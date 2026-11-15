@@ -2573,9 +2573,32 @@ function cancelPositionRestore() {
   previousRestore?.controller.abort();
 }
 
+const positionRestoration = VoiceOfMLPositionRestoration.create({
+  validatePage: (data, page, size, expected) => validatePositionWindowPage(data, page, size, expected),
+  isCurrent: task => positionRestore === task && task.key === getSearchViewKey(),
+  readViewport: key => readSearchViewport(key),
+  fetchPage: (query, page, signal, anchorId) => fetchPositionPageWithRecovery(query, page, signal, anchorId),
+  showPreview: (viewport, position, task) => showSavedSearchViewport(viewport, position, task),
+  isDragging: () => VSCROLL.isDraggingThumb,
+  capturePreviewAnchor: () => {
+    if (readerHost.overlay) return null;
+    const anchor = captureReaderReturnScroll();
+    return { index: anchor.index, offset: anchor.offset, anchorId: getResultStableId(STATE.results[anchor.index]) };
+  },
+  stableId: record => getResultStableId(record),
+  estimatedHeight: () => VSCROLL.estimatedHeight,
+  release: () => { positionRestore = null; showPositionRestoreStatus(""); },
+  applyPreview: snapshot => applyValidatedSearchViewport(snapshot),
+  snapshots: resultSnapshots,
+  restoreSnapshot: key => restoreSearchViewSnapshot(key),
+  completed: () => {},
+  failed: message => { STATE.isLoading = false; showPositionRestoreStatus(message, true); },
+  notify: message => showToast(message)
+});
+
 function tryRestoreSearchPosition(key, options = {}) {
   const previous = positionRestore?.key === key && positionRestore.failed && !options.position ? positionRestore : null;
-  let position = options.position || previous?.position || positionPersistence.getPosition(key);
+  const position = options.position || previous?.position || positionPersistence.getPosition(key);
   if (!validSearchPosition(position)) return false;
   searchIntentId++;
   cancelPendingSearchControls();
@@ -2585,94 +2608,12 @@ function tryRestoreSearchPosition(key, options = {}) {
   cancelPositionRestore();
   if (owner !== searchId) return false;
   setReturnPositionTarget();
-  const controller = new AbortController();
-  const task = { key, controller, position: {...position}, backend: options.backend || previous?.backend,
-    lookup: previous?.lookup, ready: previous?.ready || new Map(), page: 0, results: [] };
+  const task = VoiceOfMLPositionRestoration.createTask({ key, position, previous, backend: options.backend });
   positionRestore = task;
-  const current = () => positionRestore === task && key === getSearchViewKey() && !controller.signal.aborted;
   STATE.isLoading = true;
   resetPagingRecovery();
   showPositionRestoreStatus("正在恢复上次位置…");
-  (async () => {
-    try {
-      const query = JSON.parse(key);
-      if (task.backend) query.resultBackend = task.backend;
-      const viewport = options.viewport === undefined ? await readSearchViewport(key) : options.viewport;
-      if (!current()) return;
-      showSavedSearchViewport(viewport, position, task);
-      while (current()) {
-        const lookup = task.lookup || await fetchPositionPageWithRecovery(query, 1, controller.signal, position.anchorId);
-        if (!current()) return;
-        validatePositionWindowPage(lookup, 1, query.pageSize);
-        task.lookup = lookup; task.ready.set(1, lookup); task.page = 1;
-        const total = lookup.total;
-        const index = Number.isInteger(lookup.anchor_index) && lookup.anchor_index >= 0 && lookup.anchor_index < total
-          ? lookup.anchor_index : Math.min(position.index, Math.max(0, total - 1));
-        const targetPage = Math.floor(index / query.pageSize) + 1;
-        const lastPage = Math.max(1, Math.ceil(total / query.pageSize));
-        const pages = Array.from({length: Math.min(lastPage, targetPage + 1) - Math.max(1, targetPage - 1) + 1}, (_, i) => Math.max(1, targetPage - 1) + i);
-        const responses = await Promise.all(pages.map(async page => {
-          try { return {page, data: task.ready.get(page) || await fetchPositionPageWithRecovery(query, page, controller.signal)}; }
-          catch (error) { return {page, error}; }
-        }));
-        if (!current()) return;
-        for (const {page, data, error} of responses) if (!error) {
-          validatePositionWindowPage(data, page, query.pageSize, lookup);
-          task.ready.set(page, data);
-        }
-        const failure = responses.find(response => response.error);
-        if (failure) throw failure.error;
-        while (task.preview && VSCROLL.isDraggingThumb && current()) await new Promise(resolve => setTimeout(resolve, 30));
-        if (!current()) return;
-        // A cached page is authoritative only after the current generation agrees.
-        for (const [page, data] of task.cachedPages || []) {
-          if (!task.ready.has(page) && data.generation === lookup.generation && data.total === total) task.ready.set(page, data);
-        }
-        if (task.preview && !readerHost.overlay) {
-          const latest = captureReaderReturnScroll(), record = STATE.results[latest.index];
-          const anchorId = getResultStableId(record);
-          if (anchorId && anchorId !== position.anchorId) {
-            position = {...position, index: latest.index, offset: latest.offset, anchorId};
-            const available = [...task.ready.values()].some(data => data.results.some(item => getResultStableId(item) === anchorId));
-            if (!available) { task.lookup = null; task.ready.clear(); continue; }
-          } else if (anchorId) position = {...position, offset: latest.offset};
-        }
-        // Empty slots reserve scroll geometry only; visible slots are fetched on demand.
-        const page = Math.min(lastPage, Math.max(position.loadedPage, targetPage + 1));
-        const results = new Array(Math.min(total, page * query.pageSize));
-        let found = -1;
-        for (const [number, data] of task.ready) data.results.forEach((record, offset) => {
-          const index = (number - 1) * query.pageSize + offset;
-          results[index] = record;
-          if (getResultStableId(record) === position.anchorId) found = index;
-        });
-        const snapshot = { version: SEARCH_VIEW_SNAPSHOT_VERSION, key, results, total,
-          page, loadedPage: page, pageCache: {}, hasMore: results.length < total,
-          resultBackend: task.backend,
-          window: { generation: lookup.generation, pages: [...task.ready.keys()], count: [...task.ready.values()].reduce((sum, data) => sum + data.results.length, 0) },
-          estimatedHeight: VSCROLL.estimatedHeight, heightCache: [], heightRecords: [],
-          scroll: { index: found < 0 ? index : found, offset: position.offset, viewKey: key }, savedAt: Date.now() };
-        positionRestore = null;
-        showPositionRestoreStatus("");
-        if (task.preview && found === position.index) applyValidatedSearchViewport(snapshot);
-        else {
-          resultSnapshots.put(key, snapshot);
-          restoreSearchViewSnapshot(key);
-        }
-        trimSearchViewSnapshots();
-        if (found < 0 && position.anchorId) showToast("搜索结果已变化，已恢复到原位置附近");
-        return;
-      }
-    } catch (error) {
-      if (!current()) return;
-      STATE.isLoading = false;
-      task.failed = true;
-      task.error = error;
-      if (error.message === "RESTORE_PAGE_CHANGED") { task.lookup = null; task.ready.clear(); task.page = 0; }
-      showPositionRestoreStatus(error.message === "RESTORE_PAGE_CHANGED"
-        ? "搜索数据已更新，请重试恢复" : "暂时无法加载原位置附近的结果", true);
-    }
-  })();
+  void positionRestoration.run(task, options.viewport);
   return true;
 }
 

@@ -8,7 +8,7 @@ interface SearchSnapshotView {
 }
 interface SearchResultSnapshot {
   version: number; key: string; results: unknown[]; total: number; page: number; loadedPage: number;
-  pageCache: Record<string, unknown>; resultBackend?: string | null; hasMore: boolean;
+  pageCache: Record<string, unknown>; resultBackend?: string | null | undefined; hasMore: boolean;
   window: {generation?: string | undefined; pages: number[]; count: number} | null;
   estimatedHeight: number; heightCache: SearchSnapshotHeightEntry[]; heightRecords?: SearchSnapshotHeightEntry[];
   scroll: SearchSnapshotScroll; savedAt: number; bytes?: number;
