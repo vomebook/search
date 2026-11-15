@@ -2173,9 +2173,19 @@ class StaticGateTests(unittest.TestCase):
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(ROOT / path, target)
         check = ["node", paths[1]]
-        self.assert_check(self.run_check(*check), True, "# pass 11")
+        self.assert_check(self.run_check(*check), True, "# pass 15")
         test = self.root / paths[2]
         source = test.read_text()
+        for new_name in (
+            'replacement revision preserves a Reader opened synchronously during disposal',
+            'ordinary replacement carries handoff and focus while releasing background ownership',
+            'close recovery validates both search routes without changing history or private handoff',
+            'recovery survives late shell load and records handoff only on native link activation',
+        ):
+            new_anchor = "test('" + new_name + "'"
+            self.assertEqual(source.count(new_anchor), 1)
+            test.write_text(source.replace(new_anchor, "test('missing new contract'"))
+            self.assert_check(self.run_check(*check), False, "all named baseline contracts")
         name = 'remember stores a private reader URL but exposes a sanitized history URL'
         anchor = "test('" + name + "'"
         self.assertEqual(source.count(anchor), 1)
@@ -2215,7 +2225,9 @@ class StaticGateTests(unittest.TestCase):
         gate.write_text(original.replace('const required = [', 'const duplicateRows = rows.concat(rows);\nconst required = [')
                         .replace('rows.length !== 1', 'duplicateRows.length !== 1'))
         self.assert_check(self.run_check(*check), False, 'one source row above each minimum')
-        for thresholds in ('[35.86, 81.82, 27.27]', '[31.96, 84.10, 27.27]', '[31.96, 81.82, 27.28]'):
+        # Independent impossible thresholds keep these negative controls valid
+        # when additional meaningful contracts improve actual coverage.
+        for thresholds in ('[100.01, 81.82, 27.27]', '[31.96, 100.01, 27.27]', '[31.96, 81.82, 100.01]'):
             self.assertIn('[31.96, 81.82, 27.27]', original)
             gate.write_text(original.replace('[31.96, 81.82, 27.27]', thresholds))
             self.assert_check(self.run_check(*check), False, 'one source row above each minimum')

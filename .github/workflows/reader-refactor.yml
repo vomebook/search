@@ -193,6 +193,14 @@ jobs:
             tests.reader.browser.test_reader_toc_navigation.TocNavigationTests.test_merged_chm_missing_toc_anchors_use_unique_in_book_links
       - name: Run search accessibility keyboard gates
         run: python3 -B -m unittest -v tests.search.browser.test_search_accessibility_browser tests.search.browser.test_sidebar_keyboard tests.search.browser.test_search_session_browser
+      - name: Check search and Reader history ownership
+        run: |
+          node --test tests/search/session/test_search_session_contract.js tests/search/reader-navigation/test_search_history_races.mjs
+          python3 -B -m unittest -v tests.reader.browser.test_reader_reload_search_document
+          SEARCH_POSITION_BROWSER=chromium python3 -B -m unittest -v tests.reader.browser.test_reader_host_history_races
+          SEARCH_POSITION_BROWSER=firefox python3 -B -m unittest -v tests.reader.browser.test_reader_host_history_races
+          SEARCH_SESSION_BROWSER=chromium python3 -B -m unittest -v tests.search.browser.test_session_transaction_browser
+          SEARCH_SESSION_BROWSER=firefox python3 -B -m unittest -v tests.search.browser.test_session_transaction_browser
       - name: Check search position persistence and pagination recovery
         run: python3 -B -m unittest -v tests.search.browser.test_prefetch_pipeline tests.search.browser.test_search_positions
       - name: Check random reader pools and UI responsiveness
@@ -381,7 +389,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - name: Test Hugging Face history bridge
-        run: python3 -B -m unittest -v tests.gates.test_hf_quality_baseline tests.gates.test_hf_history_shell tests.gates.test_hf_sealed_baseline
+        run: python3 -B -m unittest -v tests.gates.test_hf_quality_baseline tests.gates.test_hf_history_shell tests.gates.test_hf_sealed_baseline tests.gates.test_hf_source_revision
       - name: Checkout Hugging Face Search Space
         id: hf-checkout
         run: |
@@ -390,6 +398,9 @@ jobs:
           refs=$(git ls-remote --exit-code --heads "$url" refs/heads/main)
           [[ "$refs" =~ ^([0-9a-f]{40})[[:space:]]+refs/heads/main$ ]]
           revision=${BASH_REMATCH[1]}
+          # Admit the complete captured commit before checkout, LFS or HF execution.
+          # The final changed HF candidate needs a reviewed committed pin update.
+          python3 -I -B scripts/verify_hf_source_revision.py "$revision"
           # Fetch only main and materialize its captured exact commit. Hub's
           # multi-branch pack negotiation can fail before a checkout exists.
           GIT_LFS_SKIP_SMUDGE=1 git clone --single-branch --branch main --no-checkout "$url" huggingface-search
@@ -640,6 +651,15 @@ jobs:
       - name: Run search accessibility keyboard gates
         working-directory: huggingface-search
         run: python3 -B -m unittest -v tests.search.browser.test_search_accessibility_browser tests.search.browser.test_sidebar_keyboard tests.search.browser.test_search_session_browser
+      - name: Check search and Reader history ownership
+        working-directory: huggingface-search
+        run: |
+          node --test tests/search/session/test_search_session_contract.js tests/search/reader-navigation/test_search_history_races.mjs
+          python3 -B -m unittest -v tests.reader.browser.test_reader_reload_search_document
+          SEARCH_POSITION_BROWSER=chromium python3 -B -m unittest -v tests.reader.browser.test_reader_host_history_races
+          SEARCH_POSITION_BROWSER=firefox python3 -B -m unittest -v tests.reader.browser.test_reader_host_history_races
+          SEARCH_SESSION_BROWSER=chromium python3 -B -m unittest -v tests.search.browser.test_session_transaction_browser
+          SEARCH_SESSION_BROWSER=firefox python3 -B -m unittest -v tests.search.browser.test_session_transaction_browser
       - name: Check static dependency contracts
         working-directory: huggingface-search
         run: python3 -B -m unittest -v tests.gates.test_static_contract

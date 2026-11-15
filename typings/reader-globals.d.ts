@@ -370,6 +370,7 @@ interface SearchReaderNavigationApi {
     mount(url: URL): HTMLIFrameElement;
     unmount(keepSpeech?: boolean): HTMLElement | null;
     dismiss(): void;
+    showCloseRecovery(raw: string): void;
     replace(raw: string, returnScroll: object): HTMLIFrameElement | null;
     accepts(event: MessageEvent): boolean;
     persistProgress(progress: {url?: unknown; closeTime?: unknown} | null | undefined): void;

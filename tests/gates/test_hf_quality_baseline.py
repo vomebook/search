@@ -72,18 +72,28 @@ class HfCheckoutCiTests(unittest.TestCase):
         step = hf.split('      - name: Checkout Hugging Face Search Space\n', 1)[1].split('      - name:', 1)[0]
         commands = (
             'set -euo pipefail',
-            'git ls-remote --exit-code --heads "$url" refs/heads/main',
+            'refs=$(git ls-remote --exit-code --heads "$url" refs/heads/main)',
             'revision=${BASH_REMATCH[1]}',
+            'python3 -I -B scripts/verify_hf_source_revision.py "$revision"',
             'GIT_LFS_SKIP_SMUDGE=1 git clone --single-branch --branch main --no-checkout "$url" huggingface-search',
             'GIT_LFS_SKIP_SMUDGE=1 git -C huggingface-search checkout --detach "$revision"',
             'test "$(git -C huggingface-search rev-parse HEAD)" = "$revision"',
             'python3 -B scripts/select_hf_history.py huggingface-search "$revision" >/dev/null',
-            'echo "revision=$revision" >> "$GITHUB_OUTPUT"',
             'git -C huggingface-search lfs pull',
             'git -C huggingface-search lfs fsck',
+            'echo "revision=$revision" >> "$GITHUB_OUTPUT"',
         )
         for command in commands:
             self.assertEqual(step.count(command), 1, command)
+            self.assertIn('\n          ' + command + '\n', step)
+        positions = [step.index(command) for command in commands]
+        self.assertEqual(positions, sorted(positions))
+        admission = 'python3 -I -B scripts/verify_hf_source_revision.py "$revision"'
+        for later in ('Install Python dependencies', 'Install npm dependencies',
+                      'Check source and exercise static gates', 'Check backend coverage and quality inventory'):
+            self.assertLess(hf.index(admission), hf.index(later))
+        self.assertNotIn('if:', step)
+        self.assertNotIn('|| true', step)
         self.assertIn('[[ "$refs" =~ ^([0-9a-f]{40})[[:space:]]+refs/heads/main$ ]]', step)
         self.assertLess(step.index('git ls-remote'), step.index('git clone'))
         self.assertLess(step.index('checkout --detach'), step.index('scripts/select_hf_history.py'))

@@ -390,12 +390,25 @@ process.stdout.write(stripBundledScripts(readFileSync('static/index.html','utf8'
     def test_back_tap_recovers_when_history_traversal_never_arrives(self):
         self.page.evaluate('navigateToReader("/search/static/reader.html?ext=txt")')
         self.page.frame_locator('.reader-overlay').locator('body').wait_for()
+        target = self.page.evaluate('new URL(readerOverlay.src).searchParams.get("return")')
         self.page.evaluate("""() => {
-          const back = history.back; history.back = () => {};
+          window.__backCalls = 0;
+          history.back = () => { __backCalls++; };
           handleReaderMessage({origin:location.origin,source:readerOverlay.contentWindow,data:{type:'voice-reader-close'}});
-          history.back = back;
         }""")
-        self.page.locator('.reader-overlay').wait_for(state='detached', timeout=3000)
+        # Automatic replacement destroyed the Reader entry when Back was late.
+        # The stalled contract now requires a visible, usable explicit recovery.
+        recovery = self.page.get_by_role('link', name='直接打开搜索页')
+        recovery.wait_for(state='visible', timeout=3000)
+        self.assertEqual(recovery.get_attribute('href'), target)
+        self.assertFalse(recovery.evaluate('link => !!link.closest("[inert]")'))
+        self.assertEqual(self.page.evaluate('__backCalls'), 1)
+        self.assertTrue(self.page.evaluate('readerClosing && history.state.voiceReaderOverlay'))
+        with self.page.expect_navigation(wait_until='domcontentloaded'):
+            recovery.click()
+        self.assertEqual(self.page.url, target)
+        self.page.wait_for_function('STATE.results.length > 0 && !STATE.isLoading')
+        self.assertEqual(self.page.locator('.reader-overlay').count(), 0)
         self.assertFalse(self.page.evaluate('readerClosing'))
         self.assertFalse(self.page.evaluate('!!history.state?.voiceReaderOverlay'))
         self.page.evaluate('navigateToReader("/search/static/reader.html?ext=txt")')
@@ -460,12 +473,22 @@ process.stdout.write(stripBundledScripts(readFileSync('static/index.html','utf8'
           navigateToReader('/search/static/reader.html?ext=txt');
           const button=document.querySelector('.reader-overlay-opening button');button?.click();return !!button;}''')
         self.assertTrue(present)
-        self.page.wait_for_function('() => !readerClosing', timeout=3000)
-        self.page.locator('.reader-overlay-opening').wait_for(state='detached', timeout=3000)
-        self.assertFalse(self.page.evaluate('readerClosing'))
-        self.page.evaluate('() => {history.back=window.__nativeBack;}')
+        recovery = self.page.get_by_role('link', name='直接打开搜索页')
+        recovery.wait_for(state='visible', timeout=3000)
+        self.assertFalse(recovery.evaluate('link => !!link.closest("[inert]")'))
+        self.assertTrue(held)
         for route in held:
-            route.fulfill(content_type='text/html', body='<body>cancelled</body>')
+            route.fulfill(content_type='text/html', body='<body>late reader shell</body>')
+        self.page.frame_locator('.reader-overlay').locator('body').wait_for()
+        self.page.frame_locator('.reader-overlay').locator('body').evaluate(
+            '() => window.parent.postMessage({type:"voice-reader-shell"},location.origin)')
+        self.assertTrue(recovery.is_visible(), 'late load must not dismiss the recovery shell')
+        with self.page.expect_navigation(wait_until='domcontentloaded'):
+            recovery.click()
+        self.page.wait_for_function('STATE.results.length > 0 && !STATE.isLoading')
+        self.assertEqual(self.page.locator('.reader-overlay-opening').count(), 0)
+        self.assertEqual(self.page.locator('.reader-overlay').count(), 0)
+        self.assertFalse(self.page.evaluate('readerClosing'))
 
     def test_closing_a_speech_reader_does_not_leave_the_reopened_frame_hidden(self):
         self.page.evaluate('navigateToReader("/search/static/reader.html?id=speech-resume&ext=txt")')
@@ -839,3 +862,68 @@ process.stdout.write(stripBundledScripts(readFileSync('static/index.html','utf8'
           } finally {Storage.prototype.setItem=original;}
         }''')
         self.assertTrue(result)
+
+    def test_watchdog_late_back_preserves_reader_forward_and_foreign_state(self):
+        self.page.locator('#search-input').focus()
+        before = self.page.evaluate('''() => {
+          history.replaceState({...history.state, foreignSearch:{keep:1}}, '', location.href);
+          return {url:location.href, state:history.state, rows:STATE.results.map(getResultStableId)};
+        }''')
+        opened = self.page.evaluate('''() => {
+          const path=new URL(document.querySelector('script[src*="search/reader-navigation.js"]').src)
+            .pathname.replace('search/reader-navigation.js','reader.html');
+          navigateToReader(path+'?ext=txt&title=Delayed');
+          history.replaceState({...history.state, foreignReader:{keep:2}}, '', location.href);
+          return {url:location.href, state:history.state, length:history.length};
+        }''')
+        self.page.frame_locator('.reader-overlay').locator('body').wait_for()
+        self.page.evaluate('''() => {
+          const back=history.back.bind(history);
+          window.__releaseBack=()=>{history.back=back;back();};
+          window.__backCalls=0; window.__historyWrites=0;
+          history.back=()=>{__backCalls++;};
+          for (const name of ['pushState','replaceState']) {
+            const original=history[name].bind(history);
+            history[name]=(...args)=>{__historyWrites++;return original(...args);};
+          }
+          window.__returnSnapshot=readerReturnSnapshot;
+          handleReaderMessage({origin:location.origin,source:readerOverlay.contentWindow,data:{type:'voice-reader-close'}});
+        }''')
+        recovery = self.page.get_by_role('link', name='直接打开搜索页')
+        recovery.wait_for(state='visible', timeout=3000)
+        self.assertEqual(self.page.evaluate('({url:location.href,state:history.state,length:history.length})'), opened)
+        self.assertEqual(self.page.evaluate('[__backCalls,__historyWrites]'), [1, 0])
+        self.assertTrue(self.page.evaluate('readerClosing && readerReturnSnapshot === __returnSnapshot'))
+        # Release the sole requested traversal only after the watchdog has run.
+        self.page.evaluate('__releaseBack()')
+        self.page.locator('.reader-overlay').wait_for(state='detached')
+        self.assertEqual(self.page.url, before['url'])
+        self.assertEqual(self.page.evaluate('history.state'), before['state'])
+        self.assertEqual(self.page.evaluate('STATE.results.map(getResultStableId)'), before['rows'])
+        self.assertEqual(self.page.evaluate('document.activeElement.id'), 'search-input')
+        self.assertEqual(self.page.locator('.reader-overlay-opening').count(), 0)
+        self.page.evaluate('history.forward()')
+        self.page.frame_locator('.reader-overlay').locator('body').wait_for()
+        self.assertEqual(self.page.evaluate('({url:location.href,state:history.state,length:history.length})'), opened)
+        self.assertEqual(self.page.evaluate('readerOverlay.src'), opened['state']['readerUrl'])
+        self.assertFalse(self.page.evaluate('readerClosing'))
+        self.assertEqual(self.page.locator('.reader-overlay-opening a').count(), 0)
+
+    def test_watchdog_recovery_rejects_foreign_and_non_search_targets(self):
+        self.page.evaluate('''() => {
+          const path=new URL(document.querySelector('script[src*="search/reader-navigation.js"]').src)
+            .pathname.replace('search/reader-navigation.js','reader.html');
+          navigateToReader(path+'?ext=txt');
+        }''')
+        self.page.frame_locator('.reader-overlay').locator('body').wait_for()
+        self.page.evaluate('''() => {
+          history.back=()=>{};
+          handleReaderMessage({origin:location.origin,source:readerOverlay.contentWindow,data:{type:'voice-reader-close'}});
+        }''')
+        recovery = self.page.get_by_role('link', name='直接打开搜索页')
+        recovery.wait_for(state='visible', timeout=3000)
+        safe = self.page.evaluate('new URL(new URL(readerOverlay.src).pathname.startsWith("/search/")?"/search/":"/",location.origin).href')
+        for target in ('https://invalid.example/', 'javascript:alert(1)', '/static/reader.html', '/elsewhere/page', 'http://['):
+            self.page.evaluate('target => readerNavigation.showCloseRecovery(target)', target)
+            self.assertEqual(recovery.get_attribute('href'), safe)
+            self.assertFalse(recovery.evaluate('link => !!link.closest("[inert]")'))
