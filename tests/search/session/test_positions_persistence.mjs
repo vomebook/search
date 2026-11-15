@@ -1,3 +1,4 @@
+import './restoration_contracts.mjs';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import vm from 'node:vm';
@@ -11,7 +12,7 @@ test('positions modules are composed once and synchronized across shell, resourc
   const html = read('static/index.html'), worker = read('static/sw.js');
   const resources = createRequire(import.meta.url)('../../../static/reader-resources.js');
   for (const name of ['search/positions/domain/policy.js', 'search/positions/infrastructure/indexed-db.js',
-    'search/positions/application/persistence.js']) {
+    'search/positions/application/persistence.js', 'search/positions/application/restoration.js']) {
     assert.equal(APP_DEPENDENCIES.filter(path => path === name).length, 1);
     assert.equal(html.split(name).length - 1, 1);
     assert.ok(html.indexOf(name) < html.lastIndexOf('app.js'));
