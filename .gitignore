@@ -1,4 +1,6 @@
 _site/
+/data/
+/data.candidate-*/
 static/vendor/*
 !static/vendor/djvu-rs-reader/
 static/foliate-reader/

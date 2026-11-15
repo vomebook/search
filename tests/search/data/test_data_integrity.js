@@ -3,6 +3,7 @@ const path = require("path");
 const assert = require("assert");
 const zlib = require("zlib");
 const { test, run } = require("../../support/test_harness");
+const dataRoot = process.env.SEARCH_TEST_DATA_DIR || "data";
 
 function readJson(file) {
   return JSON.parse(fs.readFileSync(file, "utf8"));
@@ -24,24 +25,25 @@ function manifestFiles(directory) {
   }, []).sort();
 }
 
-function validateManifest(directory) {
+function validateManifest(area) {
+  const directory = path.join(dataRoot, area);
   const manifest = readJson(path.join(directory, "manifest.json"));
   assert.strictEqual(manifest.version, 2);
   assert.ok(Array.isArray(manifest.urls) && manifest.urls.length > 1);
   assert.strictEqual(new Set(manifest.urls).size, manifest.urls.length, `${directory}: duplicate URLs`);
-  const prefix = `/search/${directory}/`;
+  const prefix = `/search/data/${area}/`;
   const actual = manifest.urls.map((url) => {
     assert.ok(url.startsWith(prefix), `${url}: must stay under ${prefix}`);
     return url.slice(prefix.length);
   }).sort();
   assert.deepStrictEqual(actual, manifestFiles(directory));
-  for (const url of manifest.urls) assert.ok(fs.statSync(url.slice("/search/".length)).isFile(), `${url}: missing file`);
+  for (const name of actual) assert.ok(fs.statSync(path.join(directory, name)).isFile(), `${name}: missing file`);
 }
 
-const gzipFiles = ["data/search_data.json.gz"];
+const gzipFiles = [path.join(dataRoot, "search_data.json.gz")];
 const searchData = readGzipJson(gzipFiles[0]);
-const sidebar = readJson("data/sidebar/global.json");
-const initial = readJson("data/initial/global.json");
+const sidebar = readJson(path.join(dataRoot, "sidebar/global.json"));
+const initial = readJson(path.join(dataRoot, "initial/global.json"));
 
 test("all generated gzip files have signatures and parse as JSON", () => {
   for (const file of gzipFiles) {
@@ -73,8 +75,8 @@ test("every compact record has valid table references and field types", () => {
     assert.ok(record[5] === 0 || record[5] === 1 || typeof record[5] === "boolean", `record ${index}: text flag`);
   }
 });
-test("initial manifest exactly covers generated initial payloads", () => validateManifest("data/initial"));
-test("sidebar manifest exactly covers generated sidebar payloads", () => validateManifest("data/sidebar"));
+test("initial manifest exactly covers generated initial payloads", () => validateManifest("initial"));
+test("sidebar manifest exactly covers generated sidebar payloads", () => validateManifest("sidebar"));
 test("global initial payload schema and total match the corpus", () => {
   assert.strictEqual(initial.version, 2);
   assert.strictEqual(initial.mode, "global");
@@ -98,7 +100,7 @@ test("global sidebar repositories and aggregate total match the corpus", () => {
 test("every repository initial payload matches sidebar identity and total", () => {
   for (const repo of sidebar.repos) {
     const shortName = repo.name.slice(repo.name.indexOf("/") + 1);
-    const payload = readJson(`data/initial/repos/${shortName}.json`);
+    const payload = readJson(path.join(dataRoot, `initial/repos/${shortName}.json`));
     assert.strictEqual(payload.version, 2);
     assert.strictEqual(payload.mode, "repo");
     assert.strictEqual(payload.repo, repo.name);
@@ -110,7 +112,7 @@ test("every repository initial payload matches sidebar identity and total", () =
 test("every repository sidebar payload has root folder and file arrays", () => {
   for (const repo of sidebar.repos) {
     const shortName = repo.name.slice(repo.name.indexOf("/") + 1);
-    const payload = readJson(`data/sidebar/repos/${shortName}.json`);
+    const payload = readJson(path.join(dataRoot, `sidebar/repos/${shortName}.json`));
     assert.strictEqual(payload.repo, repo.name);
     assert.strictEqual(payload.path, "");
     assert.ok(Array.isArray(payload.folders));
