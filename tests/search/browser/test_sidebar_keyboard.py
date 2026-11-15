@@ -546,16 +546,16 @@ class SidebarKeyboardTests(unittest.TestCase):
         outcome = self.page.evaluate(r'''async () => {
           const old={observer:window.MutationObserver,request:window.requestAnimationFrame,cancel:window.cancelAnimationFrame,
             getSearchViewKey,loaded:STATE._loadedPage,loading:STATE.isLoading,view:displayedSearchView,
-            mobile:STATE.isMobile,open:STATE.leftSidebarOpen,delay:readerAssetDelayUntilPaint,wake:readerAssetParseWake};
+            mobile:STATE.isMobile,open:STATE.leftSidebarOpen,delay:readerAssetController.scheduling.state.delayUntilPaint,wake:readerAssetController.scheduling.state.parseWake};
           const frames=new Map();let next=0,callback,disconnected=0,done=false;
           try {
             window.MutationObserver=class {constructor(fn){callback=fn}observe(){}disconnect(){disconnected++}};
             window.requestAnimationFrame=fn=>{const id=++next;frames.set(id,fn);return id};
             window.cancelAnimationFrame=id=>frames.delete(id);
             STATE.isMobile=false;STATE.leftSidebarOpen=true;STATE._loadedPage=0;STATE.isLoading=true;
-            readerAssetDelayUntilPaint=true;getSearchViewKey=()=>'expected';
+            readerAssetController.scheduling.state.delayUntilPaint=true;getSearchViewKey=()=>'expected';
             const controller=new AbortController();
-            const pending=waitForReaderAssetFirstPaint(controller.signal,'expected').then(()=>{done=true});
+            const pending=readerAssetController.scheduling.waitForReaderAssetFirstPaint(controller.signal,'expected').then(()=>{done=true});
             callback();const before={done,frames:frames.size};
             STATE._loadedPage=1;STATE.isLoading=false;displayedSearchView={...displayedSearchView,key:'wrong'};callback();
             const wrong={done,frames:frames.size};
@@ -564,12 +564,12 @@ class SidebarKeyboardTests(unittest.TestCase):
             const tick=()=>{const [id,fn]=frames.entries().next().value;frames.delete(id);fn()};
             tick();const first={done,frames:frames.size};tick();await pending;
             return {before,wrong,ready,first,done,frames:frames.size,disconnected,
-              wake:readerAssetParseWake===null,delay:readerAssetDelayUntilPaint};
+              wake:readerAssetController.scheduling.state.parseWake===null,delay:readerAssetController.scheduling.state.delayUntilPaint};
           } finally {
             window.MutationObserver=old.observer;window.requestAnimationFrame=old.request;window.cancelAnimationFrame=old.cancel;
             getSearchViewKey=old.getSearchViewKey;STATE._loadedPage=old.loaded;STATE.isLoading=old.loading;
             displayedSearchView=old.view;STATE.isMobile=old.mobile;STATE.leftSidebarOpen=old.open;
-            readerAssetDelayUntilPaint=old.delay;readerAssetParseWake=old.wake;
+            readerAssetController.scheduling.state.delayUntilPaint=old.delay;readerAssetController.scheduling.state.parseWake=old.wake;
           }
         }''')
         self.assertEqual(outcome, dict(before=dict(done=False,frames=0),wrong=dict(done=False,frames=0),
@@ -580,25 +580,25 @@ class SidebarKeyboardTests(unittest.TestCase):
         result = self.page.evaluate(r'''async () => {
           const old={observer:window.MutationObserver,request:window.requestAnimationFrame,cancel:window.cancelAnimationFrame,
             getSearchViewKey,loaded:STATE._loadedPage,loading:STATE.isLoading,view:displayedSearchView,
-            mobile:STATE.isMobile,open:STATE.leftSidebarOpen,delay:readerAssetDelayUntilPaint,wake:readerAssetParseWake};
+            mobile:STATE.isMobile,open:STATE.leftSidebarOpen,delay:readerAssetController.scheduling.state.delayUntilPaint,wake:readerAssetController.scheduling.state.parseWake};
           const frames=new Map();let next=0,callback,disconnected=0,done=false;
           try {
             window.MutationObserver=class {constructor(fn){callback=fn}observe(){}disconnect(){disconnected++}};
             window.requestAnimationFrame=fn=>{const id=++next;frames.set(id,fn);return id};
             window.cancelAnimationFrame=id=>frames.delete(id);
             STATE.isMobile=false;STATE.leftSidebarOpen=true;STATE._loadedPage=1;STATE.isLoading=false;
-            readerAssetDelayUntilPaint=true;getSearchViewKey=()=>'expected';displayedSearchView={...displayedSearchView,key:'expected'};
-            const pending=waitForReaderAssetFirstPaint(new AbortController().signal,'expected').then(()=>{done=true});
+            readerAssetController.scheduling.state.delayUntilPaint=true;getSearchViewKey=()=>'expected';displayedSearchView={...displayedSearchView,key:'expected'};
+            const pending=readerAssetController.scheduling.waitForReaderAssetFirstPaint(new AbortController().signal,'expected').then(()=>{done=true});
             const tick=()=>{const [id,fn]=frames.entries().next().value;frames.delete(id);fn()};
             STATE.isLoading=true;tick();tick();await Promise.resolve();
             const stalled={done,frames:frames.size,disconnected};
             STATE.isLoading=false;callback();tick();tick();await pending;
-            return {stalled,done,disconnected,wake:readerAssetParseWake===null};
+            return {stalled,done,disconnected,wake:readerAssetController.scheduling.state.parseWake===null};
           } finally {
             window.MutationObserver=old.observer;window.requestAnimationFrame=old.request;window.cancelAnimationFrame=old.cancel;
             getSearchViewKey=old.getSearchViewKey;STATE._loadedPage=old.loaded;STATE.isLoading=old.loading;
             displayedSearchView=old.view;STATE.isMobile=old.mobile;STATE.leftSidebarOpen=old.open;
-            readerAssetDelayUntilPaint=old.delay;readerAssetParseWake=old.wake;
+            readerAssetController.scheduling.state.delayUntilPaint=old.delay;readerAssetController.scheduling.state.parseWake=old.wake;
           }
         }''')
         self.assertEqual(result,dict(stalled=dict(done=False,frames=0,disconnected=0),done=True,disconnected=1,wake=True))
@@ -608,51 +608,51 @@ class SidebarKeyboardTests(unittest.TestCase):
         self.page.evaluate(r'''() => {
           window.__gateOld={observer:window.MutationObserver,getSearchViewKey,loaded:STATE._loadedPage,
             loading:STATE.isLoading,mobile:STATE.isMobile,open:STATE.leftSidebarOpen,
-            delay:readerAssetDelayUntilPaint,wake:readerAssetParseWake};
+            delay:readerAssetController.scheduling.state.delayUntilPaint,wake:readerAssetController.scheduling.state.parseWake};
           window.__gateObservers=[];window.__gateResults=[];
           window.MutationObserver=class {constructor(fn){this.fn=fn;this.closed=false;__gateObservers.push(this)}
             observe(){}disconnect(){this.closed=true}};
           STATE.isMobile=false;STATE.leftSidebarOpen=true;STATE._loadedPage=0;STATE.isLoading=true;
-          readerAssetDelayUntilPaint=true;getSearchViewKey=()=>'expected';
+          readerAssetController.scheduling.state.delayUntilPaint=true;getSearchViewKey=()=>'expected';
           window.__gateController=new AbortController();
-          waitForReaderAssetFirstPaint(__gateController.signal,'expected').then(()=>__gateResults.push('released'),
+          readerAssetController.scheduling.waitForReaderAssetFirstPaint(__gateController.signal,'expected').then(()=>__gateResults.push('released'),
             error=>__gateResults.push(error.name));
         }''')
         self.page.clock.fast_forward(751)
         self.page.wait_for_function('__gateResults.length === 1')
-        self.assertEqual(self.page.evaluate('[__gateResults[0],__gateObservers[0].closed,readerAssetParseWake,readerAssetDelayUntilPaint]'),
+        self.assertEqual(self.page.evaluate('[__gateResults[0],__gateObservers[0].closed,readerAssetController.scheduling.state.parseWake,readerAssetController.scheduling.state.delayUntilPaint]'),
                          ['released', True, None, False])
         self.page.evaluate('''() => {
-          readerAssetDelayUntilPaint=true;window.__gateController=new AbortController();
-          waitForReaderAssetFirstPaint(__gateController.signal,'expected').then(()=>__gateResults.push('released'),
+          readerAssetController.scheduling.state.delayUntilPaint=true;window.__gateController=new AbortController();
+          readerAssetController.scheduling.waitForReaderAssetFirstPaint(__gateController.signal,'expected').then(()=>__gateResults.push('released'),
             error=>__gateResults.push(error.name));__gateController.abort();
         }''')
         self.page.wait_for_function('__gateResults.length === 2')
-        self.assertEqual(self.page.evaluate('[__gateResults[1],__gateObservers[1].closed,readerAssetParseWake,readerAssetDelayUntilPaint]'),
+        self.assertEqual(self.page.evaluate('[__gateResults[1],__gateObservers[1].closed,readerAssetController.scheduling.state.parseWake,readerAssetController.scheduling.state.delayUntilPaint]'),
                          ['AbortError', True, None, False])
         result = self.page.evaluate('''async () => {
-          const controller=new AbortController();readerAssetDelayUntilPaint=true;STATE.isMobile=true;
-          await waitForReaderAssetFirstPaint(controller.signal,'expected');
-          STATE.isMobile=false;STATE.leftSidebarOpen=false;await waitForReaderAssetFirstPaint(controller.signal,'expected');
-          STATE.leftSidebarOpen=true;await waitForReaderAssetFirstPaint(controller.signal,'stale');
-          return {observers:__gateObservers.length,wake:readerAssetParseWake};
+          const controller=new AbortController();readerAssetController.scheduling.state.delayUntilPaint=true;STATE.isMobile=true;
+          await readerAssetController.scheduling.waitForReaderAssetFirstPaint(controller.signal,'expected');
+          STATE.isMobile=false;STATE.leftSidebarOpen=false;await readerAssetController.scheduling.waitForReaderAssetFirstPaint(controller.signal,'expected');
+          STATE.leftSidebarOpen=true;await readerAssetController.scheduling.waitForReaderAssetFirstPaint(controller.signal,'stale');
+          return {observers:__gateObservers.length,wake:readerAssetController.scheduling.state.parseWake};
         }''')
         self.assertEqual(result, {'observers':2,'wake':None})
         self.page.evaluate('''() => {
           const old=__gateOld;window.MutationObserver=old.observer;getSearchViewKey=old.getSearchViewKey;
           STATE._loadedPage=old.loaded;STATE.isLoading=old.loading;STATE.isMobile=old.mobile;STATE.leftSidebarOpen=old.open;
-          readerAssetDelayUntilPaint=old.delay;readerAssetParseWake=old.wake;
+          readerAssetController.scheduling.state.delayUntilPaint=old.delay;readerAssetController.scheduling.state.parseWake=old.wake;
         }''')
 
     def test_sidecar_fetch_continues_before_paint_and_user_demand_unblocks_decode(self):
         result = self.page.evaluate(r'''async () => {
           const old={fetch:window.fetch,observer:window.MutationObserver,getSearchViewKey,
             loaded:STATE._loadedPage,loading:STATE.isLoading,mobile:STATE.isMobile,open:STATE.leftSidebarOpen,
-            delay:readerAssetDelayUntilPaint,assets:readerAssets,pending:readerAssetsPending,
-            retry:readerAssetsRetryAt,wake:readerAssetParseWake};
+            delay:readerAssetController.scheduling.state.delayUntilPaint,assets:readerAssetController.state.assets,pending:readerAssetController.state.pending,
+            retry:readerAssetController.state.retryAt,wake:readerAssetController.scheduling.state.parseWake};
           let calls=0,observer;
           try {
-            readerAssets=null;readerAssetsPending=null;readerAssetsRetryAt=0;readerAssetDelayUntilPaint=true;
+            readerAssetController.state.assets=null;readerAssetController.state.pending=null;readerAssetController.state.retryAt=0;readerAssetController.scheduling.state.delayUntilPaint=true;
             STATE.isMobile=false;STATE.leftSidebarOpen=true;STATE._loadedPage=0;STATE.isLoading=true;
             getSearchViewKey=()=>'expected';
             window.MutationObserver=class {constructor(){observer=this;this.closed=false}observe(){}disconnect(){this.closed=true}};
@@ -663,17 +663,17 @@ class SidebarKeyboardTests(unittest.TestCase):
                 .pipeThrough(new CompressionStream('gzip'))));
             };
             const first=loadReaderAssetsAfterFirstPaint();
-            while (!readerAssetParseWake) await new Promise(resolve=>setTimeout(resolve,1));
-            const before={calls,published:readerAssets!==null,pending:readerAssetsPending===first};
+            while (!readerAssetController.scheduling.state.parseWake) await new Promise(resolve=>setTimeout(resolve,1));
+            const before={calls,published:readerAssetController.state.assets!==null,pending:readerAssetController.state.pending===first};
             const urgent=loadReaderAssets();
             const same=urgent===first;const value=await urgent;
-            return {before,same,calls,value,published:readerAssets===value,observerClosed:observer.closed,
-              wake:readerAssetParseWake,delay:readerAssetDelayUntilPaint};
+            return {before,same,calls,value,published:readerAssetController.state.assets===value,observerClosed:observer.closed,
+              wake:readerAssetController.scheduling.state.parseWake,delay:readerAssetController.scheduling.state.delayUntilPaint};
           } finally {
             window.fetch=old.fetch;window.MutationObserver=old.observer;getSearchViewKey=old.getSearchViewKey;
             STATE._loadedPage=old.loaded;STATE.isLoading=old.loading;STATE.isMobile=old.mobile;STATE.leftSidebarOpen=old.open;
-            readerAssetDelayUntilPaint=old.delay;readerAssets=old.assets;readerAssetsPending=old.pending;
-            readerAssetsRetryAt=old.retry;readerAssetParseWake=old.wake;
+            readerAssetController.scheduling.state.delayUntilPaint=old.delay;readerAssetController.state.assets=old.assets;readerAssetController.state.pending=old.pending;
+            readerAssetController.state.retryAt=old.retry;readerAssetController.scheduling.state.parseWake=old.wake;
           }
         }''')
         self.assertEqual(result, dict(before=dict(calls=1,published=False,pending=True),same=True,calls=1,
@@ -682,12 +682,12 @@ class SidebarKeyboardTests(unittest.TestCase):
     def test_sidecar_view_identity_is_captured_before_slow_transfer(self):
         result = self.page.evaluate(r'''async () => {
           const old={fetch:window.fetch,loaded:STATE._loadedPage,loading:STATE.isLoading,
-            mobile:STATE.isMobile,open:STATE.leftSidebarOpen,delay:readerAssetDelayUntilPaint,
-            assets:readerAssets,pending:readerAssetsPending,retry:readerAssetsRetryAt,
-            wake:readerAssetParseWake,getSearchViewKey,observer:window.MutationObserver};
+            mobile:STATE.isMobile,open:STATE.leftSidebarOpen,delay:readerAssetController.scheduling.state.delayUntilPaint,
+            assets:readerAssetController.state.assets,pending:readerAssetController.state.pending,retry:readerAssetController.state.retryAt,
+            wake:readerAssetController.scheduling.state.parseWake,getSearchViewKey,observer:window.MutationObserver};
           let release,calls=0,observerCount=0;
           try {
-            readerAssets=null;readerAssetsPending=null;readerAssetsRetryAt=0;readerAssetDelayUntilPaint=true;
+            readerAssetController.state.assets=null;readerAssetController.state.pending=null;readerAssetController.state.retryAt=0;readerAssetController.scheduling.state.delayUntilPaint=true;
             STATE.isMobile=false;STATE.leftSidebarOpen=true;STATE._loadedPage=0;STATE.isLoading=true;
             let identity='initial';getSearchViewKey=()=>identity;
             window.MutationObserver=class {constructor(){observerCount++}observe(){}disconnect(){}};
@@ -703,12 +703,12 @@ class SidebarKeyboardTests(unittest.TestCase):
             while (!release) await new Promise(resolve=>setTimeout(resolve,1));
             release();
             const result=await Promise.race([pending,new Promise((_,reject)=>setTimeout(()=>reject(Error('stale view waited')),400))]);
-            return {result,calls,observerCount,wake:readerAssetParseWake};
+            return {result,calls,observerCount,wake:readerAssetController.scheduling.state.parseWake};
           } finally {
             window.fetch=old.fetch;STATE._loadedPage=old.loaded;STATE.isLoading=old.loading;
-            STATE.isMobile=old.mobile;STATE.leftSidebarOpen=old.open;readerAssetDelayUntilPaint=old.delay;
-            readerAssets=old.assets;readerAssetsPending=old.pending;readerAssetsRetryAt=old.retry;
-            readerAssetParseWake=old.wake;getSearchViewKey=old.getSearchViewKey;window.MutationObserver=old.observer;
+            STATE.isMobile=old.mobile;STATE.leftSidebarOpen=old.open;readerAssetController.scheduling.state.delayUntilPaint=old.delay;
+            readerAssetController.state.assets=old.assets;readerAssetController.state.pending=old.pending;readerAssetController.state.retryAt=old.retry;
+            readerAssetController.scheduling.state.parseWake=old.wake;getSearchViewKey=old.getSearchViewKey;window.MutationObserver=old.observer;
           }
         }''')
         self.assertEqual(result, dict(result={'sample':{'s':2}},calls=1,observerCount=0,wake=None))
@@ -716,14 +716,14 @@ class SidebarKeyboardTests(unittest.TestCase):
     def test_initial_sidecar_completion_updates_only_current_directory(self):
         result = self.page.evaluate(r'''async () => {
           cancelSearchPrefetch();searchAbortController?.abort();cancelPositionRestore();
-          const previous={loadReaderAssets,getFolderContents,assets:readerAssets,pending:readerAssetsPending,
-            delay:readerAssetDelayUntilPaint,mobile:STATE.isMobile,open:STATE.leftSidebarOpen,
+          const previous={loadReaderAssets,getFolderContents,assets:readerAssetController.state.assets,pending:readerAssetController.state.pending,
+            delay:readerAssetController.scheduling.state.delayUntilPaint,mobile:STATE.isMobile,open:STATE.leftSidebarOpen,
             loaded:STATE._loadedPage,loading:STATE.isLoading,view:displayedSearchView};
           try {
             STATE.mode='repo';STATE.repo='Test';STATE.repoFull='VoiceOfML/Test';STATE.browserPath='';
             STATE.isMobile=false;STATE.leftSidebarOpen=true;STATE.useLocalMode=true;STATE.dataLoaded=true;
-            STATE._loadedPage=0;STATE.isLoading=true;readerAssets=null;readerAssetsPending=null;
-            readerAssetDelayUntilPaint=true;
+            STATE._loadedPage=0;STATE.isLoading=true;readerAssetController.state.assets=null;readerAssetController.state.pending=null;
+            readerAssetController.scheduling.state.delayUntilPaint=true;
             let release,loads=0;const assetPromise=new Promise(resolve=>{release=resolve});
             loadReaderAssets=()=>{loads++;return assetPromise};
             getFolderContents=async(_repo,path)=>({folders:[],files:[{name:path,ext:'chm',size:1}]});
@@ -732,14 +732,14 @@ class SidebarKeyboardTests(unittest.TestCase):
             await renderBrowser('new',++routeRenderId);
             const current=DOM.sidebarContent.querySelector('[data-type="file"]');
             const digest='a'.repeat(64);
-            readerAssets={'VoiceOfML/Test\u0000new/new.chm':
+            readerAssetController.state.assets={'VoiceOfML/Test\u0000new/new.chm':
               {s:2,m:'h',p:`objects/aa/${digest}/0123456789abcdef/document.html`}};
-            release(readerAssets);await new Promise(resolve=>setTimeout(resolve,0));
+            release(readerAssetController.state.assets);await new Promise(resolve=>setTimeout(resolve,0));
             return {oldConnected:oldRow.isConnected,oldAfter:oldRow.dataset.readerUrl||'',
               current:!!current.dataset.readerUrl,label:current.querySelector('.browser-name').getAttribute('aria-label'),loads};
           } finally {
             loadReaderAssets=previous.loadReaderAssets;getFolderContents=previous.getFolderContents;
-            readerAssets=previous.assets;readerAssetsPending=previous.pending;readerAssetDelayUntilPaint=previous.delay;
+            readerAssetController.state.assets=previous.assets;readerAssetController.state.pending=previous.pending;readerAssetController.scheduling.state.delayUntilPaint=previous.delay;
             STATE.isMobile=previous.mobile;STATE.leftSidebarOpen=previous.open;
             STATE._loadedPage=previous.loaded;STATE.isLoading=previous.loading;displayedSearchView=previous.view;
           }
@@ -749,7 +749,7 @@ class SidebarKeyboardTests(unittest.TestCase):
     def test_reader_assets_body_deadline_releases_shared_load_and_retries(self):
         self.page.clock.install()
         self.page.evaluate('''() => {
-          readerAssets=null;readerAssetsPending=null;readerAssetsRetryAt=0;
+          readerAssetController.state.assets=null;readerAssetController.state.pending=null;readerAssetController.state.retryAt=0;
           window.assetCalls=0;window.assetResults=[];window.assetAborted=false;
           const native=window.fetch;
           window.fetch=(url,options)=>String(url).endsWith('/reader_assets.json.gz')
@@ -765,7 +765,7 @@ class SidebarKeyboardTests(unittest.TestCase):
         self.page.clock.fast_forward(10001)
         self.page.wait_for_timeout(20)
         self.assertEqual(self.page.evaluate('assetResults'), [{}, {}])
-        self.assertEqual(self.page.evaluate('[assetAborted,readerAssetsPending,readerAssets]'), [True, None, None])
+        self.assertEqual(self.page.evaluate('[assetAborted,readerAssetController.state.pending,readerAssetController.state.assets]'), [True, None, None])
         self.assertEqual(self.page.evaluate('loadReaderAssets()'), {})
         self.assertEqual(self.page.evaluate('assetCalls'), 1)
         self.page.clock.fast_forward(5001)
@@ -775,7 +775,7 @@ class SidebarKeyboardTests(unittest.TestCase):
             new Blob([JSON.stringify(payload)]).stream().pipeThrough(new CompressionStream('gzip'))));};
           const value=await loadReaderAssets();
           const cached=await loadReaderAssets();
-          return {value,cached,calls:assetCalls,pending:readerAssetsPending};
+          return {value,cached,calls:assetCalls,pending:readerAssetController.state.pending};
         }''')
         self.assertEqual(recovered, dict(value={'sample': {'s': 2, 'm': 'p', 'p': 'sample.pdf'}},
                                          cached={'sample': {'s': 2, 'm': 'p', 'p': 'sample.pdf'}}, calls=2, pending=None))
@@ -783,10 +783,10 @@ class SidebarKeyboardTests(unittest.TestCase):
     def test_reader_assets_yields_and_timeout_discards_unpublished_map(self):
         self.page.clock.install()
         self.page.evaluate('''() => {
-          readerAssets=null;readerAssetsPending=null;readerAssetsRetryAt=0;
+          readerAssetController.state.assets=null;readerAssetController.state.pending=null;readerAssetController.state.retryAt=0;
           window.assetCalls=0;window.assetResults=[];window.releaseAssetYield=null;
-          window.realAssetYield=yieldConvertedReaderBuild;
-          yieldConvertedReaderBuild=()=>new Promise(resolve=>window.releaseAssetYield=resolve);
+          window.realAssetYield=readerAssetController.scheduling.yieldConvertedReaderBuild;
+          readerAssetController.scheduling.yieldConvertedReaderBuild=()=>new Promise(resolve=>window.releaseAssetYield=resolve);
           const native=window.fetch;
           window.fetch=(url,options)=>String(url).endsWith('/reader_assets.json.gz')
             ? (assetCalls++,Promise.resolve(new Response(
@@ -798,30 +798,30 @@ class SidebarKeyboardTests(unittest.TestCase):
           first.then(value=>assetResults.push(value));second.then(value=>assetResults.push(value));
         }''')
         self.page.wait_for_function('!!window.releaseAssetYield')
-        self.assertTrue(self.page.evaluate('sharedAssetPromise && readerAssets===null && !!readerAssetsPending'))
+        self.assertTrue(self.page.evaluate('sharedAssetPromise && readerAssetController.state.assets===null && !!readerAssetController.state.pending'))
         self.page.clock.fast_forward(10001)
         self.page.wait_for_function('assetResults.length===2')
-        self.assertEqual(self.page.evaluate('[assetResults,readerAssets,readerAssetsPending,assetCalls]'),
+        self.assertEqual(self.page.evaluate('[assetResults,readerAssetController.state.assets,readerAssetController.state.pending,assetCalls]'),
                          [[{}, {}], None, None, 1])
         self.assertEqual(self.page.evaluate('loadReaderAssets()'), {})
         self.assertEqual(self.page.evaluate('assetCalls'), 1)
         self.page.clock.fast_forward(5001)
         recovered = self.page.evaluate('''async()=>{
-          yieldConvertedReaderBuild=realAssetYield;
-          const value=await loadReaderAssets();return {value,assetCalls,published:readerAssets===value};
+          readerAssetController.scheduling.yieldConvertedReaderBuild=realAssetYield;
+          const value=await loadReaderAssets();return {value,assetCalls,published:readerAssetController.state.assets===value};
         }''')
         self.assertEqual(recovered, dict(value={'sample': {'s': 2, 'm': 'p', 'p': 'sample.pdf'}},
                                          assetCalls=2, published=True))
         self.page.evaluate('releaseAssetYield()')
         self.page.wait_for_timeout(100)
-        self.assertEqual(self.page.evaluate('[readerAssets,readerAssetsPending,assetCalls,assetResults]'),
+        self.assertEqual(self.page.evaluate('[readerAssetController.state.assets,readerAssetController.state.pending,assetCalls,assetResults]'),
                          [{'sample': {'s': 2, 'm': 'p', 'p': 'sample.pdf'}}, None, 2, [{}, {}]])
 
     def test_reader_assets_never_publish_partial_map_between_yields(self):
         self.page.evaluate('''()=>{
-          readerAssets=null;readerAssetsPending=null;readerAssetsRetryAt=0;
-          window.assetYields=[];window.completedAssets=null;window.realAssetYield=yieldConvertedReaderBuild;
-          yieldConvertedReaderBuild=()=>new Promise(resolve=>assetYields.push(resolve));
+          readerAssetController.state.assets=null;readerAssetController.state.pending=null;readerAssetController.state.retryAt=0;
+          window.assetYields=[];window.completedAssets=null;window.realAssetYield=readerAssetController.scheduling.yieldConvertedReaderBuild;
+          readerAssetController.scheduling.yieldConvertedReaderBuild=()=>new Promise(resolve=>assetYields.push(resolve));
           const payload={v:1,f:{first:{s:2},second:{s:3}}};
           const native=window.fetch;
           window.fetch=(url,options)=>String(url).endsWith('/reader_assets.json.gz')
@@ -830,23 +830,23 @@ class SidebarKeyboardTests(unittest.TestCase):
           loadReaderAssets().then(value=>window.completedAssets=value);
         }''')
         self.page.wait_for_function('assetYields.length===1')
-        self.assertTrue(self.page.evaluate('readerAssets===null && completedAssets===null'))
+        self.assertTrue(self.page.evaluate('readerAssetController.state.assets===null && completedAssets===null'))
         self.page.evaluate('assetYields.shift()()')
         self.page.wait_for_function('assetYields.length===1')
-        self.assertTrue(self.page.evaluate('readerAssets===null && completedAssets===null'))
+        self.assertTrue(self.page.evaluate('readerAssetController.state.assets===null && completedAssets===null'))
         self.page.evaluate('assetYields.shift()()')
         self.page.wait_for_function('completedAssets!==null')
         self.assertEqual(self.page.evaluate('completedAssets'), {'first': {'s': 2}, 'second': {'s': 3}})
-        self.assertTrue(self.page.evaluate('readerAssets===completedAssets && readerAssetsPending===null'))
-        self.page.evaluate('yieldConvertedReaderBuild=realAssetYield')
+        self.assertTrue(self.page.evaluate('readerAssetController.state.assets===completedAssets && readerAssetController.state.pending===null'))
+        self.page.evaluate('readerAssetController.scheduling.yieldConvertedReaderBuild=realAssetYield')
 
     def test_reader_assets_timeout_at_second_yield_discards_map(self):
         self.page.clock.install()
         self.page.evaluate('''()=>{
-          readerAssets=null;readerAssetsPending=null;readerAssetsRetryAt=0;
+          readerAssetController.state.assets=null;readerAssetController.state.pending=null;readerAssetController.state.retryAt=0;
           window.assetYields=[];window.assetResults=[];window.assetCalls=0;
-          window.realAssetYield=yieldConvertedReaderBuild;
-          yieldConvertedReaderBuild=()=>new Promise(resolve=>assetYields.push(resolve));
+          window.realAssetYield=readerAssetController.scheduling.yieldConvertedReaderBuild;
+          readerAssetController.scheduling.yieldConvertedReaderBuild=()=>new Promise(resolve=>assetYields.push(resolve));
           const native=window.fetch;
           window.fetch=(url,options)=>String(url).endsWith('/reader_assets.json.gz')
             ? (assetCalls++,Promise.resolve(new Response(new Blob([JSON.stringify(
@@ -862,30 +862,30 @@ class SidebarKeyboardTests(unittest.TestCase):
         self.page.clock.fast_forward(10001)
         self.page.wait_for_function('assetResults.length===2')
         self.assertTrue(self.page.evaluate('sharedAssetPromise'))
-        self.assertEqual(self.page.evaluate('[assetResults,readerAssets,readerAssetsPending,assetCalls]'),
+        self.assertEqual(self.page.evaluate('[assetResults,readerAssetController.state.assets,readerAssetController.state.pending,assetCalls]'),
                          [[{}, {}], None, None, 1])
         self.page.clock.fast_forward(5001)
         recovered = self.page.evaluate('''async()=>{
-          yieldConvertedReaderBuild=realAssetYield;
-          const value=await loadReaderAssets();return {value,assetCalls,published:readerAssets===value};
+          readerAssetController.scheduling.yieldConvertedReaderBuild=realAssetYield;
+          const value=await loadReaderAssets();return {value,assetCalls,published:readerAssetController.state.assets===value};
         }''')
         self.assertEqual(recovered, dict(value={'sample': {'s': 2}}, assetCalls=2, published=True))
         self.page.evaluate('assetYields.shift()()')
         self.page.wait_for_timeout(100)
-        self.assertEqual(self.page.evaluate('[readerAssets,readerAssetsPending,assetCalls,assetResults]'),
+        self.assertEqual(self.page.evaluate('[readerAssetController.state.assets,readerAssetController.state.pending,assetCalls,assetResults]'),
                          [{'sample': {'s': 2}}, None, 2, [{}, {}]])
 
     def test_reader_assets_respects_size_limits_and_retains_json_semantics(self):
         outcome = self.page.evaluate('''async()=>{
-          const originalFetch=window.fetch,compressedLimit=READER_ASSETS_COMPRESSED_LIMIT,
-            expandedLimit=READER_ASSETS_EXPANDED_LIMIT;
+          const originalFetch=window.fetch,compressedLimit=readerAssetController.transport.state.compressedLimit,
+            expandedLimit=readerAssetController.transport.state.expandedLimit;
           const gzip=text=>new Response(new Blob([text]).stream().pipeThrough(new CompressionStream('gzip')));
           const attempt=async make=>{
             window.fetch=make;
-            try{return {ok:true,value:await fetchReaderAssetMap()}}catch(error){return {ok:false,name:error.name,message:error.message}}
+            try{return {ok:true,value:await readerAssetController.transport.fetchReaderAssetMap()}}catch(error){return {ok:false,name:error.name,message:error.message}}
           };
           try{
-            READER_ASSETS_COMPRESSED_LIMIT=256;READER_ASSETS_EXPANDED_LIMIT=256;
+            readerAssetController.transport.state.compressedLimit=256;readerAssetController.transport.state.expandedLimit=256;
             let cancelled=false;
             const header=await attempt(()=>new Response(new ReadableStream({
               start(controller){controller.enqueue(new Uint8Array([1]));},cancel(){cancelled=true}
@@ -893,13 +893,13 @@ class SidebarKeyboardTests(unittest.TestCase):
             const compressed=await attempt(()=>new Response(new Uint8Array(257)));
             const expanded=await attempt(()=>gzip(JSON.stringify({v:1,f:{a:'x'.repeat(1024)}})));
             const malformed=await attempt(()=>gzip('{"v":1,"f":'));
-            READER_ASSETS_COMPRESSED_LIMIT=compressedLimit;READER_ASSETS_EXPANDED_LIMIT=expandedLimit;
+            readerAssetController.transport.state.compressedLimit=compressedLimit;readerAssetController.transport.state.expandedLimit=expandedLimit;
             const array=await attempt(()=>gzip('{"v":1,"f":[-0,1e400]}'));
             return {header:header.message,cancelled,compressed:compressed.message,expanded:expanded.message,
               malformed:malformed.name,array:array.ok&&Array.isArray(array.value),
               negativeZero:array.ok&&Object.is(array.value[0],-0),infinity:array.ok&&array.value[1]===Infinity};
           }finally{
-            window.fetch=originalFetch;READER_ASSETS_COMPRESSED_LIMIT=compressedLimit;READER_ASSETS_EXPANDED_LIMIT=expandedLimit;
+            window.fetch=originalFetch;readerAssetController.transport.state.compressedLimit=compressedLimit;readerAssetController.transport.state.expandedLimit=expandedLimit;
           }
         }''')
         self.assertEqual(outcome, dict(header='READER_ASSETS_LIMIT', cancelled=True,
@@ -910,22 +910,22 @@ class SidebarKeyboardTests(unittest.TestCase):
         outcome = self.page.evaluate('''async()=>{
           const originalFetch=window.fetch,originalMessageChannel=window.MessageChannel;
           const hiddenDescriptor=Object.getOwnPropertyDescriptor(document,'hidden');
-          const channel=convertedReaderYieldChannel;
+          const channel=readerAssetController.scheduling.state.channel;
           const payload={v:1,f:{sample:{s:2,m:'p',p:'sample.pdf'}}};
           try{
             window.fetch=()=>Promise.resolve(new Response(
               new Blob([JSON.stringify(payload)]).stream().pipeThrough(new CompressionStream('gzip'))));
             Object.defineProperty(document,'hidden',{configurable:true,value:true});
             window.MessageChannel=undefined;
-            const timerFallback=await fetchReaderAssetMap();
+            const timerFallback=await readerAssetController.transport.fetchReaderAssetMap();
             window.MessageChannel=originalMessageChannel;
-            const normal=await fetchReaderAssetMap();
+            const normal=await readerAssetController.transport.fetchReaderAssetMap();
             return {timerFallback,normal,hidden:document.hidden};
           }finally{
             window.fetch=originalFetch;window.MessageChannel=originalMessageChannel;
             if(hiddenDescriptor)Object.defineProperty(document,'hidden',hiddenDescriptor);else delete document.hidden;
-            if(convertedReaderYieldChannel!==channel){
-              convertedReaderYieldChannel?.port1.close();convertedReaderYieldChannel?.port2.close();convertedReaderYieldChannel=channel;
+            if(readerAssetController.scheduling.state.channel!==channel){
+              readerAssetController.scheduling.state.channel?.port1.close();readerAssetController.scheduling.state.channel?.port2.close();readerAssetController.scheduling.state.channel=channel;
             }
           }
         }''')

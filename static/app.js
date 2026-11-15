@@ -101,244 +101,23 @@ function buildRecordPath(rec) {
   return HF_DATASET_BASE + "/" + repo + "/blob/main/" + encodeRecordPath(buildRecordRelativePath(rec));
 }
 
-var readerAssets = null;
-var readerAssetsPending = null;
-var readerAssetsRetryAt = 0;
-var readerAssetDelayUntilPaint = false;
-var convertedReaderRecords = null;
-var READER_ASSETS_COMPRESSED_LIMIT = 32 * 1024 * 1024;
-var READER_ASSETS_EXPANDED_LIMIT = 128 * 1024 * 1024;
+const readerAssetController = VoiceOfMLReaderAssets.create({
+  bucketBase: API_BASE + "/api/reader-bucket-resource",
+  buildRecordLink: record => buildRecordLink(record),
+  getSearchViewKey: () => getSearchViewKey(),
+  canWaitForPaint: () => !STATE.isMobile && STATE.leftSidebarOpen,
+  resultsList: () => DOM.resultsList,
+  isFirstViewReady: targetKey => STATE._loadedPage >= 1 && !STATE.isLoading && displayedSearchView?.key === targetKey
+});
 
-function readBoundedReaderStream(stream, limit, signal) {
-  if (!stream || typeof stream.getReader !== "function") throw new Error("READER_ASSETS_UNAVAILABLE");
-  var reader = stream.getReader(), chunks = [], total = 0;
-  var abort = function() { reader.cancel().catch(function() {}); };
-  if (signal) signal.addEventListener("abort", abort, { once: true });
-  return (async function() {
-    try {
-      while (true) {
-        if (signal && signal.aborted) throw new DOMException("Reader assets timed out", "AbortError");
-        var part = await reader.read();
-        if (signal && signal.aborted) throw new DOMException("Reader assets timed out", "AbortError");
-        if (part.done) break;
-        if (!part.value || !part.value.byteLength) continue;
-        total += part.value.byteLength;
-        if (total > limit) throw new Error("READER_ASSETS_LIMIT");
-        chunks.push(part.value);
-      }
-      var bytes = new Uint8Array(total), offset = 0;
-      chunks.forEach(function(chunk) { bytes.set(chunk, offset); offset += chunk.byteLength; });
-      return bytes;
-    } catch (error) {
-      await Promise.resolve(reader.cancel(error)).catch(function() { return undefined; });
-      throw error;
-    } finally {
-      if (signal) signal.removeEventListener("abort", abort);
-      reader.releaseLock();
-    }
-  })();
-}
-
-function yieldReaderAssetLoad(signal) {
-  return new Promise(function(resolve, reject) {
-    var settled = false;
-    var finish = function(callback, value) {
-      if (settled) return;
-      settled = true;
-      signal.removeEventListener("abort", abort);
-      callback(value);
-    };
-    var abort = function() { finish(reject, new DOMException("Reader assets timed out", "AbortError")); };
-    if (signal.aborted) return abort();
-    signal.addEventListener("abort", abort, { once: true });
-    try {
-      yieldConvertedReaderBuild().then(function() { finish(resolve); }, function(error) { finish(reject, error); });
-    } catch (error) {
-      finish(reject, error);
-    }
-  });
-}
-
-// Download may overlap initial rendering, but defer decompression/JSON work
-// until the first result window has painted or the user needs Reader metadata.
-var readerAssetParseWake = null;
-
-/** @param {AbortSignal} signal @param {string | null} targetKey @returns {Promise<void>} */
-function waitForReaderAssetFirstPaint(signal, targetKey) {
-  if (!readerAssetDelayUntilPaint || !targetKey || STATE.isMobile || !STATE.leftSidebarOpen ||
-      typeof MutationObserver !== "function" || !DOM.resultsList || getSearchViewKey() !== targetKey)
-    return Promise.resolve();
-  return new Promise((resolve, reject) => {
-    let settled = false, firstFrame = 0, secondFrame = 0, observer = null;
-    const finish = error => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      if (firstFrame) cancelAnimationFrame(firstFrame);
-      if (secondFrame) cancelAnimationFrame(secondFrame);
-      if (observer) observer.disconnect();
-      signal.removeEventListener("abort", abort);
-      if (readerAssetParseWake === resume) readerAssetParseWake = null;
-      readerAssetDelayUntilPaint = false;
-      if (error) reject(error); else resolve();
-    };
-    const resume = () => finish(null);
-    const abort = () => finish(new DOMException("Reader assets timed out", "AbortError"));
-    const ready = () => STATE._loadedPage >= 1 && !STATE.isLoading && displayedSearchView?.key === targetKey;
-    const afterPaint = () => {
-      if (firstFrame || secondFrame || settled) return;
-      if (typeof requestAnimationFrame === "function") {
-        firstFrame = requestAnimationFrame(() => {
-          firstFrame = 0;
-          secondFrame = requestAnimationFrame(() => {
-            secondFrame = 0;
-            // The state may change between ready() and paint: don't decode an
-            // old frame while the same view starts a fresh request.
-            if (getSearchViewKey() !== targetKey || ready()) resume();
-          });
-        });
-      }
-    };
-    // RAF may be paused; do not hold metadata forever when search stalls.
-    const timer = setTimeout(resume, 750);
-    readerAssetParseWake = resume;
-    if (signal.aborted) { abort(); return; }
-    signal.addEventListener("abort", abort, { once: true });
-    observer = new MutationObserver(() => {
-      if (getSearchViewKey() !== targetKey) { resume(); return; }
-      if (ready()) afterPaint();
-    });
-    observer.observe(DOM.resultsList, { childList: true, subtree: true });
-    if (ready()) afterPaint();
-  });
-}
-
-async function fetchReaderAssetMap(deferDecode = false) {
-  var controller = new AbortController();
-  var timer = setTimeout(function() { controller.abort(); }, 10000);
-  // renderBrowser runs inside route application. Capture the settled view key
-  // in a microtask, rather than the intermediate state seen on entry.
-  var firstView = deferDecode ? Promise.resolve().then(() => getSearchViewKey()).catch(() => null) : null;
-  try {
-    var firstViewKey = firstView ? await firstView : null;
-    var response = await fetch("/search/data/reader_assets.json.gz", { signal: controller.signal });
-    if (!response.ok || !response.body || typeof DecompressionStream === "undefined") throw new Error("READER_ASSETS_UNAVAILABLE");
-    var compressedLength = Number(response.headers && response.headers.get && response.headers.get("content-length"));
-    if (Number.isFinite(compressedLength) && compressedLength > READER_ASSETS_COMPRESSED_LIMIT) {
-      await Promise.resolve().then(function() { return response.body.cancel(); }).catch(function() { return undefined; });
-      throw new Error("READER_ASSETS_LIMIT");
-    }
-    var compressed = await readBoundedReaderStream(response.body, READER_ASSETS_COMPRESSED_LIMIT, controller.signal);
-    if (firstView) await waitForReaderAssetFirstPaint(controller.signal, firstViewKey);
-    if (controller.signal.aborted) throw new DOMException("Reader assets timed out", "AbortError");
-    var expandedStream = new Response(compressed).body.pipeThrough(new DecompressionStream("gzip"));
-    var expanded = await readBoundedReaderStream(expandedStream, READER_ASSETS_EXPANDED_LIMIT, controller.signal);
-    // Keep decoding and parsing separate from decompression so a pending
-    // interaction can run between these individually expensive operations.
-    await yieldReaderAssetLoad(controller.signal);
-    var text = new TextDecoder().decode(expanded);
-    await yieldReaderAssetLoad(controller.signal);
-    var data = JSON.parse(text);
-    if (!data || data.v !== 1 || !data.f || typeof data.f !== "object") throw new Error("READER_ASSETS_UNAVAILABLE");
-    return data.f;
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
-function loadReaderAssets(deferDecode) {
-  if (!deferDecode) {
-    readerAssetDelayUntilPaint = false;
-    if (readerAssetParseWake) readerAssetParseWake();
-  }
-  if (readerAssets) return Promise.resolve(readerAssets);
-  if (Date.now() < readerAssetsRetryAt) return Promise.resolve({});
-  if (readerAssetsPending) return readerAssetsPending;
-  readerAssetsPending = fetchReaderAssetMap(deferDecode === true).then(function(assets) {
-    readerAssets = assets;
-    readerAssetsRetryAt = 0;
-    convertedReaderRecords = null;
-    convertedReaderRecordsByRepo = null;
-    return readerAssets;
-  }).catch(function() {
-    readerAssetsRetryAt = Date.now() + 5000;
-    return {};
-  }).finally(function() { readerAssetsPending = null; });
-  return readerAssetsPending;
-}
-
+function loadReaderAssets(deferDecode) { return readerAssetController.loadReaderAssets(deferDecode); }
 function loadReaderAssetsAfterFirstPaint() {
-  return loadReaderAssets(readerAssetDelayUntilPaint);
+  return loadReaderAssets(readerAssetController.scheduling.state.delayUntilPaint);
 }
-
 function applyReaderAsset(record, repo, relativePath, originalLink) {
-  var asset = readerAssets && readerAssets[repo + "\0" + relativePath];
-  var fields = VoiceOfMLReader.assetFields(asset, API_BASE + "/api/reader-bucket-resource", String(record.Extension || record.extension || ""));
-  return fields ? Object.assign({}, record, fields, { DownloadLink: originalLink }) : record;
+  return readerAssetController.applyReaderAsset(record, repo, relativePath, originalLink);
 }
-
-let convertedReaderRecordsByRepo = null;
-let convertedReaderRecordsPending = null;
-const CONVERTED_READER_BATCH_SIZE = 256;
-let convertedReaderYieldChannel = null;
-const convertedReaderYieldQueue = [];
-
-function yieldConvertedReaderBuild() {
-  if (typeof MessageChannel === "undefined") return new Promise(resolve => setTimeout(resolve, 0));
-  if (!convertedReaderYieldChannel) {
-    convertedReaderYieldChannel = new MessageChannel();
-    convertedReaderYieldChannel.port1.onmessage = () => convertedReaderYieldQueue.shift()?.();
-  }
-  return new Promise(resolve => { convertedReaderYieldQueue.push(resolve); convertedReaderYieldChannel.port2.postMessage(null); });
-}
-
-async function getConvertedReaderRecords(repo) {
-  // The sidecar can have tens of thousands of entries. Build one complete
-  // snapshot in small tasks so a first click or filter change cannot block UI.
-  while (readerAssets && !convertedReaderRecords) {
-    const snapshot = readerAssets;
-    if (!convertedReaderRecordsPending || convertedReaderRecordsPending.snapshot !== snapshot) {
-      const pending = { snapshot, promise: null };
-      pending.promise = (async function() {
-        const all = [], byRepo = Object.create(null), keys = Object.keys(snapshot);
-        for (let i = 0; i < keys.length; i++) {
-          if (readerAssets !== snapshot) return;
-          const key = keys[i];
-          const separator = key.indexOf("\0");
-          if (separator > 0) {
-            const sourceRepo = key.substring(0, separator);
-            const relativePath = key.substring(separator + 1);
-            const parts = relativePath.split("/");
-            const filename = parts.pop() || "";
-            const dot = filename.lastIndexOf(".");
-            if (sourceRepo.startsWith("VoiceOfML/") && dot > 0 && !parts.some(function(part) { return !part || part === "." || part === ".."; })) {
-              const record = { Repo: sourceRepo, File: filename.substring(0, dot), Extension: filename.substring(dot + 1), Folder: parts, HasTxt: false };
-              const originalLink = buildRecordLink(record);
-              const converted = applyReaderAsset(record, sourceRepo, relativePath, originalLink);
-              if (converted !== record) {
-                all.push(converted);
-                (byRepo[sourceRepo] || (byRepo[sourceRepo] = [])).push(converted);
-              }
-            }
-          }
-          if ((i + 1) % CONVERTED_READER_BATCH_SIZE === 0 && i + 1 < keys.length) {
-            await yieldConvertedReaderBuild();
-          }
-        }
-        if (readerAssets === snapshot) {
-          convertedReaderRecords = all;
-          convertedReaderRecordsByRepo = byRepo;
-        }
-      })();
-      convertedReaderRecordsPending = pending;
-    }
-    const pending = convertedReaderRecordsPending;
-    try { await pending.promise; }
-    finally { if (convertedReaderRecordsPending === pending) convertedReaderRecordsPending = null; }
-  }
-  if (!convertedReaderRecords) return [];
-  return repo ? (convertedReaderRecordsByRepo[repo] || []) : convertedReaderRecords;
-}
+function getConvertedReaderRecords(repo) { return readerAssetController.getConvertedReaderRecords(repo); }
 
 function getRecordLink(rec) {
   return rec.Link || buildRecordLink(rec);
@@ -3427,10 +3206,10 @@ function getSidebarDirectory() {
 }
 
 function refreshSidebarReaderAssets(list, currentRepo, path, routeId, readDisplayed) {
-  var initialAssets = readerAssets;
+  var initialAssets = readerAssetController.state.assets;
   loadReaderAssetsAfterFirstPaint().then(function() {
     const displayedData = readDisplayed();
-    if (!list.isConnected || !displayedData || readerAssets === initialAssets ||
+    if (!list.isConnected || !displayedData || readerAssetController.state.assets === initialAssets ||
         (routeId && routeId !== routeRenderId) || STATE.mode !== "repo" ||
         STATE.repoFull !== currentRepo || STATE.browserPath !== path) return;
     list.querySelectorAll('.browser-item[data-link]').forEach(function(row, index) {
@@ -3549,7 +3328,7 @@ function getRandomDiscovery() {
     button: () => DOM.randomTxtBtn,
     apiBase: API_BASE,
     nativeCount: () => STATE.repoFull ? (readerMetadata.byRepo[STATE.repoFull] || 0) : (readerMetadata.count || 0),
-    assetsLoaded: () => !!readerAssets,
+    assetsLoaded: () => !!readerAssetController.state.assets,
     loadReaderAssets: () => loadReaderAssets(),
     getConvertedReaderRecords: repo => getConvertedReaderRecords(repo),
     localRecord: (repo, readerOnly) => corpusWorkerRequest("random-record", { repo, readerOnly }, WORKER_REQUEST_TIMEOUT),
@@ -4181,7 +3960,7 @@ async function init() {
   window.addEventListener("pageshow", resumeResultRecovery);
   window.addEventListener("online", resumeResultRecovery);
   window.setInterval(function() { warmConnection(); }, KEEPALIVE_INTERVAL_MS);
-  readerAssetDelayUntilPaint = true;
+  readerAssetController.scheduling.state.delayUntilPaint = true;
   const initialDraftCurrent = initialSearchDraftIsCurrent();
   ROUTER.apply();
   finishInitialSearchInput(initialDraftCurrent);

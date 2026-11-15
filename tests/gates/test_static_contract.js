@@ -5,6 +5,8 @@ const { assertCode, readReaderSource } = require("../support/reader_source_contr
 const { test, run } = require("../support/test_harness");
 
 const app = fs.readFileSync("static/app.js", "utf8");
+const readerAssetSnapshot = fs.readFileSync("static/search/reader-assets/application/snapshot.js", "utf8");
+const readerAssetTransport = fs.readFileSync("static/search/reader-assets/infrastructure/sidecar.js", "utf8");
 const resultRows = fs.readFileSync("static/search/results/presentation/row.js", "utf8");
 const resultInteractions = fs.readFileSync("static/search/results/application/interactions.js", "utf8");
 const randomDiscovery = fs.readFileSync("static/search/discovery/application/random.js", "utf8");
@@ -20,7 +22,8 @@ const readerHtml = fs.readFileSync("static/reader.html", "utf8");
 const workflow = fs.readFileSync(".github/workflows/static.yml", "utf8");
 
 test("Reader-Assets preserves native Foliate extensions from asset filenames", () => {
-  assert.match(app, /VoiceOfMLReader\.assetFields\(asset, API_BASE/);
+  assert.match(readerAssetSnapshot, /VoiceOfMLReader\.assetFields\(asset, deps\.bucketBase/);
+  assert.match(app, /bucketBase: API_BASE \+ "\/api\/reader-bucket-resource"/);
 });
 test("legacy URL and sidebar field compatibility are retired", () => {
   assert.doesNotMatch(app, /route\.params\.folder\b|legacyFolders/);
@@ -441,16 +444,16 @@ test("reader uses original files and lazy PDF canvas rendering", () => {
   assert.match(reader, /tab\.hidden = !navigationState\.tocEntries\.length/);
   assert.match(reader, /PDF_MANIFEST_INVALID/);
    assert.match(contract, /page-manifest\.json/);
-  assert.match(app, /reader_assets\.json\.gz/);
+  assert.match(readerAssetTransport, /reader_assets\.json\.gz/);
   // The shared load must use the same bounded fetcher and explicitly pass
   // the first-paint decode policy; other Reader safety assertions remain.
-  assert.match(app, /readerAssetsPending\s*=\s*fetchReaderAssetMap\(deferDecode === true\)\.then\(/);
-  assert.match(app, /if \(firstView\) await waitForReaderAssetFirstPaint\(controller\.signal, firstViewKey\)/);
-  assert.match(app, /if \(readerAssetParseWake\) readerAssetParseWake\(\)/);
-  assert.match(app, /readerAssetsRetryAt = Date\.now\(\) \+ 5000/);
-  assert.doesNotMatch(app, /readerAssets = \{\};\s*convertedReaderRecords = \[\];/);
+  assert.match(readerAssetSnapshot, /state\.pending\s*=\s*transport\.fetchReaderAssetMap\(deferDecode === true\)\.then\(/);
+  assert.match(readerAssetTransport, /if \(firstView\) await scheduling\.waitForReaderAssetFirstPaint\(controller\.signal, firstViewKey\)/);
+  assert.match(readerAssetSnapshot, /if \(scheduling\.state\.parseWake\) scheduling\.state\.parseWake\(\)/);
+  assert.match(readerAssetSnapshot, /state\.retryAt = Date\.now\(\) \+ 5000/);
+  assert.doesNotMatch(readerAssetSnapshot, /state\.assets = \{\};\s*state\.converted = \[\];/);
   assert.doesNotMatch(app, /var currentRepo = STATE\.repoFull;\s*await loadReaderAssets\(\)/);
-  assert.match(app, /convertedReaderRecords = null/);
+  assert.match(readerAssetSnapshot, /state\.converted = null/);
   assert.match(app, /applyReaderAsset/);
   assert.match(app, /function getReaderLink\(rec, returnUrl, cacheMetadata = true\)/);
   assert.match(app, /if \(cacheMetadata\) try/);
@@ -487,7 +490,7 @@ test("reader uses original files and lazy PDF canvas rendering", () => {
   assert.match(app, /get id\(\) \{ return randomReaderRequestId; \}/);
   assert.match(app, /fetchRandomReaderRecord: \(url, id, returnUrl\) => fetchRandomReaderRecord\(url, id, returnUrl\)/);
   assert.match(app, /rec\.ReaderExtension \|\| rec\.Extension/);
-  assert.match(app, /async function getConvertedReaderRecords\(repo\)/);
+  assert.match(readerAssetSnapshot, /async function getConvertedReaderRecords\(repo\)/);
   assert.match(randomDiscovery, /await deps\.getConvertedReaderRecords\(deps\.readView\(\)\.repoFull \|\| ""\)\)\.length/);
   assert.match(randomDiscovery, /useConverted \? converted\[Math\.floor\(Math\.random\(\) \* converted\.length\)\] : await deps\.getRandomLocal\(true\)/);
   const randomReaderBlock = randomDiscovery.slice(randomDiscovery.indexOf("async function randomTxt"));

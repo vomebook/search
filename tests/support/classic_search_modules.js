@@ -11,6 +11,7 @@ const MODULES = ["static/search/execution/domain/policy.js", "static/search/exec
   "static/search/discovery/application/random.js",
   "static/search/shell/presentation/view.js", "static/search/shell/application/controller.js",
   "static/search/bootstrap/domain/initial-payload.js", "static/search/bootstrap/application/controller.js",
+  "static/search/reader-assets/infrastructure/scheduling.js", "static/search/reader-assets/infrastructure/sidecar.js", "static/search/reader-assets/application/snapshot.js",
   "static/search/results/virtual/domain/heights.js", "static/search/results/virtual/presentation/rows.js", "static/search/results/virtual/application/controller.js",
   "static/search/routing/domain/route.js", "static/search/routing/application/router.js",
   "static/search/history/infrastructure/store.js", "static/search/history/application/controller.js",
