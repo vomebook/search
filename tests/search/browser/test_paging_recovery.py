@@ -96,6 +96,152 @@ class PagingRecoveryTests(unittest.TestCase):
         self.assertEqual(self.page.evaluate('STATE._resultBackend'), 'api')
         self.assertEqual(self.errors, [])
 
+    def check_initial_generation_relocation(self, prefetched, initial_generation='different', local_ready=False):
+        self.page.evaluate(r'''({initialGeneration, localReady}) => {
+          cancelSearchPrefetch();
+          searchResponseCache.clear(); initialPayloadCache.clear(); searchViewSnapshots.clear();
+          const previous = window.fetch;
+          // Initial/API generations are opaque equality tokens, not the data
+          // manifest's generation. Both versions deliberately retain total 301.
+          window.initialGenerationA = 'api:' + 'a'.repeat(64);
+          window.initialGenerationB = 'api:' + 'b'.repeat(64);
+          window.initialContinuationShift = initialGeneration === 'same' ? 0 : 1;
+          window.initialContinuationRequests = [];
+          let release;
+          const continuation = new Promise(resolve => { release = resolve; });
+          window.releaseInitialContinuation = release;
+          const rows = shift => Array.from({length:301}, (_, i) => ({
+            Repo:'VoiceOfML/Test', File:'initial-paging-' + (i - shift),
+            Extension:'txt', Folder:[], Size:1, HasTxt:false
+          }));
+          window.fetch = (input, options) => {
+            const response = data => new Response(JSON.stringify(data), {
+              headers:{'Content-Type':'application/json'}
+            });
+            if (String(input).includes('data/initial/global.json')) {
+              return Promise.resolve(response({mode:'global', page:1, page_size:100,
+                total:301, generation:initialGeneration === 'missing' ? undefined
+                  : initialGeneration === 'empty' ? ''
+                  : initialGeneration === 'same' ? initialGenerationB : initialGenerationA,
+                results:rows(0).slice(0,100)}));
+            }
+            if (!String(input).includes('/api/search')) return previous(input, options);
+            const body = JSON.parse(options?.body || '{}');
+            if (body.q) return previous(input, options);
+            initialContinuationRequests.push(body);
+            return continuation.then(() => {
+              const all = rows(initialContinuationShift);
+              const anchor_index = body.anchor_id === undefined ? undefined
+                : all.findIndex(record => getResultStableId(record) === body.anchor_id);
+              return response({generation:initialGenerationB, total:301, page:body.page,
+                page_size:body.page_size, anchor_index,
+                results:all.slice((body.page-1)*body.page_size, body.page*body.page_size)});
+            });
+          };
+          STATE.query = ''; STATE.page = 1;
+          STATE.useLocalMode = localReady;
+          searchWithInitialFallbackFresh();
+        }''', dict(initialGeneration=initial_generation, localReady=local_ready))
+        self.page.wait_for_function('''STATE._initialActive && !STATE.isLoading
+          && STATE._loadedPage === 1 && initialContinuationRequests.some(body => body.page === 2)''')
+        self.assertEqual(self.page.evaluate('STATE.results.map(row => row.File)'),
+                         ['initial-paging-' + str(i) for i in range(100)])
+        self.page.evaluate('''() => {
+          window.initialAnchor = getResultStableId(STATE.results[0]);
+          window.initialRows = STATE.results.slice();
+          window.initialDomRow = DOM.resultsList.querySelector('.result-item[data-index="0"]');
+          window.initialRoute = location.hash;
+        }''')
+        if initial_generation == 'empty':
+            self.assertEqual(self.page.evaluate('''() => {
+              const cached = getCachedSearchResponse(getCurrentSearchCacheKey(1));
+              STATE.results = cached.results;
+              return cached.generation;
+            }'''), '')
+        if local_ready:
+            self.page.evaluate('''() => {
+              window.initialLocalReady = ensureLocalDataLoaded(false, true).then(async ok => {
+                if (!ok) throw new Error('Controlled local corpus did not load');
+                const data = await doSearchLocal(buildLocalSearchParams(1));
+                window.initialLocalGeneration = data.generation;
+                window.initialLocalTotal = data.total;
+                window.initialLocalIds = (await doSearchLocal({...buildLocalSearchParams(1),
+                  pageSize:200})).results.map(getResultStableId);
+                return true;
+              });
+            }''')
+            self.page.wait_for_function('window.initialLocalIds?.length === 200 && STATE.dataLoaded')
+        if prefetched:
+            self.page.evaluate('releaseInitialContinuation()')
+            self.page.wait_for_function('searchPrefetchAbortController.active.size === 0')
+            if initial_generation == 'different':
+                self.assertTrue(self.page.evaluate('apiAvailable'))
+                self.assertEqual(self.page.evaluate('apiFailureCount'), 0)
+                self.assertIsNone(self.page.evaluate('STATE._resultBackend'))
+                self.assertTrue(self.page.evaluate('initialRows.every((row, i) => STATE.results[i] === row)'))
+        else:
+            self.page.evaluate('cancelSearchPrefetch(); releaseInitialContinuation()')
+        self.page.evaluate('() => { STATE.page = 2; doSearch(true); }')
+        # The buggy append also settles here, yielding a direct row-content
+        # failure instead of timing out while waiting for a restore it never starts.
+        self.page.wait_for_function('STATE._loadedPage >= 2 && !STATE.isLoading && !positionRestore')
+        if local_ready:
+            self.assertEqual(self.page.evaluate('STATE._resultBackend'), 'local')
+            self.assertTrue(self.page.evaluate('STATE.useLocalMode'))
+            self.assertTrue(self.page.evaluate('resultWindow?.generation === initialLocalGeneration'))
+            self.assertEqual(self.page.evaluate('STATE.total'), self.page.evaluate('initialLocalTotal'))
+            self.assertEqual(self.page.evaluate('STATE.results.filter(Boolean).slice(0,200).map(getResultStableId)'),
+                             self.page.evaluate('initialLocalIds'))
+            self.assertFalse(self.page.evaluate('initialContinuationRequests.some(body => body.page === 1)'))
+            self.assertEqual(self.errors, [])
+            return
+        names = self.page.evaluate('STATE.results.filter(Boolean).map(row => row.File)')
+        self.assertGreaterEqual(len(names), 200)
+        shift = 0 if initial_generation == 'same' else 1
+        self.assertEqual(names, ['initial-paging-' + str(i) for i in range(-shift, len(names) - shift)])
+        if initial_generation == 'same':
+            self.assertTrue(self.page.evaluate('resultWindow === null'))
+            self.assertFalse(self.page.evaluate('initialContinuationRequests.some(body => body.page === 1)'))
+            self.assertTrue(self.page.evaluate('initialRows.every((row, i) => STATE.results[i] === row)'))
+            self.assertTrue(self.page.evaluate('''initialDomRow !== null && initialDomRow ===
+              DOM.resultsList.querySelector('.result-item[data-index="0"]')'''))
+        else:
+            self.assertTrue(self.page.evaluate('resultWindow?.generation === initialGenerationB'))
+            self.assertTrue(self.page.evaluate('''initialContinuationRequests.some(body =>
+              body.page === 1 && body.anchor_id === initialAnchor)'''))
+        self.assertEqual(self.page.evaluate('STATE.results.findIndex(row => row && getResultStableId(row) === initialAnchor)'), shift)
+        self.assertEqual(self.page.evaluate('STATE.total'), 301)
+        self.assertEqual(self.page.evaluate('STATE._resultBackend'), 'api')
+        self.assertTrue(self.page.evaluate('location.hash === initialRoute'))
+        self.assertEqual(self.errors, [])
+
+    def test_initial_generation_relocates_before_api_append(self):
+        self.check_initial_generation_relocation(prefetched=False)
+
+    def test_initial_generation_relocates_before_prefetched_append(self):
+        self.check_initial_generation_relocation(prefetched=True)
+
+    def test_initial_without_generation_relocates_before_api_append(self):
+        self.check_initial_generation_relocation(prefetched=False, initial_generation='missing')
+
+    def test_initial_without_generation_relocates_before_prefetched_append(self):
+        self.check_initial_generation_relocation(prefetched=True, initial_generation='missing')
+
+    def test_initial_same_generation_appends_without_relocation(self):
+        self.check_initial_generation_relocation(prefetched=False, initial_generation='same')
+
+    def test_initial_same_generation_prefetch_appends_without_relocation(self):
+        self.check_initial_generation_relocation(prefetched=True, initial_generation='same')
+
+    def test_initial_prefetch_mismatch_preserves_ready_local_backend(self):
+        self.check_initial_generation_relocation(prefetched=True, local_ready=True)
+
+    def test_initial_empty_generation_cache_roundtrip_relocates_before_api_append(self):
+        self.check_initial_generation_relocation(prefetched=False, initial_generation='empty')
+
+    def test_initial_empty_generation_cache_roundtrip_relocates_before_prefetched_append(self):
+        self.check_initial_generation_relocation(prefetched=True, initial_generation='empty')
+
     def reach_bottom(self):
         self.page.evaluate('DOM.resultsContainer.scrollTop = DOM.resultsContainer.scrollHeight')
         self.page.wait_for_function('STATE.isLoading && STATE._pendingPage === 2')

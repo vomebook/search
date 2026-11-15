@@ -742,15 +742,15 @@ test("retry workers recheck uncertainty when consuming queued items, unlike expl
   const start = source.indexOf("let downloadBatch = null;");
   const end = source.indexOf("function setupDownloadIntentWarming() {", start);
   assert.ok(start >= 0 && end > start);
-  let f;
+  let f, handoffs = 0;
   const dom = batchDomFixture();
-  const {status, uncertainList, click} = dom;
+  const {status, buttons, uncertainList, click} = dom;
   const sandbox = {
     AbortController, API_BASE: "", DOWNLOAD_CHECK_TIMEOUT: 8000, buildDownloadUrl() {}, triggerDownload() {}, showToast() {},
     document: dom.document, sessionStorage: dom.sessionStorage,
     navigator: {onLine: true},
     VoiceOfMLDownloadController: {createDownloadController(options) {
-      f = fixture({...options, triggerDownload() { throw new Error("uncertain"); }});
+      f = fixture({...options, triggerDownload() { handoffs++; throw new Error("uncertain"); }});
       return f.controller;
     }},
   };
@@ -788,6 +788,67 @@ test("retry workers recheck uncertainty when consuming queued items, unlike expl
   f.requests[5].resolve(response({ok: false}, false, 404));
   await flush();
   assert.deepEqual(Array.from(sandbox.current().blockedFailures, item => item.link), ["x"]);
+
+  // An all-skipped retry must regain its retry control after acknowledgement,
+  // while the other file remains uncertain and no request or handoff starts.
+  const other = sandbox.single("y", "y", {quiet: true, skipCheck: true});
+  await flush();
+  f.advance(300);
+  f.fireDelay(300);
+  assert.equal(await other, false);
+  sandbox.start(["x", "y"].map(link => ({filename: link, link})), true);
+  await flush();
+  const skippedBatch = sandbox.current();
+  assert.equal(skippedBatch.done, true);
+  assert.deepEqual(Array.from(skippedBatch.skippedUncertain, item => item.link), ["x", "y"]);
+  assert.deepEqual(Array.from(skippedBatch.failed), []);
+  assert.equal(buttons.retry.hidden, true);
+  assert.equal(buttons.close.hidden, false);
+  assert.equal(uncertainList.children[0].children[1].disabled, false);
+  const acknowledgeX = uncertainList.children[0].children[1];
+  click({target: acknowledgeX});
+  await flush();
+  assert.equal(f.requests.length, 6);
+  assert.equal(handoffs, 2);
+  assert.equal(sandbox.current(), skippedBatch);
+  assert.deepEqual(Array.from(skippedBatch.failed, item => item.link), ["x"]);
+  assert.deepEqual(Array.from(skippedBatch.skippedUncertain, item => item.link), ["y"]);
+  assert.deepEqual(Array.from(skippedBatch.uncertain, item => item.link), ["y"]);
+  assert.deepEqual(JSON.parse(dom.sessionStorage.getItem("uncertain-downloads")), [{filename: "y", link: "y"}]);
+  assert.equal(buttons.retry.hidden, false);
+  assert.equal(buttons.close.hidden, false);
+  assert.equal(uncertainList.children.length, 1);
+  assert.equal(uncertainList.children[0].children[1].dataset.acknowledgeLink, "y");
+  assert.equal(uncertainList.children[0].children[1].disabled, false);
+  assert.match(status.textContent, /因状态不确定跳过重试 1："y"（"y"）/);
+  click({target: acknowledgeX});
+  assert.deepEqual(Array.from(skippedBatch.failed, item => item.link), ["x"]);
+
+  // Duplicate identities across the two held lists become one retry entry.
+  skippedBatch.skippedUncertain.push({filename: "y alias", link: "y"});
+  skippedBatch.blockedFailures.push({filename: "y", link: "y"});
+  click({target: uncertainList.children[0].children[1]});
+  await flush();
+  assert.deepEqual(Array.from(skippedBatch.failed, item => item.link), ["x", "y"]);
+  assert.deepEqual(Array.from(skippedBatch.skippedUncertain), []);
+  assert.deepEqual(Array.from(skippedBatch.blockedFailures), []);
+  assert.deepEqual(JSON.parse(dom.sessionStorage.getItem("uncertain-downloads")), []);
+  assert.equal(uncertainList.children.length, 0);
+  assert.equal(buttons.retry.hidden, false);
+  assert.equal(buttons.close.hidden, false);
+  assert.equal(f.requests.length, 6);
+  assert.equal(handoffs, 2);
+
+  click({target: {dataset: {queue: "retry"}}});
+  await flush();
+  assert.deepEqual(Array.from(sandbox.current().items, item => item.link), ["x", "y"]);
+  assert.deepEqual(f.requests.slice(6).map(request => request.url), ["/api/download/check?link=x", "/api/download/check?link=y"]);
+  f.requests[6].resolve(response({ok: false}, false, 404));
+  f.requests[7].resolve(response({ok: false}, false, 404));
+  await flush();
+  assert.equal(sandbox.current().done, true);
+  assert.deepEqual(Array.from(sandbox.current().failed, item => item.link), ["x", "y"]);
+  assert.equal(handoffs, 2);
 });
 
 

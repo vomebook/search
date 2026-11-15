@@ -54,15 +54,40 @@ class UncertainDownloadTests(unittest.TestCase):
 
     def test_acknowledgement_only_clears_the_chosen_record(self):
         self.page.evaluate('''() => {
+          window.checks = [];
+          window.launches = [];
+          const nativeFetch = window.fetch;
+          window.fetch = async (url, options) => {
+            if (!String(url).includes('/api/download/check?')) return nativeFetch(url, options);
+            checks.push(String(url));
+            return new Response('{"ok":true}');
+          };
+          window.triggerDownload = url => launches.push(url);
           uncertainDownloads.push({filename:'<b>one</b>',link:'one'}, {filename:'two',link:'two'});
           saveUncertainDownloads();
           startDownloadBatch([{filename:'one',link:'one'},{filename:'two',link:'two'}], true);
         }''')
         self.page.wait_for_function('downloadBatch.done')
         self.assertEqual(self.page.locator('[data-uncertain-list] b').count(), 0)
+        self.assertFalse(self.page.locator('[data-queue="retry"]').is_visible())
+        self.assertEqual(self.page.evaluate('downloadBatch.skippedUncertain.map(item=>item.link)'), ['one', 'two'])
         self.page.locator('[data-acknowledge-link="one"]').click()
         self.assertEqual(self.page.evaluate('uncertainDownloads.map(item=>item.link)'), ['two'])
         self.assertEqual(self.page.locator('[data-acknowledge-link="two"]').count(), 1)
+        self.assertTrue(self.page.locator('[data-acknowledge-link="two"]').is_enabled())
+        self.assertEqual(self.page.evaluate('downloadBatch.failed.map(item=>item.link)'), ['one'])
+        self.assertEqual(self.page.evaluate('downloadBatch.skippedUncertain.map(item=>item.link)'), ['two'])
+        self.assertEqual(self.page.evaluate('[checks.length, launches.length]'), [0, 0])
+        self.assertTrue(self.page.locator('[data-queue="retry"]').is_visible())
+        self.assertTrue(self.page.locator('[data-queue="close"]').is_visible())
+        self.page.locator('[data-queue="retry"]').click()
+        self.page.wait_for_function('downloadBatch.done')
+        self.assertEqual(self.page.evaluate('downloadBatch.items.map(item=>item.link)'), ['one'])
+        self.assertEqual(self.page.evaluate('[checks.length, launches.length, downloadBatch.started]'), [1, 1, 1])
+        self.assertTrue(self.page.evaluate('checks[0].endsWith("/api/download/check?link=one")'))
+        self.assertEqual(self.page.evaluate('uncertainDownloads.map(item=>item.link)'), ['two'])
+        self.assertEqual(self.page.evaluate('JSON.parse(sessionStorage.getItem("uncertain-downloads")).map(item=>item.link)'), ['two'])
+        self.assertTrue(self.page.locator('[data-acknowledge-link="two"]').is_enabled())
 
 
 if __name__ == '__main__':
