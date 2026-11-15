@@ -16,6 +16,8 @@ OLD_ANCHOR = 'c7424ac3e549c9edf59f302e3809268c12bfe114'
 OLD_BASE = '626785f1e3d9e05d2e8f3d9aec3d6ec16dc25f0b'
 NEW_ANCHOR = '66d92cb401f52e9dfe78ca6026e682c7097b730b'
 NEW_BASE = 'd6c3bea07d0005143f0a411a036b360a584bf315'
+FILTERED_ANCHOR = '714a0a522b8679ea641a996d35df49acc7cfc0fe'
+FILTERED_BASE = '6cb90073a110b209ac70cfd275f23a49d641a5c2'
 FILES = ('backend-coverage-debt.json', 'strict-inventory-debt.json')
 
 
@@ -111,20 +113,25 @@ if [[ "${BAD_HASH:-0}" == 1 ]]; then printf x >> "$output"; fi
         return subprocess.run(['bash', '-e', '-o', 'pipefail', '-c', text], cwd=self.work,
                               env=self.env, text=True, capture_output=True)
 
-    def select_pair(self, new):
+    def select_pair(self, history):
         selector = (ROOT / 'scripts/select_hf_history.py').read_text()
-        anchor, baseline = (NEW_ANCHOR, NEW_BASE) if new else (OLD_ANCHOR, OLD_BASE)
+        anchor, baseline = {
+            'old': (OLD_ANCHOR, OLD_BASE),
+            'new': (NEW_ANCHOR, NEW_BASE),
+            'filtered': (FILTERED_ANCHOR, FILTERED_BASE),
+        }[history]
         selector = selector.replace(anchor, self.anchor).replace(baseline, self.baseline)
         (self.work / 'scripts/select_hf_history.py').write_text(selector)
-        verifier = (ROOT / 'scripts/verify_hf_quality_baseline.py').read_text().replace(NEW_ANCHOR, self.anchor if new else NEW_ANCHOR)
+        verifier = (ROOT / 'scripts/verify_hf_quality_baseline.py').read_text().replace(NEW_ANCHOR, self.anchor if history == 'new' else NEW_ANCHOR)
         (self.work / 'scripts/verify_hf_quality_baseline.py').write_text(verifier)
         lock_path = self.work / '.github/quality-baselines/hf-source.json'
         lock = json.loads(lock_path.read_text())
-        lock['revision'] = self.baseline if new else NEW_BASE
+        # Only the canonical history substitutes the quality lock revision.
+        lock['revision'] = self.baseline if history == 'new' else NEW_BASE
         lock_path.write_text(json.dumps(lock))
 
     def checkout(self, script=None):
-        self.select_pair(False)
+        self.select_pair('old')
         return self.run_shell(script if script is not None else shell('Checkout Hugging Face Search Space'))
 
     def verify(self, script=None):
@@ -151,10 +158,41 @@ if [[ "${BAD_HASH:-0}" == 1 ]]; then printf x >> "$output"; fi
             self.assertEqual((self.runtime / 'hf-quality-baseline' / name).read_bytes(), (self.source / name).read_bytes())
 
     def test_new_history_selection_executes_same_workflow(self):
-        self.select_pair(True)
+        self.select_pair('new')
         result = self.run_shell(shell('Checkout Hugging Face Search Space'))
         self.assert_checkout_success(result)
         self.assert_verify_success(self.verify())
+
+    def test_filtered_history_preserves_source_admission_and_canonical_quality_lock(self):
+        self.select_pair('filtered')
+        checkout = shell('Checkout Hugging Face Search Space')
+        self.env['FAKE_REV'] = self.anchor
+        result = self.run_shell(checkout)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('HF source admission failed', result.stderr)
+        self.assertEqual(self.calls(), ['ls-remote'])
+        self.assertEqual(self.output.read_text(), '')
+        self.assertFalse((self.work / 'huggingface-search').exists())
+        self.env['FAKE_REV'] = self.revision
+        self.log.write_text('')
+        self.assert_checkout_success(self.run_shell(checkout))
+        lock_path = self.work / '.github/quality-baselines/hf-source.json'
+        lock = json.loads(lock_path.read_text())
+        self.assertEqual(lock['revision'], NEW_BASE)
+        self.assert_verify_success(self.verify())
+        self.env['BAD_HASH'] = '1'
+        result = self.verify()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('missing or altered baseline file', result.stderr)
+        self.assertNotIn('Verified two HF quality baselines', result.stdout)
+        del self.env['BAD_HASH']
+        # Selecting the third baseline must not let it replace the canonical lock.
+        lock['revision'] = self.baseline
+        lock_path.write_text(json.dumps(lock))
+        result = self.verify()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('invalid selected baseline revision or lock', result.stderr)
+        self.assertNotIn('Verified two HF quality baselines', result.stdout)
 
     def test_real_workflow_and_early_exit_mutations(self):
         # A successful exit alone is not success: assert every observable side effect.
