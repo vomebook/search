@@ -4,7 +4,7 @@ const MAX_CORPUS_COMPRESSED_BYTES = 32 * 1024 * 1024;
 const MAX_CORPUS_EXPANDED_BYTES = 256 * 1024 * 1024;
 const SORT_PRECOMPUTE_DELAY_MS = 1000;
 // Bump when matching, filtering, collation or public record semantics change.
-const SEARCH_SEMANTICS_VERSION = "worker-search-v6";
+const SEARCH_SEMANTICS_VERSION = "worker-search-v7";
 let snapshotGeneration = null;
 
 let records = [];
@@ -976,49 +976,50 @@ function searchLocal(params, preparedExact = null) {
     buildFulltext();
     const activeIndex = searchFolders ? wordIndex : wordIndexFilesOnly;
     const activeVocab = searchFolders ? vocabSorted : vocabSortedFilesOnly;
-    const tokenCandidates = [];
-    let sortedCandidates = true;
     const scope = exactSearchScope(params.repos);
-    const tokens = tokenize(query);
     const terms = query.toLowerCase().split(/\s+/).filter(Boolean);
-    // Any mandatory literal term can safely bound the literal-only fallback;
-    // the fuzzy postings below still retain the complete vocabulary semantics.
-    let literalScope = scope;
-    for (const term of terms) {
-      const indexed = indexedExactCandidates(term, params, literalScope.length);
-      if (indexed !== null) literalScope = indexed;
-    }
-    const seen = new Set();
-    for (const index of literalScope) {
-      const fields = getRecordSearchFields(records[index]);
-      if (terms.every(term => fields.file.includes(term) || fields.repo.includes(term)
-          || (searchFolders && fields.folder.includes(term)))) seen.add(index);
-    }
-    for (const token of tokens) {
-      let candidates = activeIndex[token] || [];
-      // A missing vocabulary token with literal hits already has a complete
-      // authoritative answer; do not expand every two-edit near match.
-      if (!candidates.length && !(terms.length === 1 && seen.size)) {
-        sortedCandidates = false;
-        const fuzzy = new Set();
-        const maxDist = fuzzyDistanceBudget(token);
-        for (const entry of maxDist ? activeVocab : []) {
-          const vocab = entry[0];
-          if (couldBeFuzzy(token, vocab, maxDist) && editDistance(token, vocab, maxDist) <= maxDist) {
-            for (const index of activeIndex[vocab] || []) fuzzy.add(index);
+    const termCandidates = [];
+    // Repeated AND terms share candidates; retain the original term count
+    // below because single-term literal hits suppress fuzzy expansion.
+    for (const term of new Set(terms)) {
+      // A literal hit may come from Repo or an unindexed substring while
+      // another term needs fuzzy postings. Union within each term before AND.
+      const literalScope = indexedExactCandidates(term, params, scope.length) ?? scope;
+      const seen = new Set();
+      for (const index of literalScope) {
+        const fields = getRecordSearchFields(records[index]);
+        if (fields.file.includes(term) || fields.repo.includes(term)
+            || (searchFolders && fields.folder.includes(term))) seen.add(index);
+      }
+      const tokenCandidates = [];
+      let sortedCandidates = true;
+      for (const token of tokenize(term)) {
+        let candidates = activeIndex[token] || [];
+        // Preserve the single-term literal answer without expanding missing
+        // tokens; multi-term queries retain complete fuzzy postings.
+        if (!candidates.length && !(terms.length === 1 && seen.size)) {
+          sortedCandidates = false;
+          const fuzzy = new Set();
+          const maxDist = fuzzyDistanceBudget(token);
+          for (const entry of maxDist ? activeVocab : []) {
+            const vocab = entry[0];
+            if (couldBeFuzzy(token, vocab, maxDist) && editDistance(token, vocab, maxDist) <= maxDist) {
+              for (const index of activeIndex[vocab] || []) fuzzy.add(index);
+            }
           }
+          candidates = Array.from(fuzzy);
         }
-        candidates = Array.from(fuzzy);
+        if (!candidates.length) {
+          tokenCandidates.length = 0;
+          break;
+        }
+        tokenCandidates.push(candidates);
       }
-      if (!candidates.length) {
-        tokenCandidates.length = 0;
-        break;
-      }
-      tokenCandidates.push(candidates);
+      for (const index of intersectCandidateLists(tokenCandidates, sortedCandidates)) seen.add(index);
+      termCandidates.push(Array.from(seen).sort((a, b) => a - b));
+      if (!seen.size) break;
     }
-    matched = intersectCandidateLists(tokenCandidates, sortedCandidates);
-    for (const index of matched) seen.add(index);
-    matched = Array.from(seen).sort((a, b) => a - b);
+    matched = intersectCandidateLists(termCandidates, true);
   }
   const filtered = applyFilters(matched, params);
   if (params.sort === "name" || params.sort === "size") {

@@ -328,6 +328,56 @@ class PositionWindowTests(unittest.TestCase):
         self.wait_anchor(49850)
         self.assertTrue(self.page.evaluate("cachedRow===DOM.resultsList.querySelector('[data-index=\"49850\"]')"))
 
+    def check_cached_viewport_selection(self, replace_neighbor):
+        self.persist_viewport()
+        self.page.evaluate("STATE.query='paging-other';doSearch()")
+        self.page.wait_for_function('!STATE.isLoading')
+        self.page.evaluate('''replaceNeighbor => {
+          const original=fetchPositionPage;
+          fetchPositionPage=async (...args)=>{
+            const data=await original(...args);
+            for(const record of data.results) {
+              if(record.File==='paging-49850') record.Size=2;
+              if(record.File==='paging-49851') {
+                record.Size=2;
+                if(replaceNeighbor) record.File='replacement-neighbor';
+              }
+            }
+            return data;
+          };
+          searchViewSnapshots.clear();searchViewportSnapshots.clear();
+          windowGeneration='two';windowStall=1;
+          STATE.query='paging-original';doSearch(false,false,true);
+        }''', replace_neighbor)
+        self.assert_cached_viewport()
+        self.page.locator('#multi-select-toggle').check()
+        anchor = self.page.locator('.result-checkbox[data-index="49850"]')
+        neighbor = self.page.locator('.result-checkbox[data-index="49851"]')
+        anchor.check()
+        neighbor.check()
+        self.assertEqual(self.page.evaluate('getSelectedFiles().map(file=>file.filename)'),
+                         ['paging-49850.txt', 'paging-49851.txt'])
+        self.assertTrue(self.page.evaluate('!!positionRestore.preview'))
+        self.page.evaluate('releaseWindow()')
+        self.wait_anchor(49850)
+        self.assertEqual(self.page.evaluate('resultWindow.generation'), 'two')
+        self.assertEqual(self.page.evaluate('STATE.results[49851].File'),
+                         'replacement-neighbor' if replace_neighbor else 'paging-49851')
+        self.assertEqual(self.page.evaluate('STATE.results[49850].Size'), 2)
+        expected = ['paging-49850.txt'] if replace_neighbor else ['paging-49850.txt', 'paging-49851.txt']
+        self.assertEqual(self.page.evaluate('getSelectedFiles().map(file=>file.filename)'), expected)
+        self.assertTrue(anchor.is_checked())
+        self.assertEqual(neighbor.is_checked(), not replace_neighbor)
+        self.assertEqual(self.page.locator('#multi-selected-count').inner_text(),
+                         '已选1项' if replace_neighbor else '已选2项')
+        self.assertEqual(self.page.evaluate('lastSelectedIndex'), -1 if replace_neighbor else 49851)
+
+    def test_cached_viewport_selection_drops_replaced_neighbor_after_validation(self):
+        self.check_cached_viewport_selection(replace_neighbor=True)
+
+    def test_cached_viewport_selection_keeps_same_identity_after_metadata_change(self):
+        self.check_cached_viewport_selection(replace_neighbor=False)
+
     def test_reload_displays_saved_content_while_network_is_blocked(self):
         self.page.set_viewport_size({'width':390,'height':844})
         self.page.wait_for_timeout(100)
