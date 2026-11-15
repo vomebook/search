@@ -84,7 +84,7 @@ class SegmentedScrollTests(unittest.TestCase):
           setResultScrollTop(getVirtualOffset(88050)+11);renderVisible();await scrollFrames();
           const saved=captureReaderReturnScroll();
           setResultScrollTop(0);renderVisible();
-          readerReturnScrollState=saved;restoreReaderReturnScroll();await scrollFrames();checkSegment();
+          readerReturnPosition.setScroll(saved);restoreReaderReturnScroll();await scrollFrames();checkSegment();
           return {samples:segmentSamples,lastVisible,anchor:findVirtualIndex(getResultScrollTop()),
             offset:getResultScrollTop()-getVirtualOffset(88050)};
         }''')

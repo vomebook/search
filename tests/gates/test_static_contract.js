@@ -249,10 +249,13 @@ test("Reader return and search snapshot state is preserved", () => {
     "function restoreReaderReturnScroll",
     "viewKey: \"\"",
     "heightCache: new Map()",
-    "readerNavigation.remember(url, readerReturnScrollState)",
-    "if (saved.viewKey && saved.viewKey !== getSearchViewKey())",
-    "if (readerReturnScrollState && !readerReturnRestoreActive)",
+    "readerReturnPosition.cancelOnScroll()",
   ]) assert.ok(app.includes(value), value);
+  const host = fs.readFileSync("static/search/reader-host/application/host.js", "utf8");
+  const position = fs.readFileSync("static/search/reader-host/presentation/return-position.js", "utf8");
+  assertCode(host, "navigation.remember(url, /** @type {object} */ (position.scroll))");
+  assert.ok(position.includes("if (saved.viewKey && saved.viewKey !== deps.getViewKey())"));
+  assert.ok(position.includes("if (scroll && !active) { generation++; scroll = null; }"));
   assert.match(app, /searchWithInitialFallback\(\);/);
   assert.doesNotMatch(app, /if \(!restoreSearchViewSnapshot\(getSearchViewKey\(\)\)\) searchWithInitialFallback\(\);/);
 });
@@ -508,7 +511,8 @@ test("reader uses original files and lazy PDF canvas rendering", () => {
   assert.match(readerHtml, /id="theme-toggle"/);
   assert.match(readerCss, /\.reader-panel-tabs/);
   assert.match(reader, /function syncCurrentPageFromMarker/);
-  assert.match(app, /message\.type === "voice-reader-open"/);
+  assert.match(fs.readFileSync("static/search/reader-host/application/host.js", "utf8"), /message\.type === "voice-reader-open"/);
+  assert.match(app, /readerHost\.handleReaderMessage\(event\)/);
   assert.doesNotMatch(readerCss, /docx-body|reader-docx/);
   assert.match(reader, /function acquirePdfRenderSlot/);
   assert.match(reader, /function trimPdfCanvases/);

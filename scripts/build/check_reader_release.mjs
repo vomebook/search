@@ -271,6 +271,7 @@ function crossCheck(githubRoot, hfRoot) {
     "search/domain/search-window-page.js",
     "search/presentation/sidebar-render.js",
     "search/reader-navigation.js",
+  "search/reader-host/presentation/return-position.js", "search/reader-host/application/host.js",
     "reader.css",
     "reader/core/reader-request-manager.js",
     "reader/formats/reader-chapter-repository.js",
