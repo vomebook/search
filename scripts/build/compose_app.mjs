@@ -12,6 +12,7 @@ export const APP_DEPENDENCIES = Object.freeze([
   "search/discovery/application/random.js",
   "search/shell/presentation/view.js", "search/shell/application/controller.js",
   "search/bootstrap/domain/initial-payload.js", "search/bootstrap/application/controller.js",
+  "search/results/virtual/domain/heights.js", "search/results/virtual/presentation/rows.js", "search/results/virtual/application/controller.js",
   "search/routing/domain/route.js", "search/routing/application/router.js",
   "search/history/infrastructure/store.js",
   "search/history/application/controller.js",

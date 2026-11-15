@@ -11,6 +11,7 @@ import '../paging/result_window_contracts.mjs';
 import '../session/test_positions_persistence.mjs';
 import '../session/test_result_snapshots.mjs';
 import '../ui/test_sidebar_directory.mjs';
+import '../ui/virtual_results_contracts.mjs';
 import { installClassicSearchModules } from '../../support/classic_search_modules.js';
 import { APP_DEPENDENCIES, stripBundledScripts } from '../../../scripts/build/compose_app.mjs';
 

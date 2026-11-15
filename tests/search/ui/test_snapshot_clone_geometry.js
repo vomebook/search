@@ -27,8 +27,11 @@ function fixture(source, root) {
   c.resultSnapshots = c.VoiceOfMLResultSnapshots.create({cloneResult: record => c.cloneSearchResult(record),
     materialized: (task, index) => c.materializedSnapshotRow(task, index),
     applyHeights: task => c.applySnapshotCloneHeights(task), isCurrent: () => true, completed() {}});
-  for(const name of ['cloneSearchResult','ensureHeightTree','getVirtualTotalHeight',
-    'getVirtualOffset','findVirtualIndex','materializeSnapshotRange','materializedSnapshotRow','applySnapshotCloneHeights','getSelectedFiles']) {
+  Object.assign(c, c.VoiceOfMLVirtualHeights.create(c.VSCROLL, {
+    results:()=>c.STATE.results, hasWindow:()=>false, cloning:()=>!!c.resultSnapshots.cloneTask,
+    getHeightMeasurementKey:c.getHeightMeasurementKey, getResultStableId:c.getResultStableId
+  }));
+  for(const name of ['cloneSearchResult','materializeSnapshotRange','materializedSnapshotRow','applySnapshotCloneHeights','getSelectedFiles']) {
     const match=source.match(new RegExp('^function '+name+'\\([^]*?^}', 'm'));
     assert(match,name);vm.runInContext(match[0],c);
   }

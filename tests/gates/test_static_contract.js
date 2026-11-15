@@ -190,24 +190,28 @@ test("result actions use equal desktop heights and compact mobile column", () =>
   assert.doesNotMatch(resultRows, /'<span class="path-sep">\/<\/span><span class="path-folder"/);
 });
 test("virtual results use bounded buffering", () => {
-  assert.match(app, /const extraScreens = VSCROLL\.isDraggingThumb \? 0 : Math\.min\(3/);
-  assert.match(app, /const velocityOverscanPx = extraScreens \* viewH/);
+  const virtual = ["domain/heights.js", "presentation/rows.js", "application/controller.js"]
+    .map(file => fs.readFileSync("static/search/results/virtual/" + file, "utf8")).join("\n");
+  assert.match(app, /const VSCROLL = VoiceOfMLVirtualHeights\.createState\(\)/);
+  assert.match(app, /VoiceOfMLVirtualResults\.create\(VSCROLL,/);
+  assert.match(virtual, /const extraScreens = VSCROLL\.isDraggingThumb \? 0 : Math\.min\(3/);
+  assert.match(virtual, /const velocityOverscanPx = extraScreens \* viewH/);
   assert.match(app, /const visibleFirst = Math\.floor\(findVirtualIndex\(scrollTop\) \/ size\) \+ 1/);
   assert.match(app, /const direction = VSCROLL\.scrollDirection \|\| 1/);
   assert.match(app, /Demand the page under the viewport before the surrounding overscan/);
-  assert.match(app, /VSCROLL\.renderStart <= safeStart && VSCROLL\.renderEnd >= safeEnd/);
-  assert.match(app, /function ensureVirtualViewportCovered/);
-  assert.match(app, /function ensureVirtualViewportCovered\(\)[\s\S]*?VSCROLL\.renderStart = -1;[\s\S]*?VSCROLL\.renderEnd = -1;/);
-  assert.match(app, /function renderVisible\(\)/);
-  assert.match(app, /const scrollingDown = scrollTop >= previousScrollTop/);
-  assert.match(app, /const previousScrollTop = VSCROLL\.lastScrollTop/);
-  assert.match(app, /const segmentNeedsRecenter =/);
-  assert.match(app, /!segmentNeedsRecenter/);
-  assert.match(app, /function refreshVirtualAfterAppend/);
-  assert.match(app, /if \(updateView\) \{[\s\S]*?VSCROLL\.renderStart = -1;[\s\S]*?renderVisible\(\);/);
-  assert.match(app, /function reconcileVirtualRows/);
-  assert.match(app, /virtual-spacer-bottom/);
-  assert.match(app, /Number\(row\.dataset\.contentVersion\) !== VSCROLL\.contentVersion/);
+  assert.match(virtual, /VSCROLL\.renderStart <= safeStart && VSCROLL\.renderEnd >= safeEnd/);
+  assert.match(virtual, /function ensureVirtualViewportCovered/);
+  assert.match(virtual, /function ensureVirtualViewportCovered\(\)[\s\S]*?VSCROLL\.renderStart = -1;[\s\S]*?VSCROLL\.renderEnd = -1;/);
+  assert.match(virtual, /function renderVisible\(\)/);
+  assert.match(virtual, /const scrollingDown = scrollTop >= previousScrollTop/);
+  assert.match(virtual, /const previousScrollTop = VSCROLL\.lastScrollTop/);
+  assert.match(virtual, /const segmentNeedsRecenter =/);
+  assert.match(virtual, /!segmentNeedsRecenter/);
+  assert.match(virtual, /function refreshVirtualAfterAppend/);
+  assert.match(virtual, /if \(updateView\) \{[\s\S]*?VSCROLL\.renderStart = -1;[\s\S]*?scheduleVirtualRender\(\);/);
+  assert.match(virtual, /function reconcileVirtualRows/);
+  assert.match(virtual, /virtual-spacer-bottom/);
+  assert.match(virtual, /Number\(row\.dataset\.contentVersion\) !== VSCROLL\.contentVersion/);
   assert.match(app, /templates: VSCROLL\.templateCache/);
   assert.match(app, /function createResultRow\(rec, idx\) \{ return getResultRows\(\)\.createRow\(rec, idx\); \}/);
   assert.match(resultRows, /const cache = deps\.templates/);
@@ -216,18 +220,18 @@ test("virtual results use bounded buffering", () => {
   assert.match(app, /function scheduleVirtualRender/);
   assert.match(app, /scheduleVirtualRender\(\)/);
   assert.match(app, /scheduleVirtualRender\(true\)/);
-  assert.match(app, /renderAfterScroll: false/);
-  assert.doesNotMatch(app, /let scrollTicking = false/);
-  assert.match(app, /const scrollTrackUpdated = renderVisible\(\);/);
-  const scheduler = app.match(/^function scheduleVirtualRender\([^]*?^}/m)[0];
+  assert.match(virtual, /renderAfterScroll: false/);
+  assert.doesNotMatch(app + virtual, /let scrollTicking = false/);
+  assert.match(virtual, /const scrollTrackUpdated = renderVisible\(\);/);
+  const scheduler = virtual.match(/^function scheduleVirtualRender\([^]*?^}/m)[0];
   assert.match(scheduler, /if \(afterScroll && !VSCROLL\.renderAfterScroll\) \{[\s\S]*?if \(!VSCROLL\.isDraggingThumb\) maybeLoadNextPage\(\);[\s\S]*?requestAnimationFrame/);
   assert.match(scheduler, /if \(VSCROLL\.renderAfterScroll\)[\s\S]*?if \(!scrollTrackUpdated\) \{[\s\S]*?if \(VSCROLL\.isDraggingThumb\) updateScrollThumb\(\);[\s\S]*?else updateScrollTrack\(\);/);
-  assert.match(app, /updateScrollTrack\(\);[\s\S]*?return true;/);
-  assert.match(app, /if \(updateView\) \{[\s\S]*?scheduleVirtualRender\(\);/);
+  assert.match(virtual, /updateScrollTrack\(\);[\s\S]*?return true;/);
+  assert.match(virtual, /if \(updateView\) \{[\s\S]*?scheduleVirtualRender\(\);/);
   assert.match(app, /if \(!dragFrame\) dragFrame = requestAnimationFrame\(applyPendingScrollTop\)/);
   assert.match(app, /setResultScrollTop\(pendingScrollTop\);\s*pendingScrollTop = null;\s*renderVisible\(\);/);
-  assert.match(app, /VSCROLL\.isDraggingThumb\s*\? viewH \* 0\.35/);
-  assert.match(app, /if \(!VSCROLL\.isDraggingThumb && measureHeights\(start, end, anchor\)\)/);
+  assert.match(virtual, /VSCROLL\.isDraggingThumb\s*\? viewH \* 0\.35/);
+  assert.match(virtual, /if \(!VSCROLL\.isDraggingThumb && measureHeights\(start, end, anchor\)\)/);
   assert.match(app, /VSCROLL\.dragMetrics = null/);
   assert.match(css, /overflow-anchor: none/);
   assert.strictEqual(/function finishDrag\(\)[\s\S]*?measureHeights/.test(app), false);
@@ -237,15 +241,15 @@ test("virtual results use bounded buffering", () => {
   assert.match(app, /const finalScrollTop = requestedScrollTop === null \? getResultScrollTop\(\) : requestedScrollTop/);
   assert.match(app, /setResultScrollTop\(finalScrollTop\)/);
   assert.strictEqual(/VSCROLL\.renderStart = -1;\s*VSCROLL\.renderEnd = -1;\s*renderVisible\(\);\s*if \(STATE\._deferredAppendWhileDragging\)/.test(app), false);
-  assert.match(app, /VSCROLL\.measuredWindowKey === measureKey/);
-  assert.match(app, /VSCROLL\.measuredRowKeys\[idx\] === rowMeasureKey/);
-  assert.match(app, /const rowMeasureKey = getHeightMeasurementKey\(\)/);
+  assert.match(virtual, /VSCROLL\.measuredWindowKey === measureKey/);
+  assert.match(virtual, /VSCROLL\.measuredRowKeys\[idx\] === rowMeasureKey/);
+  assert.match(virtual, /const rowMeasureKey = getHeightMeasurementKey\(\)/);
   assert.match(css, /contain: paint/);
   assert.match(app, /function ensureHeightTree/);
   const heightIndex = fs.readFileSync("static/search/domain/height-index.js", "utf8");
   assert.match(heightIndex, /const parent = i \+ \(i & -i\)/);
-  assert.match(app, /VoiceOfMLSearchHeightIndex\.extendTree\(VSCROLL, oldLen\)/);
-  assert.match(app, /const canExtendTree = !VSCROLL\.heightsDirty/);
+  assert.match(virtual, /VoiceOfMLSearchHeightIndex\.extendTree\(VSCROLL, oldLen\)/);
+  assert.match(virtual, /const canExtendTree = !VSCROLL\.heightsDirty/);
   assert.match(app, /querySelectorAll\("\.result-skeleton-item"\)\.forEach/);
 });
 
@@ -259,10 +263,10 @@ test("Reader return and search snapshot state is preserved", () => {
     "function restoreSearchViewSnapshot",
     "function captureReaderReturnScroll",
     "function restoreReaderReturnScroll",
-    "viewKey: \"\"",
-    "heightCache: new Map()",
     "readerReturnPosition.cancelOnScroll()",
   ]) assert.ok(app.includes(value), value);
+  const virtualState = fs.readFileSync("static/search/results/virtual/domain/heights.js", "utf8");
+  for (const value of ['viewKey: ""', 'heightCache: new Map()']) assert.ok(virtualState.includes(value), value);
   const policy = fs.readFileSync("static/search/results/snapshots/domain/copy-budget.js", "utf8");
   const snapshots = fs.readFileSync("static/search/results/snapshots/application/store.js", "utf8");
   assert.match(policy, /VERSION = 1, MAX = 20, BYTES_MAX = 8 \* 1024 \* 1024/);

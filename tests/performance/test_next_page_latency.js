@@ -8,7 +8,8 @@ const {installClassicSearchModules} = require("../support/classic_search_modules
 
 function install(source, context, names) {
   for (const name of names) {
-    const match = source.match(new RegExp("^(?:async )?function " + name + "\\([^]*?^}", "m"));
+    const match = source.match(new RegExp("^(?:async )?function " + name + "\\([^\\n]*\\} *$", "m"))
+      || source.match(new RegExp("^(?:async )?function " + name + "\\([^]*?^}", "m"));
     assert(match, "Missing function: " + name);
     vm.runInContext(match[0], context);
   }
@@ -22,7 +23,8 @@ function createFixture(source, root) {
     STATE:{results:[first],total:801,pageSize:100,_loadedPage:1,_pageCache:{},hasMore:true,
       _resultBackend:"api",filterFolderSelfs:[],filterFolderSubtrees:[],useLocalMode:false},
     VSCROLL:{renderFrame:0,renderAfterScroll:false,isDraggingThumb:false},
-    document:{hidden:false}, DOM:{resultsContainer:{clientHeight:600}}, navigator:{onLine:true}, AbortController, DOMException,
+    document:{hidden:false}, DOM:{resultsContainer:{clientHeight:600,
+      get scrollTop(){return scrollTop;},set scrollTop(value){scrollTop=value;}}}, navigator:{onLine:true}, AbortController, DOMException,
     searchPrefetchAbortController:null, searchPagePrefetch:undefined, searchRequestId:1,
     positionRestore:null, readerHost:{overlay:null}, resultSnapshots:{cloneTask:null},
     APPEND_REQUEST_TIMEOUT:5000, RECENT_SEARCH_PAGE_TTL:604800000,
@@ -67,6 +69,23 @@ function createFixture(source, root) {
   };
   vm.createContext(context);
   installClassicSearchModules(root, context);
+  context.VSCROLL = context.VoiceOfMLVirtualHeights.createState();
+  let virtual;
+  context.getVirtualResults = () => virtual ||= context.VoiceOfMLVirtualResults.create(context.VSCROLL, {
+    elements:{get resultsContainer(){return context.DOM.resultsContainer;},
+      get resultsList(){return context.DOM.resultsList;},multiSelectToggle:null},
+    results:()=>context.STATE.results,total:()=>context.STATE.total,
+    hasWindow:()=>!!context.resultWindow,windowTotal:()=>context.resultWindow.total,
+    cloning:()=>!!context.resultSnapshots.cloneTask,restoring:()=>!!context.positionRestore,
+    loadedPage:()=>context.STATE._loadedPage,pendingEntrance:()=>false,consumeEntrance(){},recordMeasurement(){},
+    recordForRow:()=>undefined,resetKeyboardIndex(){},ensureResultTemplateCache(){},
+    createResultRow(){throw Error('This latency fixture must not render populated rows');},
+    getHeightMeasurementKey:()=>'',getResultStableId:record=>record?.File || '',
+    updateCurrentResultPosition(){},maybeLoadNextPage:()=>context.maybeLoadNextPage(),
+    updateScrollThumb:()=>context.updateScrollThumb(),updateScrollTrack:()=>context.updateScrollTrack(),
+    ensureResultWindowPages(){},updateVisibleSelection(){},animateVisibleResultRows(){},
+    rememberDisplayedSearchView(){},cancelQuickScroll(){},activateSearchView(){},clearResultTemplateCache(){}
+  });
   context.indexedDB = {open(){
     const request = {result:context.searchPositionDB};
     Object.defineProperty(request, 'onsuccess', {set(callback){callback();}});
@@ -227,7 +246,7 @@ for (const {name:project,root} of searchTestProjects()) {
     for(const near of [false,true]) {
       const f=fixture(source),c=f.context;
       Object.assign(c,{positionRestore:null,resultWindow:null,rememberDisplayedSearchView(){},
-        DOM:{resultsContainer:{clientHeight:600},resultsList:{querySelector:()=>({})}},
+        DOM:{resultsContainer:{clientHeight:600,scrollTop:near?11400:0},resultsList:{querySelector:()=>({style:{}})}},
         ensureVirtualHeights(len){c.VSCROLL.heights.length=len;},ensureHeightTree(){},
         getVirtualOffset:n=>n*60,
         layoutResultScrollSegment(){},resultScrollOrigin:0});
@@ -268,6 +287,9 @@ for (const {name:project,root} of searchTestProjects()) {
     const f=fixture(source); f.setScroll(400);
     f.context.scheduleVirtualRender(true); f.context.scheduleVirtualRender(true);
     assert.deepStrictEqual(f.appended,[2]); assert.strictEqual(f.frames.length,1);
+    // Exercise the real controller's empty-window paint; populated DOM behavior
+    // is covered by virtual_results_contracts and browser render-count checks.
+    f.context.STATE.results=[];
     f.frames[0](); assert.deepStrictEqual(f.appended,[2]);
     f.context.VSCROLL.isDraggingThumb=true;
     f.context.scheduleVirtualRender(true); assert.deepStrictEqual(f.appended,[2]);
