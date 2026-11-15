@@ -2,9 +2,11 @@ import {spawnSync} from "node:child_process";
 import {hasPassingTapContracts} from "../check_tap_contracts.mjs";
 
 // Node 26/V8 scope: only reader-document-loader.mjs and the named tests.
-// Baseline after adding failure-path contracts: 100% lines, 94.20% branches,
-// 97.22% functions. Do not accept an unloaded file as an empty 100% report.
-const minimum = [100, 94.20, 97.22];
+// Baseline with late script callbacks and retry cancellation: 100% lines,
+// 98.65% branches, 97.22% functions. Remaining V8 gaps are the unconditional
+// retry loop exit and the initial untrack no-op replaced before completion.
+// Do not accept an unloaded file as an empty 100% report.
+const minimum = [100, 98.65, 97.22];
 const result = spawnSync(process.execPath, [
   "--test", "--test-concurrency=1", "--test-reporter=tap", "--experimental-test-coverage",
   "--test-coverage-include=**/static/reader/core/reader-document-loader.mjs",
