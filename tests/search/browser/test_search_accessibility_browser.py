@@ -82,7 +82,7 @@ class SearchAccessibilityTests(unittest.TestCase):
         self.assertEqual(self.page.locator('#header svg:not([aria-hidden="true"])').count(), 0)
 
     def test_folder_bulk_controls_preserve_filters_and_cancel_superseded_rendering(self):
-        self.page.wait_for_function('filterRenderDone === filterRenderToken')
+        self.page.wait_for_function('getSidebarFilters().status().done === getSidebarFilters().status().token')
         self.page.locator('#settings-btn').click()
         self.page.evaluate('''()=>{
           routeRenderId++;
@@ -92,7 +92,7 @@ class SearchAccessibilityTests(unittest.TestCase):
           STATE.folderTreeCollapsed={};STATE.filterFolderSubtrees=['alpha/deep/hit'];STATE.filterFolderSelfs=['beta'];
           STATE.filterFolders=['alpha/deep/hit','beta'];DOM.filterFolderSection.style.display='';renderFilterFolderTree();
         }''')
-        self.page.wait_for_function('!folderTreeRenderQueue.length')
+        self.page.wait_for_function('!sidebarFolderTree.pending()')
         before = self.page.evaluate('''()=>({selfs:STATE.filterFolderSelfs.slice(),subtrees:STATE.filterFolderSubtrees.slice(),
           filters:STATE.filterFolders.slice(),total:STATE.total,ids:STATE.results.map(r=>r.ID),url:location.href,request:searchRequestId})''')
         toggle = self.page.locator('#folder-toggle-all')
@@ -103,12 +103,12 @@ class SearchAccessibilityTests(unittest.TestCase):
         self.assertEqual(toggle.inner_text(), '展开')
         self.assertEqual(toggle.get_attribute('aria-label'), '展开所有子目录')
         self.assertEqual(toggle.get_attribute('aria-expanded'), 'false')
-        self.page.wait_for_function('!folderTreeRenderQueue.length')
+        self.page.wait_for_function('!sidebarFolderTree.pending()')
         self.assertEqual(self.page.locator('#filter-folder-tree .filter-folder-item').count(), 1)
         self.assertTrue(self.page.evaluate('Object.values(STATE.folderTreeCollapsed).every(Boolean)'))
         self.page.locator('#filter-folder-tree .tree-toggle').first.click()
         self.assertEqual(toggle.inner_text(), '收起')
-        self.page.wait_for_function('!folderTreeRenderQueue.length')
+        self.page.wait_for_function('!sidebarFolderTree.pending()')
         self.assertEqual(self.page.locator('#filter-folder-tree .filter-folder-item').count(), 3)
         self.assertTrue(self.page.locator('[data-path="alpha"] input').evaluate('n=>n.indeterminate'))
         self.assertTrue(self.page.locator('[data-path="beta"] input').is_checked())
@@ -118,7 +118,7 @@ class SearchAccessibilityTests(unittest.TestCase):
         self.assertEqual(toggle.inner_text(), '收起')
         self.assertEqual(toggle.get_attribute('aria-label'), '收起所有子目录')
         self.assertEqual(toggle.get_attribute('aria-expanded'), 'true')
-        self.page.wait_for_function('!folderTreeRenderQueue.length')
+        self.page.wait_for_function('!sidebarFolderTree.pending()')
         self.assertEqual(self.page.locator('#filter-folder-tree .filter-folder-item').count(), 5)
         self.assertTrue(self.page.locator('[data-path="alpha/deep/hit"] input').is_checked())
         self.assertTrue(self.page.evaluate('Object.values(STATE.folderTreeCollapsed).every(v=>!v)'))
@@ -129,7 +129,7 @@ class SearchAccessibilityTests(unittest.TestCase):
         self.page.locator('#filter-folder-tree .tree-toggle').first.click()
         self.assertEqual(toggle.inner_text(), '展开')
         toggle.press('Enter')
-        self.page.wait_for_function('!folderTreeRenderQueue.length')
+        self.page.wait_for_function('!sidebarFolderTree.pending()')
         self.assertEqual(self.page.locator('#filter-folder-tree .filter-folder-item').count(), 5)
 
         # Interrupt an unfinished large expansion, then replace the route/tree.
@@ -140,7 +140,7 @@ class SearchAccessibilityTests(unittest.TestCase):
           routeRenderId++;STATE.folderTree=[{path:'new',name:'new',hasChildren:false,children:[],hasDirectFiles:true}];
           renderFilterFolderTree();
         }''')
-        self.page.wait_for_function('!folderTreeRenderQueue.length')
+        self.page.wait_for_function('!sidebarFolderTree.pending()')
         self.assertEqual(self.page.locator('#filter-folder-tree .filter-folder-item').count(), 1)
         self.assertEqual(self.page.locator('#filter-folder-tree .filter-folder-item').get_attribute('data-path'), 'new')
         self.assertTrue(toggle.is_disabled())

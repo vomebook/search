@@ -12,10 +12,7 @@ const context = vm.createContext({Set, STATE: {folderTree: []}});
 vm.runInContext(moduleSource, context);
 assert.strictEqual(source.indexOf('function folderPathCovered('), -1);
 assert.strictEqual(source.indexOf('function applyFolderSelectionToNode('), -1);
-const start = source.indexOf('let folderSelectionMemo = null;');
-const end = source.indexOf('function persistFolderSelection(', start);
-assert(start >= 0 && end > start);
-vm.runInContext(source.slice(start, end), context);
+require('../../support/sidebar_fixture').installSidebarTree(path.join(__dirname, '../../..'), context);
 context.applyFolderSelectionToNode = context.VoiceOfMLSearchFolderSelection.applyFolderSelectionToNode;
 
 function node(path, children = []) {

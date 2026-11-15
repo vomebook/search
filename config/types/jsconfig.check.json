@@ -26,6 +26,7 @@
   },
   "files": [
     "../../typings/reader-globals.d.ts",
+    "../../typings/search-sidebar.d.ts",
     "../../static/reader-resources.js",
     "../../static/reader/core/reader-contract.js",
     "../../static/reader/core/reader-diagnostics.mjs",
@@ -109,6 +110,9 @@
     "../../static/search/domain/search-recovery.js",
     "../../static/search/domain/search-window-page.js",
     "../../static/search/presentation/sidebar-render.js",
+    "../../static/search/sidebar/presentation/filter-list.js",
+    "../../static/search/sidebar/presentation/folder-tree.js",
+    "../../static/search/sidebar/application/filters.js",
     "../../static/tts-client.js",
     "../../static/app.js",
     "../../static/reader.js",

@@ -22,13 +22,22 @@ function fixture(data, selected = []) {
     }});
   const filename = path.join(process.cwd(), 'static/search/file-types.js');
   vm.runInContext(fs.readFileSync(filename, 'utf8'), c, {filename});
-  for (const pattern of [/^const ORDERED_EXTENSIONS = [^\n]+/m,
-    /^(?:async )?function renderExtensionFilter\([^]*?^}/m]) {
-    const match = source.match(pattern);
-    assert.ok(match, `inline declaration missing: ${pattern}`);
-    vm.runInContext(match[0], c);
-  }
-  return {c, state, container, changes, run: () => c.renderExtensionFilter()};
+  const controllerFile = path.join(process.cwd(), 'static/search/sidebar/application/filters.js');
+  vm.runInContext(fs.readFileSync(controllerFile, 'utf8'), c, {filename: controllerFile});
+  const controller = c.VoiceOfMLSidebarFilters.create({
+    readView: () => ({mode: state.mode, repo: state.repo, repoFull: state.repoFull,
+      routeId: c.routeRenderId, selectedExtensions: state.filterExtensions,
+      extensions: state.extensionList, apiAvailable: c.apiAvailable}),
+    elements: {extList: container}, lists: {renderExtensionTree: c.renderExtensionTree},
+    orderedExtensions: c.VoiceOfMLSearchFileTypes.orderedExtensions,
+    hasExtensionCounts: () => false, fetchExtensions: () => c.fetchExtensions(),
+    publishExtensions: values => { state.extensionList = values.map(item => item.name); },
+    selectExtensions(values) {
+      state.filterExtensions = values;
+      c.saveStoredExtensionFilters(); c.updateFilterCancelButtons(); c.scheduleFilterSearch();
+    },
+  });
+  return {c, state, container, changes, run: () => controller.renderExtensions()};
 }
 
 test('known order, unknown grouping, selected-only entries and change callbacks', async () => {

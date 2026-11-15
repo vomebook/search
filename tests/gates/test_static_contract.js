@@ -5,6 +5,7 @@ const { assertCode, readReaderSource } = require("../support/reader_source_contr
 const { test, run } = require("../support/test_harness");
 
 const app = fs.readFileSync("static/app.js", "utf8");
+const filters = fs.readFileSync("static/search/sidebar/application/filters.js", "utf8");
 const reader = readReaderSource(require("path").resolve("."));
 const worker = fs.readFileSync("static/search/index-worker.js", "utf8");
 const sw = fs.readFileSync("static/sw.js", "utf8");
@@ -59,15 +60,16 @@ test("local metadata completion refreshes global repository and extension filter
   assert.match(app, /if \(STATE\.mode === "repo"\) \{[\s\S]*?renderFilters\(routeRenderId\);/);
   assert.match(app, /renderExtensionFilter\(routeRenderId\);/);
   assert.match(app, /renderRepoFilter\(routeRenderId\);/);
-  assert.match(app, /async function renderRepoFilter[\s\S]*?await loadSidebarInitial\(null\)/);
+  assert.match(filters, /async function renderRepoFilter[\s\S]*?await deps\.initial\(null\)/);
+  assert.match(app, /initial: repo => loadSidebarInitial\(repo\)/);
 });
 test("filter metadata rejects stale requests and uses static sidebar fallback", () => {
   assert.match(app, /const extensionApiCache = new Map\(\)/);
   assert.match(app, /const extensionApiPending = new Map\(\)/);
   assert.match(app, /if \(extensionApiPending\.has\(key\)\) return extensionApiPending\.get\(key\)/);
-  assert.match(app, /let extensionFilterRenderId = 0/);
-  assert.match(app, /if \(renderId !== extensionFilterRenderId\) return/);
-  assert.match(app, /if \(STATE\.mode !== renderMode \|\| STATE\.repo !== renderRepo \|\| STATE\.repoFull !== renderRepoFull\) return/);
+  assert.match(filters, /let extensionFilterRenderId = 0/);
+  assert.match(filters, /if \(renderId !== extensionFilterRenderId\) return/);
+  assert.match(filters, /if \(deps\.readView\(\)\.mode !== renderMode \|\| deps\.readView\(\)\.repo !== renderRepo \|\| deps\.readView\(\)\.repoFull !== renderRepoFull\) return/);
   assert.match(app, /async function renderRepoList\(routeId\) \{[\s\S]*?var initial = await loadSidebarInitial\(null\)/);
   assert.doesNotMatch(app, /if \(!currentExtNames\.length && STATE\.mode === "repo"\) currentExtNames = extensionList\.slice\(\)\.sort\(\)/);
 });

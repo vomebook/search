@@ -2604,8 +2604,6 @@ const FILTER_SEARCH_DEBOUNCE_MS = 200;
 let routeRenderId = 0;
 // A path-only route change bumps routeRenderId for the browser, but must not
 // orphan an unfinished filter render or its batched folder-tree tasks.
-let filterRenderToken = 0;
-let filterRenderDone = 0;
 let apiAvailable = true;
 let apiFailureCount = 0;
 let apiProbeTimer = null;
@@ -5409,677 +5407,63 @@ async function renderBrowser(path, routeId) {
   displayedData = data;
 }
 
-async function renderFilters(routeId) {
-  const token = ++filterRenderToken;
-  var extensionPromise = renderExtensionFilter(routeId);
-  if (STATE.mode === "global") {
-    DOM.filterRepoSection.style.display = "";
-    await renderRepoFilter(routeId);
-  } else {
-    DOM.filterRepoSection.style.display = "none";
-  }
-  if (STATE.mode === "repo") {
-    var folderRepo = STATE.repo;
-    var folderRepoFull = STATE.repoFull;
-    DOM.filterFolderSection.style.display = "";
-    updateFolderTreeControls(true);
-    DOM.filterFolderTree.innerHTML = '<div style="font-size:12px;color:var(--on-surface-variant);opacity:0.6">加载中...</div>';
-    var folderTree = folderTreeCache.get(folderRepoFull) || null;
-    var initialFolderTree = null;
-    if (!folderTree || !folderTree.length) {
-      try {
-        var initialSidebar = await loadSidebarInitial(folderRepo);
-        if (initialSidebar && Array.isArray(initialSidebar.folders)) {
-          initialFolderTree = initialSidebar.folders.map(function(folder) {
-            return { name: folder.name, path: folder.path || folder.name, count: folder.count || 0, children: [], hasChildren: false, hasDirectFiles: true };
-          });
-        }
-      } catch (e) {}
-    }
-    if (!folderTree || !folderTree.length) {
-      if (apiAvailable) {
-        try {
-          const tree = await fetchFolderTree(folderRepo, folderRepoFull);
-          if (routeId && routeId !== routeRenderId) return;
-          if (STATE.mode !== "repo" || STATE.repo !== folderRepo || STATE.repoFull !== folderRepoFull) return;
-          if (tree) {
-            folderTreeCache.set(folderRepoFull, tree);
-            folderTree = tree;
-          }
-        } catch (e) {}
-      }
-    }
-    if ((!folderTree || !folderTree.length) && STATE.dataLoaded) {
-      try {
-        const localTree = await corpusWorkerRequest("folder-tree", { repo: folderRepoFull }, WORKER_REQUEST_TIMEOUT);
-        folderTree = localTree && localTree.tree || [];
-        if (folderTree.length) folderTreeCache.set(folderRepoFull, folderTree);
-      } catch (e) {}
-    }
-    if ((!folderTree || !folderTree.length) && initialFolderTree && initialFolderTree.length) {
-      folderTree = initialFolderTree;
-    }
-    if (routeId && routeId !== routeRenderId) return;
-    if (STATE.mode !== "repo" || STATE.repo !== folderRepo || STATE.repoFull !== folderRepoFull) return;
-    STATE.folderTree = folderTree;
-    if (STATE.folderTree && STATE.folderTree.length) initializeFolderTreeCollapsed(STATE.folderTree);
-    renderFilterFolderTree();
-  } else {
-    DOM.filterFolderSection.style.display = "none";
-    updateFolderTreeControls(true);
-  }
-  await extensionPromise;
-  if (routeId && routeId !== routeRenderId) return;
-  if (token === filterRenderToken) filterRenderDone = token;
-}
-
-function retainFilterRenderingForRoute(routeId) {
-  for (const task of folderTreeRenderQueue) task.route = routeId;
-  if (filterRenderDone !== filterRenderToken) renderFilters(routeId);
-}
-
-async function renderRepoFilter(routeId) {
-  var repos = repoList;
-  if (!repos || repos.length === 0) {
-    try {
-      var initial = await loadSidebarInitial(null);
-      if (initial && Array.isArray(initial.repos)) repos = initial.repos;
-    } catch (e) {}
-  }
-  if (apiAvailable && (!repos || repos.length === 0)) {
-    try {
-      repos = await fetchRepos();
-    } catch (e) {}
-  }
-  if (routeId && routeId !== routeRenderId) return;
-  repos = Array.isArray(repos) ? repos : [];
-  var ordered = repos.slice().sort(function(a, b) {
-    return (a.count || 0) - (b.count || 0) ||
-      String(a.name || "").localeCompare(String(b.name || ""), "zh-CN");
+// Filter feature composition: only filter state and effects cross this boundary.
+let sidebarFilters, sidebarFolderTree, sidebarFilterLists;
+function getSidebarFilters() {
+  if (sidebarFilters) return sidebarFilters;
+  sidebarFilterLists = VoiceOfMLSidebarFilterList.create({
+    readSelection: () => STATE.filterExtensions, escape: escapeHTML,
   });
-  var items = [];
-  for (var i = 0; i < ordered.length; i++) {
-    items.push({
-      key: ordered[i].name,
-      label: ordered[i].name.split("/").pop(),
-      count: ordered[i].count,
-    });
-  }
-  renderCheckboxList(DOM.filterRepoList, items, STATE.filterRepos, function(vals) {
-    STATE.filterRepos = vals;
-    updateFilterCancelButtons();
-    scheduleFilterSearch(true);
+  sidebarFolderTree = VoiceOfMLSidebarFolderTree.create({
+    container: DOM.filterFolderTree, toggleAll: DOM.folderToggleAll,
+    readView: () => ({ tree: STATE.folderTree || [], collapsed: STATE.folderTreeCollapsed,
+      subtrees: STATE.filterFolderSubtrees, selfs: STATE.filterFolderSelfs, mode: STATE.mode, routeId: routeRenderId }),
+    setCollapsed: (path, collapsed) => { STATE.folderTreeCollapsed[path] = collapsed; },
+    commitSelection: (subtrees, selfs) => {
+      STATE.filterFolderSubtrees = subtrees;
+      STATE.filterFolderSelfs = selfs;
+      STATE.filterFolders = mergeFolderFilters(selfs, subtrees.filter(Boolean));
+      updateFilterCancelButtons();
+      scheduleFilterSearch();
+    },
+    notify: showToast, escape: escapeHTML, selection: VoiceOfMLSearchFolderSelection,
   });
-}
-
-let extensionFilterRenderId = 0;
-
-async function renderExtensionFilter(routeId) {
-  var renderId = ++extensionFilterRenderId;
-  var renderMode = STATE.mode;
-  var renderRepo = STATE.repo;
-  var renderRepoFull = STATE.repoFull;
-  var extData = null;
-  if (extensionList && extensionList.length > 0) {
-    var currentCounts = renderMode === "repo" && renderRepoFull
-      ? Object.fromEntries((repoExtensionCounts[renderRepoFull] || []).map(function(item) { return [item.name, item.count || 0]; }))
-      : extensionCounts;
-    var currentExtNames = Object.keys(currentCounts).sort();
-    if (currentExtNames.length) {
-      extData = [];
-      for (var li = 0; li < currentExtNames.length; li++) {
-        var lext = currentExtNames[li];
-        extData.push({ name: lext, count: currentCounts[lext] || 0 });
-      }
-    }
-  }
-  if (extData === null && apiAvailable) {
-    try {
-      extData = await fetchExtensions(renderRepo);
-    } catch (e) {}
-  }
-  if (renderId !== extensionFilterRenderId) return;
-  if (routeId && routeId !== routeRenderId) return;
-  if (STATE.mode !== renderMode || STATE.repo !== renderRepo || STATE.repoFull !== renderRepoFull) return;
-  STATE.extensionList = extData && Array.isArray(extData)
-    ? extData
-      .filter(function(item) { return item && typeof item.name === "string"; })
-      .map(function(item) { return item.name; })
-    : [];
-  extData = extData && Array.isArray(extData) ? extData : [];
-  var extMap = {};
-  for (var extIdx = 0; extIdx < extData.length; extIdx++) {
-    if (extData[extIdx] && extData[extIdx].name) extMap[extData[extIdx].name] = true;
-  }
-  for (var selIdx = 0; selIdx < STATE.filterExtensions.length; selIdx++) {
-    var selectedExt = STATE.filterExtensions[selIdx];
-    if (selectedExt && !extMap[selectedExt]) {
-      extData.push({ name: selectedExt, count: 0 });
-      extMap[selectedExt] = true;
-    }
-  }
-  var ordered = [];
-  var rest = [];
-  if (extData.length > 0) {
-  for (var n = 0; n < extData.length; n++) {
-    var e = extData[n];
-    if (!e || typeof e.name !== "string") continue;
-    var idx_e = ORDERED_EXTENSIONS.indexOf(e.name);
-    if (idx_e >= 0) {
-        ordered.push({ name: e.name, _idx: idx_e, count: e.count || 0 });
-    } else {
-      rest.push(e);
-    }
-    }
-  }
-  ordered.sort(function(a, b) { return a._idx - b._idx || a.name.localeCompare(b.name); });
-  var items = [];
-  for (var j = 0; j < ordered.length; j++) {
-    items.push({ key: ordered[j].name, label: "." + ordered[j].name, count: ordered[j].count });
-  }
-  renderExtensionTree(DOM.filterExtList, items, rest, STATE.filterExtensions, function(vals) {
-    STATE.filterExtensions = vals;
-    saveStoredExtensionFilters();
-    updateFilterCancelButtons();
-    scheduleFilterSearch();
+  sidebarFilters = VoiceOfMLSidebarFilters.create({
+    readView: () => ({ mode: STATE.mode, repo: STATE.repo, repoFull: STATE.repoFull, routeId: routeRenderId,
+      repos: repoList || [], extensions: [], selectedRepos: STATE.filterRepos,
+      selectedExtensions: STATE.filterExtensions, tree: STATE.folderTree || [],
+      apiAvailable: apiAvailable, dataLoaded: STATE.dataLoaded }),
+    elements: {repoSection: DOM.filterRepoSection, repoList: DOM.filterRepoList,
+      folderSection: DOM.filterFolderSection, folderTree: DOM.filterFolderTree, extList: DOM.filterExtList},
+    tree: sidebarFolderTree, lists: sidebarFilterLists, orderedExtensions: ORDERED_EXTENSIONS,
+    cache: folderTreeCache,
+    initial: repo => loadSidebarInitial(repo), fetchRepos: () => fetchRepos(),
+    fetchExtensions: repo => fetchExtensions(repo), fetchFolders: (repo, full) => fetchFolderTree(repo, full),
+    localFolders: repo => corpusWorkerRequest("folder-tree", {repo}, WORKER_REQUEST_TIMEOUT),
+    hasExtensionCounts: () => !!(extensionList && extensionList.length),
+    extensionCounts: repo => repo ? Object.fromEntries((repoExtensionCounts[repo] || []).map(item => [item.name, item.count || 0])) : extensionCounts,
+    publishRepos: repos => { repoList = repos; },
+    publishExtensions: extensions => { STATE.extensionList = extensions.map(item => item.name); },
+    publishTree: (tree, resetCollapsed = false) => {
+      STATE.folderTree = tree;
+      if (resetCollapsed) STATE.folderTreeCollapsed = {};
+    },
+    selectRepos: values => { STATE.filterRepos = values; updateFilterCancelButtons(); scheduleFilterSearch(true); },
+    selectExtensions: values => {
+      STATE.filterExtensions = values;
+      saveStoredExtensionFilters(); updateFilterCancelButtons(); scheduleFilterSearch();
+    },
   });
+  return sidebarFilters;
 }
-
-function renderExtensionTree(container, items, rest, selected, onChange) {
-  if (items.length === 0 && rest.length === 0) {
-    container.innerHTML = '<div style="font-size:12px;color:var(--on-surface-variant);opacity:0.6;padding:4px 0">暂无</div>';
-    return;
-  }
-  var selectedSet = new Set(selected || []);
-  var html = [];
-  for (var i = 0; i < items.length; i++) {
-    var item = items[i];
-    html.push('<label class="filter-checkbox-item"><input type="checkbox" value="' + escapeHTML(item.key) + '" ' + (selectedSet.has(item.key) ? 'checked' : '') + '><span>' + escapeHTML(item.label) + '</span><span class="checkbox-count">' + (item.count || 0).toLocaleString() + '</span></label>');
-  }
-  if (rest.length > 0) {
-    var total = 0;
-    var restSelectedCount = 0;
-    for (var r = 0; r < rest.length; r++) {
-      total += rest[r].count || 0;
-      if (selectedSet.has(rest[r].name)) restSelectedCount++;
-    }
-    var parentChecked = restSelectedCount === rest.length;
-    var collapsed = STATE.extensionOtherCollapsed !== false;
-    html.push('<div class="filter-folder-item ext-other-row" style="--fdepth:0"><input type="checkbox" value="__OTHER__" ' + (parentChecked ? 'checked' : '') + '><span class="ext-other-spacer" aria-hidden="true"></span><button type="button" class="ext-other-toggle" aria-expanded="' + (collapsed ? 'false' : 'true') + '">其他 (' + rest.length + '种)<span class="folder-count">' + total.toLocaleString() + '</span></button></div>');
-    html.push('<div class="tree-children ext-other-children" style="display:' + (collapsed ? 'none' : 'block') + '">');
-    var restSorted = rest.slice().sort(function(a, b) { return a.name.localeCompare(b.name); });
-    for (var s = 0; s < restSorted.length; s++) {
-      var child = restSorted[s];
-      html.push('<label class="filter-folder-item" style="--fdepth:1"><span class="tree-toggle-placeholder"></span><input type="checkbox" value="' + escapeHTML(child.name) + '" ' + (selectedSet.has(child.name) ? 'checked' : '') + '><span class="folder-name">.' + escapeHTML(child.name) + '</span><span class="folder-count">' + (child.count || 0).toLocaleString() + '</span></label>');
-    }
-    html.push('</div>');
-  }
-  container.innerHTML = html.join("");
-  var parentCb = container.querySelector('input[value="__OTHER__"]');
-  if (parentCb) {
-    parentCb.setAttribute('aria-label', '选择其他文件类型');
-    var initiallySelectedRestCount = 0;
-    for (var initialIndex = 0; initialIndex < rest.length; initialIndex++) {
-      if (selectedSet.has(rest[initialIndex].name)) initiallySelectedRestCount++;
-    }
-    parentCb.indeterminate = initiallySelectedRestCount > 0 && initiallySelectedRestCount < rest.length;
-  }
-  var refreshExtOtherParentState = function(nextSet) {
-    var parent = container.querySelector('input[value="__OTHER__"]');
-    if (!parent || rest.length === 0) return;
-    var selectedRestCount = 0;
-    for (var ri = 0; ri < rest.length; ri++) {
-      if (nextSet.has(rest[ri].name)) selectedRestCount++;
-    }
-    parent.checked = selectedRestCount === rest.length;
-    parent.indeterminate = selectedRestCount > 0 && selectedRestCount < rest.length;
-  };
-  var emit = function(nextSet) { onChange(Array.from(nextSet)); };
-  container.querySelectorAll('input[type="checkbox"]').forEach(function(cb) {
-    cb.addEventListener("change", function() {
-      var nextSet = new Set(STATE.filterExtensions || []);
-      if (cb.value === "__OTHER__") {
-        for (var o = 0; o < rest.length; o++) {
-          if (cb.checked) nextSet.add(rest[o].name);
-          else nextSet.delete(rest[o].name);
-        }
-      } else if (cb.checked) nextSet.add(cb.value);
-      else nextSet.delete(cb.value);
-      container.querySelectorAll('input[type="checkbox"]').forEach(function(input) {
-        if (input.value !== "__OTHER__") input.checked = nextSet.has(input.value);
-      });
-      refreshExtOtherParentState(nextSet);
-      emit(nextSet);
-    });
-  });
-  var toggleButton = container.querySelector(".ext-other-toggle");
-  if (toggleButton) {
-    const children = container.querySelector('.ext-other-children');
-    children.id = 'ext-other-children';
-    children.inert = STATE.extensionOtherCollapsed !== false;
-    toggleButton.setAttribute('aria-controls', children.id);
-  }
-  if (toggleButton) toggleButton.addEventListener("click", function() { toggleExtensionOther(toggleButton); });
-}
-
-function toggleExtensionOther(button) {
-  var children = button.parentElement && button.parentElement.nextElementSibling;
-  if (!children || !children.classList.contains("ext-other-children")) return false;
-  var expanding = STATE.extensionOtherCollapsed !== false;
-  STATE.extensionOtherCollapsed = !expanding;
-  button.setAttribute("aria-expanded", expanding ? "true" : "false");
-  if (!expanding && children.contains(document.activeElement)) button.focus({ preventScroll: true });
-  children.inert = !expanding;
-  children.getAnimations().forEach(function(animation) { animation.cancel(); });
-  if (matchMedia('(prefers-reduced-motion: reduce)').matches) {
-    children.style.display = expanding ? 'block' : 'none';
-    return false;
-  }
-  if (expanding) {
-    children.style.display = "block";
-    children.animate([
-      { height: "0px", opacity: 0, transform: "translateY(-4px)", overflow: "hidden" },
-      { height: children.scrollHeight + "px", opacity: 1, transform: "translateY(0)", overflow: "hidden" },
-    ], { duration: 180, easing: "cubic-bezier(0.22, 1, 0.36, 1)" });
-  } else {
-    var animation = children.animate([
-      { height: children.scrollHeight + "px", opacity: 1, transform: "translateY(0)", overflow: "hidden" },
-      { height: "0px", opacity: 0, transform: "translateY(-4px)", overflow: "hidden" },
-    ], { duration: 150, easing: "cubic-bezier(0.22, 1, 0.36, 1)" });
-    animation.addEventListener("finish", function() {
-      if (STATE.extensionOtherCollapsed) children.style.display = "none";
-    }, { once: true });
-  }
-  return false;
-}
-
-
-function renderCheckboxList(container, items, selected, onChange) {
-  if (items.length === 0) {
-    container.innerHTML = '<div style="font-size:12px;color:var(--on-surface-variant);opacity:0.6;padding:4px 0">暂无</div>';
-    container._itemsKey = '';
-    return;
-  }
-  const itemsKey = items.map(i => i.key).join(',') + '|' + items.map(i => i.count || 0).join(',');
-  if (container._itemsKey !== itemsKey) {
-    container.innerHTML = items.map(function(item) {
-      return '<label class="filter-checkbox-item"><input type="checkbox" value="' + escapeHTML(item.key) + '" ' + (selected.indexOf(item.key) >= 0 ? 'checked' : '') + '><span>' + escapeHTML(item.label) + '</span>' + (item.count !== undefined ? '<span class="checkbox-count">' + item.count.toLocaleString() + '</span>' : '') + '</label>';
-    }).join("");
-    container._itemsKey = itemsKey;
-    container._onChange = onChange;
-    if (!container._hasDelegate) {
-      container.addEventListener("change", function() {
-        if (container._updating) return;
-        container._onChange(Array.from(container.querySelectorAll("input:checked")).map(function(c) { return c.value; }));
-      });
-      container._hasDelegate = true;
-    }
-  } else {
-    container._updating = true;
-    container.querySelectorAll("input").forEach(function(cb) {
-      cb.checked = selected.indexOf(cb.value) >= 0;
-    });
-    container._updating = false;
-  }
-  container._onChange = onChange;
-}
-
-function updateFolderTreeControls(loading = false) {
-  const enabled = !loading && STATE.mode === "repo" &&
-    (STATE.folderTree || []).some(node => node.children && node.children.length);
-  const button = DOM.folderToggleAll;
-  if (!button) return;
-  // A closed root hides even descendants whose individual open state is kept.
-  const expanded = Boolean(enabled && STATE.folderTree.some(node =>
-    node.children && node.children.length && !STATE.folderTreeCollapsed[node.path]));
-  button.disabled = !enabled;
-  button.textContent = expanded ? "收起" : "展开";
-  button.setAttribute("aria-expanded", String(expanded));
-  button.setAttribute("aria-label", expanded ? "收起所有子目录" : "展开所有子目录");
-  button.title = button.getAttribute("aria-label");
-}
-
-function setAllFoldersCollapsed(collapsed) {
-  if (!DOM.folderToggleAll || DOM.folderToggleAll.disabled) return;
-  const stack = [...STATE.folderTree];
-  while (stack.length) {
-    const node = stack.pop();
-    if (!node.children || !node.children.length) continue;
-    STATE.folderTreeCollapsed[node.path] = collapsed;
-    for (const child of node.children) stack.push(child);
-  }
-  if (DOM.filterFolderTree.contains(document.activeElement)) {
-    DOM.folderToggleAll.focus({ preventScroll: true });
-  }
-  // Use the owned, time-sliced tree renderer. Superseding bulk actions and
-  // route changes cancel old batches; selections/search state stay untouched.
-  renderFilterFolderTree();
-}
-
-function renderFilterFolderTree() {
-  cancelFolderTreeRendering();
-  folderSelectionMemo = null;
-  setupFolderTreeEvents();
-  updateFolderTreeControls();
-  DOM.filterFolderTree.innerHTML = "";
-  if (!STATE.folderTree || STATE.folderTree.length === 0) {
-    DOM.filterFolderTree.innerHTML = '<div style="font-size:12px;color:var(--on-surface-variant);opacity:0.6">暂无目录</div>';
-    return;
-  }
-  renderFilterTreeNodes(DOM.filterFolderTree, STATE.folderTree, 0);
-}
-
-function refreshFilterFolderSelectionState() {
-  if (!DOM.filterFolderTree || !STATE.folderTree || STATE.folderTree.length === 0) return;
-  const subtreeSet = getFolderSubtreeSet();
-  const selfSet = getFolderSelfSet();
-  const lookup = getFolderSelectionLookup(subtreeSet, selfSet);
-  DOM.filterFolderTree.querySelectorAll(".filter-folder-item").forEach(function(row) {
-    const node = row._folderNode;
-    if (node) VoiceOfMLSearchFolderSelection.applyFolderSelectionToNode(node, row, subtreeSet, selfSet, lookup);
-  });
-}
-
-function setupFolderTreeEvents() {
-  const tree = DOM.filterFolderTree;
-  if (tree._eventsReady) return;
-  tree._eventsReady = true;
-  tree.addEventListener("change", event => {
-    const row = event.target.closest(".filter-folder-item");
-    if (row?._folderNode && event.target.matches('input[type="checkbox"]')) handleFolderCheckboxChange(row._folderNode);
-  });
-  tree.addEventListener("click", event => {
-    const row = event.target.closest(".filter-folder-item");
-    if (!row?._folderNode) return;
-    const node = row._folderNode;
-    if (event.target.closest(".folder-self-toggle")) {
-      event.preventDefault();
-      handleFolderSelfToggle(node);
-    } else {
-      const toggle = event.target.closest(".tree-toggle");
-      if (!toggle) return;
-      const children = row.nextElementSibling;
-      const expanding = !!STATE.folderTreeCollapsed[node.path];
-      STATE.folderTreeCollapsed[node.path] = !expanding;
-      updateFolderTreeControls();
-      if (!expanding) cancelFolderTreeRendering(children);
-      if (expanding && !children._childrenRendered) {
-        children.style.display = "block";
-        renderFilterTreeNodes(children, node.children, Number(row.style.getPropertyValue("--fdepth")) + 1);
-      } else if (expanding) resumeFolderTreeRendering(children);
-      toggle.setAttribute("aria-expanded", String(expanding));
-      toggle.setAttribute('aria-label', (expanding ? '收起子文件夹：' : '展开子文件夹：') + node.path);
-      toggle.title = expanding ? '收起' : '展开';
-      toggleFolderChildrenAnimated(children, toggle, expanding);
-    }
-  });
-}
-
-function toggleFolderChildrenAnimated(childContainer, toggle, expanding) {
-  if (!childContainer || !toggle) return;
-  childContainer.getAnimations().forEach(function(animation) { animation.cancel(); });
-  toggle.getAnimations().forEach(function(animation) { animation.cancel(); });
-  const glyph = toggle.querySelector(".tree-toggle-glyph");
-  if (glyph) glyph.getAnimations().forEach(function(animation) { animation.cancel(); });
-  const resetChildStyles = function() {
-    ["height", "opacity", "transform", "overflow", "transition"].forEach(key => { childContainer.style[key] = ""; });
-  };
-  const stopTransition = function() {
-    if (childContainer._transitionCleanup) {
-      childContainer.removeEventListener("transitionend", childContainer._transitionCleanup);
-      childContainer._transitionCleanup = null;
-    }
-    if (childContainer._transitionTimer) {
-      clearTimeout(childContainer._transitionTimer);
-      childContainer._transitionTimer = null;
-    }
-  };
-  stopTransition();
-  resetChildStyles();
-  if (!expanding && childContainer.contains(document.activeElement)) toggle.focus({ preventScroll: true });
-  childContainer.inert = !expanding;
-  if (matchMedia('(prefers-reduced-motion: reduce)').matches) {
-    childContainer.style.display = expanding ? 'block' : 'none';
-    toggle.classList.toggle('expanded', expanding);
-    return;
-  }
-  const duration = expanding ? 220 : 190;
-  const easing = "cubic-bezier(0.22, 1, 0.36, 1)";
-  childContainer.style.display = "block";
-  const height = childContainer.scrollHeight + "px";
-  const setFrame = open => {
-    childContainer.style.height = open ? height : "0px";
-    childContainer.style.opacity = open ? "1" : "0";
-    childContainer.style.transform = open ? "translateY(0)" : "translateY(-6px)";
-  };
-  setFrame(!expanding);
-  childContainer.style.overflow = "hidden";
-  void childContainer.offsetHeight;
-  childContainer.style.transition = ["height", "opacity", "transform"].map(key => `${key} ${duration}ms ${easing}`).join(", ");
-  setFrame(expanding);
-  childContainer._transitionCleanup = function(event) {
-    if (event.target !== childContainer || event.propertyName !== "height") return;
-    stopTransition();
-    resetChildStyles();
-    childContainer.style.display = expanding ? "block" : "none";
-  };
-  childContainer.addEventListener("transitionend", childContainer._transitionCleanup);
-  childContainer._transitionTimer = setTimeout(function() {
-    if (childContainer._transitionCleanup) childContainer._transitionCleanup({ target: childContainer, propertyName: "height" });
-  }, duration + 40);
-  toggle.classList.toggle("expanded", expanding);
-  if (glyph) {
-    glyph.animate([
-      { transform: expanding ? "rotate(-45deg)" : "rotate(45deg)" },
-      { transform: expanding ? "rotate(45deg)" : "rotate(-45deg)" },
-    ], { duration, easing, fill: "forwards" });
-  }
-}
-
-function getFolderSubtreeSet() {
-  return new Set(STATE.filterFolderSubtrees || []);
-}
-
-function initializeFolderTreeCollapsed(nodes) {
-  for (let i = 0; i < (nodes || []).length; i++) {
-    const node = nodes[i];
-    if (node.path && !(node.path in STATE.folderTreeCollapsed)) STATE.folderTreeCollapsed[node.path] = false;
-    if (node.children && node.children.length > 0) initializeFolderTreeCollapsed(node.children);
-  }
-}
-
-function getFolderSelfSet() {
-  return new Set(STATE.filterFolderSelfs || []);
-}
-
-let folderSelectionMemo = null;
-
-function getFolderSelectionLookup(subtreeSet, selfSet) {
-  if (!folderSelectionMemo || folderSelectionMemo.tree !== STATE.folderTree
-      || !sameSearchFilterValues(STATE.filterFolderSubtrees, folderSelectionMemo.subtrees)
-      || !sameSearchFilterValues(STATE.filterFolderSelfs, folderSelectionMemo.selfs)) {
-    folderSelectionMemo = { tree: STATE.folderTree, subtrees: STATE.filterFolderSubtrees.slice(),
-      selfs: STATE.filterFolderSelfs.slice(), lookup: VoiceOfMLSearchFolderSelection.createFolderSelectionLookup(STATE.folderTree, subtreeSet, selfSet) };
-  }
-  return folderSelectionMemo.lookup;
-}
-
-// Split covering ancestors before removing a branch or its direct files.
-function splitFolderSelection(path, subtreeSet, selfSet, includeSelf = false, nodes = STATE.folderTree) {
-  for (const node of nodes || []) {
-    if (!node.isRoot && node.path !== path && !path.startsWith(node.path + "/")) continue;
-    if (subtreeSet.has(node.path) && (includeSelf || node.path !== path)) {
-      subtreeSet.delete(node.path);
-      if (node.hasDirectFiles) selfSet.add(node.path);
-      for (const child of node.children || []) subtreeSet.add(child.path);
-    }
-    if (node.path !== path) splitFolderSelection(path, subtreeSet, selfSet, includeSelf, node.children);
-  }
-}
-
-function setNodeSubtreeSelection(node, enabled, subtreeSet, selfSet) {
-  if (!node) return;
-  if (!enabled) splitFolderSelection(node.path, subtreeSet, selfSet);
-  const contains = path => node.isRoot || path === node.path || path.startsWith(node.path + "/");
-  for (const path of subtreeSet) if (contains(path)) subtreeSet.delete(path);
-  for (const path of selfSet) if (contains(path)) selfSet.delete(path);
-  if (!enabled) return;
-  if (!node.isRoot) subtreeSet.add(node.path);
-  else {
-    if (node.hasDirectFiles) selfSet.add(node.path);
-    for (const child of node.children || []) subtreeSet.add(child.path);
-  }
-}
-
-function normalizeFolderSelection(subtreeSet, selfSet) {
-  const lookup = VoiceOfMLSearchFolderSelection.createFolderSelectionLookup(STATE.folderTree, subtreeSet, selfSet);
-  for (const [node, state] of lookup) if (!node.isRoot && state.full) subtreeSet.add(node.path);
-  for (const path of subtreeSet) {
-    const slash = path.lastIndexOf("/");
-    if (slash >= 0 && VoiceOfMLSearchFolderSelection.folderPathCovered(path.slice(0, slash), subtreeSet)) subtreeSet.delete(path);
-  }
-  for (const path of selfSet) if (VoiceOfMLSearchFolderSelection.folderPathCovered(path, subtreeSet)) selfSet.delete(path);
-}
-
-function persistFolderSelection(subtreeSet, selfSet) {
-  normalizeFolderSelection(subtreeSet, selfSet);
-  if (subtreeSet.size > 10000 || selfSet.size > 10000) {
-    showToast("目录筛选最多支持 10000 项，请缩小选择范围");
-    return;
-  }
-  STATE.filterFolderSubtrees = Array.from(subtreeSet);
-  STATE.filterFolderSelfs = Array.from(selfSet);
-  STATE.filterFolders = mergeFolderFilters(STATE.filterFolderSelfs, STATE.filterFolderSubtrees.filter(Boolean));
-  updateFilterCancelButtons();
-  scheduleFilterSearch();
-}
-
-function collectFolderNodePaths(nodes, subtreePaths, selfPaths) {
-  for (let i = 0; i < nodes.length; i++) {
-    const node = nodes[i];
-    if (!node.isRoot && node.path) subtreePaths.push(node.path);
-    if (node.hasDirectFiles) selfPaths.push(node.path);
-    if (node.children && node.children.length > 0) {
-      collectFolderNodePaths(node.children, subtreePaths, selfPaths);
-    }
-  }
-}
-
-let folderTreeRenderQueue = [];
-let folderTreeControlId = 0;
-let folderTreeRenderTimer = null;
-let folderTreeRenderActive = false;
-
-function cancelFolderTreeRendering(root = null) {
-  folderTreeRenderQueue = folderTreeRenderQueue.filter(task => {
-    if (root && !root.contains(task.container)) return true;
-    task.container._renderTask = null;
-    return false;
-  });
-  if (!folderTreeRenderQueue.length) { clearTimeout(folderTreeRenderTimer); folderTreeRenderTimer = null; }
-}
-
-function resumeFolderTreeRendering(root) {
-  for (const container of root.querySelectorAll(".tree-children")) {
-    if (!container.isConnected || container._childrenRendered || container._renderTask || !container._folderNode) continue;
-    let visible = true;
-    for (let parent = container; parent && parent !== DOM.filterFolderTree; parent = parent.parentElement) {
-      if (parent._folderNode && STATE.folderTreeCollapsed[parent._folderNode.path]) { visible = false; break; }
-    }
-    if (visible) renderFilterTreeNodes(container, container._folderNode.children, container._folderDepth);
-  }
-}
-
-function drainFolderTreeRendering() {
-  if (folderTreeRenderActive) return;
-  folderTreeRenderActive = true;
-  clearTimeout(folderTreeRenderTimer); folderTreeRenderTimer = null;
-  const changed = new Set();
-  const subtreeSet = getFolderSubtreeSet();
-  const selfSet = getFolderSelfSet();
-  const lookup = getFolderSelectionLookup(subtreeSet, selfSet);
-  const started = performance.now();
-  try {
-    for (let count = 0; folderTreeRenderQueue.length && count < 32 && performance.now() - started < 4; ) {
-      const task = folderTreeRenderQueue[0];
-      if (!task.container.isConnected || task.tree !== STATE.folderTree || task.route !== routeRenderId) {
-        task.container._renderTask = null; folderTreeRenderQueue.shift(); continue;
-      }
-      if (task.index === task.nodes.length) {
-        task.container._childrenRendered = true; task.container._renderTask = null;
-        folderTreeRenderQueue.shift(); continue;
-      }
-      appendFilterTreeNode(task.container, task.nodes[task.index++], task.depth, subtreeSet, selfSet, lookup);
-      changed.add(task.container); count++;
-    }
-    for (const container of changed) if (container._transitionCleanup && !STATE.folderTreeCollapsed[container._folderPath]) {
-      container.style.height = container.scrollHeight + "px";
-    }
-  } finally { folderTreeRenderActive = false; }
-  if (folderTreeRenderQueue.length) folderTreeRenderTimer = setTimeout(drainFolderTreeRendering, 0);
-}
-
-function renderFilterTreeNodes(container, nodes, depth) {
-  if (container._renderTask) return;
-  container.replaceChildren(); container._childrenRendered = false;
-  const task = { container, nodes, depth, index: 0, tree: STATE.folderTree, route: routeRenderId };
-  container._renderTask = task; folderTreeRenderQueue.push(task);
-  if (!folderTreeRenderActive) drainFolderTreeRendering();
-}
-
-function appendFilterTreeNode(container, node, depth, subtreeSet, selfSet, lookup) {
-    const has = node.children && node.children.length > 0;
-    const row = /** @type {HTMLDivElement & {_folderNode?: unknown}} */ (document.createElement("div"));
-    row.className = "filter-folder-item";
-    row.style.setProperty("--fdepth", depth);
-    row.dataset.path = node.path;
-    row._folderNode = node;
-    var collapsed = !!STATE.folderTreeCollapsed[node.path];
-    row.innerHTML = (has ? ('<button type="button" class="tree-toggle' + (collapsed ? '' : ' expanded') + '" aria-label="' + (collapsed ? '展开子文件夹' : '收起子文件夹') + '" title="' + (collapsed ? '展开' : '收起') + '"><span class="tree-toggle-glyph" aria-hidden="true"></span></button>') : '<span class="tree-toggle-placeholder"></span>') +
-      '<input type="checkbox" value="' + escapeHTML(node.path) + '">' +
-      '<span class="folder-name" title="' + escapeHTML(node.name) + '">' + escapeHTML(node.name) + '</span>' +
-      (node.showSelfToggle ? '<button type="button" class="folder-self-toggle" data-path="' + escapeHTML(node.path) + '">本层文件</button>' : '') +
-      '<span class="folder-count">' + (node.count || 0).toLocaleString() + '</span>';
-    const toggle = row.querySelector(".tree-toggle");
-    row.querySelector('input').setAttribute('aria-label', '选择文件夹：' + node.path);
-    row.querySelector('.folder-self-toggle')?.setAttribute('aria-label', '本层文件：' + node.path);
-    toggle?.setAttribute('aria-label', (collapsed ? '展开子文件夹：' : '收起子文件夹：') + node.path);
-    VoiceOfMLSearchFolderSelection.applyFolderSelectionToNode(node, row, subtreeSet, selfSet, lookup);
-    container.appendChild(row);
-    if (has) {
-      const childDiv = /** @type {HTMLDivElement & {_folderPath?: string, _folderNode?: unknown, _folderDepth?: number, _childrenRendered?: boolean}} */ (document.createElement("div"));
-      childDiv.className = "tree-children";
-      childDiv.id = 'filter-folder-children-' + ++folderTreeControlId;
-      childDiv.inert = collapsed;
-      toggle.setAttribute('aria-controls', childDiv.id);
-      childDiv._folderPath = node.path;
-      childDiv._folderNode = node; childDiv._folderDepth = depth + 1;
-      if (collapsed) childDiv.style.display = "none";
-      childDiv._childrenRendered = false;
-      toggle.setAttribute("aria-expanded", String(!collapsed));
-      container.appendChild(childDiv);
-      if (!collapsed) renderFilterTreeNodes(childDiv, node.children, depth + 1);
-    }
-}
-
-function handleFolderCheckboxChange(node) {
-  const subtreeSet = getFolderSubtreeSet();
-  const selfSet = getFolderSelfSet();
-  const { full } = VoiceOfMLSearchFolderSelection.folderSelectionState(node, subtreeSet, selfSet);
-  setNodeSubtreeSelection(node, !full, subtreeSet, selfSet);
-  persistFolderSelection(subtreeSet, selfSet);
-  refreshFilterFolderSelectionState();
-}
-
-function handleFolderSelfToggle(node) {
-  const subtreeSet = getFolderSubtreeSet();
-  const selfSet = getFolderSelfSet();
-  splitFolderSelection(node.path, subtreeSet, selfSet, true);
-  if (selfSet.has(node.path)) selfSet.delete(node.path);
-  else selfSet.add(node.path);
-  persistFolderSelection(subtreeSet, selfSet);
-  refreshFilterFolderSelectionState();
-}
+function renderFilters(routeId) { return getSidebarFilters().render(routeId); }
+function retainFilterRenderingForRoute(routeId) { return getSidebarFilters().retain(routeId); }
+function renderRepoFilter(routeId) { return getSidebarFilters().renderRepos(routeId); }
+function renderExtensionFilter(routeId) { return getSidebarFilters().renderExtensions(routeId); }
+function renderFilterFolderTree() { getSidebarFilters(); sidebarFolderTree.render(); }
+function refreshFilterFolderSelectionState() { getSidebarFilters(); sidebarFolderTree.refresh(); }
+function setAllFoldersCollapsed(collapsed) { getSidebarFilters(); sidebarFolderTree.setAllCollapsed(collapsed); }
+function persistFolderSelection(subtrees, selfs) { getSidebarFilters(); sidebarFolderTree.persistSelection(subtrees, selfs); }
 
 const hitokotoState = { timer: null, controller: null, lastAt: 0, animation: null, suspended: false };
 
@@ -7044,39 +6428,8 @@ async function init() {
   });
   if (DOM.folderToggleAll) DOM.folderToggleAll.addEventListener("click", () =>
     setAllFoldersCollapsed(DOM.folderToggleAll.getAttribute("aria-expanded") === "true"));
-  DOM.folderSelectAll.addEventListener("click", function() {
-    if (!STATE.folderTree || STATE.folderTree.length === 0) return;
-    var subtreeSet = new Set();
-    var selfSet = new Set();
-    var currentSubtreeSet = getFolderSubtreeSet();
-    var currentSelfSet = getFolderSelfSet();
-    var allSelected = STATE.folderTree.every(function(node) { return VoiceOfMLSearchFolderSelection.folderSelectionState(node, currentSubtreeSet, currentSelfSet).full; });
-    if (allSelected) {
-      persistFolderSelection(subtreeSet, selfSet);
-      refreshFilterFolderSelectionState();
-      return;
-    }
-    for (var i = 0; i < STATE.folderTree.length; i++) {
-      setNodeSubtreeSelection(STATE.folderTree[i], true, subtreeSet, selfSet);
-    }
-    persistFolderSelection(subtreeSet, selfSet);
-    refreshFilterFolderSelectionState();
-  });
-  DOM.folderDeselectAll.addEventListener("click", function() {
-    if (!STATE.folderTree || STATE.folderTree.length === 0) return;
-    var subtreeSet = getFolderSubtreeSet();
-    var selfSet = getFolderSelfSet();
-    var allSubtreePaths = [];
-    var allSelfPaths = [];
-    collectFolderNodePaths(STATE.folderTree, allSubtreePaths, allSelfPaths);
-    var nextSubtreeSet = new Set();
-    var nextSelfSet = new Set();
-    for (var j = 0; j < allSelfPaths.length; j++) {
-      if (!selfSet.has(allSelfPaths[j]) && !VoiceOfMLSearchFolderSelection.folderPathCovered(allSelfPaths[j], subtreeSet)) nextSelfSet.add(allSelfPaths[j]);
-    }
-    persistFolderSelection(nextSubtreeSet, nextSelfSet);
-    refreshFilterFolderSelectionState();
-  });
+  DOM.folderSelectAll.addEventListener("click", () => { getSidebarFilters(); sidebarFolderTree.selectAll(); });
+  DOM.folderDeselectAll.addEventListener("click", () => { getSidebarFilters(); sidebarFolderTree.invertSelection(); });
   setupVirtualScroll();
   setupQuickScroll();
   setupKeyboard();
