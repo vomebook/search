@@ -17,7 +17,6 @@ jobs:
     timeout-minutes: 45
     env:
       READER_TEST_TIMEOUT_MS: "15000"
-      HF_SW_SOURCE: ${{ runner.temp }}/hf-service-worker/sw.js
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
@@ -86,6 +85,8 @@ jobs:
           set -euo pipefail
           revision=$(python3 -I -B -c 'import json; print(json.load(open(".github/hf-source-revision.json"))["revision"])')
           python3 -I -B scripts/verify_hf_source_revision.py "$revision"
+          HF_SW_SOURCE="$RUNNER_TEMP/hf-service-worker/sw.js"
+          printf 'HF_SW_SOURCE=%s\n' "$HF_SW_SOURCE" >> "$GITHUB_ENV"
           mkdir -p "$(dirname "$HF_SW_SOURCE")"
           curl --fail --location --silent --show-error --max-time 60 \
             "https://huggingface.co/spaces/VoiceOfML/Search/resolve/$revision/static/sw.js" \

@@ -654,7 +654,10 @@ test("Pages cross-site cache gates receive the reviewed HF worker before any sta
   const readerWorkflow = fs.readFileSync(".github/workflows/reader-refactor.yml", "utf8");
   const pages = readerWorkflow.split("\n  github-search:\n")[1].split("\n  firefox-staged-pdf:\n")[0];
   const fetchStep = pages.split("      - name: Fetch reviewed HF worker for cross-site cache tests\n")[1].split("      - name:")[0];
-  assert.match(pages, /env:\s*\n\s*READER_TEST_TIMEOUT_MS: "15000"\s*\n\s*HF_SW_SOURCE: \$\{\{ runner\.temp \}\}\/hf-service-worker\/sw\.js/);
+  assert.match(pages, /env:\s*\n\s*READER_TEST_TIMEOUT_MS: "15000"/);
+  assert.ok(fetchStep.includes('HF_SW_SOURCE="$RUNNER_TEMP/hf-service-worker/sw.js"'));
+  assert.ok(fetchStep.includes('printf \'HF_SW_SOURCE=%s\\n\' "$HF_SW_SOURCE" >> "$GITHUB_ENV"'));
+  assert.doesNotMatch(pages.split("    steps:")[0], /runner\.temp/);
   assert.match(fetchStep, /set -euo pipefail/);
   assert.ok(fetchStep.includes('json.load(open(".github/hf-source-revision.json"))["revision"]'));
   assert.ok(fetchStep.indexOf('scripts/verify_hf_source_revision.py "$revision"') < fetchStep.indexOf('curl --fail'));
