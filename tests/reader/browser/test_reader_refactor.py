@@ -627,10 +627,10 @@ class ReaderRefactorTest(unittest.TestCase):
         self.page.route("**/static/reader/core/reader-store.js", lambda route: route.fulfill(content_type="text/javascript", body=store))
         def instrument(route):
             response = route.fetch()
-            body = response.text().replace(
-                "async function createFoliateSection(section, index) {",
-                "async function createFoliateSection(section, index) { (window.__openedSections ||= []).push(index);",
-            )
+            script = response.text()
+            marker = "async function createFoliateSection(section, index, signal, priority) {"
+            self.assertEqual(script.count(marker), 1, "Foliate section instrumentation boundary changed")
+            body = script.replace(marker, marker + " (window.__openedSections ||= []).push(index);")
             route.fulfill(response=response, body=body)
         self.page.route("**/static/reader/formats/reader-foliate-format.mjs*", instrument)
         self.serve(support.epub_with_many_chapters(), "application/epub+zip")
