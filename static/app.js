@@ -15,9 +15,8 @@ const WORKER_LOAD_TIMEOUT = 60000;
 const APPEND_REQUEST_TIMEOUT = 5000;
 const DOWNLOAD_CHECK_TIMEOUT = 8000;
 const pendingSearchPages = new Map();
-let pagingCheckTimer = null;
+// Detached compatibility projection for browser diagnostics; the controller owns recovery.
 let pagingFailures = 0;
-let pagingRetryAt = 0;
 
 const ORDERED_EXTENSIONS = VoiceOfMLSearchFileTypes.orderedExtensions;
 const FILE_ICON_MAP = VoiceOfMLSearchFileTypes.fileIconMap;
@@ -6467,85 +6466,53 @@ const sidebarRetryCounts = new Map();
 var selectedIndices = {};
 var lastSelectedIndex = -1;
 
-function isResultsAtBottom() {
-  const container = DOM.resultsContainer;
-  return STATE.results.length > 0 && container.clientHeight > 0 &&
-    getVirtualTotalHeight() - getResultScrollTop() - container.clientHeight <= 4;
+function readPagingView() {
+  return {
+    generation: searchRequestId, loadedPage: STATE._loadedPage, page: STATE.page,
+    resultCount: STATE.results.length, hasMore: STATE.hasMore, loading: STATE.isLoading,
+    suspended: !!snapshotCloneTask || !!positionRestore,
+    inactive: document.hidden || !!readerOverlay, dragging: VSCROLL.isDraggingThumb,
+    scrollTop: getResultScrollTop(), loadedHeight: getVirtualTotalHeight(),
+    viewportHeight: DOM.resultsContainer ? DOM.resultsContainer.clientHeight : 0,
+    appendScrollTop: STATE._pagingAppendScrollTop
+  };
 }
-
-function updatePagingStatus() {
-  if (!DOM.loadInfo) return;
-  let button = /** @type {HTMLButtonElement | null} */ (document.getElementById("paging-status"));
-  if (!button) {
-    button = document.createElement("button");
-    button.id = "paging-status";
-    button.type = "button";
-    button.className = "text-btn-sm";
-    button.textContent = "加载失败，重试";
-    button.setAttribute("aria-live", "polite");
-    button.addEventListener("click", () => {
-      resetPagingRecovery();
-      maybeLoadNextPage(false, true);
-    });
-    DOM.loadInfo.appendChild(button);
-  }
-  const loading = STATE.isLoading && STATE.page > STATE._loadedPage;
-  button.hidden = !STATE.hasMore || loading || pagingFailures < 2;
-  button.disabled = loading;
-}
-
-function resetPagingRecovery() {
-  clearTimeout(pagingCheckTimer);
-  pagingCheckTimer = null;
-  pagingFailures = 0;
-  pagingRetryAt = 0;
-  updatePagingStatus();
-}
-
-function scheduleBottomLoad(delay = 0, readyPage = 0) {
-  if (readyPage && readyPage !== STATE._loadedPage + 1) return;
-  clearTimeout(pagingCheckTimer);
-  const generation = searchRequestId;
-  pagingCheckTimer = setTimeout(() => {
-    pagingCheckTimer = null;
-    if (generation !== searchRequestId) return;
-    // A ready page may satisfy one scroll intent, not drain the lookahead buffer.
-    if (readyPage && (readyPage !== STATE._loadedPage + 1 ||
-        (STATE._pagingAppendScrollTop === getResultScrollTop() && !isResultsAtBottom()))) return;
-    maybeLoadNextPage(!readyPage);
-  }, Math.max(delay, pagingRetryAt - Date.now()));
-}
-
-function finishPagingAttempt(success, error) {
-  pagingFailures = success ? 0 : pagingFailures + 1;
-  if (error && error.status >= 400 && error.status < 500 && !isRecoverableSearchError(error)) pagingFailures = 2;
-  pagingRetryAt = success ? 0 : Date.now() + 750;
-  updatePagingStatus();
-  if (pagingFailures < 2) scheduleBottomLoad();
-}
-
-function retryBottomPage() {
-  if (!isResultsAtBottom()) return;
-  expireSearchRequests();
-  if (!STATE.isLoading && Date.now() >= pagingRetryAt && pagingFailures >= 2) resetPagingRecovery();
-  scheduleBottomLoad();
-}
-
-function maybeLoadNextPage(bottomOnly = false, retry = false) {
-  if (snapshotCloneTask) return;
-  if (positionRestore) return;
-  expireSearchRequests();
-  if (document.hidden || readerOverlay || pagingFailures >= 2 || Date.now() < pagingRetryAt) return;
-  if (VSCROLL.isDraggingThumb) return;
-  if (STATE.isLoading || !STATE.hasMore) return;
-  const scrollTop = getResultScrollTop();
-  const loadedHeight = getVirtualTotalHeight();
-  const triggerPoint = loadedHeight * 0.05;
-  if (retry || isResultsAtBottom() || (!bottomOnly && scrollTop >= triggerPoint)) {
+const pagingStatus = VoiceOfMLPagingStatus.create({
+  getHost: () => DOM.loadInfo, revealHost: false,
+  retry: () => pagingController.retry()
+});
+const pagingController = VoiceOfMLPagingController.create({
+  policy: VoiceOfMLPagingPolicy,
+  clock: { now: () => Date.now(), setTimeout: (callback, delay) => setTimeout(callback, delay), clearTimeout: timer => clearTimeout(timer) },
+  readView: readPagingView,
+  expireRequests: () => expireSearchRequests(),
+  append: (page, scrollTop) => {
     STATE._pagingAppendScrollTop = scrollTop;
-    STATE.page = STATE._loadedPage + 1;
+    STATE.page = page;
     doSearch(true);
+  },
+  onState: recovery => {
+    pagingFailures = recovery.failures;
+    pagingStatus.render(readPagingView(), recovery);
   }
+});
+function updatePagingStatus() {
+  pagingController.updateStatus();
+}
+function resetPagingRecovery() {
+  pagingController.reset();
+}
+function scheduleBottomLoad(delay = 0, readyPage = 0) {
+  pagingController.schedule(delay, readyPage);
+}
+function finishPagingAttempt(success, error) {
+  pagingController.finish(success, !!error && error.status >= 400 && error.status < 500 && !isRecoverableSearchError(error));
+}
+function retryBottomPage() {
+  pagingController.retryBottom();
+}
+function maybeLoadNextPage(bottomOnly = false, retry = false) {
+  pagingController.maybeLoad(bottomOnly, retry);
 }
 
 function consumeDeferredSearchAppend() {

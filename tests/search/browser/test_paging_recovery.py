@@ -288,6 +288,23 @@ class PagingRecoveryTests(unittest.TestCase):
         self.assertEqual(after['y'], before['y'])
         self.assertEqual(self.errors, [])
 
+    def test_recovery_projection_cannot_change_controller_or_retry_presentation(self):
+        result = self.page.evaluate('''() => {
+          resetPagingRecovery();
+          finishPagingAttempt(false, {status: 400});
+          const projection = pagingController.readRecovery();
+          projection.failures = 0; projection.retryAt = 0;
+          pagingFailures = 0;
+          updatePagingStatus();
+          const button = document.getElementById('paging-status');
+          const failed = [pagingFailures, button.hidden, button.textContent];
+          resetPagingRecovery();
+          return {failed, reset: [pagingFailures, button.hidden, button.textContent]};
+        }''')
+        self.assertEqual(result['failed'], [2, False, '加载失败，重试'])
+        self.assertEqual(result['reset'], [0, True, '加载失败，重试'])
+        self.assertEqual(self.errors, [])
+
     def test_failure_retries_once_then_button_recovers_same_page(self):
         self.reach_bottom()
         self.expire_pending('fail')

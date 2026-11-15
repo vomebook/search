@@ -13,7 +13,7 @@ function install(source, context, names) {
   }
 }
 
-function fixture(source) {
+function createFixture(source, root) {
   let clock = 0, timerId = 0, scrollTop = 0;
   const timers = new Map(), calls = [], reads = [], appended = [], frames = [];
   const first = {File:"first"};
@@ -21,9 +21,9 @@ function fixture(source) {
     STATE:{results:[first],total:801,pageSize:100,_loadedPage:1,_pageCache:{},hasMore:true,
       _resultBackend:"api",filterFolderSelfs:[],filterFolderSubtrees:[],useLocalMode:false},
     VSCROLL:{renderFrame:0,renderAfterScroll:false,isDraggingThumb:false},
-    document:{hidden:false}, navigator:{onLine:true}, AbortController, DOMException,
-    searchPrefetchAbortController:null, searchRequestId:1, pagingCheckTimer:null,
-    pagingRetryAt:0, pagingFailures:0, positionRestore:null, readerOverlay:null, snapshotCloneTask:null,
+    document:{hidden:false}, DOM:{resultsContainer:{clientHeight:600}}, navigator:{onLine:true}, AbortController, DOMException,
+    searchPrefetchAbortController:null, searchRequestId:1,
+    positionRestore:null, readerOverlay:null, snapshotCloneTask:null,
     APPEND_REQUEST_TIMEOUT:5000, RECENT_SEARCH_PAGE_TTL:604800000,
     searchPageMetadata:new WeakMap([[first,{generation:"stable",total:801}]]),
     recentSearchPages:new Map(), searchResponseCache:new Map(),
@@ -50,11 +50,21 @@ function fixture(source) {
     },
     noteApiSuccess(){}, noteSearchApiFailure(){}, expireSearchRequests(){},
     getResultScrollTop:()=>scrollTop, getVirtualTotalHeight:()=>6000,
-    isResultsAtBottom:()=>false,
     doSearch(){appended.push(context.STATE.page); context.STATE._loadedPage=context.STATE.page;},
     renderVisible(){clock += 8; return true;}, updateScrollTrack(){}, updateScrollThumb(){},
   };
   vm.createContext(context);
+  for (const file of ["domain/paging-policy.js", "application/paging-controller.js"]) {
+    vm.runInContext(fs.readFileSync(path.join(root, "static/search/results", file), "utf8"), context);
+  }
+  install(source,context,["readPagingView"]);
+  context.pagingController = context.VoiceOfMLPagingController.create({
+    policy: context.VoiceOfMLPagingPolicy,
+    clock: {now:()=>clock, setTimeout:context.setTimeout, clearTimeout:context.clearTimeout},
+    readView:context.readPagingView, expireRequests:()=>context.expireSearchRequests(),
+    append(page, top){context.STATE.page=page; context.STATE._pagingAppendScrollTop=top; context.doSearch(true);},
+    onState(){}
+  });
   install(source,context,["readRecentSearchPage","prefetchSearchPages","scheduleBottomLoad",
     "maybeLoadNextPage","scheduleVirtualRender","cloneSearchData","getCachedSearchResponse",
     "setCachedSearchResponse","cancelPendingSearchCacheWrites","cancelSearchPrefetch"]);
@@ -77,6 +87,7 @@ function fixture(source) {
 
 for (const {name:project,root} of searchTestProjects()) {
   const source = fs.readFileSync(path.join(root,"static/app.js"),"utf8");
+  const fixture = source => createFixture(source, root);
   function sparseFixture() {
     const f=fixture(source), c=f.context;
     c.scheduleVirtualRender=()=>{};
