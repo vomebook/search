@@ -10,6 +10,7 @@ const required = [
   'Flash loader preserves byte values and script-before-fetch sequencing',
   'Flash renderer forwards the original data and reports unavailable engine',
   'media readiness waits for metadata and reports player timing',
+  'stalled proxy retries the proxy instead of the blocked dataset host',
   'media source retries only once and restores position on metadata',
   'resource cleanup rejects pending metadata and removes listeners',
   'metadata hard deadline rejects and exposes media retry without another source',
@@ -38,7 +39,7 @@ if (result.status !== 0 || rows.length !== 1 || rows[0].some((value, index) => v
     !hasPassingTapContracts(text, required) ||
     ['# start of coverage report', '# end of coverage report'].some(marker => lines.filter(line => line === marker).length !== 1) ||
     lines.filter(line => /^# duration_ms \d+(?:\.\d+)?$/.test(line)).length !== 1 ||
-    !['1..15', '# tests 15', '# pass 15', '# fail 0', '# cancelled 0'].every(summary =>
+    !['1..16', '# tests 16', '# pass 16', '# fail 0', '# cancelled 0'].every(summary =>
       lines.filter(line => line === summary).length === 1) ||
     ['# tests ', '# pass ', '# fail ', '# cancelled '].some(prefix => lines.filter(line => line.startsWith(prefix)).length !== 1)) {
   console.error('Reader media requires named contracts and exactly one source row above each minimum');

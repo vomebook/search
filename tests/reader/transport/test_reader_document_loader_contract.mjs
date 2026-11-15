@@ -75,6 +75,14 @@ test("proxy fallback respects response ownership, cancellation and bucket routin
   };
   await assert.rejects(h.loader.fetchReaderUrl("https://books.test/raw"), {status: 503});
   assert.equal(h.requests.length, 3); assert.equal(cancelled, 3); assert.deepEqual(h.waits, [350, 700]);
+  assert.ok(h.requests.every(({url}) => url === h.context.readerContentUrl("https://books.test/raw")));
+
+  h.requests.length = 0; h.waits.length = 0;
+  const networkError = new TypeError("failed to fetch");
+  h.context.readerRequestManager.request = async url => {h.requests.push({url}); throw networkError;};
+  await assert.rejects(h.loader.fetchReaderUrl("https://books.test/raw"), error => error === networkError);
+  assert.deepEqual(h.requests.map(({url}) => url), Array(3).fill(h.context.readerContentUrl("https://books.test/raw")));
+  assert.deepEqual(h.waits, [350, 700]);
 
   const owner = new AbortController(); h.requests.length = 0;
   h.context.readerRequestManager.request = async url => {
@@ -109,6 +117,14 @@ test("preloads are single-owner and fall back on failure or mismatched identity"
     assert.equal(await (await h.loader.loadChapterManifestDocument()).text(), "content");
     window.__VOICE_READER_CHAPTER_PRELOAD__ = {manifestUrl: "https://books.test/wrong", manifest: Promise.resolve(new Response("wrong"))};
     assert.equal(await (await h.loader.loadChapterManifestDocument()).text(), "content");
+    h.context.chapterManifestUrl = undefined;
+    window.__VOICE_READER_CHAPTER_PRELOAD__ = {manifestUrl: source,
+      manifest: Promise.resolve(new Response("unavailable", {status: 503}))};
+    const beforeFallback = h.requests.length;
+    assert.equal(await (await h.loader.loadChapterManifestDocument()).text(), "content");
+    assert.equal(window.__VOICE_READER_CHAPTER_PRELOAD__.manifest, null);
+    assert.equal(h.requests.length, beforeFallback + 1);
+    assert.equal(h.requests.at(-1).url, h.context.readerContentUrl(source));
     window.__VOICE_PDF_PRELOAD__ = {manifestUrl: source, manifest: Promise.reject(new Error("preload failed"))};
     assert.equal(await (await h.loader.fetchReaderResponse()).text(), "content");
   } finally {globalThis.window = oldWindow; globalThis.location = oldLocation;}
@@ -186,6 +202,11 @@ test("image load stays on the proxy when the dataset host is unreachable", {time
     assert.equal(image.alt, "book"); assert.equal(calls.length, 1);
     assert.notEqual(calls[0].url, h.context.sourceUrl);
     assert.equal(calls[0].url, h.context.readerContentUrl(h.context.sourceUrl));
+    const networkError = new TypeError("failed to fetch");
+    calls.length = 0;
+    h.context.imageLoader.load = async (image, url) => {calls.push(url); throw networkError;};
+    await assert.rejects(h.loader.loadImageDocument(), error => error === networkError);
+    assert.deepEqual(calls, [h.context.readerContentUrl(h.context.sourceUrl)]);
     h.context.imageLoader.load = async () => {throw Object.assign(new Error("limit"), {code:"READER_RESOURCE_LIMIT"});};
     await assert.rejects(h.loader.loadImageDocument(), {code:"READER_RESOURCE_LIMIT"});
     h.close();
