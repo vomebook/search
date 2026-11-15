@@ -458,6 +458,7 @@ function normalizeReaderReturnUrl(rawUrl) {
 }
 
 var readerOverlay = null;
+var readerOverlayRevision = 0;
 var readerUiState = "base";
 var readerClosing = false;
 const readerNavigation = VoiceOfMLReaderNavigation.createNavigation("/search/static/reader.html", {
@@ -478,9 +479,69 @@ function captureReaderReturnScroll() {
     index = findVirtualIndex(top);
     offset = top - getVirtualOffset(index);
   }
-  return { route: location.href, viewKey: getSearchViewKey(), top: top, index: index, offset: offset };
+  const active = document.activeElement;
+  const focus = active instanceof HTMLElement && active.id ? { id: active.id,
+    start: active instanceof HTMLInputElement ? active.selectionStart : null,
+    end: active instanceof HTMLInputElement ? active.selectionEnd : null,
+    direction: active instanceof HTMLInputElement ? active.selectionDirection : null } : null;
+  return { route: location.href, viewKey: getSearchViewKey(), top: top, index: index, offset: offset, focus };
 }
-function restoreReaderReturnScroll(windowRendered = false) {
+function readerSearchHandoffReady(saved) {
+  // A preview has already restored usable rows and geometry while validation
+  // may still be fetching adjacent pages. Keep that validation running.
+  if (STATE.isLoading || !STATE._loadedPage || !STATE.results.length) return false;
+  if (positionRestore && (!positionRestore.preview || positionRestore.key !== saved.viewKey)) return false;
+  const index = Math.min(saved.index, Math.max(0, STATE.total - 1));
+  return !!STATE.results[index];
+}
+
+function restoreReaderSearchHandoff() {
+  let saved;
+  try {
+    const handoff = JSON.parse(sessionStorage.getItem("reader-navigation-restore") || "null");
+    sessionStorage.removeItem("reader-navigation-restore");
+    if (!handoff || handoff.returnUrl !== location.href) return;
+    const current = /** @type {{readerUrl?: string; returnScroll?: ReturnType<typeof captureReaderReturnScroll>} | null} */ (readerNavigation.saved());
+    if (!current || current.readerUrl !== handoff.readerUrl) return;
+    const url = readerNavigation.parse(handoff.readerUrl);
+    const token = url.searchParams.get("nav");
+    if (!token || sessionStorage.getItem("reader-return:" + token) !== location.href) return;
+    saved = current.returnScroll;
+    if (!saved || saved.route !== location.href || saved.viewKey !== getSearchViewKey() ||
+        !Number.isInteger(saved.index) || saved.index < 0 || !Number.isFinite(saved.offset) || !Number.isFinite(saved.top)) return;
+  } catch (_) { return; }
+  const route = location.href;
+  let cancelled = false;
+  const cancel = () => { cancelled = true; cleanup(); };
+  const cleanup = () => {
+    for (const type of ["pointerdown", "keydown", "focusin", "input", "compositionstart", "wheel", "touchstart"])
+      document.removeEventListener(type, cancel, true);
+  };
+  for (const type of ["pointerdown", "keydown", "focusin", "input", "compositionstart", "wheel", "touchstart"])
+    document.addEventListener(type, cancel, true);
+  const routeRevision = routeRenderId;
+  const deadline = Date.now() + 30000;
+  const restore = () => {
+    if (cancelled || routeRevision !== routeRenderId || location.href !== route || saved.viewKey !== getSearchViewKey() || Date.now() > deadline) {
+      cleanup(); return;
+    }
+    if (!readerSearchHandoffReady(saved)) { requestAnimationFrame(restore); return; }
+    cleanup();
+    readerReturnScrollState = saved;
+    restoreReaderReturnScroll(false, true);
+    const focus = saved.focus;
+    const element = focus && document.getElementById(focus.id);
+    if (!element || (document.activeElement !== document.body && document.activeElement !== element)) return;
+    element.focus({ preventScroll: true });
+    if (element instanceof HTMLInputElement && Number.isInteger(focus.start) && Number.isInteger(focus.end) &&
+        ["forward", "backward", "none"].includes(focus.direction)) {
+      try { element.setSelectionRange(focus.start, focus.end, focus.direction); } catch (_) {}
+    }
+  };
+  requestAnimationFrame(restore);
+}
+
+function restoreReaderReturnScroll(windowRendered = false, restoreTop = false) {
   var saved = readerReturnScrollState;
   if (!saved) return;
   if (saved.route && saved.route !== location.href) { readerReturnScrollState = null; return; }
@@ -488,14 +549,14 @@ function restoreReaderReturnScroll(windowRendered = false) {
   var generation = ++readerReturnRestoreGeneration;
   var attempts = 0;
   function restore() {
-    if (generation !== readerReturnRestoreGeneration) return;
+    if (generation !== readerReturnRestoreGeneration || saved.viewKey !== getSearchViewKey() || saved.route !== location.href) return;
     if (!DOM.resultsContainer || !STATE.results.length) {
       if (++attempts < 20) requestAnimationFrame(restore);
       return;
     }
     ensureHeightTree();
     var index = Math.min(saved.index, STATE.results.length - 1);
-    var target = Math.max(0, getVirtualOffset(index) + saved.offset);
+    var target = Math.max(0, restoreTop ? saved.top : getVirtualOffset(index) + saved.offset);
     var max = Math.max(0, getVirtualTotalHeight() - DOM.resultsContainer.clientHeight);
     readerReturnRestoreActive = true;
     setResultScrollTop(Math.min(target, max));
@@ -515,10 +576,12 @@ function restoreReaderReturnScroll(windowRendered = false) {
 }
 function closeReaderOverlay(restoreFocus, restoreScroll) {
   if (!readerOverlay) return false;
+  readerOverlayRevision++;
   readerClosing = false;
   readerUiState = "base";
-  const returnFocus = readerNavigation.unmount();
   readerOverlay = null;
+  const returnFocus = readerNavigation.unmount();
+  if (readerOverlay) return true;
   if (restoreScroll !== false) {
     var saved = readerReturnScrollState;
     var snapshot = readerReturnSnapshot;
@@ -541,6 +604,7 @@ function closeReaderOverlay(restoreFocus, restoreScroll) {
 }
 
 function openReaderOverlay(url, addHistory) {
+  readerOverlayRevision++;
   if (addHistory !== false && !readerReturnScrollState) {
     readerReturnScrollState = captureReaderReturnScroll();
     readerReturnSnapshot = saveSearchViewSnapshot(readerReturnScrollState && readerReturnScrollState.viewKey || getSearchViewKey());
@@ -558,7 +622,9 @@ function restoreReaderOverlay(state) {
   }
   try {
     var url = readerNavigation.parse(state.readerUrl);
+    const revision = readerOverlayRevision + (readerOverlay ? 1 : 0);
     closeReaderOverlay(false, false);
+    if (readerOverlayRevision !== revision) return;
     openReaderOverlay(url, false);
   } catch (_) {}
 }
@@ -590,17 +656,10 @@ function handleReaderMessage(event) {
     } catch (_) {}
     var overlay = readerOverlay;
     history.back();
-    // A traversal that never fires popstate must not leave the Reader stuck.
+    // Back may still arrive: keep its Reader entry intact for Forward.
     setTimeout(function() {
       if (!readerClosing || readerOverlay !== overlay) return;
-      var fallback = "/search/";
-      try {
-        var stuck = new URL(new URL(overlay.src, location.origin).searchParams.get("return") || fallback, location.origin);
-        if (stuck.origin === location.origin && stuck.pathname === "/search/") fallback = stuck.href;
-      } catch (_) {}
-      closeReaderOverlay();
-      history.replaceState(null, "", fallback);
-      ROUTER.apply();
+      readerNavigation.showCloseRecovery(target?.href || "/search/");
     }, 1000);
     return;
   }
@@ -1503,10 +1562,21 @@ function consumeCachedAppendPage() {
 }
 
 function cancelSearchPrefetch() {
-  cancelPendingSearchCacheWrites();
-  searchPrefetchAbortController?.cacheWaits?.forEach(wait => wait.controller.abort());
-  searchPrefetchAbortController?.abort();
+  const previous = searchPrefetchAbortController;
   searchPrefetchAbortController = null;
+  cancelPendingSearchCacheWrites();
+  previous?.cacheWaits?.forEach(wait => wait.controller.abort());
+  previous?.abort();
+}
+
+function cancelActiveSearch() {
+  const id = ++searchId;
+  searchRequestId++;
+  const previous = searchAbortController;
+  searchAbortController = new AbortController();
+  cancelSearchPrefetch();
+  previous?.abort();
+  return id === searchId;
 }
 
 function prefetchSearchPages(base, template) {
@@ -2234,16 +2304,15 @@ const ROUTER = {
     if (mode === "global") STATE.browserPath = "";
     window.location.hash = hash;
   },
-  apply: function() {
+  apply: function(preserveSameView = false) {
     appliedRouteHash = window.location.hash;
     const route = this.parse();
     const prevMode = STATE.mode;
     const prevRepo = STATE.repo;
     const previousPath = STATE.browserPath;
-    const previousSearchKey = routeInitialized && prevMode === "repo" ? getSearchViewKey() : null;
+    const previousSearchKey = routeInitialized ? getSearchViewKey() : null;
     const wasSidebarExpanded = DOM.leftSidebar && DOM.leftSidebar.classList.contains("expanded-wide");
     saveSearchViewSnapshot();
-    cancelPositionRestore();
     STATE.mode = route.mode;
     STATE.repo = route.repo;
     STATE.repoFull = route.repo ? "VoiceOfML/" + route.repo : null;
@@ -2264,10 +2333,10 @@ const ROUTER = {
         STATE.query = Array.from(STATE.query).slice(0, 256).join("");
         showToast("搜索内容已限制为 256 个字符");
       }
-      setSearchInputValue(STATE.query);
+      if (!searchComposing && !initialSearchDraft) setSearchInputValue(STATE.query);
     } else {
       STATE.query = "";
-      setSearchInputValue("");
+      if (!searchComposing && !initialSearchDraft) setSearchInputValue("");
     }
     if (route.params.repo) {
       STATE.filterRepos = (Array.isArray(route.params.repo) ? route.params.repo : [route.params.repo])
@@ -2310,7 +2379,7 @@ const ROUTER = {
       STATE.filterFolderSubtrees = [];
       STATE.filterFolders = [];
     }
-    STATE.sort = route.params.sort || "relevance";
+    STATE.sort = normalizeSearchSort(route.params.sort);
     DOM.sortSelect.value = STATE.sort;
     var ms = route.params.min_size;
     if (ms) {
@@ -2353,16 +2422,25 @@ const ROUTER = {
       && prevMode === "repo" && route.mode === "global" && route.params.sidebar === "0";
     STATE.leftSidebarOpen = keepMobileSidebarOpen || route.params.sidebar !== "0";
     STATE.rightSidebarOpen = route.params.filters === "1";
+    const sameSearchView = previousSearchKey === getSearchViewKey();
+    if (!sameSearchView) {
+      if (routeInitialized) searchInputGeneration++;
+      cancelPendingSearchControls();
+      readerReturnRestoreGeneration++;
+      if (!cancelActiveSearch()) return;
+    }
+    const owner = searchId;
+    if (!sameSearchView || (!preserveSameView && previousPath === STATE.browserPath)) cancelPositionRestore();
+    if (owner !== searchId) return;
     updateSidebarVisibility();
     const keepSidebarExpanded = route.params.wide === "1"
       || (prevMode !== STATE.mode && wasSidebarExpanded);
     DOM.leftSidebar.classList.toggle("expanded-wide", keepSidebarExpanded);
     this.updateUI();
     updateRandomTxtVisibility();
-    if (previousSearchKey && prevMode === STATE.mode && prevRepo === STATE.repo &&
-        previousPath !== STATE.browserPath && previousSearchKey === getSearchViewKey()) {
+    if (sameSearchView && (preserveSameView || (prevMode === "repo" && previousPath !== STATE.browserPath))) {
       const routeId = ++routeRenderId;
-      renderBrowser(STATE.browserPath || "", routeId);
+      if (STATE.mode === "repo" && previousPath !== STATE.browserPath) renderBrowser(STATE.browserPath || "", routeId);
       retainFilterRenderingForRoute(routeId);
       routeInitialized = true;
       persistSearchSession();
@@ -2405,6 +2483,11 @@ const ROUTER = {
   },
 };
 
+/** @param {unknown} value */
+function normalizeSearchSort(value) {
+  return value === "name" || value === "size" ? value : "relevance";
+}
+
 function buildSearchURLParams({ includeQuery = true, displaySizes = false } = {}) {
   const sp = new URLSearchParams();
   if (includeQuery && STATE.query) sp.set("q", STATE.query);
@@ -2441,7 +2524,7 @@ function syncStateToURL() {
   const qs = sp.toString();
   if (qs) hash += "?" + qs;
   if (window.location.hash !== hash) {
-    history.replaceState(null, "", hash);
+    history.replaceState(history.state, "", hash);
   }
   appliedRouteHash = window.location.hash;
   persistSearchSession();
@@ -2456,7 +2539,14 @@ function renderSidebarAndFiltersDeferred(routeId) {
 }
 let searchTimer = null;
 let searchComposing = false;
-let composeSafetyTimer = null;
+let searchInputGeneration = 0;
+let searchCompositionGeneration = 0;
+/** @type {string | null} */
+let searchCompositionViewKey = null;
+let searchInputReady = false;
+let initialSearchDraft = false;
+/** @type {{href: string, key: string | undefined, cancelled: boolean} | null} */
+let initialSearchDraftOwner = null;
 let searchId = 0;
 let searchAbortController = null;
 let searchPrefetchAbortController = null;
@@ -2620,7 +2710,9 @@ function prepareSearchPositionNavigation({ fromStart, restorePosition }) {
   saveSearchViewSnapshot();
   const key = getSearchViewKey();
   if (fromStart) saveSearchPosition();
+  const owner = searchId;
   cancelPositionRestore();
+  if (owner !== searchId) return true;
   prepareReturnPosition(key, !fromStart);
   if (!restorePosition) return false;
   setReturnPositionTarget();
@@ -3062,14 +3154,17 @@ function showPositionRestoreStatus(message, retry = false) {
 function cancelPositionRestore() {
   cancelSnapshotClone();
   positionEntryId++;
-  if (resultWindow) resultWindow.controller.abort();
+  const previousWindow = resultWindow;
+  const previousRestore = positionRestore;
   resultWindow = null;
-  updateResultWindowStatus();
-  if (!positionRestore) return;
-  positionRestore.controller.abort();
   positionRestore = null;
-  STATE.isLoading = false;
-  showPositionRestoreStatus("");
+  updateResultWindowStatus();
+  if (previousRestore) {
+    STATE.isLoading = false;
+    showPositionRestoreStatus("");
+  }
+  previousWindow?.controller.abort();
+  previousRestore?.controller.abort();
 }
 
 function tryRestoreSearchPosition(key, options = {}) {
@@ -3078,12 +3173,11 @@ function tryRestoreSearchPosition(key, options = {}) {
   if (!validSearchPosition(position)) return false;
   cancelPendingSearchControls();
   if (!options.position && positionRestore?.key === key && !positionRestore.failed) return true;
+  if (!cancelActiveSearch()) return false;
+  const owner = searchId;
   cancelPositionRestore();
+  if (owner !== searchId) return false;
   setReturnPositionTarget();
-  searchAbortController?.abort();
-  cancelSearchPrefetch();
-  searchId++;
-  searchRequestId++;
   const controller = new AbortController();
   const task = { key, controller, position: {...position}, backend: options.backend || previous?.backend,
     lookup: previous?.lookup, ready: previous?.ready || new Map(), page: 0, results: [] };
@@ -3710,13 +3804,11 @@ function startSnapshotClone() {
 function restoreSearchViewSnapshot(key, restoreScroll = true, preserveRestore = false) {
   const snapshot = searchViewSnapshots.get(key);
   if (!snapshot || snapshot.version !== SEARCH_VIEW_SNAPSHOT_VERSION || snapshot.loadedPage < 1) return restoreScroll && tryRestoreSearchPosition(key);
+  if (!cancelActiveSearch()) return false;
+  const owner = searchId;
   if (!preserveRestore) cancelPositionRestore();
+  if (owner !== searchId) return false;
   cancelPendingSearchControls();
-  if (searchAbortController) searchAbortController.abort();
-  cancelSearchPrefetch();
-  searchAbortController = new AbortController();
-  searchId++;
-  searchRequestId++;
   const materialized = snapshot.window?.count ?? snapshot.results.length;
   STATE.results = materialized > 2000 && !preserveRestore
     ? prepareSnapshotClone(snapshot, key, restoreScroll) : snapshot.results.map(cloneSearchResult);
@@ -3850,7 +3942,7 @@ function buildSearchApiBody(params) {
   if (params.folders?.length) body.folders = params.folders;
   if (params.minSize !== null) body.min_size = params.minSize;
   if (params.maxSize !== null) body.max_size = params.maxSize;
-  body.sort = params.sort || "relevance";
+  body.sort = normalizeSearchSort(params.sort);
   if (!params.searchFolders) body.search_folders = false;
   if (params.exact) body.exact = true;
   return body;
@@ -3882,10 +3974,7 @@ function applyInitialSearchPayload(data) {
   if (!data || !Array.isArray(data.results) || !canUseInitialSearchPayload()) return false;
   if (STATE.mode === "repo" && data.repo !== STATE.repoFull) return false;
   if (STATE.mode === "global" && data.mode !== "global") return false;
-  if (searchAbortController) searchAbortController.abort();
-  cancelSearchPrefetch();
-  searchAbortController = new AbortController();
-  searchRequestId++;
+  if (!cancelActiveSearch()) return false;
   STATE.total = data.total || 0;
   STATE.page = 1;
   STATE.results = data.results.slice();
@@ -3948,7 +4037,9 @@ async function tryInitialSearchPayload(searchMode, searchRepo) {
 
 async function searchWithInitialFallback() {
   saveSearchViewSnapshot();
+  const owner = searchId;
   cancelPositionRestore();
+  if (owner !== searchId) return false;
   const key = getSearchViewKey(), entry = positionEntryId;
   prepareReturnPosition(key);
   if (searchViewSnapshots.has(key)) {
@@ -3982,6 +4073,9 @@ function searchWithInitialFallbackFresh() {
 }
 
 function ensureLocalDataLoaded(triggerSearchAfterLoad, background) {
+  const owner = searchId;
+  const key = getSearchViewKey();
+  const current = () => owner === searchId && key === getSearchViewKey();
   if (STATE.dataLoaded) return Promise.resolve(true);
   if (localDataPromise) return localDataPromise;
   if (!background && STATE.filterExtensions.length === 0) {
@@ -4013,6 +4107,7 @@ function ensureLocalDataLoaded(triggerSearchAfterLoad, background) {
         renderExtensionFilter(routeRenderId);
         renderRepoFilter(routeRenderId);
       }
+      if (!current()) return ok;
       if (STATE._initialActive) {
         STATE._initialActive = false;
       } else if (triggerSearchAfterLoad) {
@@ -4020,39 +4115,56 @@ function ensureLocalDataLoaded(triggerSearchAfterLoad, background) {
         STATE.results = [];
         doSearch();
       }
-    } else {
-      if (!background) {
-        STATE.isLoading = false;
-        STATE.resultsSkeletonActive = false;
-        setSearchVisualLoading(false);
-      }
-      showToast("本地数据加载失败");
-      if (DOM.localModeToggle) DOM.localModeToggle.checked = false;
-      STATE.useLocalMode = false;
-      // API mode now owns the query. Keep the exact switch visible (and its
-      // value surfaced) so a fallback cannot silently change search semantics.
-      setExactSearchSectionVisible(true, false);
-      syncStateToURL();
-      if (triggerSearchAfterLoad) doSearch();
+    } else if (current() && !background) {
+      STATE.isLoading = false;
+      STATE.resultsSkeletonActive = false;
+      setSearchVisualLoading(false);
     }
     return ok;
   }).catch(function(err) {
     console.error("Local data load failed:", err);
     STATE.dataLoaded = false;
     localDataPromise = null;
-    if (!background) {
+    if (current() && !background) {
       STATE.isLoading = false;
       STATE.resultsSkeletonActive = false;
       setSearchVisualLoading(false);
     }
-    if (DOM.localModeToggle) DOM.localModeToggle.checked = false;
-    STATE.useLocalMode = false;
-    showToast("本地数据加载失败");
-    syncStateToURL();
-    if (triggerSearchAfterLoad) doSearch();
     return false;
   });
   return localDataPromise;
+}
+
+function showSearchBackendUnavailable(waiting) {
+  STATE.isLoading = waiting;
+  setSearchVisualLoading(waiting);
+  STATE.results = [];
+  STATE.total = 0;
+  STATE._loadedPage = 0;
+  STATE._pageCache = {};
+  STATE.hasMore = false;
+  STATE.resultsSkeletonActive = false;
+  selectedIndices = {};
+  lastSelectedIndex = -1;
+  keyboardResultIndex = -1;
+  resetVirtualScrollState();
+  DOM.resultsList.innerHTML = "";
+  DOM.emptyState.style.display = "none";
+  const status = document.createElement("div");
+  status.setAttribute("role", "status");
+  status.textContent = waiting ? "正在加载搜索数据…" : "搜索数据加载失败，请重试";
+  status.className = "search-backend-status";
+  DOM.resultsList.append(status);
+  if (!waiting) {
+    const retry = document.createElement("button");
+    retry.type = "button";
+    retry.textContent = "重试";
+    retry.className = "search-backend-status";
+    retry.addEventListener("click", () => doSearch());
+    DOM.resultsList.append(retry);
+  }
+  updateStatusBar();
+  updateLoadInfo();
 }
 
 function submitSearchQuery(query, { restore = false, record = false, refreshHistory = false, clearResults = false, blur = false, updateInput = restore } = {}) {
@@ -4078,10 +4190,72 @@ function submitSearchQuery(query, { restore = false, record = false, refreshHist
   return result;
 }
 
+function currentSearchEntryKey() {
+  return /** @type {Window & {navigation?: {currentEntry?: {key?: string} | null}}} */ (window).navigation?.currentEntry?.key;
+}
+
+function captureInitialSearchDraft(renew = false) {
+  if (searchInputReady) return;
+  initialSearchDraft = true;
+  if (renew || !initialSearchDraftOwner) initialSearchDraftOwner = {
+    href: location.href, key: currentSearchEntryKey(), cancelled: false
+  };
+}
+
+function cancelInitialSearchDraft() {
+  if (initialSearchDraftOwner) initialSearchDraftOwner.cancelled = true;
+}
+
+function initialSearchDraftIsCurrent() {
+  const owner = initialSearchDraftOwner;
+  return !owner || (!owner.cancelled && owner.href === location.href &&
+    (owner.key === undefined || owner.key === currentSearchEntryKey()));
+}
+
+function finishInitialSearchInput(current) {
+  for (const type of ["popstate", "hashchange", "pagehide"]) window.removeEventListener(type, cancelInitialSearchDraft, true);
+  searchInputReady = true;
+  if (!current) searchInputGeneration++;
+  if (initialSearchDraft) {
+    initialSearchDraft = false;
+    if (current) debouncedSearch();
+  }
+  initialSearchDraftOwner = null;
+}
+
+function setupSearchInput() {
+  for (const type of ["popstate", "hashchange", "pagehide"]) window.addEventListener(type, cancelInitialSearchDraft, true);
+  DOM.searchInput.addEventListener("input", event => {
+    const compositionInput = event.isComposing || event.inputType === "insertCompositionText" || event.inputType === "insertFromComposition";
+    captureInitialSearchDraft(!searchComposing && !compositionInput);
+    syncSearchInputState();
+    if (compositionInput) return;
+    debouncedSearch();
+  });
+  DOM.searchInput.addEventListener("compositionstart", () => {
+    captureInitialSearchDraft(true);
+    clearTimeout(searchTimer);
+    searchTimer = null;
+    searchComposing = true;
+    searchCompositionGeneration = searchInputGeneration;
+    searchCompositionViewKey = routeInitialized ? getSearchViewKey() : null;
+  });
+  DOM.searchInput.addEventListener("compositionend", () => {
+    searchComposing = false;
+    // Keep the visible draft, but an old view's completion cannot submit in B.
+    if (searchCompositionGeneration !== searchInputGeneration ||
+        (searchCompositionViewKey !== null && searchCompositionViewKey !== getSearchViewKey())) return;
+    debouncedSearch();
+  });
+}
+
 function debouncedSearch() {
-  if (searchComposing) return;
+  if (searchComposing || !searchInputReady) return;
   clearTimeout(searchTimer);
+  const generation = searchInputGeneration;
   searchTimer = setTimeout(function() {
+    searchTimer = null;
+    if (searchComposing || generation !== searchInputGeneration) return;
     submitSearchQuery(DOM.searchInput.value.trim(), { record: true, refreshHistory: true });
   }, 100);
 }
@@ -4142,7 +4316,11 @@ function buildLocalSearchParams(page) {
 
 function doSearch(append, fromStart = false, restorePosition = false) {
   if (append && resultWindow) { loadResultWindowPage(STATE._loadedPage + 1); return; }
+  if (append && !STATE._loadedPage) append = false;
+  if (!append && !cancelActiveSearch()) return;
+  const owner = searchId;
   if (!append && prepareSearchPositionNavigation({ fromStart, restorePosition })) return;
+  if (owner !== searchId) return;
   if (append && STATE.isLoading) return;
   if (append && !STATE._loadedPage) append = false;
   if (!append) STATE.page = 1;
@@ -4166,10 +4344,6 @@ function doSearch(append, fromStart = false, restorePosition = false) {
     selectedIndices = {};
     lastSelectedIndex = -1;
     if (DOM.multiSelectToggle && DOM.multiSelectToggle.checked) updateSelectionUI();
-    if (searchAbortController) searchAbortController.abort();
-    cancelSearchPrefetch();
-    searchAbortController = new AbortController();
-    searchRequestId++;
     STATE._pageCache = {};
     STATE._loadedPage = 0;
     STATE._pagingAppendScrollTop = null;
@@ -4190,11 +4364,16 @@ function doSearch(append, fromStart = false, restorePosition = false) {
     (!continueApi && !continueInitialViaApi && (STATE.useLocalMode || folderMatchMode === "mixed"));
   if (shouldUseLocalSearch) {
     if (!STATE.dataLoaded) {
-      ensureLocalDataLoaded(false, false).then(ok => {
+      if (!append) showSearchBackendUnavailable(true);
+      ensureLocalDataLoaded(false, true).then(ok => {
         if (id !== searchId) return;
         STATE.isLoading = false;
         if (ok) doSearch(append);
-        else if (!append && folderMatchMode !== "mixed") doSearch();
+        else if (!append && folderMatchMode !== "mixed" && apiAvailable) {
+          STATE.useLocalMode = false;
+          if (DOM.localModeToggle) DOM.localModeToggle.checked = false;
+          doSearch();
+        } else if (!append) showSearchBackendUnavailable(false);
         else finishPagingAttempt(false, new Error("LOCAL_UNAVAILABLE"));
       });
       return;
@@ -4267,13 +4446,17 @@ function doSearch(append, fromStart = false, restorePosition = false) {
     return;
   }
   if (!STATE.dataLoaded) {
-    STATE.isLoading = false;
-    setSearchVisualLoading(false);
-    if (append) {
-      STATE.page = Math.max(1, STATE._loadedPage);
-      finishPagingAttempt(false);
-    }
-    showToast("数据加载中，请稍后...");
+    if (!append) showSearchBackendUnavailable(true);
+    ensureLocalDataLoaded(false, true).then(ok => {
+      if (id !== searchId) return;
+      STATE.isLoading = false;
+      if (ok) doSearch(append);
+      else if (!append) showSearchBackendUnavailable(false);
+      else {
+        STATE.page = Math.max(1, STATE._loadedPage);
+        finishPagingAttempt(false, new Error("LOCAL_UNAVAILABLE"));
+      }
+    });
     return;
   }
   STATE._resultBackend = "local";
@@ -4288,8 +4471,10 @@ function handleApiSearchFailure(append, id) {
     return Promise.resolve();
   }
   showToast("在线搜索失败，正在切换本地搜索...");
-  return ensureLocalDataLoaded(false, false).then(function(ok) {
-    if (!ok || id !== searchId) return;
+  showSearchBackendUnavailable(true);
+  return ensureLocalDataLoaded(false, true).then(function(ok) {
+    if (id !== searchId) return;
+    if (!ok) { showSearchBackendUnavailable(false); return; }
     STATE.useLocalMode = true;
     if (DOM.localModeToggle) DOM.localModeToggle.checked = true;
     syncStateToURL();
@@ -4326,7 +4511,8 @@ function doSearchFallbackLocal(params, append, id) {
       }
       STATE.dataLoaded = false;
       if (params.folderMatchMode === "mixed") {
-        showToast("本地目录筛选不可用，请刷新后重试");
+        showSearchBackendUnavailable(false);
+        showToast("本地目录筛选不可用，请重试");
       } else if (apiAvailable) {
         STATE.useLocalMode = false;
         if (DOM.localModeToggle) DOM.localModeToggle.checked = false;
@@ -4336,6 +4522,7 @@ function doSearchFallbackLocal(params, append, id) {
         if (append) STATE.page = STATE._loadedPage + 1;
         doSearch(append);
       } else {
+        showSearchBackendUnavailable(false);
         showToast("本地搜索不可用");
       }
     } finally {
@@ -4352,6 +4539,7 @@ function doSearchFallbackLocal(params, append, id) {
 }
 
 function renderSearchPage(append) {
+  DOM.resultsList.querySelectorAll(".search-backend-status").forEach(element => element.remove());
   if (append) {
     refreshVirtualAfterAppend();
   } else {
@@ -4977,10 +5165,12 @@ function setSearchVisualLoading(loading) {
 }
 
 function prepareFilterChange(clearResults) {
-  // Merge only a pending edit; otherwise preserve exact URL-restored byte values.
+  // Merge completed query drafts too; a filter click must not discard typing.
+  const query = searchTimer !== null && !searchComposing ? DOM.searchInput.value.trim() : null;
   applyPendingSizeFilters();
   cancelPendingSearchControls();
   saveSearchViewSnapshot();
+  if (query !== null && Array.from(query).length <= 256) STATE.query = query;
   STATE.page = 1;
   if (clearResults) STATE.results = [];
 }
@@ -5019,12 +5209,11 @@ function setupSizeFilterControls() {
 
 function scheduleFilterSearch(clearResults = false) {
   prepareFilterChange(clearResults);
+  if (!cancelActiveSearch()) return;
+  const owner = searchId;
   cancelPositionRestore();
+  if (owner !== searchId) return;
   resetPagingRecovery();
-  if (searchAbortController) searchAbortController.abort();
-  cancelSearchPrefetch();
-  searchId++;
-  searchRequestId++;
   STATE.isLoading = true;
   setSearchVisualLoading(true);
   syncStateToURL();
@@ -6782,6 +6971,7 @@ async function init() {
     if (document.visibilityState === "hidden") flushSidebarScroll();
   });
   syncSearchInputState();
+  setupSearchInput();
   // Session and position databases are independent; start both without
   // serializing their I/O. Route handling still waits for both to settle.
   const positionsReady = initSearchPositions();
@@ -6799,20 +6989,6 @@ async function init() {
   else if (savedMobile === "desktop") STATE.isMobile = false;
   else STATE.isMobile = autoDetectMobile();
   applyMobileMode();
-  DOM.searchInput.addEventListener("input", () => {
-    syncSearchInputState();
-    debouncedSearch();
-  });
-  DOM.searchInput.addEventListener("compositionstart", function() {
-    searchComposing = true;
-    clearTimeout(composeSafetyTimer);
-    composeSafetyTimer = setTimeout(function() { searchComposing = false; debouncedSearch(); }, 5000);
-  });
-  DOM.searchInput.addEventListener("compositionend", function() {
-    searchComposing = false;
-    clearTimeout(composeSafetyTimer);
-    debouncedSearch();
-  });
   setupSearchHistory();
   DOM.historyToggle.addEventListener("change", function() {
     STATE.recordHistory = DOM.historyToggle.checked;
@@ -6905,23 +7081,6 @@ async function init() {
     doFilterSearch(true);
   });
   DOM.localModeToggle.addEventListener("change", function() {
-    if (!STATE.dataLoaded && DOM.localModeToggle.checked) {
-      STATE.useLocalMode = true;
-      setExactSearchSectionVisible(true, true);
-      prepareFilterChange(true);
-      DOM.resultsList.innerHTML = "";
-      DOM.emptyState.style.display = "none";
-      updateStatusBar();
-      updateLoadInfo();
-      syncStateToURL();
-      const key = getSearchViewKey();
-      const id = ++searchId;
-      ensureLocalDataLoaded(false, false).then(ok => {
-        if (ok && id === searchId && key === getSearchViewKey()) doFilterSearch();
-        else if (!ok && id === searchId) doSearch();
-      });
-      return;
-    }
     STATE.useLocalMode = DOM.localModeToggle.checked;
     // Keep the switch visible in both backends: the Worker implements exact
     // mode, and a hidden but focusable control changed results unexpectedly.
@@ -6931,7 +7090,7 @@ async function init() {
     syncStateToURL();
   });
   DOM.sortSelect.addEventListener("change", function() {
-    STATE.sort = DOM.sortSelect.value;
+    STATE.sort = normalizeSearchSort(DOM.sortSelect.value);
     doFilterSearch(true);
     syncStateToURL();
   });
@@ -7004,13 +7163,19 @@ async function init() {
     // System back leaves the Reader even with its directory/search panel open.
     // Re-pushing an entry here (without a user activation) made Chromium mark
     // the whole search document skippable, so the next swipe skipped it.
-    if (readerOverlay || event.state?.voiceReaderOverlay) {
+    if (event.state?.voiceReaderOverlay) {
       restoreReaderOverlay(event.state);
       return;
     }
+    if (readerOverlay) {
+      // Apply the destination and retire A before Reader disposal or async B restoration.
+      const overlay = readerOverlay;
+      ROUTER.apply(true);
+      if (readerOverlay === overlay) closeReaderOverlay();
+    }
   });
   window.addEventListener("hashchange", function() {
-    if (readerOverlay) return;
+    if (readerOverlay || appliedRouteHash === window.location.hash) return;
     ROUTER.apply();
   });
   window.addEventListener("resize", function() {
@@ -7036,7 +7201,10 @@ async function init() {
   window.addEventListener("online", resumeResultRecovery);
   window.setInterval(function() { warmConnection(); }, KEEPALIVE_INTERVAL_MS);
   readerAssetDelayUntilPaint = true;
+  const initialDraftCurrent = initialSearchDraftIsCurrent();
   ROUTER.apply();
+  finishInitialSearchInput(initialDraftCurrent);
+  restoreReaderSearchHandoff();
   restoreReaderFromSession();
   // Keep the first search paint independent of the multi-megabyte Reader sidecar.
   // API results already carry Reader fields; the sidecar is only enrichment for
