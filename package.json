@@ -17,6 +17,7 @@
     ]
   },
   "scripts": {
+    "data:prepare": "node scripts/data/prepare_test_data.mjs",
     "lint": "eslint static scripts tests --max-warnings 0",
     "markup": "node scripts/check_markup.mjs",
     "types": "tsc --project config/types/jsconfig.check.json && tsc --project config/types/jsconfig.service-worker.json && tsc --project config/types/jsconfig.service-worker-strict.json && tsc --project config/types/jsconfig.chapter-worker-strict.json && tsc --project config/types/jsconfig.strict.json && tsc --project config/types/jsconfig.search-exact.json && tsc --project config/types/jsconfig.reader-exact.json && tsc --project config/types/jsconfig.window-page-tests.json",

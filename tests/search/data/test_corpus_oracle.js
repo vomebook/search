@@ -1,11 +1,13 @@
 const fs = require("fs");
+const path = require("path");
 const assert = require("assert");
 const vm = require("vm");
 const zlib = require("zlib");
 const { test, run } = require("../../support/test_harness");
 
+const dataRoot = process.env.SEARCH_TEST_DATA_DIR || "data";
 const workerSource = fs.readFileSync("static/search/index-worker.js", "utf8");
-const compact = JSON.parse(zlib.gunzipSync(fs.readFileSync("data/search_data.json.gz")).toString("utf8"));
+const compact = JSON.parse(zlib.gunzipSync(fs.readFileSync(path.join(dataRoot, "search_data.json.gz"))).toString("utf8"));
 
 // This decoder intentionally does not use app.js or its compact-data helpers.
 const corpus = compact.rc.map((item) => ({
@@ -223,14 +225,14 @@ test("pagination beyond final page matches brute-force total and empty indices",
   q: "VoiceOfML/Omnibus", exact: true, page: 9999, pageSize: 13,
 }));
 test("global generated first page is the corpus source order", () => {
-  const payload = JSON.parse(fs.readFileSync("data/initial/global.json", "utf8"));
+  const payload = JSON.parse(fs.readFileSync(path.join(dataRoot, "initial/global.json"), "utf8"));
   assert.strictEqual(payload.total, corpus.length);
   assert.deepStrictEqual(payload.results, corpus.slice(0, payload.page_size));
 });
 test("every repository generated first page preserves filtered corpus order and total", () => {
   for (const repo of compact.rp) {
     const short = repo.slice(repo.indexOf("/") + 1);
-    const payload = JSON.parse(fs.readFileSync(`data/initial/repos/${short}.json`, "utf8"));
+    const payload = JSON.parse(fs.readFileSync(path.join(dataRoot, `initial/repos/${short}.json`), "utf8"));
     const expected = corpus.filter((record) => record.Repo === repo);
     assert.strictEqual(payload.total, expected.length, repo);
     assert.deepStrictEqual(payload.results, expected.slice(0, payload.page_size), repo);

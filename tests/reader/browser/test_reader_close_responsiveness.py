@@ -187,8 +187,19 @@ class ReaderCloseResponsivenessTests(unittest.TestCase):
         }''')
         frame.locator('#back').click()
         self.page.wait_for_function('() => window.__hiddenOnMessage', timeout=1000)
-        self.page.locator('iframe.reader-overlay').wait_for(state='detached', timeout=3000)
+        reader_url = self.page.url
+        recovery = self.page.get_by_role('link', name='直接打开搜索页')
+        recovery.wait_for(state='visible', timeout=3000)
+        self.assertEqual(self.page.url, reader_url)
+        self.assertTrue(self.page.evaluate('history.state.voiceReaderOverlay && readerClosing'))
+        self.assertFalse(recovery.evaluate('link => !!link.closest("[inert]")'))
+        target = recovery.get_attribute('href')
         self.page.evaluate('() => { history.back=window.__nativeBack; }')
+        with self.page.expect_navigation(wait_until='domcontentloaded'):
+            recovery.click()
+        self.assertEqual(self.page.url, target)
+        self.page.locator('#search-input').wait_for(state='visible')
+        self.assertEqual(self.page.locator('iframe.reader-overlay').count(), 0)
         self.assertFalse(self.page.evaluate('readerClosing'))
 
     def test_host_updates_store_when_a_new_reader_version_closes(self):
