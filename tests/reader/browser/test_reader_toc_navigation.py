@@ -385,6 +385,74 @@ class TocNavigationTests(unittest.TestCase):
                             f"第{chapter}章 第二节 fragment did not land")
             self.assertEqual(self.landed_chapter(), chapter)
 
+    def test_large_chapter_yields_and_aborted_reader_never_mounts_partial_article(self):
+        self.expose()
+        body = '<html><body><h1 id="start">正文</h1>' + ''.join(
+            f'<p><a href="#start">第{i}段</a> 正文</p>' for i in range(2500)) + '</body></html>'
+        manifest = {'version':1,'kind':'epub-chapters',
+            'chapters':[{'index':1,'path':'chapters/chapter-0001.xhtml','bytes':len(body.encode())}],
+            'toc':[{'title':'正文','chapter':1,'fragment':'start','depth':0}]}
+        self.page.add_init_script('''(()=>{window.__resourceSteps=0;window.__disposedAt=0;
+          const original=Document.prototype.querySelectorAll;
+          Document.prototype.querySelectorAll=function(selector){
+            const result=original.call(this,selector);
+            if(selector==='*' && result.length>2500 && !this.defaultView){
+              for(const element of result){const has=element.hasAttribute.bind(element);
+                element.hasAttribute=function(name){
+                  if(name==='src' && ++window.__resourceSteps===300){
+                    const until=performance.now()+20;while(performance.now()<until){}
+                    setTimeout(()=>{window.__disposedAt=window.__resourceSteps;
+                      dispatchEvent(new Event('voice-reader-dispose'));},0);
+                  }
+                  return has(name);
+                };
+              }
+            }
+            return result;
+          }})()''')
+        self.page.route('**/api/reader-bucket-resource**', lambda route: route.fulfill(
+            json=manifest) if 'chapter-manifest' in route.request.url else route.fulfill(
+            content_type='text/html',body=body))
+        source=('https://voiceofml-search.hf.space/api/reader-bucket-resource?path=chapters/ebook/epub/'
+                + 'a'*64 + '/1234567890abcdef/chapter-manifest.json')
+        self.page.goto(self.origin + support.PREFIX + '/static/reader.html?' +
+                       urlencode(dict(url=source, ext='epub-chapters')),wait_until='domcontentloaded')
+        self.page.wait_for_function('()=>window.__disposedAt>0')
+        self.page.wait_for_timeout(100)
+        result=self.page.evaluate('''()=>({steps:__resourceSteps,disposed:__disposedAt,
+          articles:document.querySelectorAll('.reader-epub-chapter').length})''')
+        self.assertLess(result['disposed'],5000,result)
+        self.assertEqual(result['articles'],0,result)
+
+    def test_sanitized_chapter_import_preserves_text_links_and_blocks_scripts(self):
+        self.expose()
+        body = ('<html xmlns="http://www.w3.org/1999/xhtml"><head><title>chapter head</title></head>'
+                '<body id="book-body"><h1 id="start">正文</h1><p onclick="window.__unsafe=1">'
+                '跨节点 <em>needle</em><a href="#start">返回</a>'
+                '<script>window.__unsafe=2</script></p></body></html>')
+        manifest = {'version':1,'kind':'epub-chapters',
+            'chapters':[{'index':1,'path':'chapters/chapter-0001.xhtml','bytes':len(body.encode())}],
+            'toc':[{'title':'正文','chapter':1,'fragment':'start','depth':0}]}
+        self.page.route('**/api/reader-bucket-resource**', lambda route: route.fulfill(
+            json=manifest) if 'chapter-manifest' in route.request.url else route.fulfill(
+            content_type='text/html',body=body))
+        source=('https://voiceofml-search.hf.space/api/reader-bucket-resource?path=chapters/ebook/epub/'
+                + 'a'*64 + '/1234567890abcdef/chapter-manifest.json')
+        self.page.goto(self.origin + support.PREFIX + '/static/reader.html?' +
+                       urlencode(dict(url=source, ext='epub-chapters')),wait_until='domcontentloaded')
+        self.page.wait_for_function("()=>document.documentElement.dataset.readerPhase==='ready'")
+        result=self.page.evaluate('''()=>{const article=document.querySelector('.reader-epub-chapter');
+          return {id:article.id,text:article.textContent,href:article.querySelector('a').getAttribute('href'),
+            onclick:article.querySelector('p').hasAttribute('onclick'),script:!!article.querySelector('script'),
+            unsafe:window.__unsafe||0,head:article._chapterSearchHead?.textContent};}''')
+        self.assertEqual(result['id'],'book-body')
+        self.assertIn('跨节点 needle返回',result['text'])
+        self.assertEqual(result['href'],'#start')
+        self.assertFalse(result['onclick'])
+        self.assertFalse(result['script'])
+        self.assertEqual(result['unsafe'],0)
+        self.assertIn('chapter head',result['head'])
+
     def test_merged_chm_missing_toc_anchors_use_unique_in_book_links(self):
         self.expose()
         body = (f'<main><section id="chm-page-1"><h1>目录</h1>'
