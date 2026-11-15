@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { renameSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readdirSync, renameSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, extname, join, relative } from "node:path";
 import { createRequire } from "node:module";
 import { stripBundledScripts } from "./compose_app.mjs";
@@ -48,3 +48,34 @@ for (const filename of ["index.html", "static/reader.html", "sw.js"]) {
     "CURRENT_HASHED_ASSETS=" + JSON.stringify([...replacements.values()].filter(url => url.startsWith("static/")).map(url => "/search/" + url).concat([...currentVendorAssets], resources.djvuDecoderAssets("/search/static/"), resources.ruffleAssets("/search/static/"))));
   writeFileSync(target, content);
 }
+
+// Hash the rewritten graph and shells, with the version still a fixed marker
+// (including the resulting digest itself would make the hash self-referential).
+const workerPath = join(root, "sw.js");
+const worker = readFileSync(workerPath, "utf8");
+const versionMarker = /\bCACHE_VERSION\s*=\s*(["'])development\1/g;
+if ([...worker.matchAll(versionMarker)].length !== 1) {
+  throw new Error("sw.js must contain exactly one CACHE_VERSION = 'development' marker");
+}
+const cacheHash = createHash("sha256");
+function hashFile(filename) {
+  const content = readFileSync(join(root, filename));
+  cacheHash.update(JSON.stringify([filename, content.length]) + "\n").update(content);
+}
+for (const filename of ["sw.js", "index.html", "static/reader.html"]) hashFile(filename);
+// Bootstrap data and icons are not content-addressed. Only use build output;
+// HF's corresponding runtime data is not necessarily available during its build.
+for (const filename of ["manifest.json", "data/generation-manifest.json", "data/reader_assets.json.gz",
+  "data/initial/manifest.json", "data/initial/global.json", "data/sidebar/manifest.json", "data/sidebar/global.json"]) {
+  if (existsSync(join(root, filename))) hashFile(filename);
+}
+function hashIcons(directory) {
+  if (!existsSync(join(root, directory))) return;
+  for (const entry of readdirSync(join(root, directory), { withFileTypes: true }).sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0)) {
+    const filename = directory + "/" + entry.name;
+    if (entry.isDirectory()) hashIcons(filename);
+    else if (entry.isFile()) hashFile(filename);
+  }
+}
+hashIcons("icons");
+writeFileSync(workerPath, worker.replace(versionMarker, "CACHE_VERSION=" + JSON.stringify(cacheHash.digest("hex"))));

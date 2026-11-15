@@ -124,6 +124,7 @@ jobs:
           node scripts/search/check_search_readability_baseline.mjs
           node scripts/search/check_reader_navigation_baseline.mjs
           node tests/search/build/test_search_record_path_build.mjs
+          node tests/search/build/test_service_worker_cache_version.mjs
           node tests/reader/transport/test_reader_preload.js
           node tests/reader/chapter-search/test_reader_chapter_search.mjs
           node scripts/reader/check_chapter_search_core_coverage.mjs
@@ -596,6 +597,7 @@ jobs:
           node scripts/search/check_search_readability_baseline.mjs
           node scripts/search/check_reader_navigation_baseline.mjs
           node tests/search/build/test_search_record_path_build.mjs
+          node tests/search/build/test_service_worker_cache_version.mjs
           node tests/reader/images/test_reader_jxl_progressive.mjs
       - name: Run Reader request and PDF loading regressions
         working-directory: huggingface-search
@@ -705,7 +707,7 @@ jobs:
           PY
       - name: Run Reader upstream ownership gate
         working-directory: huggingface-search
-        run: timeout 120s python3 -B -m unittest -v tests.proxy.test_async_proxy tests.reader.backend.test_reader_range_flights tests.proxy.test_proxy_ownership tests.proxy.test_proxy_streams_contract tests.backend.test_coverage_safety tests.reader.backend.test_reader_index_warming tests.search.backend.test_search_execution tests.search.browser.test_browser.BrowserInteractionTests.test_directory_tree_preview_stays_usable_during_slow_contents tests.search.browser.test_browser.BrowserInteractionTests.test_reader_back_closes_overlay_without_reloading_search
+        run: timeout 120s python3 -B -m unittest -v tests.proxy.test_async_proxy tests.reader.backend.test_reader_range_flights tests.proxy.test_proxy_ownership tests.proxy.test_proxy_streams_contract tests.backend.test_coverage_safety tests.gates.test_lifespan_coverage_slice tests.reader.backend.test_reader_index_warming tests.search.backend.test_search_execution tests.search.browser.test_browser.BrowserInteractionTests.test_directory_tree_preview_stays_usable_during_slow_contents tests.search.browser.test_browser.BrowserInteractionTests.test_reader_back_closes_overlay_without_reloading_search
       - name: Run Reader core, security and search data unit tests
         working-directory: huggingface-search
         run: |
