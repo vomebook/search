@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 // Load the actual classic-script contract, including its RegExp-based isBucketPath.
 globalThis.window = globalThis;
 createRequire(import.meta.url)('../../../static/reader/core/reader-contract.js');
-const { validateResource, validateReadingManifest, validatePageMap, validateTextLayer, createV3Repository } =
+const { validateResource, validateReadingManifest, validatePageMap, validateTextLayer, partitionFor, createV3Repository } =
   await import('../../../static/reader/pdf/reader-v3.mjs');
 const json = value => JSON.parse(JSON.stringify(value));
 const invalid = error => error?.message === 'PDF_V3_INVALID';
@@ -56,6 +56,12 @@ test('page map null entry', () => {
 });
 test('text index, partition and layer positive chain', async () => {
   assert.deepEqual(await repository().textPage(json(indexRef), 1), layer);
+  const ranges = [{start: 2, end: 3}, {start: 6, end: 8}, {start: 10, end: 10}];
+  for (const [page, expected] of [[1, null], [2, ranges[0]], [4, null], [6, ranges[1]],
+    [8, ranges[1]], [9, null], [10, ranges[2]], [11, null]]) {
+    assert.strictEqual(partitionFor(ranges, page), expected);
+  }
+  assert.strictEqual(partitionFor([], 1), null);
   assert.deepEqual(validateTextLayer(json(layer), json(entry), s), layer);
   const region = (order,start,end,text) => ({id:`r${order}`,order,start,end,text,box:[0,0,1,1],
     quad:[[0,0],[1,0],[1,1],[0,1]],writing_mode:'horizontal-ltr',direction:'ltr'});
@@ -152,4 +158,19 @@ test('parse errors and unrelated repository error remain distinct', async () => 
   const other = res('text-review-manifest.json');
   await assert.rejects(repo.textIndex(json(other)), error => error.message === 'PDF_V3_GENERATION_CHANGED');
   assert.throws(() => JSON.parse('{'), SyntaxError);
+
+  // A cache hit refreshes recency; inserting a fifth resource evicts the
+  // least recently used one, not the first resource originally fetched.
+  const calls = new Map();
+  const cached = createV3Repository({pageCount: 1, sourceSha: s, resourceUrl: r => r.path,
+    readJson: (path, ref) => {calls.set(ref.sha256, (calls.get(ref.sha256) || 0) + 1); return {sha256: ref.sha256};}});
+  const refs = Array.from({length: 5}, (_, i) => ({...indexRef, sha256: String(i).repeat(64)}));
+  for (const r of refs.slice(0, 4)) assert.deepEqual(await cached.read(r), {sha256: r.sha256});
+  await cached.read(refs[0]);
+  await cached.read(refs[4]);
+  await cached.read(refs[0]);
+  assert.equal(calls.get(refs[0].sha256), 1);
+  assert.deepEqual(await cached.read(refs[1]), {sha256: refs[1].sha256});
+  assert.equal(calls.get(refs[1].sha256), 2);
+  cached.dispose();
 });
