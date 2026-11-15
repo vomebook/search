@@ -44,6 +44,7 @@ class ReaderOptimizationTests(unittest.TestCase):
               window.__headingTools = {set:setToc,sync:syncHeadingLocation,index:()=>navigationState.currentChapterIndex};
               window.__pdfTools = {trim: trimPdfSurfaces, pixels: pdfRetainedPixels, budget: pdfPixelBudget,
                 prefetch: pdfManifestPrefetches, setPage: page => updateDocumentState({page})};
+              window.__pdfRenderContext = readerContext;
               window.__startPdfProbe = () => {
                 pdfTextContentCache.clear(); pdfTextContentCacheBytes = 0;
                 pdfSearchTextCache.clear(); pdfSearchTextCacheBytes = 0;
@@ -210,6 +211,64 @@ class ReaderOptimizationTests(unittest.TestCase):
         self.assertEqual((result['page'],result['count'],result['chapter']), (4,4,1))
         self.assertEqual((result['percent'],result['input']), ('100.0%','4'))
         self.assertGreaterEqual(result['offset'],0)
+
+    def test_speculative_render_does_not_preemptively_evict_completed_neighbor(self):
+        self.expose()
+        self.serve('render priority fixture')
+        self.open(self.reader_url('txt'))
+        result=self.page.evaluate('''async()=>{
+          const c=__pdfRenderContext, root=c.content;root.replaceChildren();
+          const shell=document.createElement('section');shell.className='reader-page';
+          shell.dataset.page='50';shell.style.height='800px';root.append(shell);
+          const originals={pdf:c.pdfDocument,mode:c.capability,priority:c.pdfPagePriority,
+            trim:c.trimPdfSurfaces,text:c.renderPdfText,track:c.trackReaderResource,
+            can:c.trimPdfCanvases,acquire:c.acquirePdfRenderSlot,release:c.releasePdfRenderSlot};
+          let trims=0,done;
+          try {
+            c.capability={...c.capability,mode:'pdf'};c.pdfPagePriority=()=>1;
+            c.trimPdfSurfaces=()=>{trims++};c.renderPdfText=async()=>{};c.trackReaderResource=()=>()=>{};
+            c.trimPdfCanvases=()=>{};c.acquirePdfRenderSlot=async()=>{};c.releasePdfRenderSlot=()=>{};
+            c.pdfDocument={getPage:async()=>({getViewport:()=>({width:100,height:100}),
+              render:()=>({promise:new Promise(resolve=>done=resolve),cancel:()=>done()})})};
+            const task=c.renderPdfShell(shell,false,1);
+            await new Promise(resolve=>setTimeout(resolve,0));
+            const speculative=trims;shell._renderCancel();done();await task.catch(()=>{});
+            shell.dataset.renderState='idle';c.pdfPagePriority=()=>3;
+            const demand=c.renderPdfShell(shell,false,3);
+            await new Promise(resolve=>setTimeout(resolve,0));const foreground=trims;done();await demand;
+            return {speculative,foreground};
+          } finally {c.pdfDocument=originals.pdf;c.capability=originals.mode;c.pdfPagePriority=originals.priority;
+            c.trimPdfSurfaces=originals.trim;c.renderPdfText=originals.text;c.trackReaderResource=originals.track;
+            c.trimPdfCanvases=originals.can;c.acquirePdfRenderSlot=originals.acquire;c.releasePdfRenderSlot=originals.release;}
+        }''')
+        self.assertEqual(result,{'speculative':0,'foreground':1})
+
+    def test_pdf_preallocation_reclaims_offscreen_before_new_backing_store(self):
+        self.expose()
+        self.serve('preallocation fixture')
+        self.open(self.reader_url('txt'))
+        result=self.page.evaluate('''() => {
+          const root=document.querySelector('#content');root.replaceChildren();
+          __pdfTools.setPage(1);
+          const make=(page,pixels)=>{const shell=document.createElement('div');
+            shell.className='reader-page';shell.dataset.page=page;shell.dataset.renderState='rendered';
+            shell.style.height='1400px';const canvas=document.createElement('canvas');
+            canvas.className='ready';canvas.width=3000;canvas.height=pixels ? 2000 : 0;
+            canvas.getContext('2d').fillRect(0,0,pixels,1);shell.append(canvas);root.append(shell);return shell;};
+          const current=make(1,6000000),old=make(2,6000000),target=make(3,0);
+          target.dataset.renderState='rendering';
+          const incoming=__pdfTools.budget();
+          __pdfTools.trim(target,incoming);
+          const before={current:current.querySelector('canvas').width,old:old.querySelector('canvas').width,
+            resident:__pdfTools.pixels(),budget:__pdfTools.budget()};
+          target.querySelector('canvas').width=3000;target.querySelector('canvas').height=2000;
+          return {...before,after:__pdfTools.pixels(),oldState:old.dataset.renderState};
+        }''')
+        self.assertEqual(result['current'],3000,result)
+        self.assertEqual(result['old'],0,result)
+        self.assertEqual(result['resident'],6000000,result)
+        self.assertEqual(result['after'],12000000,result)
+        self.assertEqual(result['oldState'],'idle',result)
 
     def test_pdf_pixel_budget_releases_prefetch_and_protects_selection(self):
         self.expose()
