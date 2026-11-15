@@ -7,12 +7,11 @@ const { elements: DOM, updateCurrentResultPosition, maybeLoadNextPage, updateScr
   updateScrollTrack, ensureResultWindowPages, updateVisibleSelection, animateVisibleResultRows,
   rememberDisplayedSearchView, cancelQuickScroll, activateSearchView, clearResultTemplateCache,
   getHeightMeasurementKey, getResultStableId } = deps;
-const RESULT_SCROLL_SEGMENT_HEIGHT = segmentHeight;
 /** @type {SearchVirtualScroll} */
 const scroll = { origin: 0, target: null };
 const heights = VoiceOfMLVirtualHeights.create(VSCROLL, deps);
 const { ensureHeightTree, getVirtualTotalHeight, getVirtualOffset, findVirtualIndex, ensureVirtualHeights } = heights;
-const { layoutResultScrollSegment, reconcileVirtualRows } = VoiceOfMLVirtualRows.create(VSCROLL, scroll, {
+const { getResultScrollOrigin, layoutResultScrollSegment, reconcileVirtualRows } = VoiceOfMLVirtualRows.create(VSCROLL, scroll, {
   elements: DOM, total: deps.total, recordForRow: deps.recordForRow,
   resetKeyboardIndex: deps.resetKeyboardIndex, ensureResultTemplateCache: deps.ensureResultTemplateCache,
   createResultRow: deps.createResultRow, getResultScrollTop, getVirtualOffset, findVirtualIndex
@@ -92,17 +91,13 @@ function renderVisible() {
   VSCROLL.scrollDirection = scrollingDown ? 1 : -1;
   VSCROLL.lastScrollTop = scrollTop;
   const totalH = getVirtualOffset(len);
-  const segmentLimit = RESULT_SCROLL_SEGMENT_HEIGHT;
-  const physicalTop = scrollTop - scroll.origin;
-  const maxOrigin = Math.max(0, totalH - segmentLimit);
-  const segmentNeedsRecenter = scroll.origin > maxOrigin
-    || physicalTop < segmentLimit / 4
-    || physicalTop + viewH > segmentLimit * 3 / 4;
+  const segmentNeedsRecenter = getResultScrollOrigin(totalH, scrollTop, viewH) !== scroll.origin;
+  const needsLayout = segmentNeedsRecenter || scroll.target !== null;
   const safeStart = findVirtualIndex(Math.max(0, scrollTop - baseOverscanPx * 0.35));
   const safeEnd = Math.min(len, findVirtualIndex(scrollTop + viewH + baseOverscanPx * 0.35) + 1);
   ensureResultWindowPages(safeStart, safeEnd);
   updateCurrentResultPosition();
-  if (!deps.pendingEntrance() && !segmentNeedsRecenter
+  if (!deps.pendingEntrance() && !needsLayout
       && VSCROLL.renderStart <= safeStart && VSCROLL.renderEnd >= safeEnd) return false;
   const beforePx = VSCROLL.isDraggingThumb
     ? viewH * 0.35
@@ -115,7 +110,7 @@ function renderVisible() {
   if (end - start < 10 && len > 10) end = Math.min(start + 30, len);
   if (deps.pendingEntrance() && start === 0) end = Math.min(len, Math.max(end, 30));
   ensureResultWindowPages(start, end);
-  if (start === VSCROLL.renderStart && end === VSCROLL.renderEnd && !segmentNeedsRecenter) return false;
+  if (start === VSCROLL.renderStart && end === VSCROLL.renderEnd && !needsLayout) return false;
   VSCROLL.renderStart = start;
   VSCROLL.renderEnd = end;
   const topH = getVirtualOffset(start);
@@ -123,7 +118,7 @@ function renderVisible() {
   const bottomH = Math.max(0, totalH - endH);
   const anchorIndex = findVirtualIndex(scrollTop);
   const anchor = { index: anchorIndex, offset: scrollTop - getVirtualOffset(anchorIndex) };
-  reconcileVirtualRows(items, start, end, topH, bottomH);
+  reconcileVirtualRows(items, start, end, topH, bottomH, viewH);
   if (DOM.multiSelectToggle && DOM.multiSelectToggle.checked) updateVisibleSelection();
   // Correct the rendered window before paint, using one content anchor.
   // A deferred measurement can otherwise run against another window/query.

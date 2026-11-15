@@ -1,9 +1,6 @@
 // Isolated decoder worker: the main thread transfers a complete, checked source
 // and receives only strictly decoded, complete native pages.
-const SIMD128_PROBE = new Uint8Array([
-  0,97,115,109,1,0,0,0,1,5,1,96,0,1,123,3,2,1,0,10,22,1,20,0,253,12,
-  0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,11
-]);
+import '../../reader-resources.js';
 /** @typedef {typeof import('../../vendor/djvu-rs-reader/release-a23e0b3e3a44-025029b02a7c/simd128/djvu_rs.js')} DjvuEngine */
 /** @typedef {import('../../vendor/djvu-rs-reader/release-a23e0b3e3a44-025029b02a7c/simd128/djvu_rs.js').WasmDocument} DjvuDocument */
 /** @typedef {import('../../vendor/djvu-rs-reader/release-a23e0b3e3a44-025029b02a7c/simd128/djvu_rs.js').WasmLazyDocument} DjvuLazyDocument */
@@ -19,7 +16,7 @@ const fail = (id, code) => self.postMessage({ id, ok: false, error: code });
 
 async function prepareEngine() {
   if (engine) return;
-  const simd = WebAssembly.validate(SIMD128_PROBE);
+  const simd = VoiceOfMLReaderResources.djvuSupportsSIMD();
   // Both URLs are pinned components of the selected decoder, not book bytes.
   // Fetch the Wasm while importing its glue instead of waiting for the glue
   // to finish before discovering the Wasm URL. The decoder still consumes the

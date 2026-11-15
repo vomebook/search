@@ -385,6 +385,74 @@ class TocNavigationTests(unittest.TestCase):
                             f"第{chapter}章 第二节 fragment did not land")
             self.assertEqual(self.landed_chapter(), chapter)
 
+    def test_large_chapter_yields_and_aborted_reader_never_mounts_partial_article(self):
+        self.expose()
+        body = '<html><body><h1 id="start">正文</h1>' + ''.join(
+            f'<p><a href="#start">第{i}段</a> 正文</p>' for i in range(2500)) + '</body></html>'
+        manifest = {'version':1,'kind':'epub-chapters',
+            'chapters':[{'index':1,'path':'chapters/chapter-0001.xhtml','bytes':len(body.encode())}],
+            'toc':[{'title':'正文','chapter':1,'fragment':'start','depth':0}]}
+        self.page.add_init_script('''(()=>{window.__resourceSteps=0;window.__disposedAt=0;
+          const original=Document.prototype.querySelectorAll;
+          Document.prototype.querySelectorAll=function(selector){
+            const result=original.call(this,selector);
+            if(selector==='*' && result.length>2500 && !this.defaultView){
+              for(const element of result){const has=element.hasAttribute.bind(element);
+                element.hasAttribute=function(name){
+                  if(name==='src' && ++window.__resourceSteps===300){
+                    const until=performance.now()+20;while(performance.now()<until){}
+                    setTimeout(()=>{window.__disposedAt=window.__resourceSteps;
+                      dispatchEvent(new Event('voice-reader-dispose'));},0);
+                  }
+                  return has(name);
+                };
+              }
+            }
+            return result;
+          }})()''')
+        self.page.route('**/api/reader-bucket-resource**', lambda route: route.fulfill(
+            json=manifest) if 'chapter-manifest' in route.request.url else route.fulfill(
+            content_type='text/html',body=body))
+        source=('https://voiceofml-search.hf.space/api/reader-bucket-resource?path=chapters/ebook/epub/'
+                + 'a'*64 + '/1234567890abcdef/chapter-manifest.json')
+        self.page.goto(self.origin + support.PREFIX + '/static/reader.html?' +
+                       urlencode(dict(url=source, ext='epub-chapters')),wait_until='domcontentloaded')
+        self.page.wait_for_function('()=>window.__disposedAt>0')
+        self.page.wait_for_timeout(100)
+        result=self.page.evaluate('''()=>({steps:__resourceSteps,disposed:__disposedAt,
+          articles:document.querySelectorAll('.reader-epub-chapter').length})''')
+        self.assertLess(result['disposed'],5000,result)
+        self.assertEqual(result['articles'],0,result)
+
+    def test_sanitized_chapter_import_preserves_text_links_and_blocks_scripts(self):
+        self.expose()
+        body = ('<html xmlns="http://www.w3.org/1999/xhtml"><head><title>chapter head</title></head>'
+                '<body id="book-body"><h1 id="start">正文</h1><p onclick="window.__unsafe=1">'
+                '跨节点 <em>needle</em><a href="#start">返回</a>'
+                '<script>window.__unsafe=2</script></p></body></html>')
+        manifest = {'version':1,'kind':'epub-chapters',
+            'chapters':[{'index':1,'path':'chapters/chapter-0001.xhtml','bytes':len(body.encode())}],
+            'toc':[{'title':'正文','chapter':1,'fragment':'start','depth':0}]}
+        self.page.route('**/api/reader-bucket-resource**', lambda route: route.fulfill(
+            json=manifest) if 'chapter-manifest' in route.request.url else route.fulfill(
+            content_type='text/html',body=body))
+        source=('https://voiceofml-search.hf.space/api/reader-bucket-resource?path=chapters/ebook/epub/'
+                + 'a'*64 + '/1234567890abcdef/chapter-manifest.json')
+        self.page.goto(self.origin + support.PREFIX + '/static/reader.html?' +
+                       urlencode(dict(url=source, ext='epub-chapters')),wait_until='domcontentloaded')
+        self.page.wait_for_function("()=>document.documentElement.dataset.readerPhase==='ready'")
+        result=self.page.evaluate('''()=>{const article=document.querySelector('.reader-epub-chapter');
+          return {id:article.id,text:article.textContent,href:article.querySelector('a').getAttribute('href'),
+            onclick:article.querySelector('p').hasAttribute('onclick'),script:!!article.querySelector('script'),
+            unsafe:window.__unsafe||0,head:article._chapterSearchHead?.textContent};}''')
+        self.assertEqual(result['id'],'book-body')
+        self.assertIn('跨节点 needle返回',result['text'])
+        self.assertEqual(result['href'],'#start')
+        self.assertFalse(result['onclick'])
+        self.assertFalse(result['script'])
+        self.assertEqual(result['unsafe'],0)
+        self.assertIn('chapter head',result['head'])
+
     def test_merged_chm_missing_toc_anchors_use_unique_in_book_links(self):
         self.expose()
         body = (f'<main><section id="chm-page-1"><h1>目录</h1>'
@@ -478,6 +546,116 @@ class TocNavigationTests(unittest.TestCase):
             self.click_entry(index)
             self.assertEqual(self.landed_chapter(), index+1)
             if not self.panel_open(): self.page.locator('#history').click()
+
+    def test_virtualized_directory_reuses_rows_and_keeps_keyboard_focus(self):
+        self.page.emulate_media(reduced_motion='reduce')
+        self.page.set_viewport_size({'width':1200,'height':800})
+        self.open_chapters(2100)
+        if not self.panel_open(): self.page.locator('#history').click()
+        self.page.locator('#toc-tab').click()
+        self.page.evaluate('''async()=>{
+          const s=__toc.state(), view=s.panelView;
+          const top=s.list.getBoundingClientRect().top-view.getBoundingClientRect().top+view.scrollTop;
+          view.scrollTop=top+700*40+5;
+          view.dispatchEvent(new Event('scroll'));
+          await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
+        }''')
+        self.page.locator('#toc-list [data-toc-index="705"] [role=link]').focus()
+        self.page.keyboard.press('Tab')
+        self.assertEqual(self.page.evaluate('document.activeElement.closest(".toc-item").dataset.tocIndex'),'706')
+        results=self.page.evaluate('''async()=>{
+          const s=__toc.state(), list=s.list, view=s.panelView, base=view.scrollTop;
+          const focused=document.activeElement, original=[...list.children];
+          const observer=new MutationObserver(records=>mutations.push(...records));
+          let mutations=[];
+          observer.observe(list,{childList:true});
+          const frame=()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
+          const results=[];
+          try {
+            for (const offset of [1,41,1]) {
+              const before=[...list.children];
+              mutations=[];
+              view.scrollTop=base+offset;
+              view.dispatchEvent(new Event('scroll'));
+              await frame();
+              mutations.push(...observer.takeRecords());
+              const after=[...list.children], indices=after.map(row=>Number(row.dataset.tocIndex));
+              results.push({
+                added:mutations.reduce((n,r)=>n+r.addedNodes.length,0),
+                removed:mutations.reduce((n,r)=>n+r.removedNodes.length,0),
+                fresh:after.filter(row=>!before.includes(row)).length,
+                retained:before.filter(row=>indices.includes(Number(row.dataset.tocIndex)))
+                  .every(row=>after.includes(row)),
+                focused:document.activeElement===focused,
+                indices, tops:after.map(row=>parseFloat(row.style.top)),
+                originalIndices:original.map(row=>Number(row.dataset.tocIndex))
+              });
+            }
+          } finally { observer.disconnect(); }
+          return results;
+        }''')
+        for result, shift, changed in zip(results,(0,1,0),(0,1,1)):
+            self.assertEqual(result['added'],changed)
+            self.assertEqual(result['removed'],changed)
+            self.assertEqual(result['fresh'],changed)
+            self.assertTrue(result['retained'])
+            self.assertTrue(result['focused'])
+            self.assertEqual(result['indices'],[i+shift for i in result['originalIndices']])
+            self.assertEqual(result['tops'],[i*40 for i in result['indices']])
+        # Enter must still activate the retained, keyboard-focused link.
+        self.page.keyboard.press('Enter')
+        self.page.wait_for_function('()=>__toc.nav().currentChapterIndex===706')
+        self.assertFalse(self.errors,self.errors)
+
+    def test_virtualized_directory_row_cache_invalidates_labels_and_highlights(self):
+        self.page.emulate_media(reduced_motion='reduce')
+        self.open_chapters(2100)
+        if not self.panel_open(): self.page.locator('#history').click()
+        self.page.locator('#toc-tab').click()
+        self.page.locator('#toc-panel .panel-search-toggle').click()
+        field=self.page.locator('#toc-panel .panel-search')
+        # Both queries keep the same indices, so range/index caching alone is insufficient.
+        for query in ('第','章',''):
+            field.fill(query)
+            rows=self.page.locator('#toc-list .toc-item').evaluate_all('''rows=>rows.map(row=>({
+              index:Number(row.dataset.tocIndex),label:row.querySelector('.panel-item-main').textContent,
+              marks:[...row.querySelectorAll('mark.search-match')].map(mark=>mark.textContent)
+            }))''')
+            self.assertGreater(len(rows),1)
+            for row in rows:
+                self.assertEqual(row['label'],f"第{row['index']+1}章")
+                self.assertEqual(row['marks'],[query] if query else [])
+        # Replace entries on the same state, keeping query and indices unchanged.
+        field.fill('第')
+        replacement=self.page.evaluate('''()=>{
+          const s=__toc.state(), old=listRows();
+          function listRows(){return [...s.list.children]}
+          s.entries=s.entries.map(entry=>({...entry,label:entry.label+' 新标签'}));
+          s.render();
+          return {fresh:listRows().every(row=>!old.includes(row)),
+            labels:listRows().map(row=>row.querySelector('.panel-item-main').textContent),
+            marks:listRows().map(row=>[...row.querySelectorAll('mark.search-match')].map(m=>m.textContent))};
+        }''')
+        self.assertTrue(replacement['fresh'])
+        self.assertTrue(all(label.endswith(' 新标签') for label in replacement['labels']))
+        self.assertTrue(all(marks==['第'] for marks in replacement['marks']))
+        # setToc replaces the state/list; the new directory must not reuse old rows.
+        replaced=self.page.evaluate('''()=>{
+          const old=__toc.state();
+          __toc.set(old.entries.map(entry=>({...entry,label:entry.label.replace('新标签','替换目录')})));
+          return old!==__toc.state();
+        }''')
+        self.assertTrue(replaced)
+        labels=self.page.locator('#toc-list .panel-item-main').all_text_contents()
+        self.assertGreater(len(labels),1)
+        self.assertTrue(all(label.endswith(' 替换目录') for label in labels))
+        self.assertEqual(self.page.locator('#toc-list mark.search-match').all_text_contents(),['第']*len(labels))
+        field.fill('')
+        rows=self.page.locator('#toc-list .panel-item-main').all_text_contents()
+        self.assertGreater(len(rows),1)
+        self.assertTrue(all(label.endswith(' 替换目录') for label in rows))
+        self.assertEqual(self.page.locator('#toc-list mark.search-match').count(),0)
+        self.assertFalse(self.errors,self.errors)
 
     def test_virtualized_directory_searches_all_entries_and_clears(self):
         self.open_chapters(2100)

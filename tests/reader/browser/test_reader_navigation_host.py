@@ -2,6 +2,7 @@
 import unittest
 import subprocess
 from pathlib import Path
+from urllib.parse import parse_qs, urlsplit
 from tests.search.browser import test_paging_recovery as paging
 
 
@@ -142,11 +143,11 @@ process.stdout.write(stripBundledScripts(readFileSync('static/index.html','utf8'
           const readerPath=new URL(document.querySelector('script[src*="search/reader-navigation.js"]').src).pathname.replace('search/reader-navigation.js','reader.html');
           const target=readerPath+'?ext=txt&url=https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/a.txt';
           const returnUrl=location.href;
-          navigateToReader(target);const first=readerOverlay;
+          navigateToReader(target);const first=readerHost.overlay;
           const token=new URL(first.src).searchParams.get('nav');
           const hidden=trigger.hasAttribute('inert') && trigger.getAttribute('aria-hidden')==='true';
           handleReaderMessage({origin:location.origin,source:first.contentWindow,data:{type:'voice-reader-open',url:target+'&title=next'}});
-          const next=readerOverlay, saved=JSON.parse(sessionStorage.getItem('reader-navigation-current'));
+          const next=readerHost.overlay, saved=JSON.parse(sessionStorage.getItem('reader-navigation-current'));
           const state=history.state;
           const nextUrl=new URL(next.src);
           const inherited=nextUrl.searchParams.get('nav')===token && nextUrl.searchParams.get('return')===returnUrl;
@@ -198,14 +199,14 @@ process.stdout.write(stripBundledScripts(readFileSync('static/index.html','utf8'
           const path=new URL(document.querySelector('script[src*="search/reader-navigation.js"]').src).pathname.replace('search/reader-navigation.js','reader.html');
           const send=(source,title,origin=location.origin)=>window.dispatchEvent(new MessageEvent('message',
             {origin,source,data:{type:'voice-reader-title',title}}));
-          navigateToReader(path+'?ext=txt'); const first=readerOverlay;
+          navigateToReader(path+'?ext=txt'); const first=readerHost.overlay;
           send(first.contentWindow,'第一本.txt - VoiceOfML Reader');
           const firstTitle=document.title, frameTitle=first.title;
           send(window,'错误来源');send(first.contentWindow,'错误域名','https://example.invalid');
           const rejected=document.title;
           handleReaderMessage({origin:location.origin,source:first.contentWindow,
             data:{type:'voice-reader-open',url:path+'?ext=txt&title=second'}});
-          const second=readerOverlay, duringReplace=document.title;
+          const second=readerHost.overlay, duringReplace=document.title;
           send(first.contentWindow,'迟到的旧标题');
           const stale=document.title;
           send(second.contentWindow,'第二本.pdf - VoiceOfML Reader');
@@ -264,7 +265,7 @@ process.stdout.write(stripBundledScripts(readFileSync('static/index.html','utf8'
         self.page.frame_locator('.reader-overlay').locator('body').wait_for()
         self.page.wait_for_function('() => !document.querySelector(".reader-overlay-opening")')
         result = self.page.evaluate('''() => {
-          const frame=readerOverlay, url=frame.src;
+          const frame=readerHost.overlay, url=frame.src;
           frame.contentDocument.title='朗读中.txt - VoiceOfML Reader';
           frame.contentWindow.CCRDSpeech={state:()=>({active:true,playing:true}),reveal:()=>{}};
           window.dispatchEvent(new MessageEvent('message',{origin:location.origin,source:frame.contentWindow,
@@ -286,14 +287,14 @@ process.stdout.write(stripBundledScripts(readFileSync('static/index.html','utf8'
         self.page.frame_locator('.reader-overlay').locator('body').wait_for()
         self.page.wait_for_function('() => !document.querySelector(".reader-overlay-opening")')
         result = self.page.evaluate('''() => {
-          const first=readerOverlay;
+          const first=readerHost.overlay;
           first.contentDocument.title='第一本 - VoiceOfML Reader';
           first.contentWindow.CCRDSpeech={state:()=>({active:true,playing:true}),reveal:()=>{}};
           window.dispatchEvent(new MessageEvent('message',{origin:location.origin,source:first.contentWindow,
             data:{type:'voice-reader-title',title:first.contentDocument.title}}));
           closeReaderOverlay();const search=document.title;
           navigateToReader('/search/static/reader.html?id=second-book&ext=txt');
-          const second=readerOverlay;
+          const second=readerHost.overlay;
           window.dispatchEvent(new MessageEvent('message',{origin:location.origin,source:second.contentWindow,
             data:{type:'voice-reader-title',title:'第二本 - VoiceOfML Reader'}}));
           navigateToReader(first.src);
@@ -320,6 +321,71 @@ process.stdout.write(stripBundledScripts(readFileSync('static/index.html','utf8'
         self.assertTrue(result['evicted'])
         self.assertIsNotNone(result['expected'])
         self.assertEqual(result['captured'], result['expected'])
+
+    def test_djvu_read_button_preserves_ocr_handoff(self):
+        # Exercise the rendered action and its click-time enrichment. Stop at
+        # navigation: OCR decoding/source integrity has separate Reader tests.
+        result = self.page.evaluate(r'''() => {
+          cancelReaderWarmup();
+          const savedAssets=readerAssetController.state.assets, savedNavigate=navigateToReader;
+          const record={Repo:'VoiceOfML/Test',Folder:['docs'],File:'scan.djvu',Extension:'DjVu'};
+          const original=getRecordLink(record);
+          const root='objects/aa/'+'a'.repeat(64)+'/'+'b'.repeat(16);
+          const manifestPath=root+'/ocr-manifest.json';
+          const rows=[];
+          try {
+            readerAssetController.state.assets={[record.Repo+'\0'+buildRecordRelativePath(record)]:
+              {s:3,b:'vomebook/pdf-pages-v2',o:manifestPath,om:'accepted'}};
+            const enriched=applyReaderAsset(record,record.Repo,buildRecordRelativePath(record),original);
+            for(const warm of ['none','matching','different-source','different-version']) {
+              VSCROLL.templateCache.delete(0);
+              const row=createResultRow(record,0);
+              DOM.resultsList.replaceChildren(row);
+              const button=row.querySelector('[data-action="read"]');
+              const url=new URL(button.dataset.readerUrl,location.href), id=url.searchParams.get('id');
+              sessionStorage.removeItem('reader-source:'+id);
+              sessionStorage.removeItem('reader-resolve:'+id);
+              if(warm!=='none') cacheReaderMetadata(id,{
+                url:warm==='different-source'?original.replace('scan.djvu.DjVu','other.djvu'):original,
+                download:original,extension:'DjVu',
+                ocr_manifest:warm==='different-version'
+                  ?enriched.ReaderOcrManifest.replace('b'.repeat(16),'c'.repeat(16)):enriched.ReaderOcrManifest,
+                ocr_mode:warm==='matching'?'accepted':'stale',version:'warm-only'
+              });
+              let captured=null;
+              navigateToReader=target=>{
+                captured={id:new URL(target,location.href).searchParams.get('id'),
+                  source:JSON.parse(sessionStorage.getItem('reader-source:'+id)),
+                  resolved:JSON.parse(sessionStorage.getItem('reader-resolve:'+id))};
+              };
+              button.click();
+              rows.push({warm,id,inlineOcr:url.searchParams.has('ocr_manifest'),captured});
+            }
+            return {original,manifestPath,manifest:enriched.ReaderOcrManifest,rows};
+          } finally {
+            readerAssetController.state.assets=savedAssets;navigateToReader=savedNavigate;
+          }
+        }''')
+        self.assertTrue(result['manifest'])
+        self.assertEqual(parse_qs(urlsplit(result['manifest']).query)['path'], [result['manifestPath']])
+        for row in result['rows']:
+            with self.subTest(warm=row['warm']):
+                self.assertRegex(row['id'], r'^[a-z0-9]{13}$')
+                self.assertFalse(row['inlineOcr'])
+                self.assertIsNotNone(row['captured'])
+                self.assertEqual(row['captured']['id'], row['id'])
+                for key in ('source', 'resolved'):
+                    metadata = row['captured'][key]
+                    self.assertEqual(metadata['url'], result['original'])
+                    self.assertEqual(metadata['download'], result['original'])
+                    self.assertEqual(metadata['extension'], 'DjVu')
+                    self.assertEqual(metadata['original_extension'], 'DjVu')
+                    self.assertEqual(metadata['filename'], 'scan.djvu.DjVu')
+                    self.assertEqual(metadata['repo'], 'Test')
+                    self.assertEqual(metadata['folder'], ['docs'])
+                    self.assertEqual(metadata.get('ocr_manifest'), result['manifest'])
+                    self.assertEqual(metadata.get('ocr_mode'), 'accepted')
+                    self.assertNotIn('version', metadata)
 
     def test_directory_preserves_repeated_filename_extension_for_read_and_download(self):
         result = self.page.evaluate('''() => {
@@ -350,7 +416,7 @@ process.stdout.write(stripBundledScripts(readFileSync('static/index.html','utf8'
         self.page.evaluate('navigateToReader("/search/static/reader.html?ext=txt")')
         self.page.frame_locator('.reader-overlay').locator('body').wait_for()
         state = self.page.evaluate('''() => {
-          const frame=readerOverlay, back=history.back;
+          const frame=readerHost.overlay, back=history.back;
           history.back=()=>{};
           try {
             handleReaderMessage({origin:location.origin,source:frame.contentWindow,data:{type:'voice-reader-close'}});
@@ -364,7 +430,7 @@ process.stdout.write(stripBundledScripts(readFileSync('static/index.html','utf8'
         self.page.locator('.reader-overlay').wait_for(state='detached')
         self.page.evaluate('navigateToReader("/search/static/reader.html?ext=txt")')
         state = self.page.evaluate('''()=>{
-          handleReaderMessage({origin:location.origin,source:readerOverlay.contentWindow,
+          handleReaderMessage({origin:location.origin,source:readerHost.overlay.contentWindow,
             data:{type:'voice-reader-ui-state',state:'panel'}});
           return readerUiState;
         }''')
@@ -378,9 +444,9 @@ process.stdout.write(stripBundledScripts(readFileSync('static/index.html','utf8'
         self.page.frame_locator('.reader-overlay').locator('body').wait_for()
         self.page.evaluate("""() => {
           history.replaceState({foreign:{nested:{items:['keep', 7]}}}, "", location.href);
-          handleReaderMessage({origin:location.origin,source:readerOverlay.contentWindow,
+          handleReaderMessage({origin:location.origin,source:readerHost.overlay.contentWindow,
             data:{type:'voice-reader-ui-state',state:'panel'}});
-          handleReaderMessage({origin:location.origin,source:readerOverlay.contentWindow,
+          handleReaderMessage({origin:location.origin,source:readerHost.overlay.contentWindow,
             data:{type:'voice-reader-close'}});
         }""")
         self.page.locator('.reader-overlay').wait_for(state='detached', timeout=3000)
@@ -391,11 +457,11 @@ process.stdout.write(stripBundledScripts(readFileSync('static/index.html','utf8'
     def test_back_tap_recovers_when_history_traversal_never_arrives(self):
         self.page.evaluate('navigateToReader("/search/static/reader.html?ext=txt")')
         self.page.frame_locator('.reader-overlay').locator('body').wait_for()
-        target = self.page.evaluate('new URL(readerOverlay.src).searchParams.get("return")')
+        target = self.page.evaluate('new URL(readerHost.overlay.src).searchParams.get("return")')
         self.page.evaluate("""() => {
           window.__backCalls = 0;
           history.back = () => { __backCalls++; };
-          handleReaderMessage({origin:location.origin,source:readerOverlay.contentWindow,data:{type:'voice-reader-close'}});
+          handleReaderMessage({origin:location.origin,source:readerHost.overlay.contentWindow,data:{type:'voice-reader-close'}});
         }""")
         # Automatic replacement destroyed the Reader entry when Back was late.
         # The stalled contract now requires a visible, usable explicit recovery.
@@ -424,7 +490,7 @@ process.stdout.write(stripBundledScripts(readFileSync('static/index.html','utf8'
           let calls = 0; const back = history.back; history.back = () => { calls++; };
           history.replaceState({foreign:{nested:{items:['keep', 7]}}}, "", location.href);
           try {
-            handleReaderMessage({origin:location.origin,source:readerOverlay.contentWindow,data:{type:'voice-reader-close'}});
+            handleReaderMessage({origin:location.origin,source:readerHost.overlay.contentWindow,data:{type:'voice-reader-close'}});
           } finally { history.back = back; }
           return calls;
         }""")
@@ -438,7 +504,7 @@ process.stdout.write(stripBundledScripts(readFileSync('static/index.html','utf8'
         self.page.evaluate('navigateToReader("/search/static/reader.html?ext=txt")')
         self.page.frame_locator('.reader-overlay').locator('body').wait_for()
         result = self.page.evaluate('''() => {
-          const child=readerOverlay.contentWindow, frame=readerOverlay;
+          const child=readerHost.overlay.contentWindow, frame=readerHost.overlay;
           let disposed=false, attached=false;
           child.addEventListener('voice-reader-dispose', () => {
             disposed=true; attached=frame.isConnected;
@@ -497,12 +563,12 @@ process.stdout.write(stripBundledScripts(readFileSync('static/index.html','utf8'
         self.page.frame_locator('.reader-overlay').locator('body').wait_for()
         self.page.wait_for_function('() => !document.querySelector(".reader-overlay-opening")')
         result = self.page.evaluate('''() => {
-          const frame=readerOverlay;
+          const frame=readerHost.overlay;
           frame.contentWindow.CCRDSpeech={state:()=>({active:true,playing:true}),reveal:()=>{}};
           const target=frame.src;
           readerNavigation.dismiss();closeReaderOverlay();
           navigateToReader(target);
-          return {same:readerOverlay===frame, opacity:getComputedStyle(frame).opacity,
+          return {same:readerHost.overlay===frame, opacity:getComputedStyle(frame).opacity,
             pointer:getComputedStyle(frame).pointerEvents};
         }''')
         self.assertEqual(result, dict(same=True, opacity='1', pointer='auto'))
@@ -609,7 +675,7 @@ process.stdout.write(stripBundledScripts(readFileSync('static/index.html','utf8'
             self.assertEqual(lookups, [])
         finally:
             self.page.evaluate('''() => {
-              if(readerOverlay) { readerNavigation.dismiss();closeReaderOverlay(); }
+              if(readerHost.overlay) { readerNavigation.dismiss();closeReaderOverlay(); }
               document.querySelector('#priority-reader-test')?.remove();
               window.fetch=window.__priorityFetch;cancelReaderWarmup();
             }''')
@@ -653,7 +719,7 @@ process.stdout.write(stripBundledScripts(readFileSync('static/index.html','utf8'
             self.assertEqual(len(lookups),1)
         finally:
             self.page.evaluate('''() => {
-              if(readerOverlay){readerNavigation.dismiss();closeReaderOverlay();}
+              if(readerHost.overlay){readerNavigation.dismiss();closeReaderOverlay();}
               __lateButtons.forEach(button=>button.remove());window.fetch=__lateOriginalFetch;cancelReaderWarmup();
             }''')
 
@@ -684,10 +750,10 @@ process.stdout.write(stripBundledScripts(readFileSync('static/index.html','utf8'
             const path=new URL(document.querySelector('script[src*="search/reader-navigation.js"]').src).pathname.replace('search/reader-navigation.js','reader.html');
             navigateToReader(path+'?ext=txt');closeReaderOverlay();history.replaceState(null,'',previousUrl);
             await randomTxt();await new Promise(resolve=>originalTimer(resolve,100));
-            const recovered=aborted&&!!readerOverlay;
+            const recovered=aborted&&!!readerHost.overlay;
             closeReaderOverlay();history.replaceState(null,'',previousUrl);
             await randomTxt();await new Promise(resolve=>originalTimer(resolve,100));
-            return {recovered,attempts,opened:!!readerOverlay};
+            return {recovered,attempts,opened:!!readerHost.overlay};
           } finally {
             window.fetch=originalFetch;window.setTimeout=originalTimer;
             if(localFallback)ensureLocalDataLoaded=localFallback;
@@ -772,9 +838,9 @@ process.stdout.write(stripBundledScripts(readFileSync('static/index.html','utf8'
                   fetchFolderTree=async()=>[];loadSidebarInitial=async()=>null;
                   const folder='a%2F &/#书?',target=getReaderFolderUrl({Repo:'VoiceOfML/Test',Folder:['a%2F &','#书?']});
                   navigateToReader('/search/static/reader.html?ext=txt');
-                  const frame=readerOverlay;
+                  const frame=readerHost.overlay;
                   handleReaderMessage({origin:location.origin,source:frame.contentWindow,data:{type:'voice-reader-navigate',url:target}});
-                  return {folder,target,reader:!!readerOverlay};
+                  return {folder,target,reader:!!readerHost.overlay};
                 }''', width)
                 self.page.wait_for_function('''folder=>STATE.repo==='Test' && STATE.browserPath===folder &&
                   document.querySelector('.sidebar-breadcrumb .current')?.dataset.path===folder''', arg=result['folder'])
@@ -801,7 +867,7 @@ process.stdout.write(stripBundledScripts(readFileSync('static/index.html','utf8'
             navigateToReader('/search/static/reader.html?ext=txt');
             const saved = JSON.parse(sessionStorage.getItem('reader-navigation-current'));
             history.back();
-            return {current, route: saved.returnScroll.route, reader: readerOverlay !== null};
+            return {current, route: saved.returnScroll.route, reader: readerHost.overlay !== null};
           } finally { doSearch = originalSearch; }
         }''')
         self.assertNotIn('q=%E6%97%A7%E6%9F%A5%E8%AF%A2', result['current'])
@@ -839,14 +905,14 @@ process.stdout.write(stripBundledScripts(readFileSync('static/index.html','utf8'
         result = self.page.evaluate('''() => {
           const readerPath=new URL(document.querySelector('script[src*="search/reader-navigation.js"]').src).pathname.replace('search/reader-navigation.js','reader.html');
           const target=readerPath+'?ext=txt';navigateToReader(target);
-          const first=readerOverlay, oldSource=first.contentWindow, theme=STATE.isDark;
+          const first=readerHost.overlay, oldSource=first.contentWindow, theme=STATE.isDark;
           const message={type:'voice-reader-open',url:target+'&title=bad'};
           handleReaderMessage({origin:'https://invalid.example',source:oldSource,data:message});
           handleReaderMessage({origin:location.origin,source:window,data:message});
           handleReaderMessage({origin:location.origin,source:oldSource,data:{...message,url:'/wrong-path'}});
-          const untouched=readerOverlay===first;
+          const untouched=readerHost.overlay===first;
           handleReaderMessage({origin:location.origin,source:oldSource,data:{...message,url:target+'&title=valid'}});
-          const second=readerOverlay;
+          const second=readerHost.overlay;
           handleReaderMessage({origin:location.origin,source:oldSource,data:{type:'voice-reader-theme',theme:theme?'light':'dark'}});
           return {untouched,replaced:second!==first,staleIgnored:STATE.isDark===theme};
         }''')
@@ -855,12 +921,12 @@ process.stdout.write(stripBundledScripts(readFileSync('static/index.html','utf8'
     def test_unavailable_session_storage_does_not_block_replacement(self):
         result = self.page.evaluate('''() => {
           const readerPath=new URL(document.querySelector('script[src*="search/reader-navigation.js"]').src).pathname.replace('search/reader-navigation.js','reader.html');
-          const target=readerPath+'?ext=txt';navigateToReader(target);const first=readerOverlay;
+          const target=readerPath+'?ext=txt';navigateToReader(target);const first=readerHost.overlay;
           const original=Storage.prototype.setItem;
           try {
             Storage.prototype.setItem=()=>{throw new DOMException('Full','QuotaExceededError');};
             handleReaderMessage({origin:location.origin,source:first.contentWindow,data:{type:'voice-reader-open',url:target+'&title=next'}});
-            return readerOverlay!==first && !first.isConnected && history.state.readerUrl===readerOverlay.src;
+            return readerHost.overlay!==first && !first.isConnected && history.state.readerUrl===readerHost.overlay.src;
           } finally {Storage.prototype.setItem=original;}
         }''')
         self.assertTrue(result)
@@ -889,7 +955,7 @@ process.stdout.write(stripBundledScripts(readFileSync('static/index.html','utf8'
             history[name]=(...args)=>{__historyWrites++;return original(...args);};
           }
           window.__returnSnapshot=readerReturnSnapshot;
-          handleReaderMessage({origin:location.origin,source:readerOverlay.contentWindow,data:{type:'voice-reader-close'}});
+          handleReaderMessage({origin:location.origin,source:readerHost.overlay.contentWindow,data:{type:'voice-reader-close'}});
         }''')
         recovery = self.page.get_by_role('link', name='直接打开搜索页')
         recovery.wait_for(state='visible', timeout=3000)
@@ -907,7 +973,7 @@ process.stdout.write(stripBundledScripts(readFileSync('static/index.html','utf8'
         self.page.evaluate('history.forward()')
         self.page.frame_locator('.reader-overlay').locator('body').wait_for()
         self.assertEqual(self.page.evaluate('({url:location.href,state:history.state,length:history.length})'), opened)
-        self.assertEqual(self.page.evaluate('readerOverlay.src'), opened['state']['readerUrl'])
+        self.assertEqual(self.page.evaluate('readerHost.overlay.src'), opened['state']['readerUrl'])
         self.assertFalse(self.page.evaluate('readerClosing'))
         self.assertEqual(self.page.locator('.reader-overlay-opening a').count(), 0)
 
@@ -920,11 +986,11 @@ process.stdout.write(stripBundledScripts(readFileSync('static/index.html','utf8'
         self.page.frame_locator('.reader-overlay').locator('body').wait_for()
         self.page.evaluate('''() => {
           history.back=()=>{};
-          handleReaderMessage({origin:location.origin,source:readerOverlay.contentWindow,data:{type:'voice-reader-close'}});
+          handleReaderMessage({origin:location.origin,source:readerHost.overlay.contentWindow,data:{type:'voice-reader-close'}});
         }''')
         recovery = self.page.get_by_role('link', name='直接打开搜索页')
         recovery.wait_for(state='visible', timeout=3000)
-        safe = self.page.evaluate('new URL(new URL(readerOverlay.src).pathname.startsWith("/search/")?"/search/":"/",location.origin).href')
+        safe = self.page.evaluate('new URL(new URL(readerHost.overlay.src).pathname.startsWith("/search/")?"/search/":"/",location.origin).href')
         for target in ('https://invalid.example/', 'javascript:alert(1)', '/static/reader.html', '/elsewhere/page', 'http://['):
             self.page.evaluate('target => readerNavigation.showCloseRecovery(target)', target)
             self.assertEqual(recovery.get_attribute('href'), safe)

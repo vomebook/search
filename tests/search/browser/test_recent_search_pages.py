@@ -100,6 +100,32 @@ class RecentSearchPageTests(unittest.TestCase):
         self.fixture.wait_anchor(35050)
         self.assertNotIn(351, self.page.evaluate('windowCalls'))
 
+    def test_corrupt_persisted_page_falls_back_to_api_after_preview_jump(self):
+        self.prepare_pages()
+        self.begin_restore()
+        self.assertEqual(self.page.evaluate('''async () => {
+          const tx=positionStorage.database.transaction('recent-pages','readwrite');
+          const store=tx.objectStore('recent-pages'),request=store.get([originalWindowKey,251]);
+          let id;
+          request.onsuccess=()=>{
+            const entry=request.result;id=entry.results[50].ID;
+            entry.results[50].Folder='broken breadcrumb';store.put(entry);
+          };
+          await new Promise((resolve,reject)=>{tx.oncomplete=resolve;tx.onabort=reject});
+          positionPersistence.recentPages.clear();return id;
+        }'''), '25050')
+        self.fixture.jump(25050)
+        self.page.wait_for_function('resultWindow.pages.has(251) || resultWindow.missingPages?.has(251)')
+        self.assertFalse(self.page.evaluate('!!STATE.results[25050]'),
+                         'A corrupt disk record must not enter the preview')
+        self.page.evaluate('windowStall=0;releaseWindow()')
+        self.page.wait_for_function('!positionRestore')
+        self.fixture.jump(25050)
+        self.fixture.wait_anchor(25050)
+        self.assertIn(251, self.page.evaluate('windowCalls'))
+        self.assertEqual(self.page.evaluate('STATE.results[25050].Folder'), [])
+        self.assertTrue(self.page.locator('.result-item[data-index="25050"]').is_visible())
+
     def test_new_generation_revalidates_the_current_cached_anchor(self):
         self.prepare_pages()
         self.begin_restore()
@@ -180,6 +206,32 @@ class RecentSearchPageTests(unittest.TestCase):
           return {good,other:other===null,expired:expired===null,partial:partial===null};
         }''')
         self.assertEqual(checks, {'good':True, 'other':True, 'expired':True, 'partial':True})
+
+    def test_cached_page_validates_metadata_and_rendering_fields(self):
+        self.prepare_pages()
+        result = self.page.evaluate('''async () => {
+          const key=originalWindowKey,id=JSON.stringify([key,251]),expected=resultWindow;
+          positionPersistence.recentPages.clear();
+          const original=await readRecentSearchPage(key,251,expected),rejected=[];
+          const mutations=[
+            entry=>delete entry.savedAt,
+            ...[NaN,Infinity,'today',null].map(value=>entry=>entry.savedAt=value),
+            ...[undefined,'bad',[key],[key,252],['other',251],[key,251,0]].map(value=>entry=>entry.id=value),
+            ...[{File:7},{Repo:[]},{Extension:{}},{Folder:'bad'},{Folder:[1]},
+              {Size:-1},{Size:NaN},{Size:{}}].map(fields=>entry=>Object.assign(entry.results[50],fields))
+          ];
+          for(const mutate of mutations) {
+            const entry=structuredClone(original);mutate(entry);positionPersistence.recentPages.set(id,entry);
+            rejected.push(await readRecentSearchPage(key,251,expected)===null);
+          }
+          const accepted=[];
+          for(const Size of ['','123','1 KB',0,1,null]) {
+            const entry=structuredClone(original);entry.results[50].Size=Size;positionPersistence.recentPages.set(id,entry);
+            accepted.push(!!await readRecentSearchPage(key,251,expected));
+          }
+          return {rejected,accepted};
+        }''')
+        self.assertEqual(result, {'rejected':[True]*19, 'accepted':[True]*6})
 
     def test_page_cache_is_bounded_and_oversized_pages_keep_all_live_results(self):
         self.fixture.persist_viewport()

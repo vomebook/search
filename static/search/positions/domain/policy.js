@@ -16,18 +16,40 @@
       && typeof item.anchorId === "string" && item.savedAt > Date.now() - POSITION_TTL;
   }
 
+  /** @param {unknown} value */
+  function validRenderingRecord(value) {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+    const record = /** @type {Record<string, unknown>} */ (value);
+    return typeof record.File === "string"
+      && (record.Repo == null || typeof record.Repo === "string")
+      && (record.Extension == null || typeof record.Extension === "string")
+      && (record.Folder == null || (Array.isArray(record.Folder) && Array.from(record.Folder).every(folder => typeof folder === "string")))
+      && (record.Size == null || typeof record.Size === "string" || (typeof record.Size === "number" && Number.isFinite(record.Size) && record.Size >= 0));
+  }
+
   /** @param {unknown} value @param {SearchPosition | null | undefined} position
    * @param {(record: unknown) => string} stableId @returns {value is SearchPositionViewport} */
   function validViewport(value, position, stableId) {
     if (!position || !value || typeof value !== "object") return false;
     const viewport = /** @type {SearchPositionViewport} */ (value);
-    return viewport.key === position.key && viewport.savedAt >= Date.now() - POSITION_TTL
-      && Number.isInteger(viewport.total) && viewport.total > position.index
-      && Array.isArray(viewport.records) && viewport.records.length <= 80
-      && viewport.records.every(row => Array.isArray(row) && row.length === 3
-        && Number.isInteger(row[0]) && row[0] >= 0 && row[1] !== null && typeof row[1] === "object"
-        && Number.isFinite(row[2]) && row[2] > 0)
-      && viewport.records.some(([index, record]) => index === position.index && stableId(record) === position.anchorId);
+    /** @param {number} height */
+    const validHeight = height => Number.isFinite(height) && height > 0 && height <= 1000000;
+    if (viewport.key !== position.key || !Number.isFinite(viewport.savedAt) || viewport.savedAt < Date.now() - POSITION_TTL
+        || !Number.isInteger(viewport.total) || viewport.total <= position.index || viewport.total > 0x7ffffffe
+        || !Number.isInteger(position.index) || position.index < 0
+        || !Array.isArray(viewport.records) || !viewport.records.length || viewport.records.length > 80
+        || (viewport.estimatedHeight != null && viewport.estimatedHeight !== 0 && !validHeight(viewport.estimatedHeight))) return false;
+    const indexes = new Set();
+    let anchor = false;
+    for (const tuple of viewport.records) {
+      if (!Array.isArray(tuple) || tuple.length !== 3) return false;
+      const [index, record, height] = tuple;
+      if (!Number.isInteger(index) || index < 0 || index >= viewport.total || indexes.has(index)
+          || !validRenderingRecord(record) || !validHeight(height)) return false;
+      indexes.add(index);
+      if (index === position.index && stableId(record) === position.anchorId) anchor = true;
+    }
+    return anchor;
   }
 
   /** @param {unknown} value @param {string} key @param {number} page
@@ -38,7 +60,9 @@
     const entry = /** @type {SearchRecentPage} */ (value);
     if (entry.key !== key || !Number.isFinite(entry.savedAt) || entry.savedAt < Date.now() - RECENT_PAGE_TTL
         || !expected.generation || !Array.isArray(entry.results)
-        || Object.keys(entry.results).length !== entry.results.length) return false;
+        || !Array.isArray(entry.id) || entry.id.length !== 2 || entry.id[0] !== key || entry.id[1] !== page
+        || Object.keys(entry.results).length !== entry.results.length
+        || !entry.results.every(validRenderingRecord)) return false;
     try { VoiceOfMLSearchWindowPage.validate(entry, page, expected.query.pageSize, expected); }
     catch (_) { return false; }
     return true;

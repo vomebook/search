@@ -99,12 +99,14 @@ test('history and quotation are registered in HTML, composition, resources, offl
   }
 });
 
-test('history keeps raw session JSON semantics, storage failures, live preference, empty query and capped deduplication', () => {
+test('history rejects corrupt session JSON, storage failures, live preference, empty query and capped deduplication', () => {
   const f = historyFixture(), {c} = f;
   for (const value of [null, '{bad', 'false', '0', 'null']) { f.setStored(value); assert.deepEqual(plain(c.getHistory()), []); }
   f.setStored('{"unexpected":true}');
-  assert.deepEqual(plain(c.getHistory()), {unexpected: true});
-  c.renderDropdown(); assert.equal(f.rows.length, 0); assert.match(f.dropdown.innerHTML, /history-clear-all/);
+  assert.deepEqual(plain(c.getHistory()), []);
+  f.setStored(JSON.stringify([null, {}, 1, "valid", ...Array.from({length:25}, (_, i)=>String(i))]));
+  assert.deepEqual(plain(c.getHistory()), ["valid", ...Array.from({length:19}, (_, i)=>String(i))]);
+  c.renderDropdown(); assert.equal(f.rows.length, 20); assert.match(f.dropdown.innerHTML, /history-clear-all/);
   c.saveHistory([]);
   for (let i = 0; i < 25; i++) c.addHistoryItem('q' + i);
   assert.equal(c.getHistory().length, 20); assert.equal(c.getHistory()[19], 'q5');

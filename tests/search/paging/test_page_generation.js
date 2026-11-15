@@ -23,7 +23,7 @@ function executionFixture(root, pages) {
     renderPage:()=>effects.push('render'),visualLoading:()=>effects.push('visual'),prefetch:()=>effects.push('prefetch'),
     warmConnection:()=>effects.push('warm'),syncURL:()=>effects.push('url'),notify:()=>effects.push('toast'),
     updateStatus:()=>effects.push('status'),finishPaging:(ok,error)=>effects.push(['finish',ok,error?.message]),
-    updatePaging:()=>effects.push('paging'),hideLoading:()=>effects.push('hide'),
+    updatePaging:()=>effects.push('paging'),hideLoading:()=>effects.push('hide'),clearSkeleton:()=>effects.push('clear-skeleton'),
     finishPresentation:()=>effects.push('presentation'),updateLoadInfo:()=>effects.push('load-info')};
   const service=context.VoiceOfMLSearchExecution.create(deps);
   return {view,calls,effects,deps,service,context,
@@ -106,6 +106,7 @@ for (const {name: project, root} of searchTestProjects()) {
     test(project + ' first-page recovery failure uses paging feedback without duplicate toast', async () => {
       const f=executionFixture(root,false);f.start(false,true);f.calls[0].reject(Error('offline'));await f.flush();
       assert.strictEqual(f.view.hasMore,true);assert(!f.effects.includes('toast'));
+      assert(f.effects.includes('clear-skeleton'));
       assert(f.effects.some(e=>Array.isArray(e)&&e[0]==='finish'&&!e[1]&&e[2]==='offline'));
     });
   }
@@ -126,6 +127,16 @@ for (const {name: project, root} of searchTestProjects()) {
     return {context,controller,deps,view,timers,cancelled,appends,
       advance(time){now=time;for(const [key,timer] of [...timers]) if(timer.at<=now){timers.delete(key);timer.fn();}}};
   }
+  if (!pages) test(project + ' first-page retry bypasses empty-list bottom check but yields to pending controls', () => {
+    for (const suspended of [false, true]) {
+      const f=pagingFixture();
+      Object.assign(f.view, {loadedPage:0, resultCount:0, loadedHeight:0, scrollTop:0});
+      f.controller.finish(false);
+      f.view.suspended=suspended;
+      f.advance(750);
+      assert.deepStrictEqual(f.appends, suspended ? [] : [1]);
+    }
+  });
   test(project + " paging waits 750ms, stops after two failures, and retries the missing page", () => {
     const f=pagingFixture(), c=f.controller;
     c.finish(false);f.advance(749);assert.deepStrictEqual(f.appends,[]);

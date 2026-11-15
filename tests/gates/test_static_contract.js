@@ -106,12 +106,27 @@ test("reader intent prefetches the shell and format engines", () => {
   assertCode(app, 'VoiceOfMLReaderResources.engineAssets(extension, "/search/static/", "?reader-v1")');
   assertCode(sw, 'VoiceOfMLReaderResources.runtimePaths("/search/static/")');
   assert.ok(workflow.includes('.buildFiles("github")'));
-  assert.match(app, /var warmedReaderSources = new Set\(\)/);
-  assert.match(app, /warmedReaderSources\.size >= 8/);
+  assertCode(app, 'var warmedReaderSources = new Map()');
+  assertCode(app, 'const READER_WARMUP_TTL = 5 * 60 * 1000');
+  assertCode(app, 'const READER_WARMUP_MAX = 8');
+  const warmup = app.match(/^function startReaderSourceWarmup\([^]*?^}/m)[0];
+  // Bound successful entries, not the number of books warmed in this session.
+  for (const snippet of [
+    'if (now >= entry.expiresAt) warmedReaderSources.delete(sourceKey)',
+    'const warmed = warmedReaderSources.get(key)',
+    'if (readerId && warmed.metadataStored)',
+    'consumed = !sessionStorage.getItem(`reader-resolve:${readerId}`)',
+    'warmedReaderSources.delete(key); if (!consumed) { warmedReaderSources.set(key, warmed); return; }',
+    'if (now < (readerWarmupRetryAt.get(key) || 0)) return',
+    'if (readerWarmupPending !== task) return',
+    'warmedReaderSources.set(key, { expiresAt: Date.now() + READER_WARMUP_TTL, metadataStored })',
+    'while (warmedReaderSources.size > READER_WARMUP_MAX) { warmedReaderSources.delete(warmedReaderSources.keys().next().value); }',
+    'if (readerWarmupPending !== task || controller.signal.aborted) return',
+    'if (readerId) cacheReaderMetadata(readerId, data); finish(true)',
+  ]) assertCode(warmup, snippet);
   assert.match(app, /method: readerId \? "GET" : "HEAD", cache: "no-store"/);
-  assertCode(reader, 'return await imageLoader.load(image, readerContentUrl(target), readerAbortController.signal, deadline)');
-  assertCode(reader, 'if (/** @type {ReaderLoaderError | null | undefined} */ (error)?.code === "READER_RESOURCE_LIMIT") throw error');
-  assertCode(reader, 'return imageLoader.load(image, target, readerAbortController.signal, deadline)');
+  assertCode(reader, 'return imageLoader.load(image, readerContentUrl(target), readerAbortController.signal, deadline)');
+  assert.equal(reader.includes('return imageLoader.load(image, target, readerAbortController.signal, deadline)'), false);
   assert.match(reader, /disableStream: true/);
   assert.match(reader, /capability = readerRuntime\.negotiate\(VoiceOfMLReader\.capability\(extension\)\)/);
   assert.match(reader, /resolved\.extension[\s\S]*content\.dataset\.mode = capability\.mode/);
@@ -209,8 +224,14 @@ test("virtual results use bounded buffering", () => {
   assert.match(virtual, /function renderVisible\(\)/);
   assert.match(virtual, /const scrollingDown = scrollTop >= previousScrollTop/);
   assert.match(virtual, /const previousScrollTop = VSCROLL\.lastScrollTop/);
-  assert.match(virtual, /const segmentNeedsRecenter =/);
-  assert.match(virtual, /!segmentNeedsRecenter/);
+  const render = virtual.match(/^function renderVisible\([^]*?^}/m)[0];
+  // Both early returns must allow segment recentering and pending scroll targets.
+  for (const snippet of [
+    'const segmentNeedsRecenter = getResultScrollOrigin(totalH, scrollTop, viewH) !== scroll.origin',
+    'const needsLayout = segmentNeedsRecenter || scroll.target !== null',
+    'if (!deps.pendingEntrance() && !needsLayout && VSCROLL.renderStart <= safeStart && VSCROLL.renderEnd >= safeEnd) return false',
+    'if (start === VSCROLL.renderStart && end === VSCROLL.renderEnd && !needsLayout) return false',
+  ]) assertCode(render, snippet);
   assert.match(virtual, /function refreshVirtualAfterAppend/);
   assert.match(virtual, /if \(updateView\) \{[\s\S]*?VSCROLL\.renderStart = -1;[\s\S]*?scheduleVirtualRender\(\);/);
   assert.match(virtual, /function reconcileVirtualRows/);
@@ -419,7 +440,7 @@ test("reader uses original files and lazy PDF canvas rendering", () => {
   assertCode(reader, '}, READER_PROXY_TIMEOUT_MS)');
   assert.match(reader, /function fetchWithReaderTimeout/);
   assertCode(reader, 'retryReaderProxy(() => loadPdfTaskWithTimeout(pdfjs, options, proxy, takeInitial(proxy)))');
-  assertCode(reader, 'return loadPdfTaskWithTimeout(pdfjs, options, target)');
+  assert.equal(reader.includes('return loadPdfTaskWithTimeout(pdfjs, options, target)'), false);
   assert.match(reader, /function loadPdfWithTimeout/);
   assertCode(reader, 'trackReaderResource(destroy)');
   assertCode(reader, 'Promise.resolve(task.destroy()).catch(() => {})');
@@ -461,10 +482,23 @@ test("reader uses original files and lazy PDF canvas rendering", () => {
   assert.match(app, /url: record \? getReaderLink\(record, undefined, false\) : ""/);
   assert.match(resultRows, /const action = readerAction\(rec, recordLink\)/);
   assert.match(resultRows, /const readerActionUrl = action\.url/);
-  assert.match(app, /if \(button\) \{ button\.remove\(\);/);
+  const refresh = app.match(/^function refreshResultReaderActions\([^]*?^}/m)[0];
+  // Remove only unavailable actions, retain focus, and avoid writes for unchanged metadata.
+  for (const snippet of [
+    'if (!action.record) { if (button) { const focused = document.activeElement === button; button.remove(); if (focused) row.focus({ preventScroll: true }); } continue; }',
+    'if ((button ? button.textContent : "") !== action.label) invalidateHeight(index, record)',
+    'if (!visible.has(index)) continue',
+    'const url = getReaderLink(action.record, undefined, false)',
+    'if (button.dataset.readerUrl !== url) button.dataset.readerUrl = url',
+    'if (button.textContent !== action.label) button.textContent = action.label',
+    "if (button.getAttribute('aria-label') !== ariaLabel) button.setAttribute('aria-label', ariaLabel)",
+    'if (heightsInvalidated) measuredHeightRevision++',
+    'if (layoutChanged) { VSCROLL.measuredWindowKey = ""; VSCROLL.renderStart = -1; VSCROLL.renderEnd = -1; scheduleVirtualRender(); }',
+  ]) assertCode(refresh, snippet);
+
   assert.match(app, /applyReaderAsset\(rec, rec\.Repo \|\| "", buildRecordRelativePath\(rec\), recordLink\)/);
   assert.match(app, /isReadableRecord\(readerRecord\)/);
-  assert.match(app, /button\.dataset\.readerUrl = getReaderLink\(actionRecord\)/);
+  assertCode(refresh, 'const action = readerActionForRefresh(record)');
   assert.match(app, /freshReaderLink: record => getReaderLink\(applyReaderAsset\(/);
   assert.match(app, /recordForRow: row => resultRowRecords\.get\(row\)/);
   assert.match(resultInteractions, /const record = deps\.recordForRow\(actionBtn\.closest\("\.result-item"\)\)/);

@@ -26,6 +26,15 @@ function fixture() {
   });
   const modulePath=path.join(root,'static/search/presentation/sidebar-render.js');
   vm.runInContext(fs.readFileSync(modulePath,'utf8'),c,{filename:modulePath});
+  const directoryPath=path.join(root,'static/search/sidebar/presentation/directory.js');
+  vm.runInContext(fs.readFileSync(directoryPath,'utf8'),c,{filename:directoryPath});
+  c.getSidebarDirectoryView=()=>c.VoiceOfMLSidebarDirectoryView.create({
+    surface:space?'space':'pages',scroll:{restore:()=>c.restoreSidebarScroll()},
+    markup:{icon:key=>c.sidebarIconMarkup(key),escape:value=>c.escapeHTML(value),
+      iconType:value=>c.getFileIconType(value),formatSize:value=>c.formatSize(value),
+      name:file=>c.getBrowserFileName(file),link:(...args)=>c.getBrowserFileLink(...args),
+      reader:(...args)=>space?c.getBrowserFileReadUrl(...args):c.getBrowserReaderUrl(...args)}
+  });
   vm.runInContext(match[0],c,{filename:'sidebar-host.js'});
   return {c,calls};
 }

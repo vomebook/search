@@ -119,11 +119,24 @@ test('malformed viewport rows and recent-page holes fail validation without thro
     assert.equal(policy.validViewport({key: 'key', total: 1, savedAt: Date.now(), records}, position, record => record.id), false);
   }
   const expected = {generation: 'A', total: 1, query: {pageSize: 100}};
-  const page = {key: 'key', page: 1, page_size: 100, generation: 'A', total: 1, savedAt: Date.now(), results: [{File: 'a'}]};
+  const page = {id: ['key', 1], key: 'key', page: 1, page_size: 100, generation: 'A', total: 1, savedAt: Date.now(), results: [{File: 'a'}]};
   assert.equal(policy.validRecentPage(page, 'key', 1, expected), true);
   assert.equal(policy.validRecentPage({...page, results: new Array(1)}, 'key', 1, expected), false);
   assert.equal(policy.validRecentPage({...page, generation: 'B'}, 'key', 1, expected), false);
   assert.equal(policy.validRecentPage({...page, savedAt: undefined}, 'key', 1, expected), false);
+  for (const id of [undefined, ['other', 1], ['key', 2], ['key', 1, 2]]) {
+    assert.equal(policy.validRecentPage({...page, id}, 'key', 1, expected), false);
+  }
+  for (const record of [null, [], {File: 1}, {File: 'a', Folder: ['ok', null]}, {File: 'a', Size: -1}]) {
+    assert.equal(policy.validRecentPage({...page, results: [record]}, 'key', 1, expected), false);
+  }
+  const anchor = [0, {File: 'anchor'}, 50];
+  const viewport = {key: 'key', total: 2, savedAt: Date.now(), records: [anchor]};
+  assert.equal(policy.validViewport(viewport, position, record => record.File), true);
+  for (const tuple of [null, anchor, [2, {File: 'outside'}, 50], [1, {File: 'bad', Repo: {}}, 50], [1, {File: 'huge'}, 1000001]]) {
+    assert.equal(policy.validViewport({...viewport, records: [anchor, tuple]}, position, record => record.File), false);
+  }
+  assert.equal(policy.validViewport({...viewport, estimatedHeight: Infinity}, position, record => record.File), false);
 });
 
 test('scheduled saves coalesce and cancellation leaves no delayed flush', () => {

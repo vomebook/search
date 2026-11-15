@@ -4,8 +4,9 @@
   function create(deps) {
     /** @type {BoundedResponseCache<{time: number, data: VoiceOfMLSearchWindowPageData}>} */
     const cache = new BoundedResponseCache(deps.limit, deps.ttl);
-    /** @type {Map<string, {data: VoiceOfMLSearchWindowPageData, viewKey: string}>} */
+    /** @type {Map<string, {data: VoiceOfMLSearchWindowPageData, viewKey: string, acquiredAt: number}>} */
     const pendingWrites = new Map();
+    /** @type {WeakMap<object, object>} */
     const identities = new WeakMap();
     let writeFrame = 0;
     /** @type {ReturnType<typeof setTimeout> | null} */
@@ -32,10 +33,13 @@
     /** @param {string} key */
     function getCachedSearchResponse(key) {
       const pending = pendingWrites.get(key);
-      if (pending && pending.viewKey === deps.getSearchViewKey()) return cloneSearchData(pending.data);
+      if (pending && pending.viewKey === deps.getSearchViewKey()) {
+        if (Date.now() - pending.acquiredAt < deps.ttl) return cloneSearchData(pending.data);
+        pendingWrites.delete(key);
+      }
       const cached = cache.get(key);
       if (!cached) return null;
-      if (Date.now() - cached.time > deps.ttl) {
+      if (Date.now() - cached.time >= deps.ttl) {
         cache.delete(key);
         return null;
       }
@@ -50,19 +54,19 @@
       pendingWrites.clear();
     }
 
-    /** @param {string} key @param {VoiceOfMLSearchWindowPageData} data @param {boolean} [defer] */
-    function setCachedSearchResponse(key, data, defer = false) {
+    /** @param {string} key @param {VoiceOfMLSearchWindowPageData} data @param {boolean} [defer] @param {number} [acquiredAt] */
+    function setCachedSearchResponse(key, data, defer = false, acquiredAt = Date.now()) {
       const cached = cache.get(key)?.data;
       const identity = identities.get(data);
       if (cached && identity && identities.get(cached) === identity) return;
       if (!defer) {
         pendingWrites.delete(key);
-        cache.set(key, { time: Date.now(), data: cloneSearchData(data) });
+        cache.set(key, { time: acquiredAt, data: cloneSearchData(data) });
         return;
       }
       // Keep the existing lookahead's three pages in replacement insertion order.
       pendingWrites.delete(key);
-      pendingWrites.set(key, { data: cloneSearchData(data), viewKey: deps.getSearchViewKey() });
+      pendingWrites.set(key, { data: cloneSearchData(data), viewKey: deps.getSearchViewKey(), acquiredAt });
       while (pendingWrites.size > 3) pendingWrites.delete(/** @type {string} */ (pendingWrites.keys().next().value));
       if (writeFrame || writeTimer !== null) return;
       writeFrame = requestAnimationFrame(() => {
@@ -72,13 +76,13 @@
           const writes = [...pendingWrites];
           pendingWrites.clear();
           for (const [cacheKey, entry] of writes) if (entry.viewKey === deps.getSearchViewKey()) {
-            setCachedSearchResponse(cacheKey, entry.data);
+            if (Date.now() - entry.acquiredAt < deps.ttl) setCachedSearchResponse(cacheKey, entry.data, false, entry.acquiredAt);
           }
         }, 0);
       });
     }
 
-    return { cache, pendingWrites, cloneSearchData, getCachedSearchResponse,
+    return { cache, pendingWrites, identities, cloneSearchData, getCachedSearchResponse,
       cancelPendingSearchCacheWrites, setCachedSearchResponse };
   }
   globalThis.VoiceOfMLSearchResponseStore = { create };

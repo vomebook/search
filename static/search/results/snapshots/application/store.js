@@ -76,12 +76,13 @@
       // Keep the weak source association: saving a cancelled partial copy must
       // still return the complete source, never publish the partial array.
     }
-    /** @param {SearchSnapshotCloneTask} task @param {number} start @param {number} end @param {boolean} [deferHeights] */
-    function materializeRange(task, start, end, deferHeights = false) {
+    /** @param {SearchSnapshotCloneTask} task @param {number} start @param {number} end @param {boolean} [deferHeights] @param {string | null} [measurementKey] */
+    function materializeRange(task, start, end, deferHeights = false, measurementKey = null) {
       for (let index = Math.max(0, start); index < Math.min(end, task.results.length); index++) {
         if (index in task.results || !(index in task.snapshot.results)) continue;
         task.results[index] = host.cloneResult(task.snapshot.results[index]);
-        host.materialized(task, index);
+        measurementKey ??= host.measurementKey();
+        host.materialized(task, index, measurementKey);
       }
       if (!deferHeights) host.applyHeights(task);
     }
@@ -119,9 +120,10 @@
           return;
         }
         const count = task.keys ? task.keys.length : task.results.length, started = performance.now();
+        const measurementKey = host.measurementKey();
         for (let batch = 0; task.cursor < count && batch < 256 && performance.now() - started < 4; batch++) {
           const index = task.keys ? Number(task.keys[task.cursor++]) : task.cursor++;
-          materializeRange(task, index, index + 1, true);
+          materializeRange(task, index, index + 1, true, measurementKey);
         }
         host.applyHeights(task);
         if (task.cursor < count) { task.timer = setTimeout(step, 0); return; }

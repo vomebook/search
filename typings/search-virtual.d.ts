@@ -58,8 +58,9 @@ declare var VoiceOfMLVirtualHeights: {
 };
 declare var VoiceOfMLVirtualRows: {
   create(state: SearchVirtualState, scroll: SearchVirtualScroll, deps: SearchVirtualRowsDependencies): {
-    layoutResultScrollSegment(topH: number, endH: number, totalH: number, logicalTop: number): void;
-    reconcileVirtualRows(items: (VoiceOfMLResultRecord | null | undefined)[], start: number, end: number, topH: number, bottomH: number): void;
+    getResultScrollOrigin(totalH: number, logicalTop: number, viewport: number): number;
+    layoutResultScrollSegment(topH: number, endH: number, totalH: number, logicalTop: number, viewport?: number): void;
+    reconcileVirtualRows(items: (VoiceOfMLResultRecord | null | undefined)[], start: number, end: number, topH: number, bottomH: number, viewport?: number): void;
   };
 };
 declare var VoiceOfMLVirtualResults: {

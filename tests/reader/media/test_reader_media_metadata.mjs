@@ -48,24 +48,77 @@ test('media readiness waits for metadata and reports player timing', async () =>
   } finally {f.restore();}
 });
 
-test('media source retries only once and restores position on metadata', async () => {
+test('stalled proxy retries the proxy instead of the blocked dataset host', async () => {
   const f=fixture();try {
+    f.context.sourceUrl=f.context.downloadUrl='https://huggingface.co/datasets/VoiceOfML/VOMEBOOK/resolve/main/audio.mp3';
+    f.context.contentUrl='https://voiceofml-search.hf.space/api/reader-content?url=audio';
     const promise=f.context.renderMedia('audio');await tick();
-    f.media.dispatchEvent(new Event('error'));assert.equal(f.media.src,'https://test/original');assert.equal(f.media.loads,1);
-    f.media.currentTime=0;f.media.readyState=1;f.media.dispatchEvent(new Event('loadedmetadata'));await promise;
-    assert.equal(f.media.currentTime,4);assert.equal(f.media._readerSourceRetry,false);
-    f.media.dispatchEvent(new Event('error'));assert.equal(f.media.loads,1);
+    f.media.dispatchEvent(new Event('error'));
+    assert.equal(f.media.src,f.context.contentUrl);
+    assert.equal(f.media.src.includes('huggingface.co'),false);
+    f.media.dispatchEvent(new Event('error'));
+    assert.equal(f.media.loads,1);
     assert.ok(f.events.some(value=>Array.isArray(value)&&value[0]==='fail'&&value[2]==='READER_MEDIA'));
+    f.media.readyState=1;f.media.dispatchEvent(new Event('loadedmetadata'));
+    await assert.rejects(promise,{name:'AbortError'});
   } finally {f.restore();}
 });
 
+test('media source retries only once and restores position on metadata', async () => {
+  for(const {restorationReady,time,duration,expected} of [
+    {restorationReady:true,time:4,duration:10,expected:4},
+    {restorationReady:true,time:4,duration:Infinity,expected:4},
+    {restorationReady:true,time:NaN,duration:10,expected:0},
+    {restorationReady:false,time:4,duration:10,expected:0}
+  ]) {
+    const f=fixture();try {
+      f.context.documentState.restorationReady=restorationReady;
+      const promise=f.context.renderMedia('audio');await tick();
+      f.media.currentTime=time;f.media.playbackRate=1.5;
+      f.media.dispatchEvent(new Event('error'));assert.equal(f.media.src,'https://test/proxy');assert.equal(f.media.loads,1);
+      f.media.currentTime=0;f.media.duration=duration;f.media.playbackRate=1;
+      f.media.dispatchEvent(new Event('timeupdate'));assert.equal(f.panel.textContent,'');
+      f.media.readyState=1;f.media.dispatchEvent(new Event('loadedmetadata'));await promise;
+      assert.equal(f.media.currentTime,expected);assert.equal(f.media._readerSourceRetry,false);
+      assert.equal(f.media.playbackRate,restorationReady?1.5:1);assert.equal(f.media.paused,true);
+      assert.equal(f.events.filter(value=>value==='ready').length,1);
+      f.media.dispatchEvent(new Event('error'));assert.equal(f.media.loads,1);
+      assert.ok(f.events.some(value=>Array.isArray(value)&&value[0]==='fail'&&value[2]==='READER_MEDIA'));
+    } finally {f.restore();}
+  }
+});
+
 test('resource cleanup rejects pending metadata and removes listeners', async () => {
-  const f=fixture();try {
-    const promise=f.context.renderMedia('audio');await tick();
-    assert.equal(f.resources.size,1);for(const cleanup of f.resources)cleanup();
-    await assert.rejects(promise,{name:'AbortError'});f.media.dispatchEvent(new Event('error'));
-    assert.equal(f.media.loads,0);assert.ok(!f.events.some(value=>Array.isArray(value)&&value[0]==='fail'));
-  } finally {f.restore();}
+  const originalSet=globalThis.setTimeout,originalClear=globalThis.clearTimeout;
+  const callbacks=new Map();let next=1;
+  globalThis.setTimeout=(callback,delay)=>{const id=next++;callbacks.set(id,{callback,delay});return id;};
+  globalThis.clearTimeout=id=>callbacks.delete(id);
+  try {
+    for(const abort of [false,true]) {
+      const f=fixture();try {
+        const promise=f.context.renderMedia('audio');await tick();
+        assert.equal(f.resources.size,1);assert.equal(callbacks.size,2);
+        if(abort) {
+          f.owner.abort();
+          const before=[...f.events];
+          f.media.dispatchEvent(new Event('error'));
+          f.media.dispatchEvent(new Event('timeupdate'));
+          [...callbacks.values()].find(item=>item.delay===20000).callback();
+          assert.deepEqual(f.events,before);assert.equal(f.panel.textContent,'');
+          assert.equal(f.media.loads,0);
+        }
+        for(const cleanup of f.resources){cleanup();cleanup();}
+        await assert.rejects(promise,{name:'AbortError'});assert.equal(callbacks.size,0);
+        // Disposed elements must not restart timers, reload, or restore retry state.
+        f.media._readerSourceRetry=true;
+        for(const event of ['progress','error','loadedmetadata'])f.media.dispatchEvent(new Event(event));
+        assert.equal(callbacks.size,0);assert.equal(f.media._readerSourceRetry,true);
+        assert.equal(f.media.loads,0);assert.equal(f.context.status.textContent,'');
+        assert.ok(!f.events.includes('ready'));
+        assert.ok(!f.events.some(value=>Array.isArray(value)&&value[0]==='fail'));
+      } finally {f.restore();}
+    }
+  } finally {globalThis.setTimeout=originalSet;globalThis.clearTimeout=originalClear;}
 });
 
 test('metadata hard deadline rejects and exposes media retry without another source', async () => {
@@ -84,19 +137,37 @@ test('metadata hard deadline rejects and exposes media retry without another sou
 });
 
 test('idle deadline retries original once and rearms without changing hard deadline', async () => {
-  const f=fixture(), originalSet=globalThis.setTimeout, originalClear=globalThis.clearTimeout;
+  const originalSet=globalThis.setTimeout, originalClear=globalThis.clearTimeout;
   const callbacks=new Map();let next=1;
   globalThis.setTimeout=(callback,delay)=>{const id=next++;callbacks.set(id,{callback,delay});return id;};
   globalThis.clearTimeout=id=>callbacks.delete(id);
   try {
-    const promise=f.context.renderMedia('audio');
-    const hard=[...callbacks].find(([,item])=>item.delay===20000)[0];
-    const idle=[...callbacks].find(([,item])=>item.delay===15000)[1];idle.callback();
-    assert.equal(f.media.src,'https://test/original');assert.equal(f.media.loads,1);
-    assert.ok(callbacks.has(hard));assert.equal([...callbacks.values()].filter(item=>item.delay===20000).length,1);
-    f.media.readyState=1;f.media.dispatchEvent(new Event('loadedmetadata'));await promise;
-    assert.equal(callbacks.size,0);
-  } finally {f.restore();globalThis.setTimeout=originalSet;globalThis.clearTimeout=originalClear;}
+    for(const recover of [true,false]) {
+      const f=fixture();try {
+        const promise=f.context.renderMedia('audio');
+        const hard=[...callbacks].find(([,item])=>item.delay===20000)[0];
+        const [firstIdle,idle]=[...callbacks].find(([,item])=>item.delay===15000);idle.callback();
+        assert.equal(f.media.src,'https://test/proxy');assert.equal(f.media.loads,1);
+        assert.ok(callbacks.has(hard));assert.equal([...callbacks.values()].filter(item=>item.delay===20000).length,1);
+        const [secondIdle,rearmed]=[...callbacks].find(([,item])=>item.delay===15000);
+        assert.notEqual(secondIdle,firstIdle);assert.equal(callbacks.has(firstIdle),false);
+        if(recover) {
+          f.media.currentTime=0;f.media.readyState=1;
+          f.media.dispatchEvent(new Event('loadedmetadata'));await promise;
+          assert.equal(f.media.currentTime,4);assert.equal(f.context.status.textContent,'音频');
+          assert.equal(f.events.filter(value=>value==='ready').length,1);
+          assert.ok(!f.events.some(value=>Array.isArray(value)&&value[0]==='fail'));
+        } else {
+          rearmed.callback();
+          await assert.rejects(promise,{name:'AbortError'});
+          const failures=f.events.filter(value=>Array.isArray(value)&&value[0]==='fail');
+          assert.equal(failures.length,1);assert.equal(failures[0][2],'READER_MEDIA');
+          assert.match(failures[0][1],/媒体信息加载停顿/);assert.ok(!f.events.includes('ready'));
+        }
+        assert.equal(f.media.loads,1);assert.equal(callbacks.size,0);assert.equal(f.media._readerSourceRetry,false);
+      } finally {f.restore();}
+    }
+  } finally {globalThis.setTimeout=originalSet;globalThis.clearTimeout=originalClear;}
 });
 
 test('video setup keeps native controls and inline playback until metadata arrives', async () => {
@@ -158,5 +229,12 @@ test('progress extends the idle deadline without extending the hard deadline', a
     assert.equal(callbacks.size,2);
     f.media.readyState=1;f.media.dispatchEvent(new Event('loadedmetadata'));await promise;
     assert.equal(callbacks.size,0);
+    const before=[...f.events];
+    f.media.dispatchEvent(new Event('progress'));
+    assert.equal(callbacks.size,0);assert.deepEqual(f.events,before);
+    f.media.currentTime=7;f.media.duration=12;
+    f.media.dispatchEvent(new Event('durationchange'));
+    assert.equal(f.panel.textContent,'00:07 / 00:12');
+    assert.equal(f.events.filter(value=>value==='ready').length,1);
   } finally {f.restore();globalThis.setTimeout=originalSet;globalThis.clearTimeout=originalClear;}
 });

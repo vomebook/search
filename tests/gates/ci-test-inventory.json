@@ -774,6 +774,22 @@
       "kind": "direct",
       "source": ".github/workflows/reader-refactor.yml"
     },
+    "tests/search/session/test_positions_persistence.mjs": {
+      "kind": "helper",
+      "source": "tests/search/reader-navigation/test_search_history_races.mjs"
+    },
+    "tests/search/session/test_result_snapshots.mjs": {
+      "kind": "helper",
+      "source": "tests/search/reader-navigation/test_search_history_races.mjs"
+    },
+    "tests/search/ui/test_sidebar_directory.mjs": {
+      "kind": "helper",
+      "source": "tests/search/reader-navigation/test_search_history_races.mjs"
+    },
+    "tests/search/ui/test_sidebar_filters.js": {
+      "kind": "helper",
+      "source": "tests/search/ui/test_sidebar_directory.mjs"
+    },
     "tests/search/session/test_search_session_contract.js": {
       "kind": "direct",
       "source": ".github/workflows/reader-refactor.yml"

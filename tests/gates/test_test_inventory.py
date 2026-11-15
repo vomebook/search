@@ -51,6 +51,20 @@ class TestInventoryTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'missing evidence'):
             self.check()
 
+    def test_side_effect_import_accounts_for_helper_and_missing_import_fails(self):
+        (self.root / 'tests/test_helper.mjs').write_text('')
+        importer = self.root / 'tests/test_runner.mjs'
+        importer.write_text("import './test_helper.mjs';\n")
+        (self.root / 'scripts/gate.py').write_text(
+            'MODULES = "tests.test_example tests/test_runner.mjs"\n')
+        self.doc['tests']['tests/test_runner.mjs'] = {'kind': 'script', 'source': 'scripts/gate.py'}
+        self.doc['tests']['tests/test_helper.mjs'] = {'kind': 'helper', 'source': 'tests/test_runner.mjs'}
+        self.save()
+        self.check()
+        importer.write_text('')
+        with self.assertRaisesRegex(ValueError, 'helper importer missing'):
+            self.check()
+
     def test_missing_tests_package_marker_fails(self):
         (self.root / 'tests/__init__.py').unlink()
         with self.assertRaisesRegex(ValueError, 'tests package marker missing'):

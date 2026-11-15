@@ -190,6 +190,9 @@ export function createReaderToc(readerContext) {
     return row;
   }
 
+  // State identity follows setToc's lifecycle without retaining old lists.
+  const virtualTocRows = new WeakMap();
+
   function renderVirtualToc() {
     const state = readerContext.tocVirtualState;
     if (!state) return;
@@ -200,17 +203,35 @@ export function createReaderToc(readerContext) {
       indices = state.matches,
       first = Math.floor(visibleTop / readerContext.TOC_VIRTUAL_ROW_HEIGHT),
       start = Math.max(0, first - 12),
-      end = Math.min(indices.length, first + Math.ceil(visibleHeight / readerContext.TOC_VIRTUAL_ROW_HEIGHT) + 13),
-      fragment = document.createDocumentFragment();
-    state.list.replaceChildren();
-    for (let position = start; position < end; position++) {
-      const index = indices[position], row = readerContext.createTocRow(state.entries[index], index);
-      row.classList.add("toc-virtual-row");
-      row.style.top = `${position * readerContext.TOC_VIRTUAL_ROW_HEIGHT}px`;
-      if (state.query) readerContext.highlightPanelItem(row, state.query);
-      fragment.appendChild(row);
+      end = Math.min(indices.length, first + Math.ceil(visibleHeight / readerContext.TOC_VIRTUAL_ROW_HEIGHT) + 13);
+    let cache = virtualTocRows.get(state);
+    if (!cache || cache.query !== state.query || cache.entries !== state.entries) {
+      cache = { query: state.query, entries: state.entries, rows: new Map() };
+      virtualTocRows.set(state, cache);
+      state.list.replaceChildren();
     }
-    state.list.appendChild(fragment);
+    const wanted = new Set(indices.slice(start, end));
+    for (const [index, row] of cache.rows) {
+      if (wanted.has(index)) continue;
+      row.remove();
+      cache.rows.delete(index);
+    }
+    // Insert around retained rows: detaching a focused row would lose focus.
+    let next = state.list.firstElementChild;
+    for (let position = start; position < end; position++) {
+      const index = indices[position];
+      let row = cache.rows.get(index);
+      if (!row) {
+        row = readerContext.createTocRow(state.entries[index], index);
+        row.classList.add("toc-virtual-row");
+        if (state.query) readerContext.highlightPanelItem(row, state.query);
+        cache.rows.set(index, row);
+      }
+      const top = `${position * readerContext.TOC_VIRTUAL_ROW_HEIGHT}px`;
+      if (row.style.top !== top) row.style.top = top;
+      if (row !== next) state.list.insertBefore(row, next);
+      next = row.nextElementSibling;
+    }
     readerContext.updateTocCurrentMark();
   }
 

@@ -19,6 +19,10 @@ INTENT_PREFIX = "tests.search.browser.test_initial_intent_reader_routes.InitialI
 INTENT_TEST_NAMES = (
     "test_a_b_a_initial_failure_does_not_restart_latest_a",
     "test_a_b_a_initial_success_keeps_newest_a",
+    "test_deferred_response_retains_acquisition_age",
+    "test_newer_response_eviction_does_not_resurrect_initial",
+    "test_initial_payload_cannot_overwrite_newer_response",
+    "test_initial_payload_fixed_ttl_boundary_and_request_counts",
     "test_late_failure_cannot_start_extra_same_key_search",
     "test_late_success_cannot_abort_same_key_search_or_write_cache",
     "test_new_search_owns_same_key_while_viewport_read_is_pending",

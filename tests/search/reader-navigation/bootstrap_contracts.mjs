@@ -19,6 +19,8 @@ function fixture() {
   const c = vm.createContext({STATE:state,DOM:{sortSelect:{value:'relevance'},resultsLoading:{style:{}},
     resultsList:{innerHTML:'old',classList:{remove:x=>events.push(['remove',x])}},emptyState:{style:{}}},
     window:{location},appliedRouteHash:location.hash,readerHost:{overlay:null},INITIAL_BASE_URL:'/initial',
+    embeddedInitialPayload:null, embeddedInitialAcquiredAt:Date.now(), SEARCH_CACHE_TTL:480000,
+    cloneSearchData:data=>({...data,results:data.results.slice()}), getCachedSearchResponse:()=>null, searchResponseStore:{identities:new WeakMap()},
     searchIntentId:0,searchBootstrap:undefined,initialPayloadCache:new Map(),searchPageMetadata:new WeakMap(),
     document:{getElementById:()=>text === null ? null : {textContent:text}},
     getSearchViewKey:()=>JSON.stringify([state.mode,state.repo,state.query,state.page,state.filterExtensions]),
@@ -39,7 +41,7 @@ function fixture() {
     if(match) vm.runInContext(match[0],c);
   }
   const payload = (name='first') => ({repo:state.repoFull,total:2,results:[{File:name}]});
-  return {c,state,events,flights,location,payload,inline(value){text=value;}};
+  return {c,state,events,flights,location,payload,inline(value){text=value;try{c.embeddedInitialPayload=JSON.parse(value);}catch{c.embeddedInitialPayload=null;}}};
 }
 
 test('bootstrap registration covers source, composed and offline entry points and strict projects',()=>{
@@ -97,7 +99,7 @@ test('bootstrap stale completion never writes cache, applies or falls back, incl
   assert.equal(f.flights.length,2);assert.equal(f.flights[0].timeout,6000);
   f.flights[1].resolve(f.payload('new'));assert.equal(await newer,pages?true:undefined);
   f.flights[0].resolve(f.payload('old'));assert.equal(await old,pages?false:undefined);
-  assert.equal(f.c.initialPayloadCache.get(f.flights[0].url).results[0].File,'new');
+  assert.equal(f.c.initialPayloadCache.get(f.flights[0].url).data.results[0].File,'new');
   assert.equal(f.state.results[0].File,'new');assert.equal(f.events.some(e=>e[0]==='search'),false);
   for(const change of [f=>f.state.query='new',f=>f.state.repo='B',f=>f.state.mode='global']) {
     const g=fixture(), pending=g.c.searchWithInitialFallbackFresh();change(g);g.flights[0].reject(new Error('late'));
@@ -108,7 +110,7 @@ test('bootstrap stale completion never writes cache, applies or falls back, incl
 test('bootstrap API fallback, cache hit and direct host hooks preserve site completion values',async()=>{
   const f=fixture();f.state.page=2;assert.equal(await f.c.searchWithInitialFallbackFresh(),pages?false:undefined);
   assert.deepEqual(f.events,[['search']]);
-  const g=fixture();g.c.initialPayloadCache.set(g.c.getInitialPayloadUrl(),g.payload());
+  const g=fixture();g.c.initialPayloadCache.set(g.c.getInitialPayloadUrl(),{data:g.payload(),time:Date.now()});
   assert.equal(await g.c.searchWithInitialFallbackFresh(),pages?true:undefined);assert.equal(g.flights.length,0);
   const h=fixture();h.c.canUseInitialSearchPayload=()=>false;
   assert.equal(await h.c.searchWithInitialFallbackFresh(),pages?false:undefined);assert.deepEqual(h.events,[['search']]);
@@ -119,6 +121,31 @@ test('bootstrap API fallback, cache hit and direct host hooks preserve site comp
     j.c.tryInitialSearchPayload=async()=>false;assert.equal(await j.c.searchWithInitialFallbackFresh(),false);assert.deepEqual(j.events,[['search']]);}
   const k=fixture(), failed=k.c.searchWithInitialFallbackFresh();k.flights[0].resolve(null);
   assert.equal(await failed,pages?false:undefined);assert.deepEqual(k.events,[['search']]);
+});
+
+test('fresh response wins over initial payload and cache hits do not renew acquisition time', async()=>{
+  const f=fixture(), cached=f.payload('fresh');
+  f.c.getCachedSearchResponse=()=>cached;
+  f.c.searchResponseStore.identities.set(cached, {});
+  f.c.initialPayloadCache.set(f.c.getInitialPayloadUrl(), {data:f.payload('stale'), time:1});
+  f.inline(JSON.stringify(f.payload('inline')));
+  await f.c.searchWithInitialFallbackFresh();
+  assert.equal(f.state.results[0].File, 'fresh');
+  assert.equal(f.flights.length, 0);
+  assert.equal(f.events.some(event=>event[0]==='cache'), false);
+  assert.equal(f.c.initialPayloadCache.size, 0);
+  if (!pages) assert.equal(f.c.embeddedInitialPayload, null);
+  const g=fixture();
+  g.c.initialPayloadCache.set(g.c.getInitialPayloadUrl(), {data:g.payload(), time:123});
+  let timestamp;
+  g.c.setCachedSearchResponse=(_key,_page,_defer,acquiredAt)=>{timestamp=acquiredAt;};
+  await g.c.searchWithInitialFallbackFresh();
+  assert.equal(timestamp,123);
+  if (!pages) {
+    const h=fixture();h.inline(JSON.stringify(h.payload()));
+    h.c.embeddedInitialAcquiredAt=Date.now()-h.c.SEARCH_CACHE_TTL;
+    assert.equal(h.c.readInitialSearchPayload(),null);
+  }
 });
 
 test('HF inline parsing and precedence preserve invalid JSON, wrong repo and uncached success',async()=>{

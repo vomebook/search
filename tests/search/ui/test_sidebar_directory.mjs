@@ -1,3 +1,4 @@
+import './test_sidebar_filters.js';
 import './catalog_contracts.mjs';
 import './result_interactions_contracts.mjs';
 import './random_discovery_contracts.mjs';

@@ -5,7 +5,8 @@
     const key = "voml_search_history", max = 20;
     function get() {
       try {
-        return JSON.parse(/** @type {string} */ (storage().getItem(key))) || [];
+        const list = JSON.parse(/** @type {string} */ (storage().getItem(key)));
+        return Array.isArray(list) ? list.filter(item => typeof item === "string").slice(0, max) : [];
       } catch (_) { return []; }
     }
     /** @param {string[]} list */

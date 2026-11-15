@@ -273,6 +273,8 @@ class BrowserBehaviorTest(unittest.TestCase):
                 readInitialSearchPayload = () => null;
               }
               initialPayloadCache.clear();
+              searchResponseCache.clear();
+              cancelPendingSearchCacheWrites();
               STATE.query = ""; STATE.page = 1;
               const pending = searchWithInitialFallbackFresh();
               await new Promise(resolve => setTimeout(resolve, 50));

@@ -189,7 +189,7 @@ function getReaderLink(rec, returnUrl, cacheMetadata = true) {
   returnUrl = returnUrl || location.href;
   const readerRecord = Object.assign({}, rec, { Link: getRecordLink(rec), ReturnUrl: returnUrl, FolderUrl: getReaderFolderUrl(rec) });
   var readerUrl = VoiceOfMLReader.readerUrl(readerRecord, "/search/static/reader.html");
-  if (cacheMetadata) try { var readerId = new URL(readerUrl, location.origin).searchParams.get("id"); if (readerId) { var sourceData = { url: readerRecord.ReaderLink || readerRecord.Link, download: readerRecord.Link, title: readerRecord.File, filename: String(readerRecord.File || "") + (readerRecord.Extension ? "." + readerRecord.Extension : ""), extension: readerRecord.ReaderExtension || readerRecord.Extension, original_extension: readerRecord.Extension, repo: String(readerRecord.Repo || "").split("/").pop(), folder: readerRecord.Folder, chapter_manifest: readerRecord.ReaderChapterManifest || "", pdf_document: readerRecord.ReaderPdfDocument || "" }; cacheReaderMetadata(readerId, sourceData, true); } } catch (_) {}
+  if (cacheMetadata) try { var readerId = new URL(readerUrl, location.origin).searchParams.get("id"); if (readerId) { var sourceData = { url: readerRecord.ReaderLink || readerRecord.Link, download: readerRecord.Link, title: readerRecord.File, filename: String(readerRecord.File || "") + (readerRecord.Extension ? "." + readerRecord.Extension : ""), extension: readerRecord.ReaderExtension || readerRecord.Extension, original_extension: readerRecord.Extension, repo: String(readerRecord.Repo || "").split("/").pop(), folder: readerRecord.Folder, chapter_manifest: readerRecord.ReaderChapterManifest || "", pdf_document: readerRecord.ReaderPdfDocument || "", ocr_manifest: readerRecord.ReaderOcrManifest || "", ocr_mode: readerRecord.ReaderOcrMode || "" }; cacheReaderMetadata(readerId, sourceData, true); } } catch (_) {}
   return readerUrl;
 }
 
@@ -291,7 +291,56 @@ function restoreReaderFromSession() {
 }
 
 var warmedReaderAssets = new Set();
-var warmedReaderSources = new Set();
+const readerAssetWarmups = new Map();
+function warmReaderEngineBytes(href, mode) {
+  const controller = new AbortController();
+  const cancel = () => {
+    if (readerAssetWarmups.get(href) !== controller) return;
+    readerAssetWarmups.delete(href);
+    warmedReaderAssets.delete(href);
+    controller.abort();
+  };
+  const hidden = () => { if (document.hidden) cancel(); };
+  readerAssetWarmups.set(href, controller);
+  const timer = setTimeout(cancel, 8000);
+  window.addEventListener("pagehide", cancel);
+  window.addEventListener("offline", cancel);
+  document.addEventListener("visibilitychange", hidden);
+  (async () => {
+    try {
+      const response = await fetch(href, { mode, credentials: "same-origin", priority: "low", signal: controller.signal });
+      if (!response.ok || Number(response.headers.get("content-length")) > 1024 * 1024) {
+        await response.body?.cancel();
+        throw new Error("Reader engine warmup response");
+      }
+      const reader = response.body?.getReader();
+      if (!reader) throw new Error("Reader engine warmup body");
+      let size = 0;
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          size += value.byteLength;
+          if (size > 1024 * 1024 || controller.signal.aborted) {
+            await reader.cancel();
+            throw new Error("Reader engine warmup limit");
+          }
+        }
+      } finally { reader.releaseLock(); }
+    } catch (_) { cancel(); }
+    finally {
+      clearTimeout(timer);
+      window.removeEventListener("pagehide", cancel);
+      window.removeEventListener("offline", cancel);
+      document.removeEventListener("visibilitychange", hidden);
+      if (readerAssetWarmups.get(href) === controller) readerAssetWarmups.delete(href);
+    }
+  })();
+}
+var warmedReaderSources = new Map();
+// Match reader-resolve's metadata freshness without imposing a lifetime quota.
+const READER_WARMUP_TTL = 5 * 60 * 1000;
+const READER_WARMUP_MAX = 8;
 var readerWarmupInFlight = 0;
 let readerWarmupPending = null;
 const readerWarmupRetryAt = new Map();
@@ -310,8 +359,25 @@ function startReaderSourceWarmup(base, readerId, sourceUrl, urgent = false) {
     // that such a listener may have started or leave its timeout unowned.
     if (readerWarmupPending) return;
   }
-  if (warmedReaderSources.size >= 8 || warmedReaderSources.has(key) ||
-      Date.now() < (readerWarmupRetryAt.get(key) || 0)) return;
+  const now = Date.now();
+  for (const [sourceKey, entry] of warmedReaderSources) {
+    if (now >= entry.expiresAt) warmedReaderSources.delete(sourceKey);
+  }
+  const warmed = warmedReaderSources.get(key);
+  if (warmed) {
+    // Reader consumes this handoff. Only infer consumption after a confirmed
+    // write; disabled/quota-limited storage must still deduplicate in memory.
+    let consumed = false;
+    if (readerId && warmed.metadataStored) {
+      try { consumed = !sessionStorage.getItem(`reader-resolve:${readerId}`); } catch (_) {}
+    }
+    warmedReaderSources.delete(key);
+    if (!consumed) {
+      warmedReaderSources.set(key, warmed);
+      return;
+    }
+  }
+  if (now < (readerWarmupRetryAt.get(key) || 0)) return;
   const controller = new AbortController();
   const task = { key, cancel(superseded = false) { finish(false, superseded); } };
   const finish = (success, superseded = false) => {
@@ -320,7 +386,15 @@ function startReaderSourceWarmup(base, readerId, sourceUrl, urgent = false) {
     readerWarmupPending = null;
     readerWarmupInFlight = 0;
     if (success) {
-      warmedReaderSources.add(key);
+      let metadataStored = false;
+      if (readerId) {
+        try { metadataStored = !!sessionStorage.getItem(`reader-resolve:${readerId}`); } catch (_) {}
+      }
+      warmedReaderSources.delete(key);
+      warmedReaderSources.set(key, { expiresAt: Date.now() + READER_WARMUP_TTL, metadataStored });
+      while (warmedReaderSources.size > READER_WARMUP_MAX) {
+        warmedReaderSources.delete(warmedReaderSources.keys().next().value);
+      }
       readerWarmupRetryAt.delete(key);
     } else {
       controller.abort();
@@ -375,6 +449,13 @@ function warmReaderIntent(rawUrl, urgent = false) {
   shellAssets.concat(engineAssets).forEach(function(href) {
     if (warmedReaderAssets.has(href)) return;
     warmedReaderAssets.add(href);
+    // ICC XHR and the PDF worker entry omit Origin; DjVu's WASM uses
+    // ordinary fetch. Preserve both identities, including HF Vary: Origin.
+    if (href.endsWith(".wasm") || /\/pdf-worker-wrapper(?:\.[a-f0-9]+)?\.mjs$/.test(href)) {
+      if (href.endsWith(".wasm") && navigator.connection?.saveData) { warmedReaderAssets.delete(href); return; }
+      warmReaderEngineBytes(href, href.includes("/djvu-rs-reader/") ? "cors" : "same-origin");
+      return;
+    }
     var shellFile = href.endsWith("/reader.html");
     // Under SW control, store shell files in its cache first. A repeated link
     // preload is deduplicated after a pre-control warm, leaving classic shell
@@ -1427,7 +1508,8 @@ const searchResponseStore = VoiceOfMLSearchResponseStore.create({
 // Retain direct cache diagnostics for browser checks.
 const searchResponseCache = searchResponseStore.cache;
 const INITIAL_BASE_URL = "data/initial";
-const initialPayloadCache = new Map();
+/** @type {BoundedResponseCache<{data: SearchInitialPayload, time: number}>} */
+const initialPayloadCache = new BoundedResponseCache(16, SEARCH_CACHE_TTL);
 
 
 function noteApiSuccess() {
@@ -1479,7 +1561,8 @@ const SEARCH_VIEW_SNAPSHOT_VERSION = VoiceOfMLSnapshotPolicy.VERSION;
 const SEARCH_VIEW_SNAPSHOT_BYTES_MAX = VoiceOfMLSnapshotPolicy.BYTES_MAX;
 const resultSnapshots = VoiceOfMLResultSnapshots.create({
   cloneResult: record => cloneSearchResult(record),
-  materialized: (task, index) => materializedSnapshotRow(task, index),
+  measurementKey: () => getHeightMeasurementKey(),
+  materialized: (task, index, measurementKey) => materializedSnapshotRow(task, index, measurementKey),
   applyHeights: task => applySnapshotCloneHeights(task),
   isCurrent: task => STATE.results === task.results && getSearchViewKey() === task.key,
   completed: () => {
@@ -1845,6 +1928,11 @@ function tryRestoreSearchPosition(key, options = {}) {
 function applyValidatedSearchViewport(snapshot) {
   const anchor = captureReaderReturnScroll();
   const previous = STATE.results;
+  // Preview selections belong to records, not to slots replaced by validation.
+  const sameIdentity = index => previous[index] && snapshot.results[index] &&
+    getResultStableId(previous[index]) === getResultStableId(snapshot.results[index]);
+  for (const index of Object.keys(selectedIndices)) if (!sameIdentity(index)) delete selectedIndices[index];
+  if (!sameIdentity(lastSelectedIndex)) lastSelectedIndex = -1;
   for (const key of Object.keys(snapshot.results)) {
     if (previous[key] && JSON.stringify(previous[key]) === JSON.stringify(snapshot.results[key])) snapshot.results[key] = previous[key];
     else { VSCROLL.templateCache.delete(Number(key)); VSCROLL.measuredRowKeys[key] = null; }
@@ -1861,7 +1949,7 @@ function applyValidatedSearchViewport(snapshot) {
   refreshVirtualAfterAppend(false);
   setResultScrollTop(getVirtualOffset(Math.min(anchor.index, STATE.results.length - 1)) + anchor.offset);
   VSCROLL.renderStart = -1; VSCROLL.renderEnd = -1;
-  rememberDisplayedSearchView(); renderVisible(); updateStatusBar(); updateLoadInfo(); updatePagingStatus();
+  rememberDisplayedSearchView(); renderVisible(); updateSelectionUI(); updateStatusBar(); updateLoadInfo(); updatePagingStatus();
   positionPersistence.scheduleSave(saveSearchPosition);
 }
 
@@ -2108,6 +2196,11 @@ function extendSearchSnapshotBudget(results, page) {
 
 function saveSearchViewSnapshot(key = displayedSearchView?.key) {
   const view = displayedSearchView;
+  if ((view && view.key === key && view.window?.invalid) || resultSnapshots.snapshots.get(key)?.window?.invalid) {
+    // Keep the saved position for validation; stale rows must not replace it.
+    resultSnapshots.remove(key);
+    return null;
+  }
   // Browsing from the top must not overwrite the snapshot offered by Return.
   if (getReturnPositionTarget(key)) return resultSnapshots.snapshots.get(key) || null;
   if (!DOM.resultsContainer || !view || positionRestore || key !== view.key || view.loadedPage < 1) return null;
@@ -2131,14 +2224,14 @@ function materializeSnapshotRange(task, start, end, deferHeights = false) {
   resultSnapshots.materializeRange(task, start, end, deferHeights);
 }
 
-function materializedSnapshotRow(task, index) {
+function materializedSnapshotRow(task, index, measurementKey) {
   if (STATE.results !== task.results) return;
   VSCROLL.templateCache.delete(index); VSCROLL.measuredRowKeys[index] = null;
   if (index >= VSCROLL.renderStart && index < VSCROLL.renderEnd) {
     VSCROLL.renderStart = -1; VSCROLL.renderEnd = -1; scheduleVirtualRender();
   }
   const cached = VSCROLL.heightCache.get(getResultStableId(task.results[index]));
-  if (cached?.measurementKey === getHeightMeasurementKey() && VSCROLL.heights[index] !== cached.height) {
+  if (cached?.measurementKey === measurementKey && VSCROLL.heights[index] !== cached.height) {
     if (!task.heightAnchor) {
       const top = getResultScrollTop(), anchorIndex = findVirtualIndex(top);
       task.heightAnchor = { index: anchorIndex, offset: top - getVirtualOffset(anchorIndex) };
@@ -2165,6 +2258,10 @@ function applySnapshotCloneHeights(task) {
 
 function restoreSearchViewSnapshot(key, restoreScroll = true, preserveRestore = false) {
   const snapshot = resultSnapshots.snapshots.get(key);
+  if (snapshot?.window?.invalid) {
+    resultSnapshots.remove(key);
+    return restoreScroll && tryRestoreSearchPosition(key);
+  }
   if (!snapshot || snapshot.version !== SEARCH_VIEW_SNAPSHOT_VERSION || snapshot.loadedPage < 1) return restoreScroll && tryRestoreSearchPosition(key);
   searchIntentId++;
   if (!cancelActiveSearch()) return false;
@@ -2211,7 +2308,10 @@ function getCachedSearchResponse(key) { return searchResponseStore.getCachedSear
 
 function cancelPendingSearchCacheWrites() { searchResponseStore.cancelPendingSearchCacheWrites(); }
 
-function setCachedSearchResponse(key, data, defer = false) { searchResponseStore.setCachedSearchResponse(key, data, defer); }
+function setCachedSearchResponse(key, data, defer = false, acquiredAt = Date.now(), fromInitial = false) {
+  if (!fromInitial && canUseInitialSearchPayload() && key === getCurrentSearchCacheKey(1)) initialPayloadCache.delete(getInitialPayloadUrl());
+  searchResponseStore.setCachedSearchResponse(key, data, defer, acquiredAt);
+}
 
 function buildCurrentSearchBody(page) {
   return buildSearchApiBody({
@@ -2267,10 +2367,12 @@ function getSearchBootstrap() {
     cache: initialPayloadCache, fetchJSON: (url, timeout) => fetchJsonWithTimeout(url, timeout),
     eligible: () => canUseInitialSearchPayload(), payloadURL: () => getInitialPayloadUrl(),
     tryPayload: (mode, repo, intent) => tryInitialSearchPayload(mode, repo, intent),
-    applyPayload: (data, intent) => applyInitialSearchPayload(data, intent),
+    applyPayload: (data, intent, acquiredAt) => applyInitialSearchPayload(data, intent, acquiredAt),
+    cachedResponse: () => getCachedSearchResponse(getCurrentSearchCacheKey(1)),
+    cloneData: data => cloneSearchData(data), identity: data => searchResponseStore.identities.get(data),
     cancelSearch: () => cancelActiveSearch(), commitPage: data => commitInitialSearchPage(data),
-    cacheResponse: page => setCachedSearchResponse(getCurrentSearchCacheKey(1), page),
-    markUnverified: (record, page) => searchPageMetadata.set(record, { unverifiedInitial: true,
+    cacheResponse: (page, acquiredAt) => setCachedSearchResponse(getCurrentSearchCacheKey(1), page, false, acquiredAt, true),
+    markUnverified: (record, page) => searchPageMetadata.set(/** @type {object} */ (record), { unverifiedInitial: true,
       total: page.total, page: 1, page_size: page.page_size }),
     renderPage: () => renderInitialSearchPage(),
     syncRoute: () => {
@@ -2291,8 +2393,8 @@ function getInitialPayloadUrl() {
   return VoiceOfMLInitialPayload.url(readInitialSearchView(), INITIAL_BASE_URL);
 }
 
-function applyInitialSearchPayload(data, intent = searchIntentId) {
-  return getSearchBootstrap().apply(data, intent);
+function applyInitialSearchPayload(data, intent = searchIntentId, acquiredAt = Date.now()) {
+  return getSearchBootstrap().apply(data, intent, acquiredAt);
 }
 
 function commitInitialSearchPage(data) {
@@ -2731,32 +2833,78 @@ function getResultRows() {
 }
 function buildResultHTML(rec, idx) { return getResultRows().buildHTML(rec, idx); }
 
+let refreshedReaderAssets = null;
+function readerActionForRefresh(record, assets = readerAssetController.state.assets) {
+  const fields = assets !== readerAssetController.state.assets && VoiceOfMLReader.assetFields(
+    assets && assets[(record.Repo || "") + "\0" + buildRecordRelativePath(record)],
+    API_BASE + "/api/reader-bucket-resource", String(record.Extension || record.extension || ""));
+  const readerRecord = assets === readerAssetController.state.assets
+    ? applyReaderAsset(record, record.Repo || "", buildRecordRelativePath(record), getRecordLink(record))
+    : (fields ? Object.assign({}, record, fields, { DownloadLink: getRecordLink(record) }) : record);
+  const actionRecord = isReadableRecord(readerRecord) ? readerRecord : (isDefaultReadableRecord(record) ? record : null);
+  const label = actionRecord ? (["audio", "video", "swf"].includes(
+    VoiceOfMLReader.capability(actionRecord.ReaderExtension || actionRecord.Extension).mode) ? "在线播放" : "在线阅读") : "";
+  return { record: actionRecord, label };
+}
+
 function refreshResultReaderActions() {
-  VSCROLL.templateCache.clear();
-  for (const row of DOM.resultsList.querySelectorAll(".result-item[data-index]")) {
-    const index = Number(row.dataset.index), record = STATE.results[index];
+  const visible = new Map(Array.from(/** @type {NodeListOf<HTMLElement>} */ (DOM.resultsList.querySelectorAll(".result-item[data-index]")),
+    row => [Number(row.dataset.index), row]));
+  // Templates retain the actual old button even when their row is offscreen.
+  /** @type {Map<number, HTMLElement>} */
+  const rows = new Map(VSCROLL.templateCache);
+  for (const [index, row] of visible) rows.set(index, row);
+  let layoutChanged = false, heightsInvalidated = false;
+  const invalidateHeight = (index, record) => {
+    VSCROLL.measuredRowKeys[index] = null;
+    VSCROLL.heightCache.delete(getResultStableId(record));
+    heightsInvalidated = true;
+    if (visible.has(index)) layoutChanged = true;
+  };
+  for (const [index, row] of rows) {
+    const record = STATE.results[index];
     if (!record) continue;
-    const readerRecord = applyReaderAsset(record, record.Repo || "", buildRecordRelativePath(record), getRecordLink(record));
-    const readerReady = isReadableRecord(readerRecord);
-    let button = row.querySelector('[data-action="read"]');
-    if (!readerReady && !isDefaultReadableRecord(record)) {
-      if (button) { button.remove(); VSCROLL.measuredRowKeys[index] = null; }
+    const action = readerActionForRefresh(record);
+    let button = /** @type {HTMLElement | null} */ (row.querySelector('[data-action="read"]'));
+    if ((button ? button.textContent : "") !== action.label) invalidateHeight(index, record);
+    if (!visible.has(index)) continue;
+    if (!action.record) {
+      if (button) {
+        const focused = document.activeElement === button;
+        button.remove();
+        if (focused) row.focus({ preventScroll: true });
+      }
       continue;
     }
-    const actionRecord = readerReady ? readerRecord : record;
     if (!button) {
       button = document.createElement("button"); button.className = "result-action-btn"; button.dataset.action = "read";
       row.querySelector(".result-actions").appendChild(button);
-      VSCROLL.measuredRowKeys[index] = null;
     }
-    button.dataset.readerUrl = getReaderLink(actionRecord);
-    const label = ["audio", "video", "swf"].includes(VoiceOfMLReader.capability(actionRecord.ReaderExtension || actionRecord.Extension).mode) ? "在线播放" : "在线阅读";
-    if (button.textContent !== label) { button.textContent = label; VSCROLL.measuredRowKeys[index] = null; }
-    button.setAttribute('aria-label', label + '：' + record.File + (record.Extension ? '.' + record.Extension : ''));
+    const url = getReaderLink(action.record, undefined, false);
+    if (button.dataset.readerUrl !== url) button.dataset.readerUrl = url;
+    if (button.textContent !== action.label) button.textContent = action.label;
+    const ariaLabel = action.label + '：' + record.File + (record.Extension ? '.' + record.Extension : '');
+    if (button.getAttribute('aria-label') !== ariaLabel) button.setAttribute('aria-label', ariaLabel);
   }
-  VSCROLL.measuredWindowKey = "";
-  VSCROLL.renderStart = -1; VSCROLL.renderEnd = -1;
-  scheduleVirtualRender();
+  // A measured row may outlive the bounded template cache. Compare catalog
+  // snapshots for those rows as well, retaining old heights as anchor estimates.
+  if (refreshedReaderAssets !== readerAssetController.state.assets) {
+    for (const key of Object.keys(VSCROLL.measuredRowKeys)) {
+      const index = Number(key), record = STATE.results[index];
+      if (!record || rows.has(index) || !VSCROLL.measuredRowKeys[index]) continue;
+      if (readerActionForRefresh(record, refreshedReaderAssets).label !== readerActionForRefresh(record).label)
+        invalidateHeight(index, record);
+    }
+  }
+  refreshedReaderAssets = readerAssetController.state.assets;
+  // Do not bump contentVersion: existing rows, focus and selection stay intact.
+  VSCROLL.templateCache.clear();
+  if (heightsInvalidated) measuredHeightRevision++;
+  if (layoutChanged) {
+    VSCROLL.measuredWindowKey = "";
+    VSCROLL.renderStart = -1; VSCROLL.renderEnd = -1;
+    scheduleVirtualRender();
+  }
 }
 
 function getResultsHTMLCacheKey() {

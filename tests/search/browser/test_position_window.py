@@ -192,6 +192,68 @@ class PositionWindowTests(unittest.TestCase):
         self.assertEqual(self.page.evaluate('STATE.results[35050].File'), 'paging-49850')
         self.assertEqual(self.page.evaluate('resultWindow.generation'), 'two')
 
+    def test_snapshot_save_without_displayed_view_preserves_cached_position(self):
+        self.assertTrue(self.page.evaluate('''() => {
+          const snapshot=saveSearchViewSnapshot(), position=positionPersistence.positions.get(originalWindowKey);
+          const view=displayedSearchView, savedPosition=JSON.stringify(position);
+          displayedSearchView=null;
+          try {
+            return saveSearchViewSnapshot()===null && !!snapshot && !!position &&
+              resultSnapshots.snapshots.get(originalWindowKey)===snapshot &&
+              positionPersistence.positions.get(originalWindowKey)===position && JSON.stringify(position)===savedPosition;
+          } finally { displayedSearchView=view; }
+        }'''))
+
+    def invalidate_window_generation(self):
+        self.page.evaluate("saveSearchPosition();windowGeneration='two';windowAnchor=35050;loadResultWindowPage(251,true)")
+        self.page.wait_for_function('resultWindow?.invalid === true')
+        self.assertEqual(self.page.evaluate('resultWindow.generation'), 'one')
+        self.assertFalse(self.page.evaluate('!!STATE.results[25050]'))
+
+    def test_invalid_window_snapshot_round_trip_revalidates_generation(self):
+        self.page.evaluate('resultSnapshots.snapshots.delete(originalWindowKey)')
+        self.invalidate_window_generation()
+        self.page.evaluate('saveSearchViewSnapshot()')
+        self.page.evaluate("STATE.query='paging-other';doSearch()")
+        self.page.wait_for_function('!STATE.isLoading')
+        self.assertEqual(self.page.evaluate('positionPersistence.positions.get(originalWindowKey).index'), 49850)
+        self.page.evaluate("windowCalls=[];STATE.query='paging-original';doSearch(false,false,true)")
+        self.assertTrue(self.page.evaluate("!!positionRestore || resultWindow?.generation === 'two'"),
+                        'Returning must validate the invalid window instead of silently restoring generation one')
+        self.wait_anchor(35050)
+        self.assertIn(1, self.page.evaluate('windowCalls'))
+        self.assertEqual(self.page.evaluate('resultWindow.generation'), 'two')
+        self.assertFalse(self.page.evaluate('!!resultWindow.invalid'))
+        self.assertEqual(self.page.evaluate('STATE.results[35050].File'), 'paging-49850')
+
+    def test_invalid_window_cannot_reuse_cached_snapshot(self):
+        self.assertTrue(self.page.evaluate('!!saveSearchViewSnapshot()'))
+        self.invalidate_window_generation()
+        result = self.page.evaluate('''() => {
+          const saved=saveSearchViewSnapshot();
+          const position=positionPersistence.positions.get(originalWindowKey);
+          return {rejected:saved===null,cached:resultSnapshots.snapshots.has(originalWindowKey),
+            index:position.index,anchorId:position.anchorId};
+        }''')
+        self.assertEqual(result, dict(rejected=True, cached=False, index=49850,
+                                     anchorId='VoiceOfML/Test\0paging-49850.txt'))
+
+    def test_restore_rejects_snapshot_marked_invalid_and_recovers_position(self):
+        self.page.evaluate('window.invalidSnapshot=saveSearchViewSnapshot()')
+        self.invalidate_window_generation()
+        self.page.evaluate('invalidSnapshot.window.invalid=resultWindow.invalid')
+        self.page.evaluate("STATE.query='paging-other';doSearch()")
+        self.page.wait_for_function('!STATE.isLoading')
+        self.page.evaluate('resultSnapshots.snapshots.set(originalWindowKey,invalidSnapshot)')
+        self.assertFalse(self.page.evaluate('restoreSearchViewSnapshot(originalWindowKey,false)'),
+                         'A restore without position recovery must refuse an invalid snapshot')
+        self.assertFalse(self.page.evaluate('resultSnapshots.snapshots.has(originalWindowKey)'))
+        self.page.evaluate("resultSnapshots.snapshots.set(originalWindowKey,invalidSnapshot);windowCalls=[];STATE.query='paging-original';doSearch(false,false,true)")
+        self.wait_anchor(35050)
+        self.assertIn(1, self.page.evaluate('windowCalls'))
+        self.assertEqual(self.page.evaluate('resultWindow.generation'), 'two')
+        self.assertEqual(self.page.evaluate('STATE.results[35050].File'), 'paging-49850')
+
     def test_late_gap_response_cannot_replace_a_new_query(self):
         self.page.evaluate('windowStall=251')
         self.jump(25050)
@@ -265,6 +327,56 @@ class PositionWindowTests(unittest.TestCase):
         self.page.evaluate("window.cachedRow=DOM.resultsList.querySelector('[data-index=\"49850\"]');releaseWindow()")
         self.wait_anchor(49850)
         self.assertTrue(self.page.evaluate("cachedRow===DOM.resultsList.querySelector('[data-index=\"49850\"]')"))
+
+    def check_cached_viewport_selection(self, replace_neighbor):
+        self.persist_viewport()
+        self.page.evaluate("STATE.query='paging-other';doSearch()")
+        self.page.wait_for_function('!STATE.isLoading')
+        self.page.evaluate('''replaceNeighbor => {
+          const original=fetchPositionPage;
+          fetchPositionPage=async (...args)=>{
+            const data=await original(...args);
+            for(const record of data.results) {
+              if(record.File==='paging-49850') record.Size=2;
+              if(record.File==='paging-49851') {
+                record.Size=2;
+                if(replaceNeighbor) record.File='replacement-neighbor';
+              }
+            }
+            return data;
+          };
+          resultSnapshots.snapshots.clear();positionPersistence.viewports.clear();
+          windowGeneration='two';windowStall=1;
+          STATE.query='paging-original';doSearch(false,false,true);
+        }''', replace_neighbor)
+        self.assert_cached_viewport()
+        self.page.locator('#multi-select-toggle').check()
+        anchor = self.page.locator('.result-checkbox[data-index="49850"]')
+        neighbor = self.page.locator('.result-checkbox[data-index="49851"]')
+        anchor.check()
+        neighbor.check()
+        self.assertEqual(self.page.evaluate('getSelectedFiles().map(file=>file.filename)'),
+                         ['paging-49850.txt', 'paging-49851.txt'])
+        self.assertTrue(self.page.evaluate('!!positionRestore.preview'))
+        self.page.evaluate('releaseWindow()')
+        self.wait_anchor(49850)
+        self.assertEqual(self.page.evaluate('resultWindow.generation'), 'two')
+        self.assertEqual(self.page.evaluate('STATE.results[49851].File'),
+                         'replacement-neighbor' if replace_neighbor else 'paging-49851')
+        self.assertEqual(self.page.evaluate('STATE.results[49850].Size'), 2)
+        expected = ['paging-49850.txt'] if replace_neighbor else ['paging-49850.txt', 'paging-49851.txt']
+        self.assertEqual(self.page.evaluate('getSelectedFiles().map(file=>file.filename)'), expected)
+        self.assertTrue(anchor.is_checked())
+        self.assertEqual(neighbor.is_checked(), not replace_neighbor)
+        self.assertEqual(self.page.locator('#multi-selected-count').inner_text(),
+                         '已选1项' if replace_neighbor else '已选2项')
+        self.assertEqual(self.page.evaluate('lastSelectedIndex'), -1 if replace_neighbor else 49851)
+
+    def test_cached_viewport_selection_drops_replaced_neighbor_after_validation(self):
+        self.check_cached_viewport_selection(replace_neighbor=True)
+
+    def test_cached_viewport_selection_keeps_same_identity_after_metadata_change(self):
+        self.check_cached_viewport_selection(replace_neighbor=False)
 
     def test_reload_displays_saved_content_while_network_is_blocked(self):
         self.page.set_viewport_size({'width':390,'height':844})

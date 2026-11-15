@@ -98,9 +98,14 @@ export function createReaderMediaFormat(readerContext) {
     // The runtime capability helper stringifies unknown metadata; its ambient
     // declaration is narrower. This assertion preserves the original argument.
     const originalMode = VoiceOfMLReader.capability(/** @type {string} */ (readerContext.resolvedReaderData?.original_extension || readerContext.extension)).mode;
-    const retryUrl = originalMode === mode && readerContext.validSource(readerContext.downloadUrl) ? readerContext.downloadUrl : readerContext.sourceUrl;
+    // A stalled proxy used to assign the dataset URL to the media element. That
+    // URL is on huggingface.co, which this network cannot open, so the retry
+    // never reaches metadata. Reload the same proxied URL instead.
+    const directSource = originalMode === mode && readerContext.validSource(readerContext.downloadUrl) ? readerContext.downloadUrl : readerContext.sourceUrl;
+    const retryUrl = readerContext.contentUrl && readerContext.contentUrl !== directSource ? readerContext.contentUrl : directSource;
     const retryOriginal = () => {
-      if (sourceRetried || retryUrl === media.src || !readerContext.validSource(retryUrl)) return false;
+      if (sourceRetried || !readerContext.validSource(retryUrl)) return false;
+      if (retryUrl === media.src && retryUrl === directSource) return false;
       readerContext.saveProgress();
       retryPosition = readerContext.documentState.restorationReady
         ? {time:media.currentTime, playing:!media.paused, rate:media.playbackRate} : null;

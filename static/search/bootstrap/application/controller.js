@@ -3,14 +3,14 @@
   /** @param {SearchBootstrapDependencies} deps */
   function create(deps) {
     const policy = VoiceOfMLInitialPayload;
-    /** @param {SearchInitialPayload | null} data @param {number} intent */
-    function apply(data, intent) {
+    /** @param {SearchInitialPayload | null} data @param {number} intent @param {number | null} [acquiredAt] */
+    function apply(data, intent, acquiredAt = Date.now()) {
       if (intent !== deps.intent()) return false;
       if (!data || !Array.isArray(data.results) || !deps.eligible()) return false;
       if (!policy.accepts(data, deps.view())) return false;
       if (!deps.cancelSearch() || intent !== deps.intent()) return false;
       const page = deps.commitPage(data);
-      deps.cacheResponse(page);
+      if (acquiredAt !== null) deps.cacheResponse(Object.assign(deps.cloneData(data), page), acquiredAt);
       if (page.results[0] && !(typeof data.generation === "string" && data.generation)) {
         deps.markUnverified(page.results[0], page);
       }
@@ -32,15 +32,25 @@
       if (!deps.eligible()) return false;
       const url = deps.payloadURL();
       try {
-        let data = deps.cache.get(url);
-        if (!data) {
-          data = await deps.fetchJSON(url, 6000);
+        if (!current()) return false;
+        const cached = deps.cachedResponse();
+        let entry = deps.cache.get(url);
+        if (cached) {
+          const applied = deps.applyPayload(Object.assign(deps.cloneData(cached), {
+            mode: deps.view().mode, repo: deps.view().repoFull,
+          }), intent, null);
+          if (applied && entry && deps.identity(entry.data) !== deps.identity(cached)) deps.cache.delete(url);
+          return applied;
+        }
+        if (!entry) {
+          const data = await deps.fetchJSON(url, 6000);
           if (!current()) return false;
           if (!data) return false;
-          deps.cache.set(url, data);
+          entry = { data, time: Date.now() };
+          deps.cache.set(url, entry);
         }
         if (!current()) return false;
-        return deps.applyPayload(data, intent);
+        return deps.applyPayload(entry.data, intent, entry.time);
       } catch (e) {
         return false;
       }
