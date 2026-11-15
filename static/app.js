@@ -2176,7 +2176,7 @@ const SEARCH_CACHE_MAX = 60;
 const searchResponseCache = new BoundedResponseCache(SEARCH_CACHE_MAX, SEARCH_CACHE_TTL);
 const INITIAL_BASE_URL = "data/initial";
 const initialPayloadCache = new Map();
-let randomTxtStatusId = 0;
+
 
 function noteApiSuccess() {
   apiFailureCount = 0;
@@ -2216,34 +2216,7 @@ function noteApiFailure() {
 }
 
 async function updateRandomTxtVisibility() {
-  if (!DOM.randomTxtBtn) return;
-  const id = ++randomTxtStatusId;
-  DOM.randomTxtBtn.style.display = "none";
-  if (STATE.dataLoaded) {
-    const originalCount = STATE.repoFull ? (readerMetadata.byRepo[STATE.repoFull] || 0) : (readerMetadata.count || 0);
-    if (originalCount) {
-      // Native files already make the action available. Neither a slow sidecar
-      // nor a full converted-pool build should delay showing this control.
-      loadReaderAssets();
-      DOM.randomTxtBtn.style.display = "";
-      return;
-    }
-    await loadReaderAssets();
-    if (id !== randomTxtStatusId) return;
-    const count = (await getConvertedReaderRecords(STATE.repoFull || "")).length;
-    if (id !== randomTxtStatusId) return;
-    DOM.randomTxtBtn.style.display = count > 0 ? "" : "none";
-    return;
-  }
-  const repo = STATE.mode === "repo" && STATE.repo ? STATE.repo : "";
-  const url = repo ? API_BASE + "/api/random-reader/status?repo=" + encodeURIComponent(repo) : API_BASE + "/api/random-reader/status";
-  try {
-    const data = await fetchJsonWithTimeout(url, 4000);
-    if (id !== randomTxtStatusId) return;
-    DOM.randomTxtBtn.style.display = data && data.available ? "" : "none";
-  } catch (e) {
-    if (id === randomTxtStatusId) DOM.randomTxtBtn.style.display = "none";
-  }
+  return getRandomDiscovery().updateRandomTxtVisibility();
 }
 
 function stableSearchStringify(value) {
@@ -4407,139 +4380,46 @@ function setupHitokoto() {
   updateHitokotoVisibility();
 }
 
-async function getRandomLocal(readerOnly) {
-  const data = await corpusWorkerRequest("random-record", { repo: STATE.repoFull || "", readerOnly: !!readerOnly }, WORKER_REQUEST_TIMEOUT);
-  return data && data.record || null;
-}
-
-async function randomBook() {
-  showToast("正在随机下载书籍...");
-  if (STATE.dataLoaded) {
-    try {
-      var localRec = await getRandomLocal(false);
-      if (!localRec) throw new Error("NO_RECORD");
-      var localFilename = (localRec.File || "file") + (localRec.Extension ? "." + localRec.Extension : "");
-      await downloadFile(localFilename, getRecordLink(localRec), { skipCheck: true });
-    } catch (e) {
-      showToast("暂无可下载书籍");
-    }
-    return;
-  }
-  var url = STATE.repoFull
-    ? API_BASE + "/api/random?repo=" + encodeURIComponent(STATE.repo)
-    : API_BASE + "/api/random";
-  fetch(url).then(function(resp) {
-      if (!resp.ok) throw new Error("HTTP " + resp.status);
-      return resp.json();
-    })
-    .then(function(rec) {
-      if (rec) {
-        var filename = (rec.File || "file") + (rec.Extension ? "." + rec.Extension : "");
-        downloadFile(filename, getRecordLink(rec), { skipCheck: true });
-      } else {
-        showToast("暂无可下载书籍");
-      }
-    })
-    .catch(function() {
-      async function fallback() {
-        var rec = await getRandomLocal(false);
-        if (rec) {
-          var filename = (rec.File || "file") + (rec.Extension ? "." + rec.Extension : "");
-          downloadFile(filename, getRecordLink(rec), { skipCheck: true });
-        } else {
-          showToast("暂无可下载书籍");
-        }
-      }
-      if (STATE.dataLoaded) fallback().catch(function() { showToast("暂无可下载书籍"); });
-      else ensureLocalDataLoaded(false, true).then(function(ok) { if (ok) return fallback(); throw new Error("LOCAL_UNAVAILABLE"); }).catch(function() { showToast("暂无可下载书籍"); });
-    });
-}
-
+// Discovery owns random selection; asset loading and Reader/download lifecycles stay shared.
+let randomDiscovery;
 var randomReaderRequestId = 0;
-
+function getRandomDiscovery() {
+  return randomDiscovery || (randomDiscovery = VoiceOfMLRandomDiscovery.create({
+    readView: () => ({ dataLoaded: STATE.dataLoaded, repoFull: STATE.repoFull, repo: STATE.repo, mode: STATE.mode }),
+    requests: { get id() { return randomReaderRequestId; }, set id(value) { randomReaderRequestId = value; } },
+    button: () => DOM.randomTxtBtn,
+    apiBase: API_BASE,
+    nativeCount: () => STATE.repoFull ? (readerMetadata.byRepo[STATE.repoFull] || 0) : (readerMetadata.count || 0),
+    assetsLoaded: () => !!readerAssets,
+    loadReaderAssets: () => loadReaderAssets(),
+    getConvertedReaderRecords: repo => getConvertedReaderRecords(repo),
+    localRecord: (repo, readerOnly) => corpusWorkerRequest("random-record", { repo, readerOnly }, WORKER_REQUEST_TIMEOUT),
+    ensureLocalDataLoaded: () => ensureLocalDataLoaded(false, true),
+    fetchStatus: (url, timeout) => fetchJsonWithTimeout(url, timeout),
+    getRecordLink: rec => getRecordLink(rec),
+    getReaderLink: (rec, returnUrl) => getReaderLink(rec, returnUrl),
+    navigateToReader: (url, returnUrl) => navigateToReader(url, returnUrl),
+    downloadFile: (filename, link, options) => downloadFile(filename, link, options),
+    showToast: message => showToast(message),
+    getRandomLocal: readerOnly => getRandomLocal(readerOnly),
+    fetchRandomReaderRecord: (url, id, returnUrl) => fetchRandomReaderRecord(url, id, returnUrl),
+    openReaderRecord: (rec, returnUrl) => openReaderRecord(rec, returnUrl)
+  }));
+}
+async function getRandomLocal(readerOnly) {
+  return getRandomDiscovery().getRandomLocal(readerOnly);
+}
+async function randomBook() {
+  return getRandomDiscovery().randomBook();
+}
 async function fetchRandomReaderRecord(url, requestId, returnUrl) {
-  for (let attempt = 0; attempt < 2; attempt++) {
-    if (requestId !== randomReaderRequestId || location.href !== returnUrl) return null;
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 10000);
-    try {
-      const response = await fetch(url, { signal: controller.signal, cache: "no-store" });
-      if (!response.ok) {
-        await response.body?.cancel();
-        const error = Object.assign(new Error(`HTTP ${response.status}`), {
-          permanent: response.status < 500 && ![408, 429].includes(response.status)
-        });
-        throw error;
-      }
-      return await response.json();
-    } catch (error) {
-      if (error.permanent || attempt || error instanceof SyntaxError || navigator.onLine === false) throw error;
-    } finally {
-      clearTimeout(timer);
-    }
-  }
+  return getRandomDiscovery().fetchRandomReaderRecord(url, requestId, returnUrl);
 }
-
 function openReaderRecord(rec, returnUrl) {
-  returnUrl = returnUrl || location.href;
-  if (!rec || location.href !== returnUrl) return false;
-  const url = getReaderLink(rec, returnUrl);
-  if (!url) return false;
-  return navigateToReader(url, returnUrl);
+  return getRandomDiscovery().openReaderRecord(rec, returnUrl);
 }
-
 async function randomTxt() {
-  var requestId = ++randomReaderRequestId;
-  var returnUrl = location.href;
-  showToast("正在随机打开书籍...");
-  if (STATE.dataLoaded) {
-    try {
-      var originalCount = STATE.repoFull ? (readerMetadata.byRepo[STATE.repoFull] || 0) : (readerMetadata.count || 0);
-      if (!originalCount && !readerAssets) await loadReaderAssets();
-      else loadReaderAssets();
-      var converted = await getConvertedReaderRecords(STATE.repoFull || "");
-      if (requestId !== randomReaderRequestId || location.href !== returnUrl) return;
-      var useConverted = converted.length > 0 && Math.random() * (originalCount + converted.length) >= originalCount;
-      var localRec = useConverted ? converted[Math.floor(Math.random() * converted.length)] : await getRandomLocal(true);
-      if (requestId !== randomReaderRequestId || location.href !== returnUrl) return;
-      if (!openReaderRecord(localRec, returnUrl)) throw new Error("NO_READER");
-    } catch (e) {
-      if (requestId !== randomReaderRequestId || location.href !== returnUrl) return;
-      showToast("暂无可读书籍");
-    }
-    return;
-  }
-  var url = STATE.repoFull
-    ? API_BASE + "/api/random-reader?repo=" + encodeURIComponent(STATE.repo)
-    : API_BASE + "/api/random-reader";
-  return fetchRandomReaderRecord(url, requestId, returnUrl).then(function(rec) {
-    if (requestId !== randomReaderRequestId || location.href !== returnUrl) return;
-    if (!openReaderRecord(rec, returnUrl)) throw new Error("NO_READER");
-  }).catch(function() {
-    if (requestId !== randomReaderRequestId || location.href !== returnUrl) return;
-    async function fallback() {
-      if (requestId !== randomReaderRequestId || location.href !== returnUrl) return;
-      var originalCount = STATE.repoFull ? (readerMetadata.byRepo[STATE.repoFull] || 0) : (readerMetadata.count || 0);
-      if (!originalCount && !readerAssets) await loadReaderAssets();
-      else loadReaderAssets();
-      var converted = await getConvertedReaderRecords(STATE.repoFull || "");
-      if (requestId !== randomReaderRequestId || location.href !== returnUrl) return;
-      var useConverted = converted.length > 0 && Math.random() * (originalCount + converted.length) >= originalCount;
-      var rec = useConverted ? converted[Math.floor(Math.random() * converted.length)] : await getRandomLocal(true);
-      if (requestId !== randomReaderRequestId || location.href !== returnUrl) return;
-      if (!openReaderRecord(rec, returnUrl)) {
-        showToast("暂无可读书籍");
-      }
-    }
-    if (STATE.dataLoaded) fallback().catch(function() {
-      if (requestId !== randomReaderRequestId || location.href !== returnUrl) return;
-      showToast("暂无可读书籍");
-    });
-    else ensureLocalDataLoaded(false, true).then(function(ok) { if (ok) return fallback(); throw new Error("LOCAL_UNAVAILABLE"); }).catch(function() {
-      if (requestId !== randomReaderRequestId || location.href !== returnUrl) return;
-      showToast("暂无可读书籍");
-    });
-  });
+  return getRandomDiscovery().randomTxt();
 }
 let toastTimer;
 
