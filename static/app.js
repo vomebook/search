@@ -751,21 +751,21 @@ function openExternalWindow(url) {
   return popup;
 }
 
-var HISTORY_KEY = "voml_search_history";
-var HISTORY_MAX = 20;
 var EXT_FILTER_STORAGE_KEY = "voml_ext_filter:global";
-
-function getHistory() {
-  try {
-    return JSON.parse(sessionStorage.getItem(HISTORY_KEY)) || [];
-  } catch (e) { return []; }
+const searchHistoryStore = VoiceOfMLSearchHistoryStore.create(() => sessionStorage);
+let searchHistory;
+function getSearchHistoryController() {
+  return searchHistory || (searchHistory = VoiceOfMLSearchHistory.create({
+    elements: () => ({ searchInput: DOM.searchInput, searchBox: DOM.searchBox,
+      historyDropdown: DOM.historyDropdown, resultsContainer: DOM.resultsContainer }),
+    store: searchHistoryStore, escapeHTML,
+    recordHistory: () => STATE.recordHistory,
+    isComposing: () => searchComposing,
+    submitSearchQuery: (query, options) => submitSearchQuery(query, options)
+  }));
 }
-
-function saveHistory(list) {
-  try {
-    sessionStorage.setItem(HISTORY_KEY, JSON.stringify(list.slice(0, HISTORY_MAX)));
-  } catch (e) {}
-}
+function getHistory() { return searchHistoryStore.get(); }
+function saveHistory(list) { searchHistoryStore.save(list); }
 
 function mergeFolderFilters(selfs, subtrees) {
   const selfSet = new Set(selfs || []);
@@ -794,111 +794,11 @@ function saveStoredExtensionFilters() {
   } catch (e) {}
 }
 
-function addHistoryItem(q) {
-  if (!q || !STATE.recordHistory) return;
-  var list = getHistory();
-  var idx = list.indexOf(q);
-  if (idx >= 0) list.splice(idx, 1);
-  list.unshift(q);
-  saveHistory(list);
-}
-
-function renderDropdown() {
-  if (!DOM.historyDropdown) return;
-  var active = document.activeElement;
-  var row = DOM.historyDropdown.contains(active) ? active.closest('.history-item') : null;
-  var oldIndex = row ? Array.from(DOM.historyDropdown.querySelectorAll('.history-item')).indexOf(row) : -1;
-  var list = getHistory();
-  if (list.length === 0) { hideSearchHistory(!!row); return; }
-  var html = "";
-  for (var h = 0; h < list.length; h++) {
-    html += '<div class="history-item" data-query="' + escapeHTML(list[h]) + '">' +
-      '<svg class="history-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>' +
-      '<button type="button" class="history-text" aria-label="搜索：' + escapeHTML(list[h]) + '">' + escapeHTML(list[h]) + '</button>' +
-      '<button type="button" class="history-del" aria-label="删除搜索历史：' + escapeHTML(list[h]) + '" data-del="' + escapeHTML(list[h]) + '">&times;</button>' +
-      '</div>';
-  }
-  html += '<div class="history-footer"><button class="history-clear-all">清空历史</button></div>';
-  DOM.historyDropdown.innerHTML = html;
-  DOM.historyDropdown.style.display = "";
-  if (row) {
-    var index = list.indexOf(/** @type {HTMLElement} */ (row).dataset.query);
-    var selector = index >= 0 && active.matches('.history-del') ? '.history-del' : '.history-text';
-    DOM.historyDropdown.querySelectorAll('.history-item')[index >= 0 ? index : Math.min(oldIndex, list.length - 1)]
-      .querySelector(selector).focus({ preventScroll: true });
-  }
-}
-
-function hideSearchHistory(restoreFocus = false) {
-  // Focus first: its normal focus listener may render history again.
-  if (restoreFocus) DOM.searchInput.focus({ preventScroll: true });
-  DOM.historyDropdown.style.display = "none";
-}
-
-function setupSearchHistory() {
-  let hideTimer, pressTimer, pressed = false, hovering = false;
-  const scheduleHide = () => {
-    clearTimeout(hideTimer);
-    hideTimer = setTimeout(() => {
-      if (!hovering && !DOM.searchBox.contains(document.activeElement)) hideSearchHistory();
-    }, 150);
-  };
-  DOM.searchInput.addEventListener('focus', renderDropdown);
-  DOM.searchBox.addEventListener('focusout', scheduleHide);
-  DOM.historyDropdown.addEventListener('mouseenter', () => { hovering = true; });
-  DOM.historyDropdown.addEventListener('mouseleave', () => { hovering = false; clearTimeout(pressTimer); scheduleHide(); });
-  document.addEventListener('pointerdown', event => {
-    if (!DOM.searchBox.contains(event.target)) hideSearchHistory();
-  }, { passive: true });
-  DOM.searchBox.addEventListener('keydown', event => {
-    if (event.isComposing || searchComposing || event.keyCode === 229 || event.ctrlKey || event.metaKey || event.altKey ||
-        DOM.historyDropdown.style.display === 'none') return;
-    if (event.key === 'Escape') {
-      event.preventDefault(); event.stopPropagation(); hideSearchHistory(true);
-    } else if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
-      const buttons = Array.from(DOM.historyDropdown.querySelectorAll('.history-text'));
-      if (!buttons.length) return;
-      const row = event.target.closest('.history-item');
-      const index = row ? Array.from(DOM.historyDropdown.querySelectorAll('.history-item')).indexOf(row) : -1;
-      const next = event.key === 'ArrowDown' ? index + 1 : index - 1;
-      event.preventDefault(); event.stopPropagation();
-      if (next < 0) DOM.searchInput.focus({ preventScroll: true });
-      else buttons[Math.min(next, buttons.length - 1)].focus({ preventScroll: true });
-    }
-  });
-  const startPress = event => {
-    clearTimeout(pressTimer); pressed = false;
-    if (event.target.closest('.history-del,.history-clear-all')) return;
-    const row = event.target.closest('.history-item');
-    if (row) pressTimer = setTimeout(() => { pressed = true; removeHistoryItem(row.dataset.query); }, 600);
-  };
-  DOM.historyDropdown.addEventListener('mousedown', startPress);
-  DOM.historyDropdown.addEventListener('touchstart', startPress, { passive: true });
-  for (const type of ['mouseup', 'touchend', 'touchmove', 'touchcancel'])
-    DOM.historyDropdown.addEventListener(type, () => clearTimeout(pressTimer), { passive: true });
-  DOM.historyDropdown.addEventListener('click', event => {
-    if (pressed && event.detail !== 0) { pressed = false; return; }
-    pressed = false;
-    const remove = event.target.closest('.history-del');
-    if (remove) { removeHistoryItem(remove.dataset.del); return; }
-    if (event.target.closest('.history-clear-all')) { saveHistory([]); hideSearchHistory(true); return; }
-    const row = event.target.closest('.history-item');
-    if (row) {
-      const restoreFocus = DOM.historyDropdown.contains(document.activeElement);
-      submitSearchQuery(row.dataset.query, { restore: true, blur: true });
-      hideSearchHistory();
-      if (restoreFocus) DOM.resultsContainer.focus({ preventScroll: true });
-    }
-  });
-}
-
-function removeHistoryItem(q) {
-  var list = getHistory();
-  var idx = list.indexOf(q);
-  if (idx >= 0) list.splice(idx, 1);
-  saveHistory(list);
-  renderDropdown();
-}
+function addHistoryItem(q) { getSearchHistoryController().addHistoryItem(q); }
+function renderDropdown() { getSearchHistoryController().renderDropdown(); }
+function hideSearchHistory(restoreFocus = false) { getSearchHistoryController().hideSearchHistory(restoreFocus); }
+function setupSearchHistory() { getSearchHistoryController().setupSearchHistory(); }
+function removeHistoryItem(q) { getSearchHistoryController().removeHistoryItem(q); }
 
 function updateSelectionUI() {
   if (!DOM.multiSelectToggle || !DOM.multiActionBar) return;
@@ -4295,90 +4195,8 @@ function refreshFilterFolderSelectionState() { getSidebarFilters(); sidebarFolde
 function setAllFoldersCollapsed(collapsed) { getSidebarFilters(); sidebarFolderTree.setAllCollapsed(collapsed); }
 function persistFolderSelection(subtrees, selfs) { getSidebarFilters(); sidebarFolderTree.persistSelection(subtrees, selfs); }
 
-const hitokotoState = { timer: null, controller: null, lastAt: 0, animation: null, suspended: false };
-
-function hitokotoVisible() { return !document.hidden && !hitokotoState.suspended; }
-
-function scheduleHitokoto() {
-  clearTimeout(hitokotoState.timer);
-  hitokotoState.timer = null;
-  if (!hitokotoVisible() || hitokotoState.controller) return;
-  hitokotoState.timer = setTimeout(fetchHitokoto, Math.max(0, 30000 - (Date.now() - hitokotoState.lastAt)));
-}
-
-async function fetchHitokoto() {
-  if (!hitokotoVisible() || hitokotoState.controller) return;
-  clearTimeout(hitokotoState.timer);
-  hitokotoState.timer = null;
-  const controller = new AbortController();
-  hitokotoState.controller = controller;
-  const timeout = setTimeout(() => controller.abort(), 8000);
-  try {
-    const resp = await fetch("https://vomebook-hitokoto.hf.space/", { signal: controller.signal });
-    if (!resp.ok) throw new Error("Hitokoto unavailable");
-    const data = await resp.json();
-    if (hitokotoState.controller !== controller || !hitokotoVisible() || controller.signal.aborted) return;
-    const text = data.hitokoto || data.text || data.content || data.sentence || "";
-    if (typeof text === "string" && text) typewriter(DOM.hitokoto, text);
-  } catch (_) {
-    // Keep the current quotation on transient failures.
-  } finally {
-    clearTimeout(timeout);
-    if (hitokotoState.controller === controller) {
-      hitokotoState.controller = null;
-      hitokotoState.lastAt = Date.now();
-      scheduleHitokoto();
-    }
-  }
-}
-
-function resumeHitokotoAnimation() {
-  const animation = hitokotoState.animation;
-  if (!animation || animation.timer || !hitokotoVisible()) return;
-  if (matchMedia("(prefers-reduced-motion: reduce)").matches) {
-    animation.el.textContent = animation.chars.join("");
-    hitokotoState.animation = null;
-    return;
-  }
-  animation.timer = setTimeout(() => {
-    animation.timer = null;
-    if (!hitokotoVisible()) return;
-    animation.el.textContent = animation.chars.slice(0, ++animation.index).join("");
-    if (animation.index >= animation.chars.length) hitokotoState.animation = null;
-    else resumeHitokotoAnimation();
-  }, animation.speed);
-}
-
-function typewriter(el, text, speed = 60) {
-  if (hitokotoState.animation) clearTimeout(hitokotoState.animation.timer);
-  el.style.opacity = "0.55";
-  el.textContent = "";
-  hitokotoState.animation = { el, chars: Array.from(text), index: 0, speed, timer: null };
-  resumeHitokotoAnimation();
-}
-
-function updateHitokotoVisibility() {
-  if (hitokotoVisible()) {
-    resumeHitokotoAnimation();
-    scheduleHitokoto();
-  } else {
-    clearTimeout(hitokotoState.timer);
-    hitokotoState.timer = null;
-    if (hitokotoState.controller) hitokotoState.controller.abort();
-    hitokotoState.controller = null;
-    if (hitokotoState.animation) {
-      clearTimeout(hitokotoState.animation.timer);
-      hitokotoState.animation.timer = null;
-    }
-  }
-}
-
-function setupHitokoto() {
-  document.addEventListener("visibilitychange", updateHitokotoVisibility);
-  window.addEventListener("pagehide", () => { hitokotoState.suspended = true; updateHitokotoVisibility(); });
-  window.addEventListener("pageshow", () => { hitokotoState.suspended = false; updateHitokotoVisibility(); });
-  updateHitokotoVisibility();
-}
+const quotation = VoiceOfMLQuotation.create({ element: () => DOM.hitokoto });
+function setupHitokoto() { quotation.setup(); }
 
 // Discovery owns random selection; asset loading and Reader/download lifecycles stay shared.
 let randomDiscovery;
