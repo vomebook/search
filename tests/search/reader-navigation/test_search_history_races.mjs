@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
 import test from 'node:test';
+import { APP_DEPENDENCIES, stripBundledScripts } from '../../../scripts/build/compose_app.mjs';
 
 const source = fs.readFileSync('static/app.js', 'utf8');
 function fixture(names, values = {}) {
@@ -14,6 +15,31 @@ function fixture(names, values = {}) {
     vm.runInContext(match[0], context);
   }
   return context;
+}
+
+function inputFixture({submit = () => {}, schedule = () => {}, early} = {}) {
+  const context = vm.createContext({});
+  for (const file of ['domain/ownership.js', 'application/controller.js'])
+    vm.runInContext(fs.readFileSync('static/search/input/' + file, 'utf8'), context);
+  const input = new EventTarget(), navigation = new EventTarget(), callbacks = new Map(), cancelled = [];
+  input.value = 'old draft';
+  if (early) input._earlySearchInput = early;
+  const c = {input, navigation, callbacks, cancelled, href: 'https://example.test/A', entry: 'entry-A', key: 'A', syncs: 0};
+  let next = 0;
+  c.controller = context.VoiceOfMLSearchInput.create({input, navigation,
+    ownership: context.VoiceOfMLSearchInputOwnership,
+    clock: {setTimeout(fn, delay) { assert.equal(delay, 100); callbacks.set(++next, fn); schedule(); return next; },
+      clearTimeout(id) { cancelled.push(id); }},
+    getHref: () => c.href, getEntryKey: () => c.entry, getViewKey: () => c.key,
+    syncInput: () => c.syncs++, submit, onState: state => {
+      c.state = {...state};
+      c.onState?.(state);
+    }
+  });
+  c.emit = (type, values = {}) => input.dispatchEvent(Object.assign(new Event(type), values));
+  c.flush = () => callbacks.get(c.state.timer)();
+  c.controller.mount();
+  return c;
 }
 
 test('reader handoff waits for usable target rows but not preview validation of adjacent pages', () => {
@@ -122,80 +148,291 @@ test('filter change preserves composing and overlong drafts without submitting t
   }
 });
 
+test('composition start cannot revive state disposed by a synchronous notification', () => {
+  for (const ready of [false, true]) {
+    const c = inputFixture();
+    if (ready) c.controller.finishStartup(true);
+    c.onState = () => { c.onState = null; c.controller.dispose(); };
+    c.emit('compositionstart');
+    assert.equal(c.state.composing, false);
+    assert.equal(c.state.timer, null);
+    c.emit('compositionend');
+    assert.equal(c.callbacks.size, 0);
+  }
+});
+
 test('composition completion checks both visit generation and search view ownership', () => {
   for (const change of ['generation', 'view', 'neither']) {
-    const handlers = new Map();
-    let scheduled = 0, key = 'A';
-    const c = fixture(['setupSearchInput'], {
-      DOM: {searchInput: {addEventListener(type, handler) { handlers.set(type, handler); }}},
-      searchInputReady: true, initialSearchDraft: false, searchTimer: null,
-      searchComposing: false, searchInputGeneration: 0, searchCompositionGeneration: 0,
-      searchCompositionViewKey: null, routeInitialized: true,
-      getSearchViewKey: () => key, clearTimeout() {}, syncSearchInputState() {},
-      window: {addEventListener() {}}, cancelInitialSearchDraft() {}, captureInitialSearchDraft() {},
-      debouncedSearch() { scheduled++; }
-    });
-    c.setupSearchInput();
-    handlers.get('compositionstart')();
-    if (change === 'generation') c.searchInputGeneration++;
-    if (change === 'view') key = 'B';
-    handlers.get('compositionend')();
-    assert.equal(c.searchComposing, false);
+    let scheduled = 0;
+    const c = inputFixture({schedule() { scheduled++; }});
+    c.controller.finishStartup(true);
+    c.emit('compositionstart');
+    if (change === 'generation') c.controller.invalidateVisit();
+    if (change === 'view') c.key = 'B';
+    c.emit('compositionend');
+    assert.equal(c.state.composing, false);
     assert.equal(scheduled, change === 'neither' ? 1 : 0, change);
     const before = scheduled;
-    handlers.get('input')({isComposing: false, inputType: 'insertCompositionText'});
+    c.emit('input', {isComposing: false, inputType: 'insertCompositionText'});
     assert.equal(scheduled, before);
-    handlers.get('input')({isComposing: false, inputType: 'insertText'});
+    c.emit('input', {isComposing: false, inputType: 'insertText'});
     assert.equal(scheduled, before + 1, 'a deliberate edit remains usable');
   }
 });
 
 test('startup drafts require their original URL, entry and uninterrupted visit', () => {
   for (const change of ['href', 'entry', 'event', 'none']) {
-    let key = 'entry-A', submits = 0;
-    const c = fixture(['captureInitialSearchDraft', 'cancelInitialSearchDraft',
-      'initialSearchDraftIsCurrent', 'finishInitialSearchInput'], {
-      location: {href: 'https://example.test/A'}, currentSearchEntryKey: () => key,
-      initialSearchDraftOwner: null, initialSearchDraft: false, searchInputReady: false,
-      searchInputGeneration: 0, window: {removeEventListener() {}},
-      debouncedSearch() { submits++; }
-    });
-    c.captureInitialSearchDraft();
-    if (change === 'href') c.location.href = 'https://example.test/B';
-    if (change === 'entry') key = 'entry-B';
-    if (change === 'event') c.cancelInitialSearchDraft();
-    c.finishInitialSearchInput(c.initialSearchDraftIsCurrent());
-    assert.equal(submits, change === 'none' ? 1 : 0, change);
-    assert.equal(c.searchInputGeneration, change === 'none' ? 0 : 1, change);
-    assert.equal(c.searchInputReady, true);
-    assert.equal(c.initialSearchDraftOwner, null);
+    let submits = 0;
+    const c = inputFixture({submit() { submits++; }});
+    c.controller.captureDraft();
+    c.emit('compositionstart');
+    if (change === 'href') c.href = 'https://example.test/B';
+    if (change === 'entry') c.entry = 'entry-B';
+    if (change === 'event') c.navigation.dispatchEvent(new Event('popstate'));
+    c.controller.finishStartup(c.controller.draftIsCurrent());
+    assert.equal(c.state.timer, null, 'startup never submits a composing draft');
+    c.emit('compositionend');
+    if (c.state.timer !== null) c.flush();
+    assert.equal(submits, change === 'none' ? 1 : 0, 'startup invalidates old composition generations: ' + change);
+    assert.equal(c.state.ready, true);
+    c.href = 'https://example.test/after-startup';
+    assert.equal(c.controller.draftIsCurrent(), true, 'startup releases the draft owner');
   }
 });
 
 test('a queued debounce cannot submit after its search view changes', () => {
-  let callback, submits = 0;
-  const c = fixture(['debouncedSearch'], {searchTimer: null, searchComposing: false,
-    searchInputReady: true, searchInputGeneration: 0,
-    DOM: {searchInput: {value: 'old draft'}}, clearTimeout() {},
-    setTimeout(fn) { callback = fn; return 1; }, submitSearchQuery() { submits++; }});
-  c.debouncedSearch();
-  c.searchInputGeneration++;
+  let submits = 0;
+  const c = inputFixture({submit() { submits++; }});
+  c.controller.finishStartup(true);
+  c.controller.debounce();
+  const callback = c.callbacks.get(c.state.timer);
+  c.controller.invalidateVisit();
   callback();
   assert.equal(submits, 0);
-  c.debouncedSearch();
-  callback();
+  c.controller.debounce();
+  c.flush();
   assert.equal(submits, 1);
 });
 
+test('controller adopts early IME, submits the latest draft once and releases the producer', () => {
+  for (const composing of [false, true]) {
+    let released = 0;
+    const queries = [];
+    const c = inputFixture({submit: query => queries.push(query), early: {dirty: true, composing,
+      owner: {href: 'https://example.test/A', key: 'entry-A', cancelled: false}, dispose() { released++; }}});
+    c.controller.mount();
+    assert.equal(released, 1);
+    assert.equal(c.state.dirty, true);
+    assert.equal(c.state.composing, composing);
+    c.controller.finishStartup(c.controller.draftIsCurrent());
+    c.input.value = '  latest 中  ';
+    if (composing) {
+      assert.equal(c.state.timer, null);
+      c.emit('compositionend');
+    }
+    c.emit('input', {inputType: 'insertFromComposition'});
+    c.flush();
+    assert.deepEqual(queries, ['latest 中']);
+    assert.equal(c.state.dirty, false);
+    c.href = 'https://example.test/after-startup';
+    assert.equal(c.controller.draftIsCurrent(), true, 'adopted owner is released');
+  }
+});
+
+test('cancelled early visit rejects IME tails after A-B-A but accepts a deliberate edit', () => {
+  const queries = [];
+  const c = inputFixture({submit: query => queries.push(query), early: {dirty: true, composing: true,
+    owner: {href: 'https://example.test/A', key: undefined, cancelled: true}, dispose() {}}});
+  assert.equal(c.controller.draftIsCurrent(), false);
+  c.controller.finishStartup(false);
+  c.emit('compositionend');
+  c.emit('input', {inputType: 'insertFromComposition'});
+  assert.equal(c.state.timer, null);
+  c.input.value = 'fresh';
+  c.emit('input', {inputType: 'insertText'});
+  c.flush();
+  assert.deepEqual(queries, ['fresh']);
+});
+
+test('startup navigation cancellation can renew for a new edit or composition', () => {
+  for (const event of ['popstate', 'hashchange', 'pagehide']) {
+    const c = inputFixture();
+    c.emit('input');
+    c.navigation.dispatchEvent(new Event(event));
+    assert.equal(c.controller.draftIsCurrent(), false);
+    c.href = 'https://example.test/B';
+    c.entry = 'entry-B';
+    c.emit('input', {inputType: 'insertCompositionText'});
+    assert.equal(c.controller.draftIsCurrent(), false);
+    c.emit('compositionstart');
+    assert.equal(c.controller.draftIsCurrent(), true);
+    c.navigation.dispatchEvent(new Event(event));
+    c.emit('compositionend');
+    c.emit('input', {inputType: 'insertText'});
+    assert.equal(c.controller.draftIsCurrent(), true);
+  }
+});
+
+test('replaced timers and disposed controllers cannot submit or clear a newer timer', () => {
+  const queries = [];
+  const c = inputFixture({submit: query => queries.push(query)});
+  c.controller.finishStartup(true);
+  c.emit('input');
+  const first = c.state.timer, stale = c.callbacks.get(first);
+  c.emit('input');
+  const second = c.state.timer;
+  assert.ok(c.cancelled.includes(first));
+  stale();
+  assert.equal(c.state.timer, second);
+  assert.deepEqual(queries, []);
+  const queued = c.callbacks.get(second), syncs = c.syncs;
+  c.controller.dispose();
+  c.controller.dispose();
+  assert.ok(c.cancelled.includes(second));
+  c.controller.mount();
+  c.controller.debounce();
+  c.emit('input');
+  c.emit('compositionstart');
+  c.emit('compositionend');
+  queued();
+  assert.equal(c.syncs, syncs, 'disposed listeners are removed');
+  assert.equal(c.state.composing, false);
+  assert.equal(c.state.timer, null);
+  assert.deepEqual(queries, []);
+});
+
+test('debounce publication yields to one-shot reentrant cancellation, replacement and disposal', () => {
+  for (const phase of ['before-schedule', 'before-submit']) {
+    for (const action of ['cancelTimer', 'debounce', 'dispose']) {
+      const queries = [];
+      const c = inputFixture({submit: query => queries.push(query)});
+      c.controller.finishStartup(true);
+      if (phase === 'before-submit') c.controller.debounce();
+      const pending = c.state.timer;
+      let calls = 0;
+      c.onState = state => {
+        if (state.timer !== null) return;
+        c.onState = null;
+        calls++;
+        c.controller[action]();
+      };
+      if (phase === 'before-schedule') c.controller.debounce();
+      else c.callbacks.get(pending)();
+      assert.equal(calls, 1, phase + '/' + action);
+      assert.deepEqual(queries, [], 'outer operation must yield after publication');
+      const active = [...c.callbacks.keys()].filter(id => id !== pending && !c.cancelled.includes(id));
+      if (action === 'debounce') {
+        assert.deepEqual(active, [c.state.timer], 'only the reentrant replacement is scheduled');
+        c.flush();
+        assert.deepEqual(queries, ['old draft']);
+      } else {
+        assert.equal(c.state.timer, null);
+        assert.deepEqual(active, []);
+      }
+    }
+  }
+});
+
+test('published state is a detached narrow projection without mutable ownership', () => {
+  const queries = [], snapshots = [];
+  const c = inputFixture({submit: query => queries.push(query)});
+  c.onState = state => {
+    assert.deepEqual(Object.keys(state).sort(), ['composing', 'dirty', 'ready', 'timer']);
+    snapshots.push(state);
+  };
+  c.controller.captureDraft();
+  const captured = snapshots.at(-1);
+  c.controller.cancelDraft();
+  captured.owner = {cancelled: false};
+  captured.generation = 100;
+  captured.ready = true;
+  captured.composing = true;
+  captured.timer = 999;
+  captured.dirty = false;
+  assert.equal(c.controller.draftIsCurrent(), false, 'snapshot mutation cannot revive a cancelled owner');
+  c.controller.debounce();
+  assert.equal(c.callbacks.size, 0, 'snapshot mutation cannot complete startup');
+  c.controller.captureDraft(true);
+  assert.equal(c.controller.draftIsCurrent(), true);
+  const renewed = snapshots.at(-1);
+  assert.notEqual(renewed, captured);
+  assert.equal(renewed.dirty, true);
+  assert.equal(renewed.ready, false);
+  assert.equal(renewed.composing, false);
+  assert.equal(renewed.timer, null);
+  c.controller.finishStartup(true);
+  assert.equal(renewed.ready, false, 'previous notifications do not change with internal state');
+  c.flush();
+  assert.deepEqual(queries, ['old draft']);
+  assert.equal(c.state.ready, true);
+});
+
+test('app adapter publishes readable input state and delegates submit with history options', () => {
+  const modules = vm.createContext({});
+  for (const path of ['domain/ownership.js', 'application/controller.js'])
+    vm.runInContext(fs.readFileSync('static/search/input/' + path, 'utf8'), modules);
+  const input = new EventTarget(), navigation = new EventTarget(), queries = [];
+  input.value = '  adapter draft  ';
+  let callback;
+  navigation.setTimeout = fn => { callback = fn; return 42; };
+  navigation.clearTimeout = () => {};
+  const c = fixture(['setupSearchInput', 'initialSearchDraftIsCurrent', 'finishInitialSearchInput', 'cancelPendingSearchControls'], {
+    VoiceOfMLSearchInput: modules.VoiceOfMLSearchInput, VoiceOfMLSearchInputOwnership: modules.VoiceOfMLSearchInputOwnership,
+    DOM: {searchInput: input}, window: navigation, location: {href: 'https://example.test/A'},
+    routeInitialized: true, getSearchViewKey: () => 'A', syncSearchInputState() {}, clearTimeout() {},
+    filterSearchTimer: null, sizeFilterTimer: null,
+    submitSearchQuery(query, options) { queries.push([query, {...options}]); }
+  });
+  c.setupSearchInput();
+  assert.equal(c.searchInputReady, false, 'mounting alone does not complete startup');
+  input.dispatchEvent(new Event('input'));
+  assert.equal(c.searchInputReady, false, 'early input waits for route initialization');
+  assert.equal(c.searchTimer, null);
+  assert.equal(callback, undefined);
+  c.finishInitialSearchInput(c.initialSearchDraftIsCurrent());
+  assert.equal(c.searchInputReady, true, 'the controller publishes completed startup');
+  input.dispatchEvent(new Event('input'));
+  assert.equal(c.searchTimer, 42);
+  callback();
+  assert.equal(c.searchTimer, null);
+  assert.deepEqual(queries, [['adapter draft', {record: true, refreshHistory: true}]]);
+  input.dispatchEvent(new Event('compositionstart'));
+  assert.equal(c.searchComposing, true);
+  input.dispatchEvent(new Event('compositionend'));
+  assert.equal(c.searchComposing, false);
+  c.cancelPendingSearchControls();
+  callback();
+  assert.equal(c.searchTimer, null);
+  assert.equal(queries.length, 1);
+});
+
+test('input dependency order, source shell, build resources and SW agree without delaying inline capture', () => {
+  const paths = ['search/input/domain/ownership.js', 'search/input/application/controller.js'];
+  const html = fs.readFileSync('static/index.html', 'utf8');
+  assert.ok(APP_DEPENDENCIES.indexOf(paths[0]) < APP_DEPENDENCIES.indexOf(paths[1]));
+  const modules = vm.createContext({});
+  for (const path of APP_DEPENDENCIES.filter(path => paths.includes(path)))
+    vm.runInContext(fs.readFileSync('static/' + path, 'utf8'), modules);
+  assert.equal(typeof modules.VoiceOfMLSearchInput.create, 'function');
+  vm.runInContext(fs.readFileSync('static/reader-resources.js', 'utf8'), modules);
+  for (const path of paths) {
+    assert.ok(html.indexOf('input._earlySearchInput = handoff') < html.indexOf(path));
+    assert.ok(html.indexOf(path) < html.indexOf('static/app.js'));
+    assert.ok(!stripBundledScripts(html).includes(path));
+    for (const site of ['github', 'huggingface']) assert.ok(modules.VoiceOfMLReaderResources.buildFiles(site).includes(path));
+    assert.ok(fs.readFileSync('static/sw.js', 'utf8').includes('/static/' + path));
+  }
+});
+
 test('a queued debounce cannot submit after composition starts', () => {
-  let callback, submits = 0;
-  const c = fixture(['debouncedSearch'], {searchTimer: null, searchComposing: false,
-    searchInputReady: true, searchInputGeneration: 0,
-    DOM: {searchInput: {value: 'intermediate'}}, clearTimeout() {},
-    setTimeout(fn) { callback = fn; return 1; }, submitSearchQuery() { submits++; }});
-  c.debouncedSearch();
-  c.searchComposing = true;
+  let submits = 0;
+  const c = inputFixture({submit() { submits++; }});
+  c.input.value = 'intermediate';
+  c.controller.finishStartup(true);
+  c.controller.debounce();
+  const callback = c.callbacks.get(c.state.timer);
+  c.emit('compositionstart');
   callback();
   assert.equal(submits, 0);
-  assert.equal(c.searchTimer, null);
+  assert.equal(c.state.timer, null);
 });

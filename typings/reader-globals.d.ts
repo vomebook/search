@@ -71,6 +71,32 @@ declare var VoiceOfMLSearchCanonical: {
 declare var VoiceOfMLSearchRecovery: {
   isRecoverable(error: {name?: string | undefined; status?: number | undefined; code?: string | undefined; message?: string | undefined} | null | undefined): boolean;
 };
+interface VoiceOfMLInputDraftOwner {href: string; key: string | undefined; cancelled: boolean}
+interface VoiceOfMLInputVisitOwner {generation: number; viewKey: string | null}
+interface VoiceOfMLInputState {
+  timer: number | null; composing: boolean; dirty: boolean; ready: boolean;
+}
+interface VoiceOfMLInputElement extends EventTarget {
+  value: string;
+  _earlySearchInput?: {dirty: boolean; composing: boolean; owner: VoiceOfMLInputDraftOwner | null; dispose(): void};
+}
+interface VoiceOfMLInputDependencies {
+  input: VoiceOfMLInputElement; navigation: EventTarget; ownership: typeof VoiceOfMLSearchInputOwnership;
+  clock: {setTimeout(callback: () => void, delay: number): number; clearTimeout(timer: number): void};
+  getHref(): string; getEntryKey(): string | undefined; getViewKey(): string | null;
+  syncInput(): void; submit(query: string): void; onState(state: Readonly<VoiceOfMLInputState>): void;
+}
+interface VoiceOfMLInputController {
+  mount(): void; dispose(): void; debounce(): void; cancelTimer(): void; invalidateVisit(): void;
+  captureDraft(renew?: boolean): void; cancelDraft(): void; draftIsCurrent(): boolean; finishStartup(current: boolean): void;
+}
+declare var VoiceOfMLSearchInputOwnership: {
+  draft(href: string, key: string | undefined): VoiceOfMLInputDraftOwner;
+  draftIsCurrent(owner: VoiceOfMLInputDraftOwner | null, href: string, key: string | undefined): boolean;
+  visit(generation: number, viewKey: string | null): VoiceOfMLInputVisitOwner;
+  visitIsCurrent(owner: VoiceOfMLInputVisitOwner, generation: number, viewKey: string | null): boolean;
+};
+declare var VoiceOfMLSearchInput: {create(deps: VoiceOfMLInputDependencies): VoiceOfMLInputController};
 interface VoiceOfMLSearchWindowPageData {results: unknown[]; page: number; page_size: number; total: number; generation?: string | undefined}
 interface VoiceOfMLSearchWindowExpected {total: number; generation?: string | undefined}
 declare var VoiceOfMLSearchWindowPage: {

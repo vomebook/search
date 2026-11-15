@@ -2554,7 +2554,7 @@ const ROUTER = {
     STATE.rightSidebarOpen = route.params.filters === "1";
     const sameSearchView = previousSearchKey === getSearchViewKey();
     if (!sameSearchView) {
-      if (routeInitialized) searchInputGeneration++;
+      if (routeInitialized) searchInputController.invalidateVisit();
       cancelPendingSearchControls();
       readerReturnRestoreGeneration++;
       if (!cancelActiveSearch()) return;
@@ -2667,16 +2667,13 @@ function renderSidebarAndFiltersDeferred(routeId) {
     renderFilters(routeId);
   });
 }
+// Readable host compatibility bridge; only the input controller writes these.
 let searchTimer = null;
 let searchComposing = false;
-let searchInputGeneration = 0;
-let searchCompositionGeneration = 0;
-/** @type {string | null} */
-let searchCompositionViewKey = null;
 let searchInputReady = false;
 let initialSearchDraft = false;
-/** @type {{href: string, key: string | undefined, cancelled: boolean} | null} */
-let initialSearchDraftOwner = null;
+/** @type {VoiceOfMLInputController} */
+let searchInputController;
 let searchId = 0;
 // Distinguish repeated searches/restorations of the same view, independently of paging.
 let searchIntentId = 0;
@@ -2823,10 +2820,9 @@ function updateSearchPositionControls() {
 }
 
 function cancelPendingSearchControls() {
-  clearTimeout(searchTimer);
+  searchInputController.cancelTimer();
   clearTimeout(filterSearchTimer);
   clearTimeout(sizeFilterTimer);
-  searchTimer = null;
   filterSearchTimer = null;
   sizeFilterTimer = null;
 }
@@ -4335,86 +4331,31 @@ function submitSearchQuery(query, { restore = false, record = false, refreshHist
   return result;
 }
 
-function currentSearchEntryKey() {
-  return /** @type {Window & {navigation?: {currentEntry?: {key?: string} | null}}} */ (window).navigation?.currentEntry?.key;
-}
-
-function captureInitialSearchDraft(renew = false) {
-  if (searchInputReady) return;
-  initialSearchDraft = true;
-  if (renew || !initialSearchDraftOwner) initialSearchDraftOwner = {
-    href: location.href, key: currentSearchEntryKey(), cancelled: false
-  };
-}
-
-function cancelInitialSearchDraft() {
-  if (initialSearchDraftOwner) initialSearchDraftOwner.cancelled = true;
-}
-
 function initialSearchDraftIsCurrent() {
-  const owner = initialSearchDraftOwner;
-  return !owner || (!owner.cancelled && owner.href === location.href &&
-    (owner.key === undefined || owner.key === currentSearchEntryKey()));
+  return searchInputController.draftIsCurrent();
 }
 
 function finishInitialSearchInput(current) {
-  for (const type of ["popstate", "hashchange", "pagehide"]) window.removeEventListener(type, cancelInitialSearchDraft, true);
-  searchInputReady = true;
-  if (!current) searchInputGeneration++;
-  if (initialSearchDraft) {
-    initialSearchDraft = false;
-    if (current) debouncedSearch();
-  }
-  initialSearchDraftOwner = null;
+  searchInputController.finishStartup(current);
 }
 
 function setupSearchInput() {
-  for (const type of ["popstate", "hashchange", "pagehide"]) window.addEventListener(type, cancelInitialSearchDraft, true);
-  DOM.searchInput.addEventListener("input", event => {
-    const compositionInput = event.isComposing || event.inputType === "insertCompositionText" || event.inputType === "insertFromComposition";
-    captureInitialSearchDraft(!searchComposing && !compositionInput);
-    syncSearchInputState();
-    if (compositionInput) return;
-    debouncedSearch();
+  searchInputController = VoiceOfMLSearchInput.create({
+    input: DOM.searchInput, navigation: window, ownership: VoiceOfMLSearchInputOwnership,
+    clock: { setTimeout: (callback, delay) => window.setTimeout(callback, delay), clearTimeout: timer => window.clearTimeout(timer) },
+    getHref: () => location.href,
+    getEntryKey: () => /** @type {Window & {navigation?: {currentEntry?: {key?: string} | null}}} */ (window).navigation?.currentEntry?.key,
+    getViewKey: () => routeInitialized ? getSearchViewKey() : null,
+    syncInput: syncSearchInputState,
+    submit: query => { submitSearchQuery(query, { record: true, refreshHistory: true }); },
+    onState: state => {
+      searchTimer = state.timer;
+      searchComposing = state.composing;
+      searchInputReady = state.ready;
+      initialSearchDraft = state.dirty;
+    }
   });
-  DOM.searchInput.addEventListener("compositionstart", () => {
-    captureInitialSearchDraft(true);
-    clearTimeout(searchTimer);
-    searchTimer = null;
-    searchComposing = true;
-    searchCompositionGeneration = searchInputGeneration;
-    searchCompositionViewKey = routeInitialized ? getSearchViewKey() : null;
-  });
-  DOM.searchInput.addEventListener("compositionend", () => {
-    searchComposing = false;
-    // Keep the visible draft, but an old view's completion cannot submit in B.
-    if (searchCompositionGeneration !== searchInputGeneration ||
-        (searchCompositionViewKey !== null && searchCompositionViewKey !== getSearchViewKey())) return;
-    debouncedSearch();
-  });
-  const input = /** @type {HTMLInputElement & {_earlySearchInput?: {
-    dirty: boolean, composing: boolean, owner: typeof initialSearchDraftOwner, dispose: () => void
-  }}} */ (DOM.searchInput);
-  const early = input._earlySearchInput;
-  if (early) {
-    initialSearchDraft = early.dirty;
-    initialSearchDraftOwner = early.owner;
-    searchComposing = early.composing;
-    searchCompositionGeneration = searchInputGeneration;
-    searchCompositionViewKey = null;
-    early.dispose();
-  }
-}
-
-function debouncedSearch() {
-  if (searchComposing || !searchInputReady) return;
-  clearTimeout(searchTimer);
-  const generation = searchInputGeneration;
-  searchTimer = setTimeout(function() {
-    searchTimer = null;
-    if (searchComposing || generation !== searchInputGeneration) return;
-    submitSearchQuery(DOM.searchInput.value.trim(), { record: true, refreshHistory: true });
-  }, 100);
+  searchInputController.mount();
 }
 
 function renderResultsSkeleton(count) {
