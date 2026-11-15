@@ -94,6 +94,30 @@ class SegmentedScrollTests(unittest.TestCase):
         self.assertEqual(result['anchor'], 88050)
         self.assertAlmostEqual(result['offset'], 11, delta=1)
 
+    def test_clamped_segment_end_skips_work_but_pending_target_still_restores(self):
+        result = self.page.evaluate('''async()=>{
+          setResultScrollTop(getVirtualTotalHeight(),true);await scrollFrames();
+          const origin=resultScrollOrigin,top=getResultScrollTop();
+          const observer=new MutationObserver(()=>{});
+          observer.observe(DOM.resultsList,{attributes:true,childList:true,subtree:true});
+          const idle=renderVisible(),writes=observer.takeRecords().length;observer.disconnect();
+          // Restore within the same rendered window and the same clamped segment.
+          // A target must reach native scrollTop even when no origin change is needed.
+          const target=top-11;resultScrollTarget=target;
+          const restored=renderVisible();checkSegment();
+          return {idle,writes,restored,origin,sameOrigin:origin===resultScrollOrigin,
+            target,actual:getResultScrollTop(),physical:DOM.resultsContainer.scrollTop,
+            cleared:resultScrollTarget===null,samples:segmentSamples};
+        }''')
+        self.assertFalse(result['idle'])
+        self.assertEqual(result['writes'], 0)
+        self.assertTrue(result['restored'])
+        self.assertTrue(result['sameOrigin'])
+        self.assertTrue(result['cleared'])
+        self.assertAlmostEqual(result['actual'], result['target'], delta=1)
+        self.assertAlmostEqual(result['physical'], result['target'] - result['origin'], delta=1)
+        self.check_samples(result['samples'])
+
     def test_editable_position_jumps_between_distant_segments(self):
         self.page.locator('#edit-result-position').click()
         self.page.locator('#current-result-position').fill('95001')

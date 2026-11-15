@@ -3922,7 +3922,7 @@ function cancelSnapshotClone() {
   if (task.frame) cancelAnimationFrame(task.frame);
 }
 
-function materializeSnapshotRange(task, start, end, deferHeights = false) {
+function materializeSnapshotRange(task, start, end, deferHeights = false, measurementKey = null) {
   for (let index = Math.max(0, start); index < Math.min(end, task.results.length); index++) {
     if (index in task.results || !(index in task.snapshot.results)) continue;
     task.results[index] = cloneSearchResult(task.snapshot.results[index]);
@@ -3932,7 +3932,7 @@ function materializeSnapshotRange(task, start, end, deferHeights = false) {
       VSCROLL.renderStart = -1; VSCROLL.renderEnd = -1; scheduleVirtualRender();
     }
     const cached = VSCROLL.heightCache.get(getResultStableId(task.results[index]));
-    if (cached?.measurementKey === getHeightMeasurementKey() && VSCROLL.heights[index] !== cached.height) {
+    if (cached?.measurementKey === (measurementKey ??= getHeightMeasurementKey()) && VSCROLL.heights[index] !== cached.height) {
       if (!task.heightAnchor) {
         const top = getResultScrollTop(), anchorIndex = findVirtualIndex(top);
         task.heightAnchor = { index: anchorIndex, offset: top - getVirtualOffset(anchorIndex) };
@@ -3982,9 +3982,10 @@ function startSnapshotClone() {
       return;
     }
     const count = task.keys ? task.keys.length : task.results.length, started = performance.now();
+    const measurementKey = getHeightMeasurementKey();
     for (let batch = 0; task.cursor < count && batch < 256 && performance.now() - started < 4; batch++) {
       const index = task.keys ? Number(task.keys[task.cursor++]) : task.cursor++;
-      materializeSnapshotRange(task, index, index + 1, true);
+      materializeSnapshotRange(task, index, index + 1, true, measurementKey);
     }
     applySnapshotCloneHeights(task);
     if (task.cursor < count) { task.timer = setTimeout(step, 0); return; }
@@ -4984,21 +4985,26 @@ function setResultScrollTop(value, restoreWindow = false) {
   updateCurrentResultPosition();
 }
 
-function layoutResultScrollSegment(topH, endH, totalH, logicalTop) {
-  const viewport = DOM.resultsContainer.clientHeight;
+function getResultScrollOrigin(totalH, logicalTop, viewport) {
   const limit = RESULT_SCROLL_SEGMENT_HEIGHT;
   const maxOrigin = Math.max(0, totalH - limit);
   const physical = logicalTop - resultScrollOrigin;
   if (resultScrollOrigin > maxOrigin || physical < limit / 4 || physical + viewport > limit * 3 / 4) {
-    resultScrollOrigin = Math.max(0, Math.min(maxOrigin, logicalTop - limit / 2));
+    return Math.max(0, Math.min(maxOrigin, logicalTop - limit / 2));
   }
+  return resultScrollOrigin;
+}
+
+function layoutResultScrollSegment(topH, endH, totalH, logicalTop, viewport = DOM.resultsContainer.clientHeight) {
+  const limit = RESULT_SCROLL_SEGMENT_HEIGHT;
+  resultScrollOrigin = getResultScrollOrigin(totalH, logicalTop, viewport);
   const top = DOM.resultsList.querySelector('.virtual-spacer-top');
   const bottom = DOM.resultsList.querySelector('.virtual-spacer-bottom');
   if (top) top.style.height = Math.max(0, topH - resultScrollOrigin) + 'px';
   if (bottom) bottom.style.height = Math.max(0, Math.min(totalH, resultScrollOrigin + limit) - endH) + 'px';
 }
 
-function reconcileVirtualRows(items, start, end, topH, bottomH) {
+function reconcileVirtualRows(items, start, end, topH, bottomH, viewport = DOM.resultsContainer.clientHeight) {
   const focused = document.activeElement;
   const focusedRow = DOM.resultsList.contains(focused) ? /** @type {HTMLElement} */ (focused.closest('.result-item')) : null;
   const focusedRecord = focusedRow && resultRowRecords.get(focusedRow);
@@ -5021,7 +5027,7 @@ function reconcileVirtualRows(items, start, end, topH, bottomH) {
     DOM.resultsList.append(bottomSpacer);
   }
   const endH = getVirtualOffset(end);
-  layoutResultScrollSegment(topH, endH, endH + bottomH, logicalTop);
+  layoutResultScrollSegment(topH, endH, endH + bottomH, logicalTop, viewport);
 
   const existing = new Map();
   DOM.resultsList.querySelectorAll(".result-item[data-index]").forEach((row) => {
@@ -5102,17 +5108,13 @@ function renderVisible() {
   VSCROLL.scrollDirection = scrollingDown ? 1 : -1;
   VSCROLL.lastScrollTop = scrollTop;
   const totalH = getVirtualOffset(len);
-  const segmentLimit = RESULT_SCROLL_SEGMENT_HEIGHT;
-  const physicalTop = scrollTop - resultScrollOrigin;
-  const maxOrigin = Math.max(0, totalH - segmentLimit);
-  const segmentNeedsRecenter = resultScrollOrigin > maxOrigin
-    || physicalTop < segmentLimit / 4
-    || physicalTop + viewH > segmentLimit * 3 / 4;
+  const segmentNeedsRecenter = getResultScrollOrigin(totalH, scrollTop, viewH) !== resultScrollOrigin;
+  const needsLayout = segmentNeedsRecenter || resultScrollTarget !== null;
   const safeStart = findVirtualIndex(Math.max(0, scrollTop - baseOverscanPx * 0.35));
   const safeEnd = Math.min(len, findVirtualIndex(scrollTop + viewH + baseOverscanPx * 0.35) + 1);
   ensureResultWindowPages(safeStart, safeEnd);
   updateCurrentResultPosition();
-  if (!pendingResultEntrance && !segmentNeedsRecenter
+  if (!pendingResultEntrance && !needsLayout
       && VSCROLL.renderStart <= safeStart && VSCROLL.renderEnd >= safeEnd) return false;
   const beforePx = VSCROLL.isDraggingThumb
     ? viewH * 0.35
@@ -5125,7 +5127,7 @@ function renderVisible() {
   if (end - start < 10 && len > 10) end = Math.min(start + 30, len);
   if (pendingResultEntrance && start === 0) end = Math.min(len, Math.max(end, 30));
   ensureResultWindowPages(start, end);
-  if (start === VSCROLL.renderStart && end === VSCROLL.renderEnd && !segmentNeedsRecenter) return false;
+  if (start === VSCROLL.renderStart && end === VSCROLL.renderEnd && !needsLayout) return false;
   VSCROLL.renderStart = start;
   VSCROLL.renderEnd = end;
   const topH = getVirtualOffset(start);
@@ -5133,7 +5135,7 @@ function renderVisible() {
   const bottomH = Math.max(0, totalH - endH);
   const anchorIndex = findVirtualIndex(scrollTop);
   const anchor = { index: anchorIndex, offset: scrollTop - getVirtualOffset(anchorIndex) };
-  reconcileVirtualRows(items, start, end, topH, bottomH);
+  reconcileVirtualRows(items, start, end, topH, bottomH, viewH);
   if (DOM.multiSelectToggle && DOM.multiSelectToggle.checked) updateVisibleSelection();
   // Correct the rendered window before paint, using one content anchor.
   // A deferred measurement can otherwise run against another window/query.
