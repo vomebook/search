@@ -438,6 +438,16 @@ class ReaderTrueOfflineCases:
         self.page.on('response', lambda response: self.responses.append(response))
         self.page.on('requestfailed', lambda request: self.failed.append(request))
 
+    def wait_local_search(self, query):
+        self.page.locator('#search-input').wait_for(state='visible')
+        self.page.wait_for_function('''query => typeof STATE !== 'undefined' &&
+          routeInitialized && searchInputReady && STATE.query === query &&
+          STATE.dataLoaded && STATE.useLocalMode && !STATE.isLoading &&
+          STATE.total > 0 && STATE._resultBackend === 'local' &&
+          corpusWorker instanceof Worker''', arg=query)
+        self.assertEqual(self.page.locator('#search-input').input_value(), query)
+        self.page.locator('#results-list .result-item').first.wait_for(state='visible')
+
     def assert_offline_reader_error(self):
         self.page.locator('.reader-error, iframe.reader-overlay').wait_for(state='visible')
         document = (self.page.frame_locator('iframe.reader-overlay')
@@ -467,8 +477,7 @@ class ReaderTrueOfflineCases:
             self.page.reload(wait_until='domcontentloaded')
             # Use the repository's actual search_data.json.gz and native Worker,
             # not replace-corpus, synthetic search responses, or a saved preview.
-            self.page.wait_for_function('STATE.dataLoaded && !STATE.isLoading && STATE.total > 0')
-            self.assertTrue(self.page.evaluate('corpusWorker instanceof Worker && STATE.useLocalMode'))
+            self.wait_local_search('手机')
             self.page.wait_for_function('''async () =>
               !!await caches.match('/search/data/search_data.json.gz')''')
         search_url = self.page.url
@@ -515,13 +524,9 @@ class ReaderTrueOfflineCases:
         self.responses.clear()
         if PREFIX:
             self.page.go_back(wait_until='domcontentloaded')
-            self.page.locator('#search-input').wait_for(state='visible')
-            self.page.wait_for_function('''typeof STATE !== 'undefined' &&
-              STATE.query === '手机' && STATE.dataLoaded &&
-              !STATE.isLoading && STATE.total > 0 && STATE.useLocalMode''')
+            self.wait_local_search('手机')
             self.assertEqual(self.page.url, search_url)
             self.assertEqual(self.page.locator('.reader-error, .reader-text, iframe.reader-overlay').count(), 0)
-            self.page.locator('#results-list .result-item').first.wait_for(state='visible')
             self.assertTrue(any(response.request.is_navigation_request() and
                                 urlsplit(response.url).path == PREFIX + '/' and
                                 response.status == 200 and response.from_service_worker
@@ -538,13 +543,15 @@ class ReaderTrueOfflineCases:
         # offline reload above is the SW evidence; do not mislabel reuse as fetch.
         if PREFIX:
             back.click()
-            self.page.locator('#search-input').wait_for(state='visible')
+            # This tests reuse after restoration: a visible input/session preview
+            # can precede input binding, initial routing, and native worker load.
+            self.wait_local_search('手机')
+            self.assertEqual(self.page.url, search_url)
             # A different query proves the restored native corpus can search
             # offline, beyond rendering the previous query's session preview.
             self.page.locator('#search-input').fill('电脑')
             self.page.locator('#search-input').press('Enter')
-            self.page.wait_for_function('''STATE.query === '电脑' && !STATE.isLoading &&
-              STATE.total > 0 && STATE._resultBackend === 'local' ''')
+            self.wait_local_search('电脑')
             self.assertFalse(self.page.evaluate('navigator.onLine'))
 
 
