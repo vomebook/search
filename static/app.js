@@ -1596,42 +1596,8 @@ function closeLeftSidebar() { getShell().closeLeftSidebar(); }
 function closeRightSidebar() { getShell().closeRightSidebar(); }
 
 const ROUTER = {
-  parse: function() {
-    const hash = window.location.hash.replace(/^#/, "");
-    const qIdx = hash.indexOf("?");
-    const path = qIdx >= 0 ? hash.substring(0, qIdx) : hash;
-    const queryString = qIdx >= 0 ? hash.substring(qIdx + 1) : "";
-    const parts = path.split("/").filter(Boolean);
-    const mode = parts.length === 0 ? "global" : "repo";
-    const repo = parts.length === 0 ? null : parts[0];
-    const params = {};
-    if (queryString) {
-      const sp = new URLSearchParams(queryString);
-      sp.forEach(function(v, k) {
-        if (k === "repo" || k === "folder_self" || k === "folder_subtree" || k === "folder") {
-          if (!params[k]) params[k] = [];
-          params[k].push(v);
-        } else {
-          params[k] = v;
-        }
-      });
-    }
-    return { mode: mode, repo: repo, params: params };
-  },
-  navigate: function(mode, repo, folder) {
-    let hash = mode === "global" ? "#/" : "#/" + repo;
-    const sp = buildSearchURLParams({ includeQuery: false, displaySizes: true });
-    if (mode === "repo" && STATE.mode === "repo" && repo === STATE.repo) {
-      STATE.filterFolderSelfs.forEach(function(path) { sp.append("folder_self", path); });
-      STATE.filterFolderSubtrees.forEach(function(path) { sp.append("folder_subtree", path); });
-    }
-    if (mode !== "global" && folder) sp.set("path", folder);
-    else if (mode !== "global" && folder === undefined && STATE.browserPath) sp.set("path", STATE.browserPath);
-    const qs = sp.toString();
-    if (qs) hash += "?" + qs;
-    if (mode === "global") STATE.browserPath = "";
-    window.location.hash = hash;
-  },
+  parse: () => VoiceOfMLRoute.parse(window.location.hash),
+  navigate: (mode, repo, folder) => getRouteNavigation().navigate(mode, repo, folder),
   apply: function(preserveSameView = false) {
     appliedRouteHash = window.location.hash;
     const route = this.parse();
@@ -1655,59 +1621,19 @@ const ROUTER = {
       STATE.folderTreeCollapsed = {};
       folderContentsCache.clear();
     }
-    if (route.params.q !== undefined) {
-      STATE.query = route.params.q;
-      if (Array.from(STATE.query).length > 256) {
-        STATE.query = Array.from(STATE.query).slice(0, 256).join("");
-        showToast("搜索内容已限制为 256 个字符");
-      }
-      if (!searchComposing && !initialSearchDraft) setSearchInputValue(STATE.query);
-    } else {
-      STATE.query = "";
-      if (!searchComposing && !initialSearchDraft) setSearchInputValue("");
-    }
-    if (route.params.repo) {
-      STATE.filterRepos = (Array.isArray(route.params.repo) ? route.params.repo : [route.params.repo])
-        .map(function(r) { return r.includes("/") ? r : "VoiceOfML/" + r; });
-    } else {
-      STATE.filterRepos = [];
-    }
-    if (route.params.ext !== undefined) {
-      STATE.filterExtensions = route.params.ext ? route.params.ext.split(",").filter(Boolean) : [];
-      saveStoredExtensionFilters();
-    } else if (!routeInitialized) {
-      STATE.filterExtensions = loadStoredExtensionFilters();
-    } else {
-      STATE.filterExtensions = [];
-      saveStoredExtensionFilters();
-    }
-    if (route.params.path) {
-      STATE.browserPath = route.params.path;
-    } else {
-      STATE.browserPath = "";
-    }
-    if (STATE.mode !== "global") {
-      var urlSelfs = route.params.folder_self;
-      var urlSubtrees = route.params.folder_subtree;
-      urlSelfs = urlSelfs === undefined ? [] : (Array.isArray(urlSelfs) ? urlSelfs : [urlSelfs]);
-      urlSubtrees = urlSubtrees === undefined ? [] : (Array.isArray(urlSubtrees) ? urlSubtrees : [urlSubtrees]);
-      urlSelfs = urlSelfs.filter(function(path) { return typeof path === "string"; });
-      urlSubtrees = urlSubtrees.filter(function(path) { return typeof path === "string"; });
-      if (urlSelfs.length || urlSubtrees.length) {
-        STATE.filterFolderSelfs = urlSelfs;
-        STATE.filterFolderSubtrees = urlSubtrees;
-        STATE.filterFolders = mergeFolderFilters(STATE.filterFolderSelfs, STATE.filterFolderSubtrees);
-      } else {
-        STATE.filterFolderSelfs = [];
-        STATE.filterFolderSubtrees = [];
-        STATE.filterFolders = [];
-      }
-    } else {
-      STATE.filterFolderSelfs = [];
-      STATE.filterFolderSubtrees = [];
-      STATE.filterFolders = [];
-    }
-    STATE.sort = normalizeSearchSort(route.params.sort);
+    const projected = VoiceOfMLRoute.project(route.params, STATE.mode, routeInitialized);
+    STATE.query = projected.query;
+    if (projected.queryTruncated) showToast("搜索内容已限制为 256 个字符");
+    if (!searchComposing && !initialSearchDraft) setSearchInputValue(STATE.query);
+    STATE.filterRepos = projected.filterRepos;
+    STATE.filterExtensions = projected.filterExtensions === null ? loadStoredExtensionFilters() : projected.filterExtensions;
+    if (projected.filterExtensions !== null) saveStoredExtensionFilters();
+    STATE.browserPath = projected.browserPath;
+    STATE.filterFolderSelfs = projected.filterFolderSelfs;
+    STATE.filterFolderSubtrees = projected.filterFolderSubtrees;
+    STATE.filterFolders = STATE.filterFolderSelfs.length || STATE.filterFolderSubtrees.length
+      ? mergeFolderFilters(STATE.filterFolderSelfs, STATE.filterFolderSubtrees) : [];
+    STATE.sort = projected.sort;
     DOM.sortSelect.value = STATE.sort;
     var ms = route.params.min_size;
     if (ms) {
@@ -1733,23 +1659,23 @@ const ROUTER = {
       DOM.filterMaxSize.value = "";
       DOM.filterMaxUnit.value = "MB";
     }
-    STATE.searchFolders = route.params.search_folders !== "false";
+    STATE.searchFolders = projected.searchFolders;
     if (DOM.searchFoldersToggle) DOM.searchFoldersToggle.checked = STATE.searchFolders;
-    STATE.exact = route.params.exact !== "0";
+    STATE.exact = projected.exact;
     if (DOM.exactSearchToggle) DOM.exactSearchToggle.checked = STATE.exact;
-    STATE.useLocalMode = route.params.local !== "0";
+    STATE.useLocalMode = projected.useLocalMode;
     if (DOM.localModeToggle) DOM.localModeToggle.checked = STATE.useLocalMode;
     // Exact mode is implemented by the Worker as well, so the switch is always
     // relevant. Hiding it made a keyboard-reachable control change semantics.
     setExactSearchSectionVisible(true, false);
-    STATE.recordHistory = route.params.history !== "0";
+    STATE.recordHistory = projected.recordHistory;
     if (DOM.historyToggle) DOM.historyToggle.checked = STATE.recordHistory;
-    STATE.useMirrorLinks = route.params.mirror !== "0";
+    STATE.useMirrorLinks = projected.useMirrorLinks;
     if (DOM.mirrorLinksToggle) DOM.mirrorLinksToggle.checked = STATE.useMirrorLinks;
     const keepMobileSidebarOpen = STATE.isMobile && STATE.leftSidebarOpen
       && prevMode === "repo" && route.mode === "global" && route.params.sidebar === "0";
-    STATE.leftSidebarOpen = keepMobileSidebarOpen || route.params.sidebar !== "0";
-    STATE.rightSidebarOpen = route.params.filters === "1";
+    STATE.leftSidebarOpen = keepMobileSidebarOpen || projected.leftSidebarOpen;
+    STATE.rightSidebarOpen = projected.rightSidebarOpen;
     const sameSearchView = previousSearchKey === getSearchViewKey();
     if (!sameSearchView) {
       if (routeInitialized) searchInputController.invalidateVisit();
@@ -1761,7 +1687,7 @@ const ROUTER = {
     if (!sameSearchView || (!preserveSameView && previousPath === STATE.browserPath)) cancelPositionRestore();
     if (owner !== searchId) return;
     updateSidebarVisibility();
-    const keepSidebarExpanded = route.params.wide === "1"
+    const keepSidebarExpanded = projected.wide
       || (prevMode !== STATE.mode && wasSidebarExpanded);
     DOM.leftSidebar.classList.toggle("expanded-wide", keepSidebarExpanded);
     this.updateUI();
@@ -1816,47 +1742,38 @@ function normalizeSearchSort(value) {
   return value === "name" || value === "size" ? value : "relevance";
 }
 
-function buildSearchURLParams({ includeQuery = true, displaySizes = false } = {}) {
-  const sp = new URLSearchParams();
-  if (includeQuery && STATE.query) sp.set("q", STATE.query);
-  if (STATE.filterExtensions.length > 0) sp.set("ext", STATE.filterExtensions.join(","));
-  if (STATE.sort !== "relevance") sp.set("sort", STATE.sort);
-  const sizeValue = displaySizes ? fmtSizeUrl : value => value;
-  if (STATE.filterMinSize !== null) sp.set("min_size", sizeValue(STATE.filterMinSize));
-  if (STATE.filterMaxSize !== null) sp.set("max_size", sizeValue(STATE.filterMaxSize));
-  if (!STATE.searchFolders) sp.set("search_folders", "false");
-  if (!STATE.exact) sp.set("exact", "0");
-  if (!STATE.useLocalMode) sp.set("local", "0");
-  if (!STATE.recordHistory) sp.set("history", "0");
-  if (!STATE.useMirrorLinks) sp.set("mirror", "0");
-  if (!STATE.leftSidebarOpen) sp.set("sidebar", "0");
-  if (STATE.rightSidebarOpen) sp.set("filters", "1");
-  if (DOM.leftSidebar.classList.contains("expanded-wide")) sp.set("wide", "1");
-  return sp;
+function buildSearchURLParams(options = {}) {
+  return VoiceOfMLRoute.buildParams(readRouteState(), fmtSizeUrl, options);
 }
 
-function syncStateToURL() {
-  if (readerHost.overlay) return;
-  let hash = STATE.mode === "global" ? "#/" : "#/" + STATE.repo;
-  const sp = buildSearchURLParams();
-  if (STATE.mode === "global") {
-    STATE.filterRepos.forEach(function(r) {
-      sp.append("repo", r.split("/").pop());
-    });
-  }
-  if (STATE.mode !== "global" && STATE.browserPath) sp.set("path", STATE.browserPath);
-  if (STATE.mode !== "global") {
-    STATE.filterFolderSelfs.forEach(function(folder) { sp.append("folder_self", folder); });
-    STATE.filterFolderSubtrees.forEach(function(folder) { sp.append("folder_subtree", folder); });
-  }
-  const qs = sp.toString();
-  if (qs) hash += "?" + qs;
-  if (window.location.hash !== hash) {
-    history.replaceState(history.state, "", hash);
-  }
-  appliedRouteHash = window.location.hash;
-  persistSearchSession();
+// Only URL-facing state crosses the routing boundary; result/scroll ownership stays here.
+function readRouteState() {
+  return {
+    mode: STATE.mode, repo: STATE.repo, browserPath: STATE.browserPath,
+    query: STATE.query, sort: STATE.sort,
+    filterRepos: STATE.filterRepos.slice(), filterExtensions: STATE.filterExtensions.slice(),
+    filterFolderSelfs: STATE.filterFolderSelfs.slice(), filterFolderSubtrees: STATE.filterFolderSubtrees.slice(),
+    filterMinSize: STATE.filterMinSize, filterMaxSize: STATE.filterMaxSize,
+    searchFolders: STATE.searchFolders, exact: STATE.exact, useLocalMode: STATE.useLocalMode,
+    recordHistory: STATE.recordHistory, useMirrorLinks: STATE.useMirrorLinks,
+    leftSidebarOpen: STATE.leftSidebarOpen, rightSidebarOpen: STATE.rightSidebarOpen,
+    wide: DOM.leftSidebar.classList.contains("expanded-wide"),
+  };
 }
+let routeNavigation;
+function getRouteNavigation() {
+  return routeNavigation || (routeNavigation = VoiceOfMLRouter.create({
+    readState: readRouteState, buildParams: options => buildSearchURLParams(options),
+    readerOpen: () => !!readerHost.overlay,
+    currentURL: () => window.location.hash,
+    setHash: url => { window.location.hash = url; },
+    clearBrowserPath: () => { STATE.browserPath = ""; },
+    replaceURL: url => history.replaceState(history.state, "", url),
+    commitAppliedURL: url => { appliedRouteHash = url; },
+    persistSession: () => persistSearchSession(),
+  }));
+}
+function syncStateToURL() { getRouteNavigation().sync(); }
 
 function renderSidebarAndFiltersDeferred(routeId) {
   if (!routeId || routeId === routeRenderId) renderSidebar(routeId);

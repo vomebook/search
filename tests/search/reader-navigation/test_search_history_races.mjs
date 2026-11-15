@@ -5,6 +5,7 @@ import fs from 'node:fs';
 import vm from 'node:vm';
 import test from 'node:test';
 import './host_contracts.mjs';
+import './routing_contracts.mjs';
 import '../paging/result_window_contracts.mjs';
 import '../session/test_positions_persistence.mjs';
 import '../session/test_result_snapshots.mjs';
