@@ -29,7 +29,7 @@ function fixture() {
       options.signal?.addEventListener('abort',()=>reject(new DOMException('cancelled','AbortError')));
     })};
   vm.createContext(context);vm.runInContext(metadataBlock+block+'\nsetupReaderIntentWarming();',context);
-  return {context,calls,stored,events,timers,run:code=>vm.runInContext(code,context),advance:()=>{now+=5001;}};
+  return {context,calls,stored,events,timers,run:code=>vm.runInContext(code,context),advance:(ms=5001)=>{now+=ms;}};
 }
 (async()=>{
   const f=fixture();f.run('warmReaderIntent("/reader?id=one&ext=txt");warmReaderIntent("/reader?id=one&ext=txt")');
@@ -69,12 +69,14 @@ function fixture() {
   t.context.navigator.onLine=true;
   for(let i=0;i<9;i++) {
     t.run(`warmReaderIntent('/reader?url=https://source.test/${i}')`);
-    if(i<8){t.calls.at(-1).resolve({ok:true});await tick();}
+    t.calls.at(-1).resolve({ok:true});await tick();
+    assert.ok(t.run('warmedReaderSources.size')<=8);
   }
   const sourceCalls=t.calls.filter(call=>call.options.method==='HEAD');
-  assert.strictEqual(sourceCalls.length,8);assert.ok(sourceCalls.every(call=>call.options.method==='HEAD'));
+  assert.strictEqual(sourceCalls.length,9);assert.ok(sourceCalls.every(call=>call.options.method==='HEAD'));
+  assert.strictEqual(t.run('warmedReaderSources.size'),8);
   assert.strictEqual(t.timers.size,1,'the delayed shell warmup remains scheduled');
-  console.log('reader warming: cancellation, stale responses, invalid metadata, HEAD and eight-source bound passed');
+  console.log('reader warming: cancellation, stale responses, invalid metadata and ninth HEAD warmup passed');
 
   // Exercise the actual delegated events, not only the helper. Hover is
   // speculative; pointer and keyboard intent may replace a different hover.
@@ -157,12 +159,20 @@ function fixture() {
   assert.strictEqual(sources.run('warmedReaderSources.size'),1);
 
   const capacity=fixture();
+  for(let i=0;i<8;i++) {
+    emitIntent(capacity,'pointerover','done'+i);
+    resolverCalls(capacity).at(-1).resolve({ok:true,json:async()=>({url:'https://source.test/'+i})});await tick();
+  }
   capacity.run(`warmReaderIntent('/reader?url=https://source.test/busy')`);
-  capacity.run(`for(let i=0;i<8;i++)warmedReaderSources.add('id:done'+i)`);
+  const capacityBusy=capacity.calls.find(call=>call.options.method==='HEAD');
   emitIntent(capacity,'focusin','limit');
-  assert.ok(capacity.calls.find(call=>call.options.method==='HEAD').options.signal.aborted);
-  assert.strictEqual(resolverCalls(capacity).length,0,'urgent work still honors the eight-source bound');
+  assert.ok(capacityBusy.options.signal.aborted);
+  assert.strictEqual(resolverCalls(capacity).length,9,'full success cache must allow urgent work');
+  await tick();
+  assert.strictEqual(capacity.run('readerWarmupPending.key'),'id:limit','old rejection cannot release the urgent owner');
+  resolverCalls(capacity).at(-1).resolve({ok:true,json:async()=>({url:'https://source.test/limit'})});await tick();
   assert.strictEqual(capacity.run('readerWarmupInFlight'),0);
+  assert.strictEqual(capacity.run('warmedReaderSources.size'),8);
 
   const timeout=fixture();
   emitIntent(timeout,'pointerover','timed-out');
@@ -191,6 +201,93 @@ function fixture() {
   assert.ok(busyAgain.options.signal.aborted,'a cached target still cancels unrelated speculation');
   assert.strictEqual(resolverCalls(previous).length,4,'priority does not repeat a successful warmup');
   console.log('reader warming: delegated intent preemption, stale responses, limits and backoff passed');
+
+  const warmBook = async (fixture, id) => {
+    const before=resolverCalls(fixture).length;
+    emitIntent(fixture,'pointerover',id);
+    assert.strictEqual(resolverCalls(fixture).length,before+1,'new warmup starts synchronously');
+    resolverCalls(fixture).at(-1).resolve({ok:true,json:async()=>({url:'https://source.test/'+id})});await tick();
+  };
+  const lru=fixture();
+  for(let i=0;i<8;i++)await warmBook(lru,'book'+i);
+  emitIntent(lru,'pointerover','book0');
+  assert.strictEqual(resolverCalls(lru).length,8,'successful same-book hover is deduplicated');
+  await warmBook(lru,'book8');
+  assert.ok(lru.run('warmedReaderSources.has("id:book0")'),'a cache hit updates recency');
+  assert.ok(!lru.run('warmedReaderSources.has("id:book1")'),'ninth success evicts least recently used');
+  await warmBook(lru,'book1');
+  for(let i=9;i<80;i++) {
+    await warmBook(lru,'book'+i);
+    assert.strictEqual(lru.run('warmedReaderSources.size'),8,'success state remains bounded');
+  }
+
+  const expiry=fixture();
+  await warmBook(expiry,'expires');
+  expiry.advance(299999);
+  emitIntent(expiry,'focusin','expires');
+  assert.strictEqual(resolverCalls(expiry).length,1,'metadata stays warm before five minutes');
+  expiry.advance(1);
+  await warmBook(expiry,'expires');
+  assert.strictEqual(expiry.run('warmedReaderSources.size'),1,'hits must not extend metadata freshness');
+  expiry.advance(300000);
+  await warmBook(expiry,'fresh');
+  assert.ok(!expiry.run('warmedReaderSources.has("id:expires")'),'unvisited expired state is pruned');
+  const headCount=()=>t.calls.filter(call=>call.options.method==='HEAD').length;
+  t.run(`warmReaderIntent('/reader?url=https://source.test/8')`);
+  assert.strictEqual(headCount(),9,'HEAD success also deduplicates');
+  t.advance(300000);t.run(`warmReaderIntent('/reader?url=https://source.test/8')`);
+  assert.strictEqual(headCount(),10,'HEAD success also expires');
+  t.calls.at(-1).resolve({ok:true});await tick();
+
+  const consumed=fixture();
+  await warmBook(consumed,'consumed');
+  consumed.run(fs.readFileSync('static/reader/core/reader-bindings.mjs','utf8').replace(/^export /,''));
+  const metadata=consumed.run(`(() => {
+    const context={readerId:'consumed'};
+    createReaderBindings(context).applySourceSessionAndCachedMetadata();
+    return context.resolvedReaderData;
+  })()`);
+  assert.strictEqual(metadata.url,'https://source.test/consumed');
+  assert.ok(!consumed.stored.has('reader-resolve:consumed'),'actual Reader binding consumes metadata');
+  await warmBook(consumed,'consumed');
+  assert.ok(consumed.stored.has('reader-resolve:consumed'),'returning to a consumed book refills metadata');
+  emitIntent(consumed,'pointerover','consumed');
+  assert.strictEqual(resolverCalls(consumed).length,2,'refilled metadata deduplicates again');
+
+  for(const failure of ['write','read','access']) {
+    const unavailable=fixture();
+    if(failure==='access') Object.defineProperty(unavailable.context,'sessionStorage',{
+      get(){throw new Error('Storage disabled');}
+    });
+    else unavailable.context.sessionStorage[failure==='write'?'setItem':'getItem']=()=>{throw new Error('Storage disabled');};
+    await warmBook(unavailable,'unavailable');
+    for(let i=0;i<10;i++)emitIntent(unavailable,'pointerover','unavailable');
+    assert.strictEqual(resolverCalls(unavailable).length,1,'unavailable storage must retain in-memory deduplication');
+    unavailable.advance(300000);
+    await warmBook(unavailable,'unavailable');
+  }
+  const temporarilyBlocked=fixture();
+  await warmBook(temporarilyBlocked,'blocked');
+  const getItem=temporarilyBlocked.context.sessionStorage.getItem;
+  temporarilyBlocked.context.sessionStorage.getItem=()=>{throw new Error('Storage disabled');};
+  emitIntent(temporarilyBlocked,'pointerover','blocked');
+  assert.strictEqual(resolverCalls(temporarilyBlocked).length,1,'read failure is not consumption');
+  temporarilyBlocked.context.sessionStorage.getItem=getItem;
+  temporarilyBlocked.stored.delete('reader-resolve:blocked');
+  await warmBook(temporarilyBlocked,'blocked');
+
+  const backoff=fixture();
+  emitIntent(backoff,'pointerover','retry');
+  resolverCalls(backoff)[0].resolve({ok:false});await tick();
+  backoff.advance(4999);emitIntent(backoff,'focusin','retry');
+  assert.strictEqual(resolverCalls(backoff).length,1);
+  backoff.advance(1);await warmBook(backoff,'retry');
+  for(let i=0;i<70;i++) {
+    emitIntent(backoff,'pointerover','failure'+i);
+    resolverCalls(backoff).at(-1).resolve({ok:false});await tick();
+  }
+  assert.strictEqual(backoff.run('readerWarmupRetryAt.size'),64,'failure state remains bounded');
+  console.log('reader warming: LRU, ninth book, five-minute TTL, actual Reader consumption, storage failures and bounded backoff passed');
 
   const cache=fixture();
   cache.stored.set('reader-navigation-current','keep');
