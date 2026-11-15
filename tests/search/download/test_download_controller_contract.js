@@ -4,6 +4,13 @@ const path = require("node:path");
 const test = require("node:test");
 const vm = require("node:vm");
 
+function installBatchModules(sandbox) {
+  for (const name of ["application/batch.js", "presentation/queue.js"]) {
+    const filename = path.join(__dirname, "../../../static/search/downloads", name);
+    vm.runInNewContext(fs.readFileSync(filename, "utf8"), sandbox, {filename});
+  }
+}
+
 // Behavioral baseline against the original shared download controller.
 // Only synthetic requests and a controlled clock are used; no file is downloaded.
 function fixture(overrides = {}) {
@@ -549,7 +556,7 @@ test("detailed shared callers cancel independently and handoff attempts remain p
 
 test("batch retries only definite failures and reports uncertainty", async () => {
   const source = fs.readFileSync(path.join(__dirname, "../../../static/app.js"), "utf8");
-  const start = source.indexOf("function renderDownloadBatch() {");
+  const start = source.indexOf("const downloadBatches =");
   const end = source.indexOf("function setupDownloadIntentWarming() {", start);
   assert.ok(start >= 0 && end > start);
   const outcomes = {a: "started", b: "failed", c: "uncertain", d: "cancelled"};
@@ -559,10 +566,11 @@ test("batch retries only definite failures and reports uncertainty", async () =>
     AbortController, document: dom.document, sessionStorage: dom.sessionStorage,
     downloadFileDetailed: async (_name, link) => outcomes[link], showToast() {},
   };
-  const stateStart = source.indexOf("let downloadBatch = null;");
-  const stateEnd = source.indexOf("const downloadController =", stateStart);
-  assert.ok(stateStart >= 0 && stateEnd > stateStart && stateEnd < start);
-  vm.runInNewContext(source.slice(stateStart, stateEnd) + source.slice(start, end) + "\nglobalThis.start = startDownloadBatch; globalThis.current = () => downloadBatch;", sandbox);
+  const stateEnd = source.indexOf("const downloadController =", start);
+  const wrappers = source.indexOf("function renderDownloadBatch() {", stateEnd);
+  assert.ok(stateEnd > start && wrappers > stateEnd && end > wrappers);
+  installBatchModules(sandbox);
+  vm.runInNewContext(source.slice(start, stateEnd) + source.slice(wrappers, end) + "\nglobalThis.start = startDownloadBatch; globalThis.current = () => downloadBatches.batch;", sandbox);
   sandbox.start(Object.keys(outcomes).map(link => ({filename: link, link})));
   await flush();
   const batch = sandbox.current();
@@ -676,7 +684,7 @@ test("uncertain feedback belongs to each live non-quiet shared subscriber", asyn
 
 test("single uncertain handoff is retained and a later batch failure is visible but not retried", async () => {
   const source = fs.readFileSync(path.join(__dirname, "../../../static/app.js"), "utf8");
-  const start = source.indexOf("let downloadBatch = null;");
+  const start = source.indexOf("const downloadBatches =");
   const end = source.indexOf("function setupDownloadIntentWarming() {", start);
   assert.ok(start >= 0 && end > start);
   let f;
@@ -691,7 +699,8 @@ test("single uncertain handoff is retained and a later batch failure is visible 
       return f.controller;
     }},
   };
-  vm.runInNewContext(source.slice(start, end) + "\nglobalThis.start = startDownloadBatch; globalThis.current = () => downloadBatch; globalThis.single = downloadFile;", sandbox);
+  installBatchModules(sandbox);
+  vm.runInNewContext(source.slice(start, end) + "\nglobalThis.start = startDownloadBatch; globalThis.current = () => downloadBatches.batch; globalThis.single = downloadFile;", sandbox);
   assert.equal(await sandbox.single("single.txt", "x", {quiet: true, skipCheck: true}), false);
   assert.deepEqual(JSON.parse(dom.sessionStorage.getItem("uncertain-downloads")), [{filename: "single.txt", link: "x"}]);
   sandbox.start([{filename: "single.txt", link: "x"}, {filename: "other.txt", link: "y"}]);
@@ -739,7 +748,7 @@ test("single uncertain handoff is retained and a later batch failure is visible 
 
 test("retry workers recheck uncertainty when consuming queued items, unlike explicit batches", async () => {
   const source = fs.readFileSync(path.join(__dirname, "../../../static/app.js"), "utf8");
-  const start = source.indexOf("let downloadBatch = null;");
+  const start = source.indexOf("const downloadBatches =");
   const end = source.indexOf("function setupDownloadIntentWarming() {", start);
   assert.ok(start >= 0 && end > start);
   let f, handoffs = 0;
@@ -754,7 +763,8 @@ test("retry workers recheck uncertainty when consuming queued items, unlike expl
       return f.controller;
     }},
   };
-  vm.runInNewContext(source.slice(start, end) + "\nglobalThis.start = startDownloadBatch; globalThis.current = () => downloadBatch; globalThis.single = downloadFile;", sandbox);
+  installBatchModules(sandbox);
+  vm.runInNewContext(source.slice(start, end) + "\nglobalThis.start = startDownloadBatch; globalThis.current = () => downloadBatches.batch; globalThis.single = downloadFile;", sandbox);
   sandbox.start(["a", "b", "x"].map(link => ({filename: link, link})));
   await flush();
   f.requests[0].resolve(response({ok: false}, false, 404));
@@ -851,6 +861,76 @@ test("retry workers recheck uncertainty when consuming queued items, unlike expl
   assert.equal(handoffs, 2);
 });
 
+
+test("batch owns two quiet workers, deduplicates in order and cancels queued work", async () => {
+  const dom = batchDomFixture(), pending = [], toasts = [];
+  const sandbox = {AbortController, document: dom.document, sessionStorage: dom.sessionStorage};
+  installBatchModules(sandbox);
+  const batches = sandbox.VoiceOfMLDownloadBatch.create({
+    downloadFileDetailed(filename, link, options) {
+      assert.equal(options.quiet, true);
+      assert.equal(options.batch, batches.batch);
+      return new Promise(resolve => pending.push({filename, link, resolve}));
+    },
+    showToast: message => toasts.push(message), render: sandbox.VoiceOfMLDownloadQueue.render,
+  });
+  batches.start([{filename: "empty", link: ""}]);
+  assert.equal(batches.batch, null);
+  assert.deepEqual(toasts, ["未选中任何文件"]);
+  batches.start([{filename: "old", link: "a"}, {filename: "b", link: "b"},
+    {filename: "latest", link: "a"}, {filename: "c", link: "c"}]);
+  assert.deepEqual(pending.map(item => [item.filename, item.link]), [["latest", "a"], ["b", "b"]]);
+  const current = batches.batch;
+  batches.start([{filename: "ignored", link: "ignored"}]);
+  assert.equal(batches.batch, current);
+  assert.equal(toasts[1], "已有批量任务，请先完成或取消");
+  assert.equal(batches.isActive(), true);
+  dom.click({target: {dataset: {queue: "close"}}});
+  assert.equal(batches.batch, current);
+  dom.click({target: {dataset: {queue: "cancel"}}});
+  assert.equal(current.abortController.signal.aborted, true);
+  pending.forEach(item => item.resolve("cancelled"));
+  await flush();
+  assert.equal(pending.length, 2);
+  assert.equal(current.done, true);
+  assert.equal(current.failed.length, 0);
+  assert.equal(batches.isActive(), false);
+  assert.match(dom.status.textContent, /已取消待下载/);
+  assert.equal(dom.buttons.cancel.hidden, true);
+  assert.equal(dom.buttons.close.hidden, false);
+  dom.click({target: {dataset: {queue: "close"}}});
+  assert.equal(batches.batch, null);
+  assert.equal(dom.document.getElementById("download-queue"), null);
+});
+
+test("ledger restore filters records, tolerates storage failure and preserves acknowledgement order", () => {
+  for (const saved of ["invalid json", "{}", '[null,{"filename":3,"link":"bad"},{"filename":"empty","link":""}]']) {
+    const sandbox = {AbortController, sessionStorage: {getItem: () => saved}};
+    installBatchModules(sandbox);
+    const batches = sandbox.VoiceOfMLDownloadBatch.create({render() {}, showToast() {}});
+    assert.equal(batches.uncertain.length, 0);
+  }
+  const dom = batchDomFixture();
+  dom.sessionStorage.setItem("uncertain-downloads", JSON.stringify([
+    {filename: "<b>first</b>", link: "first"}, {filename: "second", link: "second"},
+  ]));
+  const sandbox = {AbortController, document: dom.document, sessionStorage: dom.sessionStorage};
+  installBatchModules(sandbox);
+  const batches = sandbox.VoiceOfMLDownloadBatch.create({render: sandbox.VoiceOfMLDownloadQueue.render, showToast() {}});
+  batches.render();
+  assert.equal(dom.uncertainList.children[0].children[0].textContent, '"<b>first</b>"（"first"） ');
+  dom.sessionStorage.setItem = () => { throw new Error("blocked storage"); };
+  batches.onUncertain("replacement must not replace first", "first");
+  batches.onUncertain("third", "third");
+  assert.deepEqual(Array.from(batches.uncertain, item => item.filename), ["<b>first</b>", "second", "third"]);
+  batches.acknowledge("second");
+  assert.deepEqual(Array.from(batches.uncertain, item => item.link), ["first", "third"]);
+  batches.acknowledge("absent");
+  assert.deepEqual(Array.from(batches.uncertain, item => item.link), ["first", "third"]);
+  sandbox.sessionStorage.getItem = () => { throw new Error("blocked storage"); };
+  const fresh = sandbox.VoiceOfMLDownloadBatch.create({render() {}, showToast() {}});
+  assert.equal(fresh.uncertain.length, 0);
+});
 
 test("legacy launch scheduler preserves pacing, cancellation and recovery after throws", async () => {
   let throwNext = false;
