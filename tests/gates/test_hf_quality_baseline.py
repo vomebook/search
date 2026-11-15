@@ -570,10 +570,15 @@ class HfSearchProjectionCiTests(unittest.TestCase):
                                             'python3 -B scripts/check_sidebar_payload_regressions.py'), 1)
 
     def test_initial_payload_gate_rejects_failures_skips_and_incomplete_runs(self):
-        self.assertEqual(len(TEST_NAMES), 17)
-        self.assertEqual(len(set(TEST_NAMES)), 17)
+        self.assertEqual(len(TEST_NAMES), 21)
+        self.assertEqual(len(set(TEST_NAMES)), 21)
         self.assertEqual(sum('.SidebarInitialPayloadRouteRaceTests.' in name for name in TEST_NAMES), 7)
-        self.assertEqual(sum('.InitialIntentReaderRouteTests.' in name for name in TEST_NAMES), 10)
+        self.assertEqual(sum('.InitialIntentReaderRouteTests.' in name for name in TEST_NAMES), 14)
+        for name in ('test_deferred_response_retains_acquisition_age',
+                     'test_newer_response_eviction_does_not_resurrect_initial',
+                     'test_initial_payload_cannot_overwrite_newer_response',
+                     'test_initial_payload_fixed_ttl_boundary_and_request_counts'):
+            self.assertTrue(any(test.endswith('.' + name) for test in TEST_NAMES))
         result = Mock(testsRun=len(TEST_NAMES), skipped=[], expectedFailures=[], unexpectedSuccesses=[])
         result.wasSuccessful.return_value = True
         self.assertTrue(passed(result))

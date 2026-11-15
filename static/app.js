@@ -419,7 +419,7 @@ function getReaderLink(rec, returnUrl, cacheMetadata = true) {
   returnUrl = returnUrl || location.href;
   const readerRecord = Object.assign({}, rec, { Link: getRecordLink(rec), ReturnUrl: returnUrl, FolderUrl: getReaderFolderUrl(rec) });
   var readerUrl = VoiceOfMLReader.readerUrl(readerRecord, "/search/static/reader.html");
-  if (cacheMetadata) try { var readerId = new URL(readerUrl, location.origin).searchParams.get("id"); if (readerId) { var sourceData = { url: readerRecord.ReaderLink || readerRecord.Link, download: readerRecord.Link, title: readerRecord.File, filename: String(readerRecord.File || "") + (readerRecord.Extension ? "." + readerRecord.Extension : ""), extension: readerRecord.ReaderExtension || readerRecord.Extension, original_extension: readerRecord.Extension, repo: String(readerRecord.Repo || "").split("/").pop(), folder: readerRecord.Folder, chapter_manifest: readerRecord.ReaderChapterManifest || "", pdf_document: readerRecord.ReaderPdfDocument || "" }; cacheReaderMetadata(readerId, sourceData, true); } } catch (_) {}
+  if (cacheMetadata) try { var readerId = new URL(readerUrl, location.origin).searchParams.get("id"); if (readerId) { var sourceData = { url: readerRecord.ReaderLink || readerRecord.Link, download: readerRecord.Link, title: readerRecord.File, filename: String(readerRecord.File || "") + (readerRecord.Extension ? "." + readerRecord.Extension : ""), extension: readerRecord.ReaderExtension || readerRecord.Extension, original_extension: readerRecord.Extension, repo: String(readerRecord.Repo || "").split("/").pop(), folder: readerRecord.Folder, chapter_manifest: readerRecord.ReaderChapterManifest || "", pdf_document: readerRecord.ReaderPdfDocument || "", ocr_manifest: readerRecord.ReaderOcrManifest || "", ocr_mode: readerRecord.ReaderOcrMode || "" }; cacheReaderMetadata(readerId, sourceData, true); } } catch (_) {}
   return readerUrl;
 }
 
@@ -2706,7 +2706,8 @@ const SEARCH_CACHE_MAX = 60;
 /** @type {BoundedResponseCache<{time: number, data: ReturnType<typeof cloneSearchData>}>} */
 const searchResponseCache = new BoundedResponseCache(SEARCH_CACHE_MAX, SEARCH_CACHE_TTL);
 const INITIAL_BASE_URL = "data/initial";
-const initialPayloadCache = new Map();
+/** @type {BoundedResponseCache<{data: ReturnType<typeof cloneSearchData>, time: number}>} */
+const initialPayloadCache = new BoundedResponseCache(16, SEARCH_CACHE_TTL);
 let randomTxtStatusId = 0;
 
 function noteApiSuccess() {
@@ -4043,10 +4044,13 @@ function cloneSearchData(data) {
 
 function getCachedSearchResponse(key) {
   const pending = pendingSearchCacheWrites.get(key);
-  if (pending && pending.viewKey === getSearchViewKey()) return cloneSearchData(pending.data);
+  if (pending && pending.viewKey === getSearchViewKey()) {
+    if (Date.now() - pending.acquiredAt < SEARCH_CACHE_TTL) return cloneSearchData(pending.data);
+    pendingSearchCacheWrites.delete(key);
+  }
   var cached = searchResponseCache.get(key);
   if (!cached) return null;
-  if (Date.now() - cached.time > SEARCH_CACHE_TTL) {
+  if (Date.now() - cached.time >= SEARCH_CACHE_TTL) {
     searchResponseCache.delete(key);
     return null;
   }
@@ -4066,18 +4070,19 @@ function cancelPendingSearchCacheWrites() {
   pendingSearchCacheWrites.clear();
 }
 
-function setCachedSearchResponse(key, data, defer = false) {
+function setCachedSearchResponse(key, data, defer = false, acquiredAt = Date.now(), fromInitial = false) {
+  if (!fromInitial && canUseInitialSearchPayload() && key === getCurrentSearchCacheKey(1)) initialPayloadCache.delete(getInitialPayloadUrl());
   const cached = searchResponseCache.get(key)?.data;
   const identity = searchResponseCacheIdentities.get(data);
   if (cached && identity && searchResponseCacheIdentities.get(cached) === identity) return;
   if (!defer) {
     pendingSearchCacheWrites.delete(key);
-    searchResponseCache.set(key, { time: Date.now(), data: cloneSearchData(data) });
+    searchResponseCache.set(key, { time: acquiredAt, data: cloneSearchData(data) });
     return;
   }
   // Retain at most the existing lookahead's three pages, never another queue of results.
   pendingSearchCacheWrites.delete(key);
-  pendingSearchCacheWrites.set(key, { data: cloneSearchData(data), viewKey: getSearchViewKey() });
+  pendingSearchCacheWrites.set(key, { data: cloneSearchData(data), viewKey: getSearchViewKey(), acquiredAt });
   while (pendingSearchCacheWrites.size > 3) pendingSearchCacheWrites.delete(pendingSearchCacheWrites.keys().next().value);
   if (searchCacheWriteFrame || searchCacheWriteTimer !== null) return;
   searchCacheWriteFrame = requestAnimationFrame(() => {
@@ -4087,7 +4092,7 @@ function setCachedSearchResponse(key, data, defer = false) {
       const writes = [...pendingSearchCacheWrites];
       pendingSearchCacheWrites.clear();
       for (const [cacheKey, entry] of writes) if (entry.viewKey === getSearchViewKey()) {
-        setCachedSearchResponse(cacheKey, entry.data);
+        if (Date.now() - entry.acquiredAt < SEARCH_CACHE_TTL) setCachedSearchResponse(cacheKey, entry.data, false, entry.acquiredAt);
       }
     }, 0);
   });
@@ -4149,7 +4154,7 @@ function getInitialPayloadUrl() {
   return INITIAL_BASE_URL + "/global.json";
 }
 
-function applyInitialSearchPayload(data, intent = searchIntentId) {
+function applyInitialSearchPayload(data, intent = searchIntentId, acquiredAt = Date.now()) {
   if (intent !== searchIntentId) return false;
   if (!data || !Array.isArray(data.results) || !canUseInitialSearchPayload()) return false;
   if (STATE.mode === "repo" && data.repo !== STATE.repoFull) return false;
@@ -4168,13 +4173,13 @@ function applyInitialSearchPayload(data, intent = searchIntentId) {
   STATE.isLoading = false;
   STATE.resultsSkeletonActive = false;
   setSearchVisualLoading(false);
-  setCachedSearchResponse(getCurrentSearchCacheKey(1), {
+  // Cache hits render without renewing their original acquisition age.
+  if (acquiredAt !== null) setCachedSearchResponse(getCurrentSearchCacheKey(1), Object.assign(cloneSearchData(data), {
     results: STATE.results,
     total: STATE.total,
     page: 1,
     page_size: STATE.pageSize,
-    generation: data.generation,
-  });
+  }), false, acquiredAt, true);
   if (STATE.results[0] && !(typeof data.generation === "string" && data.generation)) {
     searchPageMetadata.set(STATE.results[0], { unverifiedInitial: true,
       total: STATE.total, page: 1, page_size: STATE.pageSize });
@@ -4208,15 +4213,27 @@ async function tryInitialSearchPayload(searchMode, searchRepo, intent = ++search
   if (!canUseInitialSearchPayload()) return false;
   var url = getInitialPayloadUrl();
   try {
-    var data = initialPayloadCache.get(url);
-    if (!data) {
-      data = await fetchJsonWithTimeout(url, 6000);
+    if (!isCurrentSearchRoute()) return false;
+    const cached = getCachedSearchResponse(getCurrentSearchCacheKey(1));
+    let entry = initialPayloadCache.get(url);
+    if (cached) {
+      const applied = applyInitialSearchPayload(Object.assign(cloneSearchData(cached), {
+        mode: STATE.mode, repo: STATE.repoFull,
+      }), intent, null);
+      if (applied && entry && searchResponseCacheIdentities.get(entry.data) !== searchResponseCacheIdentities.get(cached)) {
+        initialPayloadCache.delete(url);
+      }
+      return applied;
+    }
+    if (!entry) {
+      const data = await fetchJsonWithTimeout(url, 6000);
       if (!isCurrentSearchRoute()) return false;
       if (!data) return false;
-      initialPayloadCache.set(url, data);
+      entry = { data, time: Date.now() };
+      initialPayloadCache.set(url, entry);
     }
     if (!isCurrentSearchRoute()) return false;
-    return applyInitialSearchPayload(data, intent);
+    return applyInitialSearchPayload(entry.data, intent, entry.time);
   } catch (e) {
     return false;
   }

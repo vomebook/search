@@ -240,6 +240,7 @@ class SidebarInitialPayloadRouteRaceTests(unittest.TestCase):
           const path = STATE.browserPath;
           const initialUrl = getInitialPayloadUrl();
           initialPayloadCache.delete(initialUrl);
+          searchResponseCache.clear();
           fetchJsonWithTimeout = (url, ...args) => url === initialUrl ? held : previous(url, ...args);
           try {
             const pending = tryInitialSearchPayload(STATE.mode, STATE.repo);
