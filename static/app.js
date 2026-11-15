@@ -3043,8 +3043,11 @@ async function readRecentSearchPage(key, page, expected, timeoutMs = 150, signal
       request.onerror = abort;
     } catch (_) { abort(); }
   });
-  if (!entry || entry.key !== key || entry.savedAt < Date.now() - RECENT_SEARCH_PAGE_TTL || !expected.generation
-      || !Array.isArray(entry.results) || Object.keys(entry.results).length !== entry.results.length) return null;
+  if (!entry || entry.key !== key || !Number.isFinite(entry.savedAt)
+      || entry.savedAt < Date.now() - RECENT_SEARCH_PAGE_TTL || !expected.generation
+      || !Array.isArray(entry.id) || entry.id.length !== 2 || entry.id[0] !== key || entry.id[1] !== page
+      || !Array.isArray(entry.results) || Object.keys(entry.results).length !== entry.results.length
+      || !entry.results.every(validSearchRenderingRecord)) return null;
   try { validatePositionWindowPage(entry, page, expected.query.pageSize, expected); } catch (_) { return null; }
   cacheRecentSearchPage(entry);
   return entry;
@@ -3136,6 +3139,14 @@ async function readSearchViewport(key) {
   });
 }
 
+function validSearchRenderingRecord(record) {
+  return !!record && typeof record === "object" && !Array.isArray(record) && typeof record.File === "string"
+    && (record.Repo == null || typeof record.Repo === "string")
+    && (record.Extension == null || typeof record.Extension === "string")
+    && (record.Folder == null || (Array.isArray(record.Folder) && Array.from(record.Folder).every(folder => typeof folder === "string")))
+    && (record.Size == null || typeof record.Size === "string" || (Number.isFinite(record.Size) && record.Size >= 0));
+}
+
 function validSearchViewport(viewport, position) {
   // Persisted previews are untrusted: validate every tuple before any consumer
   // destructures it, even when an earlier tuple already matches the anchor.
@@ -3153,12 +3164,7 @@ function validSearchViewport(viewport, position) {
     if (!Array.isArray(tuple) || tuple.length !== 3) return false;
     const [index, record, height] = tuple;
     if (!Number.isInteger(index) || index < 0 || index >= viewport.total || indexes.has(index)
-        || !record || typeof record !== "object" || Array.isArray(record) || typeof record.File !== "string"
-        || (record.Repo != null && typeof record.Repo !== "string")
-        || (record.Extension != null && typeof record.Extension !== "string")
-        || (record.Folder != null && (!Array.isArray(record.Folder) || Array.from(record.Folder).some(folder => typeof folder !== "string")))
-        || (record.Size != null && typeof record.Size !== "string" && (!Number.isFinite(record.Size) || record.Size < 0))
-        || !validHeight(height)) return false;
+        || !validSearchRenderingRecord(record) || !validHeight(height)) return false;
     indexes.add(index);
     if (index === position.index && getResultStableId(record) === position.anchorId) anchor = true;
   }
