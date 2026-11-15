@@ -1,4 +1,5 @@
 import './result_interactions_contracts.mjs';
+import './random_discovery_contracts.mjs';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';

@@ -96,6 +96,8 @@
     "../../typings/search-positions.d.ts",
     "../../typings/search-restoration.d.ts",
     "../../typings/search-results.d.ts",
+    "../../typings/search-discovery.d.ts",
+    "../../static/search/discovery/application/random.js",
     "../../static/search/results/presentation/row.js",
     "../../static/search/results/application/interactions.js",
     "../../typings/search-snapshots.d.ts",
