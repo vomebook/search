@@ -53,7 +53,7 @@ CATEGORY_METHODS = {
         "test_oversized_chapter_manifest_and_response_use_resource_limit",
         "test_zip_bomb_metadata_is_rejected_before_foliate_parser",
         "test_image_proxy_failure_recovers_on_manual_retry_without_direct_source",
-        "test_fetch_formats_fall_back_when_proxy_request_rejects",
+        "test_fetch_formats_keep_proxy_failure_until_manual_retry",
         "test_foliate_normalizes_legacy_chm_markup_and_keeps_resources",
     ),
     "navigation": (

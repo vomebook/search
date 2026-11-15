@@ -21,7 +21,7 @@ const rows = (result.stdout || "").split(/\r?\n/).flatMap(line => {
 const text = result.stdout || "";
 const required = [
   "retry policy keeps bounded delay and never retries rate-limited or aborted work",
-  "proxy fallback respects response ownership, cancellation and bucket routing",
+  "proxy-only fetching respects response ownership, cancellation and bucket routing",
   "preloads are single-owner and fall back on failure or mismatched identity",
   "document preparation preserves failure and byte-limit ownership",
   "script load releases timers, handlers and resources on success, error and close",

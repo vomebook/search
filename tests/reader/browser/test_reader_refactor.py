@@ -80,6 +80,53 @@ class ReaderRefactorTest(unittest.TestCase):
         self.page.goto(url)
         self.page.wait_for_function("() => document.documentElement.dataset.readerPhase === 'ready'")
 
+    def test_fetch_proxy_failure_and_manual_retry_for_txt_and_markdown(self):
+        support.route_local_vendor_fallback(self.page)
+        direct, requests = [], []
+        self.page.on("request", lambda request: direct.append(request.url)
+                     if request.url.startswith("https://huggingface.co/") else None)
+        available = False
+
+        def proxy(route):
+            requests.append(route.request.url)
+            route.fulfill(status=200 if available else status,
+                          content_type="text/plain" if extension == "txt" else "text/markdown",
+                          body="# Proxy readable" if available else "unavailable",
+                          headers={"Access-Control-Allow-Origin": "*"})
+
+        self.page.route("**/api/reader-content**", proxy)
+        for extension, selector in (("txt", ".reader-text"), ("md", ".reader-markdown")):
+            for status in (403, 404):
+                with self.subTest(extension=extension, status=status):
+                    requests.clear()
+                    available = False
+                    self.page.goto(self.reader_url(extension), wait_until="domcontentloaded")
+                    self.page.locator('html[data-reader-phase="failed"]').wait_for()
+                    alert = self.page.get_by_role("alert")
+                    self.assertTrue(alert.is_visible())
+                    self.assertIn(f"HTTP {status}", alert.text_content())
+                    self.assertEqual(self.page.locator("#status").text_content(), "无法打开")
+                    self.assertEqual(self.page.locator("#content").get_attribute("data-error-code"), "READER_NETWORK")
+                    self.assertEqual(self.page.locator(selector).count(), 0)
+                    self.assertEqual(self.page.locator(".reader-loading-indicator").count(), 0)
+                    self.assertEqual(len(requests), 1)
+                    source = urllib.parse.parse_qs(urllib.parse.urlsplit(self.page.url).query)["url"]
+                    self.assertEqual(urllib.parse.parse_qs(urllib.parse.urlsplit(requests[0]).query)["url"], source)
+                    self.assertEqual(direct, [])
+                    # Network errors use a manual browser reload for retry.
+                    self.assertEqual(self.page.locator("#reader-engine-retry").count(), 0)
+                    failed_url = self.page.url
+                    available = True
+                    self.page.reload(wait_until="domcontentloaded")
+                    self.page.locator('html[data-reader-phase="ready"]').wait_for()
+                    self.assertIn("Proxy readable", self.page.locator(selector).inner_text())
+                    if extension == "md":
+                        self.assertEqual(self.page.locator(selector + " h1").inner_text(), "Proxy readable")
+                    self.assertEqual(self.page.locator(".reader-error, .reader-loading-indicator").count(), 0)
+                    self.assertEqual(self.page.url, failed_url)
+                    self.assertEqual(requests, [requests[0]] * 2)
+                    self.assertEqual(direct, [])
+
     def markdown_link_fixture(self):
         support.route_local_vendor_fallback(self.page)
         # The checked-in Reader source loads these locally in production builds;

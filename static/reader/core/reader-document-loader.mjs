@@ -96,11 +96,10 @@ export function createReaderDocumentLoader(readerContext) {
       if (response.ok) return response;
       await response.body?.cancel();
       throw Object.assign(new Error(`HTTP ${response.status}`), { status: response.status });
-    }).catch((error) => {
+    }).catch(error => {
       readerContext.assertReaderActive();
       requestInit.signal?.throwIfAborted();
-      if (readerContext.retryableReaderProxyError(error)) throw error;
-      return readerContext.fetchWithReaderTimeout(rawUrl, readerContext.READER_PROXY_TIMEOUT_MS, requestInit);
+      throw error;
     });
   }
 
