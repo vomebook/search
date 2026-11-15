@@ -5,6 +5,8 @@ const { assertCode, readReaderSource } = require("../support/reader_source_contr
 const { test, run } = require("../support/test_harness");
 
 const app = fs.readFileSync("static/app.js", "utf8");
+const resultRows = fs.readFileSync("static/search/results/presentation/row.js", "utf8");
+const resultInteractions = fs.readFileSync("static/search/results/application/interactions.js", "utf8");
 const filters = fs.readFileSync("static/search/sidebar/application/filters.js", "utf8");
 const reader = readReaderSource(require("path").resolve("."));
 const worker = fs.readFileSync("static/search/index-worker.js", "utf8");
@@ -171,8 +173,9 @@ test("search clear control follows the query state", () => {
   assert.match(css, /\.search-box\.has-query \.search-input::\-webkit-search-cancel-button \{ opacity: 1 !important; pointer-events: auto !important;/);
 });
 test("result actions use equal desktop heights and compact mobile column", () => {
-  assert.doesNotMatch(app, /class="result-summary"/);
-  assert.match(app, /class="result-title"[\s\S]*class="result-path"[\s\S]*class="result-meta"/);
+  assert.doesNotMatch(resultRows, /class="result-summary"/);
+  assert.match(resultRows, /class="result-title"[\s\S]*class="result-path"[\s\S]*class="result-meta"/);
+  assert.match(app, /function buildResultHTML\(rec, idx\) \{ return getResultRows\(\)\.buildHTML\(rec, idx\); \}/);
   assert.match(css, /body:not\(\.mobile\) \.result-title \{ grid-column: 3; grid-row: 1;/);
   assert.match(css, /body:not\(\.mobile\) \.result-path \{ grid-column: 3 \/ 5; grid-row: 2;/);
   assert.match(css, /body:not\(\.mobile\) \.result-meta \{ grid-column: 3 \/ 5; grid-row: 3;/);
@@ -180,9 +183,9 @@ test("result actions use equal desktop heights and compact mobile column", () =>
   assert.match(css, /body\.mobile \.result-actions \{\s*flex-direction: column;\s*gap: 1px;/);
   assert.match(css, /body\.mobile \.result-action-btn \{ height: 20px;/);
   assert.match(css, /body\.mobile \.result-path \{\s*display: block;\s*white-space: normal;\s*word-break: break-all;\s*overflow-wrap: normal;/);
-  assert.match(app, /folderDisplay \+ separator \+ '<\/span>'/);
-  assert.ok(app.includes('role="button" tabindex="0" class="path-folder"'));
-  assert.doesNotMatch(app, /'<span class="path-sep">\/<\/span><span class="path-folder"/);
+  assert.match(resultRows, /folderDisplay \+ separator \+ '<\/span>'/);
+  assert.ok(resultRows.includes('role="button" tabindex="0" class="path-folder"'));
+  assert.doesNotMatch(resultRows, /'<span class="path-sep">\/<\/span><span class="path-folder"/);
 });
 test("virtual results use bounded buffering", () => {
   assert.match(app, /const extraScreens = VSCROLL\.isDraggingThumb \? 0 : Math\.min\(3/);
@@ -203,7 +206,11 @@ test("virtual results use bounded buffering", () => {
   assert.match(app, /function reconcileVirtualRows/);
   assert.match(app, /virtual-spacer-bottom/);
   assert.match(app, /Number\(row\.dataset\.contentVersion\) !== VSCROLL\.contentVersion/);
-  assert.match(app, /VSCROLL\.templateCache\.size > 240/);
+  assert.match(app, /templates: VSCROLL\.templateCache/);
+  assert.match(app, /function createResultRow\(rec, idx\) \{ return getResultRows\(\)\.createRow\(rec, idx\); \}/);
+  assert.match(resultRows, /const cache = deps\.templates/);
+  assert.match(resultRows, /cache\.size > 240\) cache\.delete\(/);
+  assert.match(resultRows, /cache\.keys\(\)\.next\(\)\.value/);
   assert.match(app, /function scheduleVirtualRender/);
   assert.match(app, /scheduleVirtualRender\(\)/);
   assert.match(app, /scheduleVirtualRender\(true\)/);
@@ -438,14 +445,20 @@ test("reader uses original files and lazy PDF canvas rendering", () => {
   assert.match(app, /applyReaderAsset/);
   assert.match(app, /function getReaderLink\(rec, returnUrl, cacheMetadata = true\)/);
   assert.match(app, /if \(cacheMetadata\) try/);
-  assert.match(app, /const readerActionUrl = readerActionRecord \? getReaderLink\(readerActionRecord, undefined, false\) : ""/);
+  assert.match(app, /url: record \? getReaderLink\(record, undefined, false\) : ""/);
+  assert.match(resultRows, /const action = readerAction\(rec, recordLink\)/);
+  assert.match(resultRows, /const readerActionUrl = action\.url/);
   assert.match(app, /if \(button\) \{ button\.remove\(\);/);
   assert.match(app, /applyReaderAsset\(rec, rec\.Repo \|\| "", buildRecordRelativePath\(rec\), recordLink\)/);
   assert.match(app, /isReadableRecord\(readerRecord\)/);
   assert.match(app, /button\.dataset\.readerUrl = getReaderLink\(actionRecord\)/);
-  assert.match(app, /actionBtn\.dataset\.readerUrl = getReaderLink\(applyReaderAsset\(/);
-  assert.match(app, /navigateToReader\(actionBtn\.dataset\.readerUrl\)/);
-  assert.match(app, /navigateToReader\(readerLink\)/);
+  assert.match(app, /freshReaderLink: record => getReaderLink\(applyReaderAsset\(/);
+  assert.match(app, /recordForRow: row => resultRowRecords\.get\(row\)/);
+  assert.match(resultInteractions, /const record = deps\.recordForRow\(actionBtn\.closest\("\.result-item"\)\)/);
+  assert.match(resultInteractions, /if \(record\) actionBtn\.dataset\.readerUrl = deps\.freshReaderLink\(record\)/);
+  assert.match(resultInteractions, /deps\.navigateToReader\(actionBtn\.dataset\.readerUrl\)/);
+  assert.match(resultInteractions, /const readerLink = browserItem\.dataset\.readerUrl/);
+  assert.match(resultInteractions, /deps\.navigateToReader\(readerLink\)/);
   const navigation = fs.readFileSync('static/search/reader-navigation.js', 'utf8');
   assert.match(navigation, /url\.searchParams\.set\("return", returnUrl\)/);
   assert.match(navigation, /sessionStorage\.setItem\("reader-return:" \+ token/);

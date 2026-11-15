@@ -3567,45 +3567,30 @@ function animateVisibleResultRows() {
   });
 }
 
-function buildResultHTML(rec, idx) {
-  const fileName = escapeHTML(rec.File + (rec.Extension ? '.' + rec.Extension : ''));
-  const iconType = getFileIconType(rec.Extension);
-  const titleHTML = highlightText(rec.File, STATE.query);
-  const repoShort = escapeHTML((rec.Repo || "").split("/").pop());
-  const sizeStr = formatSize(rec.Size);
-  const recordLink = getRecordLink(rec);
-  const readerRecord = applyReaderAsset(rec, rec.Repo || "", buildRecordRelativePath(rec), recordLink);
-  const readerActionRecord = isReadableRecord(readerRecord) ? readerRecord
-    : (isDefaultReadableRecord(rec) ? rec : null);
-  const readerActionUrl = readerActionRecord ? getReaderLink(readerActionRecord, undefined, false) : "";
-  const breadcrumb = (rec.Folder || []).map((f, j) => {
-    const accum = (rec.Folder || []).slice(0, j + 1).join("/");
-    const folderDisplay = STATE.searchFolders ? highlightText(f, STATE.query) : escapeHTML(f);
-    const separator = j < (rec.Folder || []).length - 1 ? '<span class="path-sep">/</span>' : '';
-    return '<span role="button" tabindex="0" class="path-folder" aria-label="筛选路径：' + escapeHTML(accum) + '" data-folder="' + escapeHTML(accum) + '" data-repo="' + repoShort + '">' + folderDisplay + separator + '</span>';
-  }).join("");
-  const repoSeparator = (rec.Folder || []).length ? '<span class="path-sep">/</span>' : '';
-  return (
-    '<input type="checkbox" class="result-checkbox" aria-label="选择文件：' + fileName + '" data-index="' + idx + '">' +
-    '<div class="result-file-icon" aria-hidden="true">' + (ICONS[iconType] || ICONS.file) + '</div>' +
-    '<div class="result-info">' +
-      '<div class="result-title">' + titleHTML +
-        (rec.Extension ? '<span style="opacity:0.5;font-size:12px">.' + escapeHTML(rec.Extension) + '</span>' : '') +
-      '</div>' +
-      '<div class="result-path"><span role="button" tabindex="0" class="path-folder" aria-label="筛选仓库路径：' + repoShort + '" data-folder="" data-repo="' + repoShort + '">' + repoShort + repoSeparator + '</span>' + breadcrumb + '</div>' +
-      '<div class="result-meta">' +
-        (STATE.mode === "global" ? '<button type="button" class="result-repo-tag" aria-label="打开仓库：' + repoShort + '" data-repo="' + repoShort + '">' + repoShort + '</button>' : '') +
-        (sizeStr ? '<span class="result-size">' + sizeStr + '</span>' : '') +
-      '</div>' +
-    '</div>' +
-    '<div class="result-actions">' +
-      '<button class="result-action-btn" aria-label="复制链接：' + fileName + '" data-action="copy" data-link="' + escapeHTML(getCopyableLink(recordLink)) + '">复制链接</button>' +
-      '<button class="result-action-btn primary" aria-label="下载：' + fileName + '" data-action="download" data-filename="' + fileName + '" data-link="' + escapeHTML(recordLink) + '">下载</button>' +
-      '<a href="' + escapeHTML(getPreviewLink(getRecordPath(rec))) + '" aria-label="仓库查看：' + fileName + '（新窗口）" class="result-action-btn" target="_blank" rel="noopener noreferrer">仓库查看</a>' +
-      (readerActionUrl ? '<button class="result-action-btn" aria-label="' + (["audio", "video", "swf"].includes(VoiceOfMLReader.capability(readerActionRecord.ReaderExtension || readerActionRecord.Extension).mode) ? "在线播放" : "在线阅读") + '：' + fileName + '" data-action="read" data-reader-url="' + escapeHTML(readerActionUrl) + '">' + (["audio", "video", "swf"].indexOf(VoiceOfMLReader.capability(readerActionRecord.ReaderExtension || readerActionRecord.Extension).mode) >= 0 ? "在线播放" : "在线阅读") + '</button>' : '') +
-    '</div>'
-  );
+let resultRows = null;
+function getResultRows() {
+  if (!resultRows) resultRows = VoiceOfMLResultRows.create({
+    readView: () => ({ query: STATE.query, searchFolders: STATE.searchFolders, mode: STATE.mode }),
+    escapeHTML: value => escapeHTML(value), highlightText: (text, query) => highlightText(text, query),
+    getFileIconType: ext => getFileIconType(ext), formatSize: size => formatSize(size),
+    getRecordLink: record => getRecordLink(record), getCopyableLink: link => getCopyableLink(link),
+    getRecordPath: record => getRecordPath(record), getPreviewLink: path => getPreviewLink(path), icons: ICONS,
+    readerAction(rec, recordLink) {
+      const readerRecord = applyReaderAsset(rec, rec.Repo || "", buildRecordRelativePath(rec), recordLink);
+      const record = isReadableRecord(readerRecord) ? readerRecord : (isDefaultReadableRecord(rec) ? rec : null);
+      return {
+        url: record ? getReaderLink(record, undefined, false) : "",
+        label: record && ["audio", "video", "swf"].includes(VoiceOfMLReader.capability(record.ReaderExtension || record.Extension).mode) ? "在线播放" : "在线阅读",
+      };
+    },
+    templates: VSCROLL.templateCache,
+    contentVersion: () => VSCROLL.contentVersion,
+    placeholder: index => createResultWindowPlaceholder(index),
+    bindRecord: (row, record) => resultRowRecords.set(row, record),
+  });
+  return resultRows;
 }
+function buildResultHTML(rec, idx) { return getResultRows().buildHTML(rec, idx); }
 
 function refreshResultReaderActions() {
   VSCROLL.templateCache.clear();
@@ -3665,30 +3650,7 @@ function ensureResultTemplateCache() {
   if (VSCROLL.templateCacheKey !== key) clearResultTemplateCache(key);
 }
 
-function createResultRow(rec, idx) {
-  if (!rec) return createResultWindowPlaceholder(idx);
-  let template = VSCROLL.templateCache.get(idx);
-  if (!template) {
-    template = document.createElement("div");
-    template.className = "result-item" + (idx % 2 === 1 ? " is-alt" : "");
-    template.dataset.index = String(idx);
-    template.dataset.contentVersion = String(VSCROLL.contentVersion);
-    template.innerHTML = buildResultHTML(rec, idx);
-    VSCROLL.templateCache.set(idx, template);
-    if (VSCROLL.templateCache.size > 240) {
-      VSCROLL.templateCache.delete(VSCROLL.templateCache.keys().next().value);
-    }
-  } else {
-    VSCROLL.templateCache.delete(idx);
-    VSCROLL.templateCache.set(idx, template);
-  }
-  const row = template.cloneNode(true);
-  row.tabIndex = -1;
-  row.setAttribute('role', 'listitem');
-  row.setAttribute('aria-label', rec.File + (rec.Extension ? '.' + rec.Extension : ''));
-  resultRowRecords.set(row, rec);
-  return row;
-}
+function createResultRow(rec, idx) { return getResultRows().createRow(rec, idx); }
 
 // Keep native layout safely below Android WebView height limits. Positions,
 // height measurements and the proxy thumb always use the full logical range.
@@ -5067,101 +5029,44 @@ function clearAllFilters() {
   syncStateToURL();
 }
 
-function setupResultDelegation() {
-  DOM.resultsList.addEventListener('keydown', event => {
-    if (event.defaultPrevented || event.isComposing || event.ctrlKey || event.metaKey || event.altKey) return;
-    const path = event.target.closest('.path-folder[role="button"]');
-    if (path && (event.key === 'Enter' || event.key === ' ')) {
-      event.preventDefault(); event.stopPropagation(); path.click();
-    }
-  });
-  DOM.resultsList.addEventListener("click", function(e) {
-    const missing = e.target.closest("[data-window-page]");
-    if (missing && resultWindow) {
+let resultInteractions = null;
+function getResultInteractions() {
+  if (!resultInteractions) resultInteractions = VoiceOfMLResultInteractions.create({
+    elements: {
+      resultsList: DOM.resultsList, sidebarContent: DOM.sidebarContent,
+      multiSelectToggle: DOM.multiSelectToggle, multiCopyLinks: DOM.multiCopyLinks,
+      multiBatchDownload: DOM.multiBatchDownload, multiDeselect: DOM.multiDeselect,
+      multiSelectAll: DOM.multiSelectAll,
+    },
+    selection: {
+      get indices() { return selectedIndices; }, set indices(value) { selectedIndices = value; },
+      get lastIndex() { return lastSelectedIndex; }, set lastIndex(value) { lastSelectedIndex = value; },
+    },
+    hasRecord: index => !!(STATE.results[index] || resultSnapshots.cloneTask?.snapshot.results[index]),
+    selectionRecords: () => resultSnapshots.cloneTask?.snapshot.results || STATE.results,
+    resultCount: () => STATE.results.length,
+    updateSelectionUI: () => updateSelectionUI(), getSelectedFiles: () => getSelectedFiles(),
+    getCopyableLink: link => getCopyableLink(link), startDownloadBatch: items => startDownloadBatch(items),
+    showToast: message => showToast(message),
+    retryWindowPage(page) {
+      if (!resultWindow) return false;
       if (resultWindow.invalid) restartResultWindow();
-      else { const page = Number(missing.dataset.windowPage); resultWindow.failures.delete(page); loadResultWindowPage(page); }
-      return;
-    }
-    const actionBtn = e.target.closest("[data-action]");
-    if (actionBtn) {
-      e.preventDefault();
-      const action = actionBtn.dataset.action;
-      if (action === "copy") {
-        navigator.clipboard.writeText(actionBtn.dataset.link)
-          .then(function() { showToast("链接已复制"); })
-          .catch(function() { showToast("复制失败"); });
-        return;
-      }
-      if (action === "download") {
-        downloadFile(actionBtn.dataset.filename || "file", actionBtn.dataset.link || "", { button: actionBtn });
-        return;
-      }
-      if (action === "read") {
-        const record = resultRowRecords.get(actionBtn.closest(".result-item"));
-        if (record) actionBtn.dataset.readerUrl = getReaderLink(applyReaderAsset(
-          record, record.Repo || "", buildRecordRelativePath(record), getRecordLink(record)));
-        navigateToReader(actionBtn.dataset.readerUrl);
-        return;
-      }
-    }
-    const repoTag = e.target.closest(".result-repo-tag");
-    if (repoTag) {
-      ROUTER.navigate("repo", repoTag.dataset.repo);
-      return;
-    }
-    const folderLink = e.target.closest(".path-folder");
-    if (folderLink) {
-      const folder = folderLink.dataset.folder;
-      const frepo = folderLink.dataset.repo;
-      if (frepo && folder !== undefined) {
-        // A result breadcrumb selects the complete directory subtree and
-        // opens the same path in the left browser in one history entry.
-        let hash = "#/" + encodeURIComponent(frepo);
-        const sp = buildSearchURLParams({ displaySizes: true });
-        if (folder) {
-          sp.set("path", folder);
-          sp.append("folder_subtree", folder);
-        }
-        const qs = sp.toString();
-        const nextHash = qs ? hash + "?" + qs : hash;
-        // A user may browse the sidebar elsewhere without changing filters,
-        // then click the already-selected breadcrumb to return to it.
-        if (window.location.hash === nextHash) renderBrowser(folder, routeRenderId);
-        else window.location.hash = nextHash;
-      }
-      return;
-    }
+      else { resultWindow.failures.delete(page); loadResultWindowPage(page); }
+      return true;
+    },
+    recordForRow: row => resultRowRecords.get(row),
+    freshReaderLink: record => getReaderLink(applyReaderAsset(
+      record, record.Repo || "", buildRecordRelativePath(record), getRecordLink(record))),
+    downloadFile: (filename, link, options) => downloadFile(filename, link, options),
+    navigateToReader: url => navigateToReader(url),
+    navigateRepo: (repo, ...path) => ROUTER.navigate("repo", repo, ...path),
+    currentRepo: () => STATE.repo,
+    buildSearchURLParams: options => buildSearchURLParams(options),
+    renderBrowser: folder => renderBrowser(folder, routeRenderId),
   });
-  DOM.sidebarContent.addEventListener("click", function(e) {
-    const repoItem = e.target.closest(".repo-list-item");
-    if (repoItem) {
-      ROUTER.navigate("repo", repoItem.dataset.repo);
-      return;
-    }
-    const browserItem = e.target.closest(".browser-item");
-    if (!browserItem) return;
-    if (e.target.closest(".browser-action")) {
-      e.stopPropagation();
-      if (browserItem.dataset.link) {
-        downloadFile(browserItem.dataset.filename || "file", browserItem.dataset.link,
-          { button: browserItem.querySelector(".browser-action") });
-      }
-      return;
-    }
-    if (browserItem.dataset.type === "folder") {
-      ROUTER.navigate("repo", STATE.repo, browserItem.dataset.path);
-      return;
-    }
-    const readerLink = browserItem.dataset.readerUrl;
-    if (readerLink) {
-      navigateToReader(readerLink);
-      return;
-    }
-    if (browserItem.dataset.link) {
-      downloadFile(browserItem.dataset.filename || "file", browserItem.dataset.link);
-    }
-  });
+  return resultInteractions;
 }
+function setupResultDelegation() { getResultInteractions().installDelegation(); }
 
 async function init() {
   cacheDOM();
@@ -5197,48 +5102,7 @@ async function init() {
     clearResultTemplateCache();
     if (STATE.results.length > 0) renderResults();
   });
-  if (DOM.multiSelectToggle) DOM.multiSelectToggle.addEventListener("change", updateSelectionUI);
-  DOM.resultsList.addEventListener("click", function(e) {
-    if (!DOM.multiSelectToggle || !DOM.multiSelectToggle.checked) return;
-    var cb = e.target.closest(".result-checkbox");
-    if (!cb) return;
-    e.stopPropagation();
-    var idx = parseInt(cb.dataset.index);
-    if (e.shiftKey && lastSelectedIndex >= 0) {
-      var lo = Math.min(lastSelectedIndex, idx);
-      var hi = Math.max(lastSelectedIndex, idx);
-      for (var si = lo; si <= hi; si++) if (STATE.results[si] || resultSnapshots.cloneTask?.snapshot.results[si]) selectedIndices[si] = true;
-    } else if (cb.checked) {
-      selectedIndices[idx] = true;
-    } else {
-      delete selectedIndices[idx];
-    }
-    lastSelectedIndex = idx;
-    updateSelectionUI();
-  });
-  if (DOM.multiCopyLinks) DOM.multiCopyLinks.addEventListener("click", function() {
-    const links = getSelectedFiles().map(item => getCopyableLink(item.link));
-    if (links.length === 0) { showToast("未选中任何文件"); return; }
-    navigator.clipboard.writeText(links.join("\n")).then(function() {
-      showToast("已复制 " + links.length + " 条链接");
-    }).catch(function() { showToast("复制失败"); });
-  });
-  if (DOM.multiBatchDownload) DOM.multiBatchDownload.addEventListener("click", function() {
-    startDownloadBatch(getSelectedFiles());
-  });
-  if (DOM.multiDeselect) DOM.multiDeselect.addEventListener("click", function() {
-    selectedIndices = {};
-    lastSelectedIndex = -1;
-    updateSelectionUI();
-  });
-  if (DOM.multiSelectAll) DOM.multiSelectAll.addEventListener("click", function() {
-    const records = resultSnapshots.cloneTask?.snapshot.results || STATE.results;
-    var allSelected = records.length > 0 && records.every(function(record, index) { return !record || selectedIndices[index]; });
-    if (allSelected) selectedIndices = {};
-    else for (var si = 0; si < records.length; si++) if (records[si]) selectedIndices[si] = true;
-    lastSelectedIndex = allSelected ? -1 : STATE.results.length - 1;
-    updateSelectionUI();
-  });
+  getResultInteractions().installSelection();
   DOM.hamburgerBtn.addEventListener("click", toggleLeftSidebar);
   DOM.settingsBtn.addEventListener("click", toggleRightSidebar);
   DOM.closeFiltersBtn.addEventListener("click", closeRightSidebar);
