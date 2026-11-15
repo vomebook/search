@@ -34,7 +34,7 @@ class RecentSearchPageTests(unittest.TestCase):
 
     def flush(self):
         self.page.evaluate('''() => new Promise(resolve=>{
-          const tx=searchPositionDB.transaction(['positions','viewports','recent-pages']);tx.oncomplete=resolve;
+          const tx=positionStorage.database.transaction(['positions','viewports','recent-pages']);tx.oncomplete=resolve;
         })''')
 
     def visit(self, index):
@@ -51,7 +51,7 @@ class RecentSearchPageTests(unittest.TestCase):
     def begin_restore(self):
         self.page.evaluate("STATE.query='paging-other';doSearch()")
         self.page.wait_for_function('!STATE.isLoading')
-        self.page.evaluate("searchViewSnapshots.clear();searchViewportSnapshots.clear();recentSearchPages.clear();windowCalls=[];windowStall=1;STATE.query='paging-original';doSearch(false,false,true)")
+        self.page.evaluate("searchViewSnapshots.clear();positionPersistence.viewports.clear();positionPersistence.recentPages.clear();windowCalls=[];windowStall=1;STATE.query='paging-original';doSearch(false,false,true)")
         self.page.wait_for_function('positionRestore?.preview && !!window.releaseWindow')
 
     def wait_cached(self, index):
@@ -69,8 +69,8 @@ class RecentSearchPageTests(unittest.TestCase):
           TextEncoder.prototype.encode=function(...args){counts.encodes++;return encode.apply(this,args)};
           try {
             for(let offset=1;offset<=20;offset++) {setResultScrollTop(getVirtualOffset(49850)+offset);saveSearchPosition()}
-            await new Promise(resolve=>{const tx=searchPositionDB.transaction(['positions','viewports','recent-pages']);tx.oncomplete=resolve});
-            return {...counts,offset:searchPositions.get(originalWindowKey).offset};
+            await new Promise(resolve=>{const tx=positionStorage.database.transaction(['positions','viewports','recent-pages']);tx.oncomplete=resolve});
+            return {...counts,offset:positionPersistence.positions.get(originalWindowKey).offset};
           } finally {IDBObjectStore.prototype.put=put;TextEncoder.prototype.encode=encode}
         }''')
         self.assertAlmostEqual(result.pop('offset'), 20, delta=1)
@@ -78,9 +78,9 @@ class RecentSearchPageTests(unittest.TestCase):
 
     def test_new_index_reuses_covering_viewport_and_restores_latest_offset(self):
         self.fixture.persist_viewport()
-        self.page.evaluate('window.keptViewport=searchViewportSnapshots.get(originalWindowKey)')
+        self.page.evaluate('window.keptViewport=positionPersistence.viewports.get(originalWindowKey)')
         self.visit(49855)
-        self.assertTrue(self.page.evaluate('keptViewport===searchViewportSnapshots.get(originalWindowKey)'))
+        self.assertTrue(self.page.evaluate('keptViewport===positionPersistence.viewports.get(originalWindowKey)'))
         self.begin_restore()
         self.wait_cached(49855)
         self.page.evaluate('releaseWindow()')
@@ -141,8 +141,8 @@ class RecentSearchPageTests(unittest.TestCase):
         result = self.page.evaluate('''async () => {
           const data=cloneSearchData({results:STATE.results.slice(49800,49900),page:499,page_size:100,total:STATE.total,generation:'regular'});
           const results=STATE.results.map(cloneSearchResult),view={...displayedSearchView,results,window:null};
-          saveRecentSearchPages(searchPositions.get(originalWindowKey),view,49850);
-          recentSearchPages.clear();
+          positionPersistence.saveRecentPages(positionPersistence.positions.get(originalWindowKey),view,49850);
+          positionPersistence.recentPages.clear();
           const entry=await readRecentSearchPage(originalWindowKey,499,{...resultWindow,generation:'regular'});
           return entry && {generation:entry.generation,id:entry.results[50].ID};
         }''')
@@ -169,11 +169,11 @@ class RecentSearchPageTests(unittest.TestCase):
         self.prepare_pages()
         checks = self.page.evaluate('''async () => {
           const key=getSearchViewKey(),expected=resultWindow;
-          recentSearchPages.clear();
+          positionPersistence.recentPages.clear();
           const entry=await readRecentSearchPage(key,251,expected);
           const good=entry?.results[50].ID==='25050';
           const other=await readRecentSearchPage(key+'other',251,expected);
-          entry.savedAt=Date.now()-RECENT_SEARCH_PAGE_TTL-1;
+          entry.savedAt=Date.now()-VoiceOfMLPositionPolicy.RECENT_PAGE_TTL-1;
           const expired=await readRecentSearchPage(key,251,expected);
           entry.savedAt=Date.now();entry.results.pop();
           const partial=await readRecentSearchPage(key,251,expected);
@@ -184,14 +184,14 @@ class RecentSearchPageTests(unittest.TestCase):
     def test_page_cache_is_bounded_and_oversized_pages_keep_all_live_results(self):
         self.fixture.persist_viewport()
         result = self.page.evaluate('''async () => {
-          const position=searchPositions.get(originalWindowKey), view=displayedSearchView;
-          for(let i=0;i<35;i++)saveRecentSearchPages(position,{...view,key:JSON.stringify({...JSON.parse(view.key),query:'bounded-'+i})},position.index);
-          await new Promise(resolve=>{const tx=searchPositionDB.transaction('recent-pages');tx.oncomplete=resolve});
-          const count=await new Promise(resolve=>{const request=searchPositionDB.transaction('recent-pages').objectStore('recent-pages').count();request.onsuccess=()=>resolve(request.result)});
+          const position=positionPersistence.positions.get(originalWindowKey), view=displayedSearchView;
+          for(let i=0;i<35;i++)positionPersistence.saveRecentPages(position,{...view,key:JSON.stringify({...JSON.parse(view.key),query:'bounded-'+i})},position.index);
+          await new Promise(resolve=>{const tx=positionStorage.database.transaction('recent-pages');tx.oncomplete=resolve});
+          const count=await new Promise(resolve=>{const request=positionStorage.database.transaction('recent-pages').objectStore('recent-pages').count();request.onsuccess=()=>resolve(request.result)});
           const oversizedKey=JSON.stringify({...JSON.parse(view.key),query:'oversized'});
           for(let i=49800;i<49900;i++)STATE.results[i]={...STATE.results[i],Metadata:'x'.repeat(4000)};
-          saveRecentSearchPages(position,{...view,key:oversizedKey},position.index);
-          return {count,memory:recentSearchPages.size,oversized:recentSearchPages.has(JSON.stringify([oversizedKey,499])),live:STATE.results.slice(49800,49900).length};
+          positionPersistence.saveRecentPages(position,{...view,key:oversizedKey},position.index);
+          return {count,memory:positionPersistence.recentPages.size,oversized:positionPersistence.recentPages.has(JSON.stringify([oversizedKey,499])),live:STATE.results.slice(49800,49900).length};
         }''')
         self.assertEqual(result, {'count':32, 'memory':32, 'oversized':False, 'live':100})
 
@@ -200,23 +200,23 @@ class RecentSearchPageTests(unittest.TestCase):
           const now=Date.now(),clock=Date.now;Date.now=()=>now;
           const name='recent-pages';
           try {
-            const tx=searchPositionDB.transaction(name,'readwrite'),store=tx.objectStore(name);
+            const tx=positionStorage.database.transaction(name,'readwrite'),store=tx.objectStore(name);
             store.clear();
             for(let i=0;i<40;i++)store.put({id:['prune',i],savedAt:now});
-            store.put({id:['expired',0],savedAt:now-RECENT_SEARCH_PAGE_TTL-1});
-            pruneSearchContentStore(store,32,RECENT_SEARCH_PAGE_TTL);
+            store.put({id:['expired',0],savedAt:now-VoiceOfMLPositionPolicy.RECENT_PAGE_TTL-1});
+            VoiceOfMLPositionStorage.pruneContent(store,32,VoiceOfMLPositionPolicy.RECENT_PAGE_TTL);
             await new Promise((resolve,reject)=>{tx.oncomplete=resolve;tx.onabort=reject});
             const entries=await new Promise(resolve=>{
-              const request=searchPositionDB.transaction(name).objectStore(name).getAll();
+              const request=positionStorage.database.transaction(name).objectStore(name).getAll();
               request.onsuccess=()=>resolve(request.result);
             });
-            const tx2=searchPositionDB.transaction(name,'readwrite'),s=tx2.objectStore(name);
-            s.clear();s.put({id:['boundary',0],savedAt:now-RECENT_SEARCH_PAGE_TTL});
-            s.put({id:['expired',0],savedAt:now-RECENT_SEARCH_PAGE_TTL-1});
-            pruneSearchContentStore(s,32,RECENT_SEARCH_PAGE_TTL);
+            const tx2=positionStorage.database.transaction(name,'readwrite'),s=tx2.objectStore(name);
+            s.clear();s.put({id:['boundary',0],savedAt:now-VoiceOfMLPositionPolicy.RECENT_PAGE_TTL});
+            s.put({id:['expired',0],savedAt:now-VoiceOfMLPositionPolicy.RECENT_PAGE_TTL-1});
+            VoiceOfMLPositionStorage.pruneContent(s,32,VoiceOfMLPositionPolicy.RECENT_PAGE_TTL);
             await new Promise((resolve,reject)=>{tx2.oncomplete=resolve;tx2.onabort=reject});
             const boundary=await new Promise(resolve=>{
-              const r=searchPositionDB.transaction(name).objectStore(name).getAll();r.onsuccess=()=>resolve(r.result.map(e=>e.id[0]));
+              const r=positionStorage.database.transaction(name).objectStore(name).getAll();r.onsuccess=()=>resolve(r.result.map(e=>e.id[0]));
             });
             return {ids:entries.map(entry=>entry.id[1]),boundary};
           } finally {Date.now=clock;}
@@ -232,9 +232,9 @@ class RecentSearchPageTests(unittest.TestCase):
           };
           try {
             const view=displayedSearchView,key=JSON.stringify({...JSON.parse(view.key),query:'batch-write'});
-            saveRecentSearchPages({index:49895},{...view,key},49905);
-            await new Promise(resolve=>{const tx=searchPositionDB.transaction('recent-pages');tx.oncomplete=resolve});
-            return {writes,pages:[499,500].map(page=>recentSearchPages.get(JSON.stringify([key,page]))?.results.length)};
+            positionPersistence.saveRecentPages({index:49895},{...view,key},49905);
+            await new Promise(resolve=>{const tx=positionStorage.database.transaction('recent-pages');tx.oncomplete=resolve});
+            return {writes,pages:[499,500].map(page=>positionPersistence.recentPages.get(JSON.stringify([key,page]))?.results.length)};
           } finally {IDBDatabase.prototype.transaction=transaction;}
         }''')
         self.assertEqual(result, {'writes':1,'pages':[100,100]})

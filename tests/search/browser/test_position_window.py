@@ -22,8 +22,8 @@ class PositionWindowTests(unittest.TestCase):
           searchViewSnapshots.clear();
           window.windowCalls=[];window.windowFailures=new Set();window.windowGeneration='one';
           window.windowAnchor=49850;window.windowTotal=50001;window.windowStall=0;
-          window.originalWindowKey=[...searchPositions.keys()].find(key=>JSON.parse(key).query==='paging-original');
-          const saved=searchPositions.get(originalWindowKey);
+          window.originalWindowKey=[...positionPersistence.positions.keys()].find(key=>JSON.parse(key).query==='paging-original');
+          const saved=positionPersistence.positions.get(originalWindowKey);
           Object.assign(saved,{index:49850,loadedPage:500,anchorId:'VoiceOfML/Test\\0paging-49850.txt',offset:11});
           // Isolate recovery/demand requests from the normal next-page prefetch.
           prefetchNextPage=()=>{};
@@ -92,7 +92,7 @@ class PositionWindowTests(unittest.TestCase):
         self.assertEqual(self.page.evaluate('windowCalls.filter(page=>page===251).length'), 3)
         self.page.wait_for_timeout(800)
         self.assertEqual(self.page.evaluate('windowCalls.filter(page=>page===251).length'), 3)
-        self.assertEqual(self.page.evaluate('searchPositions.get(originalWindowKey).index'), 49850)
+        self.assertEqual(self.page.evaluate('positionPersistence.positions.get(originalWindowKey).index'), 49850)
         self.page.evaluate('windowFailures.clear()')
         self.page.locator('#search-window-status button').click()
         self.wait_anchor(25050)
@@ -238,8 +238,8 @@ class PositionWindowTests(unittest.TestCase):
 
     def persist_viewport(self):
         self.page.evaluate('''async () => {
-          searchPositions.get(originalWindowKey).savedAt=0;saveSearchPosition();
-          await new Promise(resolve=>{const tx=searchPositionDB.transaction(['positions','viewports']);tx.oncomplete=resolve});
+          positionPersistence.positions.get(originalWindowKey).savedAt=0;saveSearchPosition();
+          await new Promise(resolve=>{const tx=positionStorage.database.transaction(['positions','viewports']);tx.oncomplete=resolve});
         }''')
 
     def assert_cached_viewport(self, offset=11):
@@ -260,7 +260,7 @@ class PositionWindowTests(unittest.TestCase):
         self.persist_viewport()
         self.page.evaluate("STATE.query='paging-other';doSearch()")
         self.page.wait_for_function('!STATE.isLoading')
-        self.page.evaluate("searchViewSnapshots.clear();searchViewportSnapshots.clear();windowStall=1;STATE.query='paging-original';doSearch(false,false,true)")
+        self.page.evaluate("searchViewSnapshots.clear();positionPersistence.viewports.clear();windowStall=1;STATE.query='paging-original';doSearch(false,false,true)")
         self.assert_cached_viewport()
         self.page.evaluate("window.cachedRow=DOM.resultsList.querySelector('[data-index=\"49850\"]');releaseWindow()")
         self.wait_anchor(49850)
@@ -271,7 +271,7 @@ class PositionWindowTests(unittest.TestCase):
         self.page.wait_for_timeout(100)
         self.persist_viewport()
         # Resizing can change fractional row geometry; restore the saved mobile offset.
-        saved_offset = self.page.evaluate('searchPositions.get(originalWindowKey).offset')
+        saved_offset = self.page.evaluate('positionPersistence.positions.get(originalWindowKey).offset')
         fetcher = self.page.evaluate('fetchPositionPage.toString()')
         self.page.add_init_script('''document.addEventListener('DOMContentLoaded',()=>{
           window.windowCalls=[];window.windowFailures=new Set();window.windowGeneration='one';
@@ -322,10 +322,10 @@ class PositionWindowTests(unittest.TestCase):
 
     def test_saved_viewport_is_bounded_and_not_used_for_another_anchor(self):
         self.persist_viewport()
-        self.assertLessEqual(self.page.evaluate('searchViewportSnapshots.get(originalWindowKey).records.length'), 80)
+        self.assertLessEqual(self.page.evaluate('positionPersistence.viewports.get(originalWindowKey).records.length'), 80)
         self.page.evaluate("STATE.query='paging-other';doSearch()")
         self.page.wait_for_function('!STATE.isLoading')
-        self.page.evaluate("searchViewSnapshots.clear();searchPositions.get(originalWindowKey).anchorId='different';windowStall=1;STATE.query='paging-original';doSearch(false,false,true)")
+        self.page.evaluate("searchViewSnapshots.clear();positionPersistence.positions.get(originalWindowKey).anchorId='different';windowStall=1;STATE.query='paging-original';doSearch(false,false,true)")
         self.page.wait_for_function('!!window.releaseWindow')
         self.assertFalse(self.page.evaluate('!!positionRestore.preview'))
         self.page.evaluate('releaseWindow()')
@@ -341,12 +341,12 @@ class PositionWindowTests(unittest.TestCase):
         }''')
         self.persist_viewport()
         self.assertTrue(self.page.evaluate('''() => {
-          const saved=searchViewportSnapshots.get(originalWindowKey);
-          return saved.records.length<80 && new TextEncoder().encode(JSON.stringify(saved)).byteLength<=SEARCH_VIEWPORT_BYTES_MAX;
+          const saved=positionPersistence.viewports.get(originalWindowKey);
+          return saved.records.length<80 && new TextEncoder().encode(JSON.stringify(saved)).byteLength<=VoiceOfMLPositionPolicy.VIEWPORT_BYTES_MAX;
         }'''))
         self.page.evaluate("STATE.query='paging-other';doSearch()")
         self.page.wait_for_function('!STATE.isLoading')
-        self.page.evaluate("searchViewSnapshots.clear();searchViewportSnapshots.clear();windowStall=1;STATE.query='paging-original';doSearch(false,false,true)")
+        self.page.evaluate("searchViewSnapshots.clear();positionPersistence.viewports.clear();windowStall=1;STATE.query='paging-original';doSearch(false,false,true)")
         self.assert_cached_viewport()
         self.page.evaluate('releaseWindow()')
         self.wait_anchor(49850)

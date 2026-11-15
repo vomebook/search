@@ -118,19 +118,19 @@ class SearchSessionBrowserTests(unittest.TestCase):
         self.page.route(self.origin + '/search/', lambda route: route.fulfill(
             content_type='text/html', body=(support.ROOT / 'static/index.html').read_text()))
         self.page.goto(self.origin + '/search/', wait_until='domcontentloaded')
-        self.page.wait_for_function('!!searchPositionDB', timeout=8000)
+        self.page.wait_for_function('!!positionStorage.database', timeout=8000)
         result = self.page.evaluate('''async () => {
-          searchPositionDB.close(); searchPositionDB=null;
+          positionStorage.close();
           const request=indexedDB.open('voice-search-positions',4);
           const blocker=await new Promise((resolve,reject)=>{request.onsuccess=()=>resolve(request.result);request.onerror=()=>reject(request.error)});
           const deletion=indexedDB.deleteDatabase('voice-search-positions');
           let deleted=false; deletion.onsuccess=()=>{deleted=true};
           await initSearchPositions();
-          const openedBefore=!!searchPositionDB;
+          const openedBefore=!!positionStorage.database;
           blocker.close();
           for(let i=0;i<50&&!deleted;i++) await new Promise(resolve=>setTimeout(resolve,20));
           await new Promise(resolve=>setTimeout(resolve,100));
-          return {openedBefore,deleted,openedAfter:!!searchPositionDB};
+          return {openedBefore,deleted,openedAfter:!!positionStorage.database};
         }''')
         self.assertEqual(result, {'openedBefore':False, 'deleted':True, 'openedAfter':False})
 

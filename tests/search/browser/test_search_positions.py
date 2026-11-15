@@ -22,10 +22,10 @@ class SearchPositionTests(unittest.TestCase):
         self.page.evaluate('maybeLoadNextPage(false,true)')
         self.page.wait_for_function('STATE._loadedPage>=2 && !STATE.isLoading')
         self.page.evaluate('DOM.resultsContainer.scrollTop=getVirtualOffset(125)+17')
-        self.page.wait_for_function('searchPositions.get(getSearchViewKey())?.index===125')
-        self.saved = self.page.evaluate('searchPositions.get(getSearchViewKey())')
+        self.page.wait_for_function('positionPersistence.positions.get(getSearchViewKey())?.index===125')
+        self.saved = self.page.evaluate('positionPersistence.positions.get(getSearchViewKey())')
         self.page.evaluate('''() => new Promise(resolve => {
-          const tx=searchPositionDB.transaction('positions');
+          const tx=positionStorage.database.transaction('positions');
           tx.objectStore('positions').get(getSearchViewKey()); tx.oncomplete=resolve;
         })''')
 
@@ -59,14 +59,14 @@ class SearchPositionTests(unittest.TestCase):
           });
         }''', self.saved)
         self.page.goto(self.fixture.origin + '/search/#/?q=paging-original&local=0')
-        self.page.wait_for_function('searchPositionDB?.version === 4 && !STATE.isLoading')
+        self.page.wait_for_function('positionStorage.database?.version === 4 && !STATE.isLoading')
         self.assertEqual(self.page.evaluate('findVirtualIndex(getResultScrollTop())'), 0)
         self.page.evaluate('setResultScrollTop(getVirtualOffset(25)+10);saveSearchPosition()')
-        self.page.wait_for_function('searchPositions.get(getSearchViewKey())?.index === 25')
-        self.saved = self.page.evaluate('searchPositions.get(getSearchViewKey())')
+        self.page.wait_for_function('positionPersistence.positions.get(getSearchViewKey())?.index === 25')
+        self.saved = self.page.evaluate('positionPersistence.positions.get(getSearchViewKey())')
         # Memory updates precede IndexedDB commit; assert persistence before reload.
         persisted = self.page.evaluate('''key => new Promise((resolve,reject) => {
-          const tx=searchPositionDB.transaction('positions'), req=tx.objectStore('positions').get(key);
+          const tx=positionStorage.database.transaction('positions'), req=tx.objectStore('positions').get(key);
           let value; req.onsuccess=()=>{value=req.result||null};
           tx.oncomplete=()=>resolve(value);tx.onabort=()=>reject(tx.error);
         })''', self.saved['key'])
@@ -115,7 +115,7 @@ class SearchPositionTests(unittest.TestCase):
         self.page.evaluate("STATE.query='paging-latest'; doSearch(); releaseRestore()")
         self.page.wait_for_function("STATE.query==='paging-latest' && !STATE.isLoading && !positionRestore")
         self.assertEqual(self.page.evaluate('displayedSearchView.key'), self.page.evaluate('getSearchViewKey()'))
-        self.assertEqual(self.page.evaluate('searchPositions.get(' + repr(self.saved['key']) + ').anchorId'), self.saved['anchorId'])
+        self.assertEqual(self.page.evaluate('positionPersistence.positions.get(' + repr(self.saved['key']) + ').anchorId'), self.saved['anchorId'])
         self.assertEqual(self.fixture.errors, [])
 
     def test_rebuild_failure_keeps_position_and_retry_succeeds(self):
@@ -138,11 +138,11 @@ class SearchPositionTests(unittest.TestCase):
         self.page.evaluate('maybeLoadNextPage(false,true)')
         self.page.wait_for_function('STATE._loadedPage>=2 && !STATE.isLoading')
         self.page.evaluate('DOM.resultsContainer.scrollTop=getVirtualOffset(120)+9')
-        self.page.wait_for_function('searchPositions.get(getSearchViewKey())?.index===120')
-        saved=self.page.evaluate('searchPositions.get(getSearchViewKey())')
+        self.page.wait_for_function('positionPersistence.positions.get(getSearchViewKey())?.index===120')
+        saved=self.page.evaluate('positionPersistence.positions.get(getSearchViewKey())')
         self.assertTrue(self.page.evaluate('''() => {
-          const page=recentSearchPages.get(JSON.stringify([getSearchViewKey(),2]));
-          return page?.generation.startsWith('worker:') && getResultStableId(page.results[20])===searchPositions.get(getSearchViewKey()).anchorId;
+          const page=positionPersistence.recentPages.get(JSON.stringify([getSearchViewKey(),2]));
+          return page?.generation.startsWith('worker:') && getResultStableId(page.results[20])===positionPersistence.positions.get(getSearchViewKey()).anchorId;
         }'''))
         self.page.evaluate("STATE.query='paging-other'; doSearch()")
         self.page.wait_for_function('!STATE.isLoading')
@@ -157,15 +157,15 @@ class SearchPositionTests(unittest.TestCase):
 
     def test_expiry_and_count_prune_positions_independently(self):
         result = self.page.evaluate('''async () => {
-          const original=searchPositions.get(getSearchViewKey());
+          const original=positionPersistence.positions.get(getSearchViewKey());
           await new Promise(resolve=>{
-            const tx=searchPositionDB.transaction('positions','readwrite'),store=tx.objectStore('positions');
+            const tx=positionStorage.database.transaction('positions','readwrite'),store=tx.objectStore('positions');
             for(let i=0;i<505;i++) store.put({...original,key:'test-'+i,savedAt:Date.now()-i*1000});
-            store.put({...original,key:'expired',savedAt:Date.now()-SEARCH_POSITION_TTL-1});
+            store.put({...original,key:'expired',savedAt:Date.now()-VoiceOfMLPositionPolicy.POSITION_TTL-1});
             tx.oncomplete=resolve;
           });
-          searchPositions.clear(); searchPositionDB.close(); await initSearchPositions();
-          return {count:searchPositions.size,expired:searchPositions.has('expired'),oldest:searchPositions.has('test-504')};
+          positionPersistence.positions.clear(); positionStorage.database.close(); await initSearchPositions();
+          return {count:positionPersistence.positions.size,expired:positionPersistence.positions.has('expired'),oldest:positionPersistence.positions.has('test-504')};
         }''')
         self.assertEqual(result, {'count': 500, 'expired': False, 'oldest': False})
 
@@ -282,10 +282,9 @@ class SearchPositionTests(unittest.TestCase):
           const first=saveSearchViewSnapshot(), results=first.results;
           let scans=0; const cursor=IDBIndex.prototype.openCursor;
           IDBIndex.prototype.openCursor=function(...args){scans++; return cursor.apply(this,args)};
-          lastPositionPruneAt=Date.now();
           try {
             for(let i=0;i<20;i++) saveSearchViewSnapshot();
-            const tx=searchPositionDB.transaction('positions');
+            const tx=positionStorage.database.transaction('positions');
             await new Promise(resolve=>{tx.oncomplete=resolve});
             return {same:searchViewSnapshots.get(getSearchViewKey()).results===results,scans};
           } finally {IDBIndex.prototype.openCursor=cursor;}
@@ -351,8 +350,8 @@ class SearchPositionTests(unittest.TestCase):
         self.begin_rebuild('''() => {
           prefetchNextPage=()=>{}; // Isolate restoration from ordinary lookahead.
           pagingTotal=800;searchResponseCache.clear();
-          const originalKey=[...searchPositions.keys()].find(key=>JSON.parse(key).query==='paging-original');
-          searchPositions.get(originalKey).loadedPage=8;
+          const originalKey=[...positionPersistence.positions.keys()].find(key=>JSON.parse(key).query==='paging-original');
+          positionPersistence.positions.get(originalKey).loadedPage=8;
           const original=fetchPositionPage;window.restoreCalls=[];window.restorePeak=0;let active=0;
           fetchPositionPage=async (...args)=>{
             restoreCalls.push(args[1]);active++;restorePeak=Math.max(restorePeak,active);
@@ -372,8 +371,8 @@ class SearchPositionTests(unittest.TestCase):
         self.begin_rebuild('''() => {
           prefetchNextPage=()=>{};
           pagingTotal=400;searchResponseCache.clear();
-          const key=[...searchPositions.keys()].find(key=>JSON.parse(key).query==='paging-original');
-          searchPositions.get(key).loadedPage=4;
+          const key=[...positionPersistence.positions.keys()].find(key=>JSON.parse(key).query==='paging-original');
+          positionPersistence.positions.get(key).loadedPage=4;
           const original=fetchPositionPage;window.restoreCalls=[];window.failPage=true;
           fetchPositionPage=async (...args)=>{
             restoreCalls.push(args[1]);
@@ -393,8 +392,8 @@ class SearchPositionTests(unittest.TestCase):
     def test_parallel_generation_mismatch_discards_entire_buffer(self):
         self.begin_rebuild('''() => {
           pagingTotal=400;searchResponseCache.clear();
-          const key=[...searchPositions.keys()].find(key=>JSON.parse(key).query==='paging-original');
-          searchPositions.get(key).loadedPage=4;
+          const key=[...positionPersistence.positions.keys()].find(key=>JSON.parse(key).query==='paging-original');
+          positionPersistence.positions.get(key).loadedPage=4;
           const original=fetchPositionPage;window.coherent=false;
           fetchPositionPage=async (...args)=>({...await original(...args),generation:coherent||args[1]===3?'new':'old'});
         }''')

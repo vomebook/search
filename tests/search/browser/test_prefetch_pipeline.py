@@ -176,7 +176,7 @@ class PrefetchPipelineTests(unittest.TestCase):
     def test_matching_saved_pages_avoid_network_and_old_generation_is_rejected(self):
         result = self.page.evaluate('''async () => {
           cancelSearchPrefetch();
-          STATE._pageCache={};searchResponseCache.clear();recentSearchPages.clear();
+          STATE._pageCache={};searchResponseCache.clear();positionPersistence.recentPages.clear();
           const key=getSearchViewKey();const template={q:STATE.query,page:1,page_size:100};
           const metadata={generation:'stable',page:1,page_size:100,total:STATE.total,results:STATE.results};
           rememberSearchPageMetadata(metadata);
@@ -184,7 +184,7 @@ class PrefetchPipelineTests(unittest.TestCase):
           for(let page=2;page<=4;page++) {
             const entry={key,id:[key,page],page,page_size:100,total:STATE.total,generation:'stable',savedAt:Date.now(),
               results:Array.from({length:Math.min(100,STATE.total-(page-1)*100)},(_,i)=>({ID:String((page-1)*100+i),File:'cached'}))};
-            cached.push(entry);cacheRecentSearchPage(entry);
+            cached.push(entry);positionPersistence.recentPages.set(JSON.stringify(entry.id), entry);
           }
           window.networkPages=[];
           const native=fetchSearchPage;
@@ -195,7 +195,7 @@ class PrefetchPipelineTests(unittest.TestCase):
             const reused=Object.keys(STATE._pageCache).map(Number);
             const calls=networkPages.slice();
             cancelSearchPrefetch();STATE._pageCache={};searchResponseCache.clear();
-            cached.forEach(entry=>cacheRecentSearchPage({...entry,generation:'old'}));
+            cached.forEach(entry=>positionPersistence.recentPages.set(JSON.stringify(entry.id), {...entry,generation:'old'}));
             prefetchSearchPages('/api/search',template);
             while(controllerActive()) await new Promise(resolve=>setTimeout(resolve,0));
             return {reused,calls,revalidated:networkPages};

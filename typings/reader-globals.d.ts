@@ -455,6 +455,7 @@ declare var VoiceOfMLReaderChapters: ReaderChaptersApi;
 declare var VoiceOfMLReaderVirtual: ReaderVirtualApi;
 
 interface SearchSessionApi {
+  watchTransaction(transaction: IDBTransaction): {result: Promise<boolean>; finished: Promise<void>; fail(): void};
   createSearchSession(options: {canPersist(): boolean; canRestore(target?: URL): boolean}): {
     openSearchSessionDB(): Promise<IDBDatabase>;
     persistSearchSession(): Promise<void>;

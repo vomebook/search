@@ -2477,12 +2477,12 @@ const SEARCH_VIEW_SNAPSHOT_VERSION = 1;
 const searchViewSnapshots = new Map();
 const SEARCH_VIEW_SNAPSHOT_MAX = 20;
 const SEARCH_VIEW_SNAPSHOT_BYTES_MAX = 8 * 1024 * 1024;
-const SEARCH_POSITION_MAX = 500;
-const SEARCH_POSITION_TTL = 90 * 24 * 60 * 60 * 1000;
-const searchPositions = new Map();
-let searchPositionDB = null;
+const positionStorage = VoiceOfMLPositionStorage.create();
+const positionPersistence = VoiceOfMLSearchPositions.create({
+  storage: positionStorage, cloneResult: record => cloneSearchResult(record),
+  metadata: record => searchPageMetadata.get(/** @type {object} */ (record))
+});
 let displayedSearchView = null;
-let positionSaveTimer = null;
 let positionRestore = null;
 let resultWindow = null;
 let returnPositionTarget = null;
@@ -2504,7 +2504,7 @@ function resetPositionControlScroll() {
 
 function prepareReturnPosition(key, updateControls = true) {
   resetPositionControlScroll();
-  const saved = searchPositions.get(key);
+  const saved = positionPersistence.getPosition(key);
   setReturnPositionTarget(validSearchPosition(saved) && (saved.index > 0 || saved.offset > 0) ? saved : null);
   if (updateControls) updateSearchPositionControls();
 }
@@ -2636,7 +2636,6 @@ function setupSearchPositionControls() {
     else updateCurrentResultPosition();
   });
 }
-let lastPositionPruneAt = 0;
 let displayedViewRevision = 0;
 let measuredHeightRevision = 0;
 const searchSnapshotSources = new WeakMap();
@@ -2644,101 +2643,16 @@ const searchSnapshotResultBudgets = new WeakMap();
 const searchSnapshotHeightValues = new WeakMap();
 const searchSnapshotCloneSources = new WeakMap();
 let snapshotCloneTask = null;
-const searchViewportSnapshots = new Map();
-const SEARCH_VIEWPORT_MAX = 64;
-const SEARCH_VIEWPORT_BYTES_MAX = 64 * 1024;
 const resultRowRecords = new WeakMap();
-const searchViewportSources = new WeakMap();
 const searchPageMetadata = new WeakMap();
-const recentSearchPages = new Map();
-const recentSearchPageSources = new WeakMap();
-const RECENT_SEARCH_PAGE_MAX = 32;
-const RECENT_SEARCH_PAGE_BYTES_MAX = 256 * 1024;
-const RECENT_SEARCH_PAGE_TTL = 7 * 24 * 60 * 60 * 1000;
 
 function rememberSearchPageMetadata(data) {
   if (data?.results?.[0] && typeof data.generation === "string" && data.generation) searchPageMetadata.set(data.results[0], {
     generation: data.generation, total: data.total, page: data.page, page_size: data.page_size });
 }
 
-function cacheRecentSearchPage(entry) {
-  const id = JSON.stringify(entry.id);
-  recentSearchPages.delete(id); recentSearchPages.set(id, entry);
-  while (recentSearchPages.size > RECENT_SEARCH_PAGE_MAX) recentSearchPages.delete(recentSearchPages.keys().next().value);
-}
-
-function pruneSearchContentStore(store, limit, ttl) {
-  const index = store.index("savedAt");
-  const expired = index.openKeyCursor(IDBKeyRange.upperBound(Date.now() - ttl, true));
-  expired.onsuccess = event => {
-    const cursor = event.target.result;
-    if (cursor) { store.delete(cursor.primaryKey); cursor.continue(); }
-  };
-  let skipped = false;
-  index.openKeyCursor(null, "prev").onsuccess = event => {
-    const cursor = event.target.result;
-    if (!cursor) return;
-    // Jump over retained keys inside IndexedDB instead of visiting each in JS.
-    if (!skipped) { skipped = true; cursor.advance(limit); return; }
-    store.delete(cursor.primaryKey); cursor.continue();
-  };
-}
-
-function saveRecentSearchPages(position, view, visibleEnd) {
-  const size = JSON.parse(view.key).pageSize;
-  let store;
-  for (let page = Math.floor(position.index / size) + 1; page <= Math.floor(visibleEnd / size) + 1; page++) {
-    const start = (page - 1) * size, length = Math.min(size, view.total - start);
-    const metadata = view.window || searchPageMetadata.get(view.results[start]);
-    if (!metadata?.generation || metadata.total !== view.total || (view.window && !view.window.pages.has(page))) continue;
-    const id = [view.key, page], previous = recentSearchPages.get(JSON.stringify(id));
-    const source = previous && recentSearchPageSources.get(previous);
-    if (source?.first === view.results[start] && source.last === view.results[start + length - 1]
-        && previous.generation === metadata.generation && Date.now() - previous.savedAt < 60000) {
-      cacheRecentSearchPage(previous); continue;
-    }
-    const results = view.results.slice(start, start + length);
-    if (results.length !== length || Object.keys(results).length !== length || results.some(record => !record)) continue;
-    const entry = { id, key: view.key, page, page_size: size, total: view.total, generation: metadata.generation,
-      results: results.map(cloneSearchResult), savedAt: Date.now() };
-    if (new TextEncoder().encode(JSON.stringify(entry)).byteLength > RECENT_SEARCH_PAGE_BYTES_MAX) continue;
-    cacheRecentSearchPage(entry);
-    recentSearchPageSources.set(entry, {first: results[0], last: results[length - 1]});
-    if (searchPositionDB?.objectStoreNames.contains("recent-pages")) try {
-      if (!store) store = searchPositionDB.transaction("recent-pages", "readwrite").objectStore("recent-pages");
-      store.put(entry);
-    } catch (_) {}
-  }
-  if (store) try { pruneSearchContentStore(store, RECENT_SEARCH_PAGE_MAX, RECENT_SEARCH_PAGE_TTL); } catch (_) {}
-}
-
 async function readRecentSearchPage(key, page, expected, timeoutMs = 150, signal = null) {
-  const id = [key, page];
-  let entry = recentSearchPages.get(JSON.stringify(id));
-  if (!entry && searchPositionDB?.objectStoreNames.contains("recent-pages")) entry = await new Promise(resolve => {
-    let settled = false;
-    const finish = value => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      signal?.removeEventListener("abort", abort);
-      resolve(value);
-    };
-    const abort = () => finish(null);
-    const timer = setTimeout(abort, timeoutMs);
-    if (signal?.aborted) { abort(); return; }
-    signal?.addEventListener("abort", abort, { once: true });
-    try {
-      const request = searchPositionDB.transaction("recent-pages").objectStore("recent-pages").get(id);
-      request.onsuccess = () => finish(request.result);
-      request.onerror = abort;
-    } catch (_) { abort(); }
-  });
-  if (!entry || entry.key !== key || entry.savedAt < Date.now() - RECENT_SEARCH_PAGE_TTL || !expected.generation
-      || !Array.isArray(entry.results) || Object.keys(entry.results).length !== entry.results.length) return null;
-  try { validatePositionWindowPage(entry, page, expected.query.pageSize, expected); } catch (_) { return null; }
-  cacheRecentSearchPage(entry);
-  return entry;
+  return positionPersistence.readRecentPage(key, page, expected, timeoutMs, signal);
 }
 
 async function loadCachedPreviewPage(window, page) {
@@ -2768,70 +2682,19 @@ async function loadCachedPreviewPage(window, page) {
 }
 
 function saveSearchViewport(position, view) {
-  const visibleEnd = findVirtualIndex(getResultScrollTop() + DOM.resultsContainer.clientHeight);
-  saveRecentSearchPages(position, view, visibleEnd);
-  const previous = searchViewportSnapshots.get(view.key), source = previous && searchViewportSources.get(previous);
-  const pageStart = Math.floor(position.index / STATE.pageSize) * STATE.pageSize;
-  const generation = view.window?.generation || searchPageMetadata.get(view.results[pageStart])?.generation;
-  if (source && previous.total === view.total && previous.generation === generation
-      && previous.measurementKey === getHeightMeasurementKey() && Date.now() - previous.savedAt < 24 * 60 * 60 * 1000) {
-    let covered = true;
-    for (let index = position.index; index <= visibleEnd; index++) {
-      const saved = source.get(index);
-      if (!saved || saved.record !== view.results[index] || saved.height !== (VSCROLL.heights[index] || VSCROLL.estimatedHeight)) { covered = false; break; }
-    }
-    if (covered) return;
-  }
-  const start = Math.max(0, position.index - 24);
-  const end = Math.min(view.results.length, position.index + 56);
-  const records = [];
-  for (let index = start; index < end; index++) {
-    if (view.results[index]) records.push([index, cloneSearchResult(view.results[index]), VSCROLL.heights[index] || VSCROLL.estimatedHeight]);
-  }
-  const viewport = { key: position.key, savedAt: position.savedAt, anchorId: position.anchorId, index: position.index,
-    total: view.total, generation, estimatedHeight: VSCROLL.estimatedHeight, measurementKey: getHeightMeasurementKey(), records: [] };
-  // API records can include long URLs. Spend the budget on the visible screen
-  // first, then its nearest neighbors, rather than discarding the whole preview.
-  const distance = index => Math.max(position.index - index, index - visibleEnd, 0);
-  records.sort((a, b) => distance(a[0]) - distance(b[0]) || a[0] - b[0]);
-  const encoder = new TextEncoder();
-  let bytes = encoder.encode(JSON.stringify(viewport)).byteLength;
-  for (const record of records) {
-    const cost = encoder.encode(JSON.stringify(record)).byteLength + 1;
-    if (bytes + cost > SEARCH_VIEWPORT_BYTES_MAX) continue;
-    viewport.records.push(record); bytes += cost;
-  }
-  viewport.records.sort((a, b) => a[0] - b[0]);
-  if (!viewport.records.some(([index]) => index === position.index)) return;
-  searchViewportSnapshots.delete(viewport.key);
-  searchViewportSnapshots.set(viewport.key, viewport);
-  searchViewportSources.set(viewport, new Map(viewport.records.map(([index, , height]) => [index, {record: view.results[index], height}])));
-  while (searchViewportSnapshots.size > SEARCH_VIEWPORT_MAX) searchViewportSnapshots.delete(searchViewportSnapshots.keys().next().value);
-  if (searchPositionDB?.objectStoreNames.contains("viewports")) try {
-    const tx = searchPositionDB.transaction("viewports", "readwrite"), store = tx.objectStore("viewports");
-    store.put(viewport);
-    pruneSearchContentStore(store, SEARCH_VIEWPORT_MAX, SEARCH_POSITION_TTL);
-  } catch (_) {}
-}
-
-async function readSearchViewport(key) {
-  if (searchViewportSnapshots.has(key)) return searchViewportSnapshots.get(key);
-  if (!searchPositionDB?.objectStoreNames.contains("viewports")) return null;
-  return new Promise(resolve => {
-    const timer = setTimeout(() => resolve(null), 150);
-    try {
-      const request = searchPositionDB.transaction("viewports").objectStore("viewports").get(key);
-      request.onsuccess = () => { clearTimeout(timer); resolve(request.result); };
-      request.onerror = () => { clearTimeout(timer); resolve(null); };
-    } catch (_) { clearTimeout(timer); resolve(null); }
+  positionPersistence.saveViewport(position, view, {
+    visibleEnd: findVirtualIndex(getResultScrollTop() + DOM.resultsContainer.clientHeight),
+    pageSize: STATE.pageSize, measurementKey: getHeightMeasurementKey(), estimatedHeight: VSCROLL.estimatedHeight,
+    heightAt: index => VSCROLL.heights[index] || VSCROLL.estimatedHeight
   });
 }
 
+async function readSearchViewport(key) {
+  return positionPersistence.readViewport(key);
+}
+
 function validSearchViewport(viewport, position) {
-  return !!position && !!viewport && viewport.key === position.key
-    && viewport.savedAt >= Date.now() - SEARCH_POSITION_TTL && Number.isInteger(viewport.total) && viewport.total > position.index
-    && Array.isArray(viewport.records) && viewport.records.length <= 80
-    && viewport.records.some(([index, record]) => index === position.index && getResultStableId(record) === position.anchorId);
+  return VoiceOfMLPositionPolicy.validViewport(viewport, position, getResultStableId);
 }
 
 function showSavedSearchViewport(viewport, position, task) {
@@ -2852,47 +2715,11 @@ function showSavedSearchViewport(viewport, position, task) {
 }
 
 function validSearchPosition(value) {
-  return value && value.version === 1 && typeof value.key === "string"
-    && Number.isInteger(value.index) && value.index >= 0
-    && Number.isFinite(value.offset) && value.offset >= 0
-    && Number.isInteger(value.loadedPage) && value.loadedPage >= 1
-    && typeof value.anchorId === "string" && value.savedAt > Date.now() - SEARCH_POSITION_TTL;
+  return VoiceOfMLPositionPolicy.validPosition(value);
 }
 
 async function initSearchPositions() {
-  await /** @type {Promise<void>} */ (new Promise(resolve => {
-    let expired = false;
-    const timer = setTimeout(() => { expired = true; resolve(); }, 1500);
-    try {
-      const request = indexedDB.open("voice-search-positions", 4);
-      request.onupgradeneeded = () => {
-        const db = request.result;
-        for (const name of Array.from(db.objectStoreNames)) db.deleteObjectStore(name);
-        for (const name of ["positions", "viewports", "recent-pages"]) {
-          const store = db.createObjectStore(name, {keyPath: name === "recent-pages" ? "id" : "key"});
-          store.createIndex("savedAt", "savedAt");
-        }
-      };
-      request.onerror = request.onblocked = () => { expired = true; clearTimeout(timer); resolve(); };
-      request.onsuccess = () => {
-        if (expired) { request.result.close(); return; }
-        searchPositionDB = request.result;
-        searchPositionDB.onversionchange = () => { searchPositionDB.close(); searchPositionDB = null; };
-        const transaction = searchPositionDB.transaction("positions", "readwrite");
-        const store = transaction.objectStore("positions");
-        store.getAll().onsuccess = event => {
-          // The position store is capped at 500; read it in one database round trip.
-          let count = 0;
-          const values = event.target.result.sort((a, b) => b.savedAt - a.savedAt);
-          for (const value of values) {
-            if (!validSearchPosition(value) || ++count > SEARCH_POSITION_MAX) store.delete(value.key);
-            else if (!searchPositions.has(value.key)) searchPositions.set(value.key, value);
-          }
-        };
-        transaction.oncomplete = transaction.onabort = () => { clearTimeout(timer); resolve(); };
-      };
-    } catch (_) { clearTimeout(timer); resolve(); }
-  }));
+  await positionPersistence.init();
 }
 
 function rememberDisplayedSearchView() {
@@ -2912,52 +2739,25 @@ function rememberDisplayedSearchView() {
 }
 
 function saveSearchPosition() {
-  clearTimeout(positionSaveTimer);
+  positionPersistence.cancelSave();
   const view = displayedSearchView;
   const target = view && getReturnPositionTarget(view.key);
   if (target) return target;
   if (!view || positionRestore || readerHost.overlay || !view.results.length || !VSCROLL.heights.length) return null;
-  if (STATE.results !== view.results || (STATE.isLoading && view.key !== getSearchViewKey())) return searchPositions.get(view.key) || null;
+  if (STATE.results !== view.results || (STATE.isLoading && view.key !== getSearchViewKey())) return positionPersistence.getPosition(view.key) || null;
   const index = Math.min(findVirtualIndex(getResultScrollTop()), view.results.length - 1);
-  if (!view.results[index]) return searchPositions.get(view.key) || null;
+  if (!view.results[index]) return positionPersistence.getPosition(view.key) || null;
   const position = { version: 1, key: view.key, index,
     offset: Math.max(0, getResultScrollTop() - getVirtualOffset(index)),
     anchorId: getResultStableId(view.results[index]), loadedPage: view.loadedPage,
     savedAt: Date.now() };
-  const previous = searchPositions.get(view.key);
-  if (previous && position.savedAt - previous.savedAt < 1000 && previous.index === position.index
-      && previous.offset === position.offset && previous.anchorId === position.anchorId
-      && previous.loadedPage === position.loadedPage) return previous;
-  // Initialization reads newest first; only sort when enforcing the small cap.
-  searchPositions.set(view.key, position);
-  saveSearchViewport(position, view);
-  const prune = Date.now() - lastPositionPruneAt >= 60000 || searchPositions.size > SEARCH_POSITION_MAX;
-  if (prune) {
-    const ordered = Array.from(searchPositions.values()).sort((a, b) => b.savedAt - a.savedAt);
-    ordered.forEach((item, i) => { if (!validSearchPosition(item) || i >= SEARCH_POSITION_MAX) searchPositions.delete(item.key); });
-    lastPositionPruneAt = Date.now();
-  }
-  if (searchPositionDB) try {
-    const transaction = searchPositionDB.transaction("positions", "readwrite");
-    const store = transaction.objectStore("positions");
-    store.put(position);
-    let count = 0;
-    if (prune) store.index("savedAt").openCursor(null, "prev").onsuccess = event => {
-      const cursor = event.target.result;
-      if (!cursor) return;
-      if (!validSearchPosition(cursor.value) || ++count > SEARCH_POSITION_MAX) cursor.delete();
-      cursor.continue();
-    };
-    transaction.onabort = () => {}; // Memory restoration still works if storage is unavailable.
-  } catch (_) {}
-  return position;
+  return positionPersistence.save(position, () => saveSearchViewport(position, view));
 }
 
 function setupSearchPositionSaving() {
   DOM.resultsContainer.addEventListener("scroll", () => {
     if (positionRestore || STATE.isLoading || displayedSearchView?.key !== getSearchViewKey()) return;
-    clearTimeout(positionSaveTimer);
-    positionSaveTimer = setTimeout(saveSearchPosition, 250);
+    positionPersistence.scheduleSave(saveSearchPosition);
   }, { passive: true });
   // Query and route handlers save explicitly; capture only filters before mutation.
   for (const type of ["change", "click"]) document.addEventListener(type, event => {
@@ -2995,7 +2795,7 @@ function cancelPositionRestore() {
 
 function tryRestoreSearchPosition(key, options = {}) {
   const previous = positionRestore?.key === key && positionRestore.failed && !options.position ? positionRestore : null;
-  let position = options.position || previous?.position || searchPositions.get(key);
+  let position = options.position || previous?.position || positionPersistence.getPosition(key);
   if (!validSearchPosition(position)) return false;
   searchIntentId++;
   cancelPendingSearchControls();
@@ -3116,7 +2916,7 @@ function applyValidatedSearchViewport(snapshot) {
   setResultScrollTop(getVirtualOffset(Math.min(anchor.index, STATE.results.length - 1)) + anchor.offset);
   VSCROLL.renderStart = -1; VSCROLL.renderEnd = -1;
   rememberDisplayedSearchView(); renderVisible(); updateStatusBar(); updateLoadInfo(); updatePagingStatus();
-  clearTimeout(positionSaveTimer); positionSaveTimer = setTimeout(saveSearchPosition, 250);
+  positionPersistence.scheduleSave(saveSearchPosition);
 }
 
 function validatePositionWindowPage(data, page, pageSize, expected) {
@@ -3225,7 +3025,7 @@ async function loadResultWindowPage(page, prefetch = false) {
     displayedSearchView = null;
     rememberDisplayedSearchView();
     renderVisible(); updateLoadInfo(); updatePagingStatus();
-    clearTimeout(positionSaveTimer); positionSaveTimer = setTimeout(saveSearchPosition, 250);
+    positionPersistence.scheduleSave(saveSearchPosition);
     return true;
   } catch (error) {
     if (!resultWindowCurrent(window)) return false;
