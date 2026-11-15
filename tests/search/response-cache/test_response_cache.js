@@ -30,4 +30,5 @@ test("response caches bound bytes, expire, preserve live oversized data and reta
   assert.strictEqual(context.cache.bytes, 0);
   assert.strictEqual(context.cache.entriesInfo.size, 0);
 });
+require("./response_store_contracts");
 run("response-cache");

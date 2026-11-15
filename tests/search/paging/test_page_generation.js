@@ -226,11 +226,16 @@ for (const {name: project, root} of searchTestProjects()) {
       const old = [{File:"old"}], next = [{File:"new"}];
       const metadata = new WeakMap([[old[0],{generation:"A",total:2}], [next[0],{generation:"B",total:2}]]);
       const context = {STATE:{results:old,total:2,_loadedPage:1,_pageCache:{2:next},_resultBackend:"api"},
-        VSCROLL:{isDraggingThumb:true}, searchPageMetadata:metadata, searchResponseCache:new Map(),
+        VSCROLL:{isDraggingThumb:true}, searchPageMetadata:metadata,
         resultSnapshots:{remove(){}}, getSearchViewKey:()=>"query", captureReaderReturnScroll:()=>({index:0,offset:12}),
         getResultStableId:r=>r.File, getReturnPositionTarget:()=>null, setReturnPositionTarget(){},
         rememberSearchPageMetadata(){}, tryRestoreSearchPosition(key,options){context.recovery={key,options};}};
       vm.createContext(context);
+      installClassicSearchModules(root, context);
+      context.searchResponseStore = context.VoiceOfMLSearchResponseStore.create({
+        limit:3, ttl:60000, getSearchViewKey:context.getSearchViewKey,
+        rememberSearchPageMetadata:context.rememberSearchPageMetadata,
+      });
       for (const name of ["checkSearchPageAppend", "appendSearchResults", "deferSearchAppend", "applySearchPage"]) {
         vm.runInContext(source.match(new RegExp("^function " + name + "\\([^]*?^}", "m"))[0], context);
       }

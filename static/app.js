@@ -759,7 +759,7 @@ function checkSearchPageAppend(data) {
   // A prefetched initial continuation reaches this guard before the ordinary
   // append assigns its API backend; keep recovery on that same backend.
   const backend = STATE._resultBackend || "api";
-  searchResponseCache.clear();
+  searchResponseStore.cache.clear();
   resultSnapshots.remove(key);
   STATE._pageCache = {};
   tryRestoreSearchPosition(key, { position, viewport: null, backend });
@@ -829,7 +829,7 @@ function prefetchSearchPages(base, template) {
     hasPage: page => !!STATE._pageCache[page],
     stringify: body => stableSearchStringify(body),
     getCached: key => getCachedSearchResponse(key),
-    evictCached: key => { searchResponseCache.delete(key); },
+    evictCached: key => { searchResponseStore.cache.delete(key); },
     readRecent: (...args) => readRecentSearchPage(...args),
     fetchPage: (key, url, body, signal) => fetchSearchPage(key, url, body, signal, APPEND_REQUEST_TIMEOUT),
     validate: (...args) => validatePositionWindowPage(...args),
@@ -1566,8 +1566,13 @@ const API_RECOVERY_DELAY = 30000;
 let localDataPromise = null;
 const SEARCH_CACHE_TTL = 8 * 60 * 1000;
 const SEARCH_CACHE_MAX = 60;
-/** @type {BoundedResponseCache<{time: number, data: ReturnType<typeof cloneSearchData>}>} */
-const searchResponseCache = new BoundedResponseCache(SEARCH_CACHE_MAX, SEARCH_CACHE_TTL);
+const searchResponseStore = VoiceOfMLSearchResponseStore.create({
+  limit: SEARCH_CACHE_MAX, ttl: SEARCH_CACHE_TTL,
+  getSearchViewKey: () => getSearchViewKey(),
+  rememberSearchPageMetadata: data => rememberSearchPageMetadata(data),
+});
+// Retain direct cache diagnostics for browser checks.
+const searchResponseCache = searchResponseStore.cache;
 const INITIAL_BASE_URL = "data/initial";
 const initialPayloadCache = new Map();
 
@@ -2347,73 +2352,13 @@ function restoreSearchViewSnapshot(key, restoreScroll = true, preserveRestore = 
   return true;
 }
 
-function cloneSearchData(data) {
-  if (!data || !Array.isArray(data.results)) return data;
-  rememberSearchPageMetadata(data);
-  const copy = {
-    ...data,
-    results: data.results.slice(),
-    total: data.total,
-    page: data.page,
-    page_size: data.page_size,
-  };
-  const identity = searchResponseCacheIdentities.get(data) || {};
-  searchResponseCacheIdentities.set(data, identity);
-  searchResponseCacheIdentities.set(copy, identity);
-  return copy;
-}
+function cloneSearchData(data) { return searchResponseStore.cloneSearchData(data); }
 
-function getCachedSearchResponse(key) {
-  const pending = pendingSearchCacheWrites.get(key);
-  if (pending && pending.viewKey === getSearchViewKey()) return cloneSearchData(pending.data);
-  var cached = searchResponseCache.get(key);
-  if (!cached) return null;
-  if (Date.now() - cached.time > SEARCH_CACHE_TTL) {
-    searchResponseCache.delete(key);
-    return null;
-  }
-  return cloneSearchData(cached.data);
-}
+function getCachedSearchResponse(key) { return searchResponseStore.getCachedSearchResponse(key); }
 
-const pendingSearchCacheWrites = new Map();
-const searchResponseCacheIdentities = new WeakMap();
-let searchCacheWriteFrame = 0;
-let searchCacheWriteTimer = null;
+function cancelPendingSearchCacheWrites() { searchResponseStore.cancelPendingSearchCacheWrites(); }
 
-function cancelPendingSearchCacheWrites() {
-  if (searchCacheWriteFrame) cancelAnimationFrame(searchCacheWriteFrame);
-  clearTimeout(searchCacheWriteTimer);
-  searchCacheWriteFrame = 0;
-  searchCacheWriteTimer = null;
-  pendingSearchCacheWrites.clear();
-}
-
-function setCachedSearchResponse(key, data, defer = false) {
-  const cached = searchResponseCache.get(key)?.data;
-  const identity = searchResponseCacheIdentities.get(data);
-  if (cached && identity && searchResponseCacheIdentities.get(cached) === identity) return;
-  if (!defer) {
-    pendingSearchCacheWrites.delete(key);
-    searchResponseCache.set(key, { time: Date.now(), data: cloneSearchData(data) });
-    return;
-  }
-  // Retain at most the existing lookahead's three pages, never another queue of results.
-  pendingSearchCacheWrites.delete(key);
-  pendingSearchCacheWrites.set(key, { data: cloneSearchData(data), viewKey: getSearchViewKey() });
-  while (pendingSearchCacheWrites.size > 3) pendingSearchCacheWrites.delete(pendingSearchCacheWrites.keys().next().value);
-  if (searchCacheWriteFrame || searchCacheWriteTimer !== null) return;
-  searchCacheWriteFrame = requestAnimationFrame(() => {
-    searchCacheWriteFrame = 0;
-    searchCacheWriteTimer = setTimeout(() => {
-      searchCacheWriteTimer = null;
-      const writes = [...pendingSearchCacheWrites];
-      pendingSearchCacheWrites.clear();
-      for (const [cacheKey, entry] of writes) if (entry.viewKey === getSearchViewKey()) {
-        setCachedSearchResponse(cacheKey, entry.data);
-      }
-    }, 0);
-  });
-}
+function setCachedSearchResponse(key, data, defer = false) { searchResponseStore.setCachedSearchResponse(key, data, defer); }
 
 function buildCurrentSearchBody(page) {
   return buildSearchApiBody({
