@@ -182,10 +182,10 @@ class DownloadLifecycleTests(unittest.TestCase):
           startDownloadBatch(items); startDownloadBatch(items);
           STATE.results=[]; selectedIndices={};
         }''')
-        self.page.wait_for_function('downloadBatch.done')
-        self.assertEqual(self.page.evaluate('[peak,downloadBatch.started,downloadBatch.failed.length,launches.length]'), [2,6,1,6])
+        self.page.wait_for_function('downloadBatches.batch.done')
+        self.assertEqual(self.page.evaluate('[peak,downloadBatches.batch.started,downloadBatches.batch.failed.length,launches.length]'), [2,6,1,6])
         self.page.locator('[data-queue="retry"]').click()
-        self.page.wait_for_function('downloadBatch.done && downloadBatch.started === 1')
+        self.page.wait_for_function('downloadBatches.batch.done && downloadBatches.batch.started === 1')
         self.assertEqual(self.page.evaluate('Object.values(calls).sort()'), [1,1,1,1,1,1,2])
         self.assertEqual(self.page.evaluate('launches.length'), 7)
 
@@ -201,7 +201,7 @@ class DownloadLifecycleTests(unittest.TestCase):
         }''')
         self.page.locator('[data-queue="cancel"]').click()
         self.page.evaluate('releases.forEach(release=>release())')
-        self.page.wait_for_function('downloadBatch.done')
+        self.page.wait_for_function('downloadBatches.batch.done')
         self.assertEqual(self.page.evaluate('[releases.length,launches.length,pendingDownloads.size]'), [2,0,0])
         self.page.locator('[data-queue="close"]').click()
         self.assertEqual(self.page.locator('#download-queue').count(), 0)
