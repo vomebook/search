@@ -1592,18 +1592,8 @@ function returnFromSidebar() {
   navigateSidebarParent();
 }
 
-function closeLeftSidebar() {
-  STATE.leftSidebarOpen = false;
-  DOM.leftSidebar.classList.remove("expanded-wide");
-  updateSidebarVisibility();
-  syncStateToURL();
-}
-
-function closeRightSidebar() {
-  STATE.rightSidebarOpen = false;
-  updateSidebarVisibility();
-  syncStateToURL();
-}
+function closeLeftSidebar() { getShell().closeLeftSidebar(); }
+function closeRightSidebar() { getShell().closeRightSidebar(); }
 
 const ROUTER = {
   parse: function() {
@@ -4335,123 +4325,37 @@ function setupQuickScroll() {
   document.addEventListener("visibilitychange", () => { if (document.hidden) cancelQuickScroll(); });
 }
 
-function toggleTheme() {
-  const btn = DOM.themeBtn;
-  const rect = btn.getBoundingClientRect();
-  const ripple = document.createElement("div");
-  ripple.className = "theme-ripple";
-  ripple.style.left = (rect.left + rect.width / 2) + "px";
-  ripple.style.top = (rect.top + rect.height / 2) + "px";
-  ripple.style.background = STATE.isDark ? "#fff" : "#1a1c1e";
-  ripple.style.marginLeft = "-0px";
-  ripple.style.marginTop = "-0px";
-  document.body.appendChild(ripple);
-  document.body.classList.add("theme-transitioning");
-  STATE.isDark = !STATE.isDark;
-  applyTheme();
-  writeSearchPreference("theme", STATE.isDark ? "dark" : "light");
-  ripple.addEventListener("animationend", () => {
-    ripple.remove();
-    document.body.classList.remove("theme-transitioning");
-  });
+let shell = null;
+function getShell() {
+  return shell || (shell = VoiceOfMLShell.create({
+    readState: () => ({ isDark: STATE.isDark, isMobile: STATE.isMobile,
+      leftSidebarOpen: STATE.leftSidebarOpen, rightSidebarOpen: STATE.rightSidebarOpen }),
+    setDark: value => { STATE.isDark = value; },
+    setMobile: value => { STATE.isMobile = value; },
+    setSidebars: (left, right) => { STATE.leftSidebarOpen = left; STATE.rightSidebarOpen = right; },
+    writePreference: writeSearchPreference,
+    notifyReaderTheme: isDark => {
+      if (readerHost.overlay && readerHost.overlay.contentWindow) readerHost.overlay.contentWindow.postMessage({ type: "voice-reader-theme-state", theme: isDark ? "dark" : "light" }, location.origin);
+    },
+    updateSidebarHeader, updateSelectionUI,
+    scheduleScrollTrack: () => requestAnimationFrame(updateScrollTrack),
+    syncURL: () => syncStateToURL(),
+    view: VoiceOfMLShellView.create(() => ({ themeBtn: DOM.themeBtn, themeIconLight: DOM.themeIconLight,
+      themeIconDark: DOM.themeIconDark, mobileToggleBtn: DOM.mobileToggleBtn,
+      mobileIconPhone: DOM.mobileIconPhone, mobileIconDesktop: DOM.mobileIconDesktop,
+      leftSidebar: DOM.leftSidebar, rightSidebar: DOM.rightSidebar, hamburgerBtn: DOM.hamburgerBtn,
+      settingsBtn: DOM.settingsBtn, overlay: DOM.overlay }), true)
+  }));
 }
-
-function applyTheme() {
-  DOM.themeBtn.setAttribute('aria-label', STATE.isDark ? '切换到浅色主题' : '切换到深色主题');
-  if (STATE.isDark) {
-    document.body.classList.remove("light");
-    DOM.themeIconLight.style.display = "none";
-    DOM.themeIconDark.style.display = "";
-  } else {
-    document.body.classList.add("light");
-    DOM.themeIconLight.style.display = "";
-    DOM.themeIconDark.style.display = "none";
-  }
-  if (readerHost.overlay && readerHost.overlay.contentWindow) readerHost.overlay.contentWindow.postMessage({ type: "voice-reader-theme-state", theme: STATE.isDark ? "dark" : "light" }, location.origin);
-}
-
-function toggleMobile() {
-  STATE.isMobile = !STATE.isMobile;
-  applyMobileMode();
-  writeSearchPreference("mobileMode", STATE.isMobile ? "mobile" : "desktop");
-}
-
-function applyMobileMode() {
-  DOM.mobileToggleBtn.setAttribute('aria-label', STATE.isMobile ? '切换到电脑版' : '切换到手机版');
-  if (STATE.isMobile) {
-    document.body.classList.add("mobile");
-    document.body.classList.remove("force-desktop");
-    DOM.mobileIconPhone.style.display = "";
-    DOM.mobileIconDesktop.style.display = "none";
-    STATE.leftSidebarOpen = false;
-    STATE.rightSidebarOpen = false;
-  } else {
-    document.body.classList.remove("mobile");
-    document.body.classList.add("force-desktop");
-    DOM.mobileIconPhone.style.display = "none";
-    DOM.mobileIconDesktop.style.display = "";
-    STATE.leftSidebarOpen = true;
-    STATE.rightSidebarOpen = false;
-  }
-  updateSidebarVisibility();
-  document.documentElement.classList.remove("mobile-boot");
-  updateSidebarHeader();
-  updateSelectionUI();
-  requestAnimationFrame(updateScrollTrack);
-}
-
+function toggleTheme() { getShell().toggleTheme(); }
+function applyTheme() { getShell().applyTheme(); }
+function toggleMobile() { getShell().toggleMobile(); }
+function applyMobileMode() { getShell().applyMobileMode(); }
 function autoDetectMobile() { return window.innerWidth <= 768; }
-
-function focusSearchSidebar(sidebar) {
-  const control = Array.from(sidebar.querySelectorAll('button,a[href],input,select,[tabindex="0"]'))
-    .find(node => !node.disabled && node.getClientRects().length && !node.closest('[hidden],[inert]'));
-  (control || sidebar).focus({ preventScroll: true });
-}
-
-function toggleLeftSidebar(event) {
-  if (STATE.leftSidebarOpen) {
-    closeLeftSidebar();
-    return;
-  }
-  STATE.leftSidebarOpen = true;
-  if (STATE.isMobile && STATE.leftSidebarOpen && STATE.rightSidebarOpen) STATE.rightSidebarOpen = false;
-  updateSidebarVisibility();
-  updateSidebarHeader();
-  syncStateToURL();
-  if (event?.detail === 0 || event?.type === 'keydown') focusSearchSidebar(DOM.leftSidebar);
-}
-
-function toggleRightSidebar(event) {
-  if (STATE.rightSidebarOpen) return closeRightSidebar();
-  STATE.rightSidebarOpen = true;
-  if (STATE.rightSidebarOpen && STATE.leftSidebarOpen && STATE.isMobile) STATE.leftSidebarOpen = false;
-  updateSidebarVisibility();
-  syncStateToURL();
-  if (event?.detail === 0 || event?.type === 'keydown') focusSearchSidebar(DOM.rightSidebar);
-}
-
-function updateSidebarVisibility() {
-  const main = /** @type {HTMLElement} */ (document.querySelector('#main-content'));
-  const covered = STATE.isMobile && (STATE.leftSidebarOpen || STATE.rightSidebarOpen);
-  const focusCovered = covered && main.contains(document.activeElement);
-  main.inert = covered;
-  for (const [sidebar, button, open] of [[DOM.leftSidebar, DOM.hamburgerBtn, STATE.leftSidebarOpen],
-      [DOM.rightSidebar, DOM.settingsBtn, STATE.rightSidebarOpen]]) {
-    const restoreFocus = !open && sidebar.contains(document.activeElement);
-    sidebar.inert = !open;
-    button.setAttribute('aria-expanded', String(open));
-    button.setAttribute('aria-label', sidebar === DOM.leftSidebar ? (open ? '关闭仓库导航' : '打开仓库导航') :
-      (open ? '关闭搜索过滤' : '打开搜索过滤'));
-    if (restoreFocus) button.focus({ preventScroll: true });
-  }
-  DOM.leftSidebar.classList.toggle("collapsed", !STATE.leftSidebarOpen);
-  DOM.leftSidebar.classList.toggle("open", STATE.leftSidebarOpen);
-  DOM.rightSidebar.classList.toggle("collapsed", !STATE.rightSidebarOpen);
-  DOM.rightSidebar.classList.toggle("open", STATE.rightSidebarOpen);
-  DOM.overlay.style.display = "";
-  DOM.overlay.classList.toggle("open", STATE.isMobile && (STATE.leftSidebarOpen || STATE.rightSidebarOpen));
-  if (focusCovered) focusSearchSidebar(STATE.rightSidebarOpen ? DOM.rightSidebar : DOM.leftSidebar);
-}
+function focusSearchSidebar(sidebar) { VoiceOfMLShellView.focusSearchSidebar(sidebar); }
+function toggleLeftSidebar(event) { getShell().toggleLeftSidebar(event); }
+function toggleRightSidebar(event) { getShell().toggleRightSidebar(event); }
+function updateSidebarVisibility() { getShell().updateSidebarVisibility(); }
 let keyboardResultIndex = -1;
 
 function focusKeyboardResult(index) {

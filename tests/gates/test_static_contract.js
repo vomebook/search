@@ -8,6 +8,7 @@ const app = fs.readFileSync("static/app.js", "utf8");
 const resultRows = fs.readFileSync("static/search/results/presentation/row.js", "utf8");
 const resultInteractions = fs.readFileSync("static/search/results/application/interactions.js", "utf8");
 const randomDiscovery = fs.readFileSync("static/search/discovery/application/random.js", "utf8");
+const shellView = fs.readFileSync("static/search/shell/presentation/view.js", "utf8");
 const filters = fs.readFileSync("static/search/sidebar/application/filters.js", "utf8");
 const reader = readReaderSource(require("path").resolve("."));
 const worker = fs.readFileSync("static/search/index-worker.js", "utf8");
@@ -581,7 +582,11 @@ test("reader uses original files and lazy PDF canvas rendering", () => {
 test("mobile shell hides sidebars before application startup", () => {
   assert.match(html, /document\.documentElement\.classList\.add\("mobile-boot"\)/);
   assert.match(css, /html\.mobile-boot \.left-sidebar/);
-  assert.match(app, /document\.documentElement\.classList\.remove\("mobile-boot"\)/);
+  assert.match(shellView, /document\.documentElement\.classList\.remove\("mobile-boot"\)/);
+  assert.match(app, /function applyMobileMode\(\) \{ getShell\(\)\.applyMobileMode\(\); \}/);
+  assert.match(app, /view: VoiceOfMLShellView\.create\(/);
+  const shellController = fs.readFileSync("static/search/shell/application/controller.js", "utf8");
+  assert.match(shellController, /updateSidebarVisibility\(\);\s*view\.finishMobileMode\(\);\s*deps\.updateSidebarHeader\(\);\s*deps\.updateSelectionUI\(\);\s*deps\.scheduleScrollTrack\(\);/);
 });
 test("Service Worker cache name combines site namespace and build version", () => {
   assertCode(sw, 'const CACHE_PREFIX = "vomebook-search-"');

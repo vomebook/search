@@ -282,6 +282,7 @@ function crossCheck(githubRoot, hfRoot) {
   "search/positions/domain/policy.js", "search/positions/infrastructure/indexed-db.js", "search/positions/application/persistence.js", "search/positions/application/restoration.js",
   "search/results/presentation/row.js", "search/results/application/interactions.js",
   "search/discovery/application/random.js",
+  "search/shell/presentation/view.js", "search/shell/application/controller.js",
   "search/history/infrastructure/store.js",
   "search/history/application/controller.js",
   "search/ambient/application/quotation.js",

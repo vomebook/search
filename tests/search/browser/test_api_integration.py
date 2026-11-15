@@ -262,13 +262,30 @@ class ApiIntegrationTest(unittest.TestCase):
         self.assertEqual(self.page.evaluate("STATE._resultBackend"), "local")
         expected = self.page.evaluate("async () => (await doSearchLocal({q:'手机', exact:STATE.exact, searchFolders:STATE.searchFolders, page:1, pageSize:STATE.pageSize})).results.map(getResultStableId)")
         self.assertEqual(self.page.evaluate("STATE.results.map(getResultStableId)"), expected)
-        self.page.evaluate("maybeLoadNextPage = () => {}; STATE.pageSize = 2; doSearch()")
+        self.page.evaluate('''() => {
+          // The paging controller owns its scheduling; suppress automatic
+          // appends at the execution boundary while this test requests page 2.
+          window.localStartupSearch = doSearch;
+          doSearch = (...args) => { if (!args[0]) return localStartupSearch(...args); };
+          STATE.pageSize = 2; doSearch();
+        }''')
         self.page.wait_for_function("STATE._loadedPage === 1 && !STATE.isLoading")
         expected = self.page.evaluate("async () => (await doSearchLocal({q:'手机', exact:STATE.exact, searchFolders:STATE.searchFolders, page:1, pageSize:500})).results.map(getResultStableId)")
-        self.page.evaluate("STATE.useLocalMode = false; STATE.page = 2; doSearch(true)")
+        self.page.evaluate("STATE.useLocalMode = false; STATE.page = 2; localStartupSearch(true)")
         self.page.wait_for_function("STATE._loadedPage >= 2 && !STATE.isLoading")
         actual = self.page.evaluate("STATE.results.map(getResultStableId)")
+        self.assertEqual(self.page.evaluate('STATE._loadedPage'), 2)
+        self.assertEqual(len(actual), 4)
         self.assertEqual(actual, expected[:len(actual)])
+        # Also force an uncached append: page-two prefetch can otherwise bypass
+        # the backend-choice branch after the local-mode preference changes.
+        self.page.evaluate('''() => {
+          cancelSearchPrefetch(); STATE._pageCache = {};
+          STATE.page = 3; localStartupSearch(true);
+        }''')
+        self.page.wait_for_function("STATE._loadedPage === 3 && !STATE.isLoading")
+        self.assertEqual(self.page.evaluate("STATE._resultBackend"), "local")
+        self.assertEqual(self.page.evaluate("STATE.results.map(getResultStableId)"), expected[:6])
         self.assertFalse(any(item.get("q") == "手机" for item in self.search_requests))
 
     def test_api_pagination_stays_on_api_after_local_corpus_is_ready(self):
