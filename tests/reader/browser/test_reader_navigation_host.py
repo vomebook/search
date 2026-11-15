@@ -2,6 +2,7 @@
 import unittest
 import subprocess
 from pathlib import Path
+from urllib.parse import parse_qs, urlsplit
 from tests.search.browser import test_paging_recovery as paging
 
 
@@ -320,6 +321,71 @@ process.stdout.write(stripBundledScripts(readFileSync('static/index.html','utf8'
         self.assertTrue(result['evicted'])
         self.assertIsNotNone(result['expected'])
         self.assertEqual(result['captured'], result['expected'])
+
+    def test_djvu_read_button_preserves_ocr_handoff(self):
+        # Exercise the rendered action and its click-time enrichment. Stop at
+        # navigation: OCR decoding/source integrity has separate Reader tests.
+        result = self.page.evaluate(r'''() => {
+          cancelReaderWarmup();
+          const savedAssets=readerAssets, savedNavigate=navigateToReader;
+          const record={Repo:'VoiceOfML/Test',Folder:['docs'],File:'scan.djvu',Extension:'DjVu'};
+          const original=getRecordLink(record);
+          const root='objects/aa/'+'a'.repeat(64)+'/'+'b'.repeat(16);
+          const manifestPath=root+'/ocr-manifest.json';
+          const rows=[];
+          try {
+            readerAssets={[record.Repo+'\0'+buildRecordRelativePath(record)]:
+              {s:3,b:'vomebook/pdf-pages-v2',o:manifestPath,om:'accepted'}};
+            const enriched=applyReaderAsset(record,record.Repo,buildRecordRelativePath(record),original);
+            for(const warm of ['none','matching','different-source','different-version']) {
+              VSCROLL.templateCache.delete(0);
+              const row=createResultRow(record,0);
+              DOM.resultsList.replaceChildren(row);
+              const button=row.querySelector('[data-action="read"]');
+              const url=new URL(button.dataset.readerUrl,location.href), id=url.searchParams.get('id');
+              sessionStorage.removeItem('reader-source:'+id);
+              sessionStorage.removeItem('reader-resolve:'+id);
+              if(warm!=='none') cacheReaderMetadata(id,{
+                url:warm==='different-source'?original.replace('scan.djvu.DjVu','other.djvu'):original,
+                download:original,extension:'DjVu',
+                ocr_manifest:warm==='different-version'
+                  ?enriched.ReaderOcrManifest.replace('b'.repeat(16),'c'.repeat(16)):enriched.ReaderOcrManifest,
+                ocr_mode:warm==='matching'?'accepted':'stale',version:'warm-only'
+              });
+              let captured=null;
+              navigateToReader=target=>{
+                captured={id:new URL(target,location.href).searchParams.get('id'),
+                  source:JSON.parse(sessionStorage.getItem('reader-source:'+id)),
+                  resolved:JSON.parse(sessionStorage.getItem('reader-resolve:'+id))};
+              };
+              button.click();
+              rows.push({warm,id,inlineOcr:url.searchParams.has('ocr_manifest'),captured});
+            }
+            return {original,manifestPath,manifest:enriched.ReaderOcrManifest,rows};
+          } finally {
+            readerAssets=savedAssets;navigateToReader=savedNavigate;
+          }
+        }''')
+        self.assertTrue(result['manifest'])
+        self.assertEqual(parse_qs(urlsplit(result['manifest']).query)['path'], [result['manifestPath']])
+        for row in result['rows']:
+            with self.subTest(warm=row['warm']):
+                self.assertRegex(row['id'], r'^[a-z0-9]{13}$')
+                self.assertFalse(row['inlineOcr'])
+                self.assertIsNotNone(row['captured'])
+                self.assertEqual(row['captured']['id'], row['id'])
+                for key in ('source', 'resolved'):
+                    metadata = row['captured'][key]
+                    self.assertEqual(metadata['url'], result['original'])
+                    self.assertEqual(metadata['download'], result['original'])
+                    self.assertEqual(metadata['extension'], 'DjVu')
+                    self.assertEqual(metadata['original_extension'], 'DjVu')
+                    self.assertEqual(metadata['filename'], 'scan.djvu.DjVu')
+                    self.assertEqual(metadata['repo'], 'Test')
+                    self.assertEqual(metadata['folder'], ['docs'])
+                    self.assertEqual(metadata.get('ocr_manifest'), result['manifest'])
+                    self.assertEqual(metadata.get('ocr_mode'), 'accepted')
+                    self.assertNotIn('version', metadata)
 
     def test_directory_preserves_repeated_filename_extension_for_read_and_download(self):
         result = self.page.evaluate('''() => {

@@ -3,6 +3,7 @@
 Uses the real app/router/search pipeline; only transport and Reader document are
 controlled. The paging fixture supplies enough real result rows to test scroll.
 """
+import json
 import os
 import unittest
 from unittest import mock
@@ -84,6 +85,120 @@ class InitialIntentReaderRouteTests(unittest.TestCase):
     def evaluate_bounded(self, expression, arg=None):
         return evaluate_bounded(self.page, expression, arg)
 
+    def load_initial_clock_fixture(self, query=''):
+        self.initial_requests = []
+        self.api_requests = []
+        self.initial_generation = 'G1'
+        self.api_generation = 'G2'
+        self.page.add_init_script('window.initialNow = 1000000; Date.now = () => initialNow;')
+
+        def payload(generation):
+            return dict(mode='global', generation=generation, total=1, page=1, page_size=100,
+                        results=[dict(Repo='VoiceOfML/Test', File=generation, Extension='txt', Folder=[], Size=12)])
+
+        def initial(route):
+            self.initial_requests.append(route.request.url)
+            route.fulfill(json=payload(self.initial_generation))
+
+        def search(route):
+            self.api_requests.append(json.loads(route.request.post_data or '{}'))
+            route.fulfill(json=payload(self.api_generation))
+
+        self.page.route('**/data/initial/global.json', initial)
+        self.page.route('**/api/search', search)
+        # A hash-only goto would keep the paging fixture's existing document.
+        self.page.goto('about:blank')
+        self.page.goto(self.fixture.origin + '/search/#/?local=0&q=' + query, wait_until='domcontentloaded')
+        self.page.wait_for_function('STATE._loadedPage === 1 && !STATE.isLoading')
+
+    def assert_initial_generation(self, generation):
+        self.page.wait_for_function('g => !STATE.isLoading && STATE.results[0]?.File === g', arg=generation)
+        self.assertIn(generation, self.page.locator('#results-list').inner_text())
+
+    def test_initial_payload_fixed_ttl_boundary_and_request_counts(self):
+        self.load_initial_clock_fixture()
+        self.assert_initial_generation('G1')
+        self.assertEqual((len(self.initial_requests), len(self.api_requests)), (1, 0))
+        # Explicit fresh-path fixture bypasses view snapshots; response-cache hits
+        # must retain the initial acquisition time as well as the initial cache.
+        for age in (240000, 479999):
+            self.page.evaluate('age => { initialNow = 1000000 + age; }', age)
+            self.evaluate_bounded('async () => { await searchWithInitialFallbackFresh(); }')
+            self.assert_initial_generation('G1')
+            self.assertEqual((len(self.initial_requests), len(self.api_requests)), (1, 0))
+        self.initial_generation = 'G2'
+        self.page.evaluate('initialNow = 1480000')
+        self.evaluate_bounded('async () => { await searchWithInitialFallbackFresh(); }')
+        self.assert_initial_generation('G2')
+        self.assertEqual((len(self.initial_requests), len(self.api_requests)), (2, 0))
+        self.page.evaluate('initialNow = 1959999')
+        self.evaluate_bounded('async () => { await searchWithInitialFallbackFresh(); }')
+        self.assert_initial_generation('G2')
+        self.assertEqual(len(self.initial_requests), 2)
+        self.initial_generation = 'G3'
+        self.page.evaluate('initialNow = 1960000')
+        self.evaluate_bounded('async () => { await searchWithInitialFallbackFresh(); }')
+        self.assert_initial_generation('G3')
+        self.assertEqual((len(self.initial_requests), len(self.api_requests)), (3, 0))
+
+    def test_initial_payload_cannot_overwrite_newer_response(self):
+        self.load_initial_clock_fixture()
+        self.page.evaluate('''() => {
+          initialNow += 1000; searchResponseCache.clear(); doSearch();
+        }''')
+        self.assert_initial_generation('G2')
+        self.assertEqual(len(self.api_requests), 1)
+        self.evaluate_bounded('async () => { await searchWithInitialFallbackFresh(); }')
+        self.assert_initial_generation('G2')
+        self.assertEqual(self.page.evaluate('getCachedSearchResponse(getCurrentSearchCacheKey(1)).generation'), 'G2')
+        self.assertEqual((len(self.initial_requests), len(self.api_requests)), (1, 1))
+        # Eviction of the newer response must not resurrect a known older initial.
+        self.initial_generation = 'G3'
+        self.page.evaluate('searchResponseCache.clear()')
+        self.evaluate_bounded('async () => { await searchWithInitialFallbackFresh(); }')
+        self.assert_initial_generation('G3')
+        self.assertEqual((len(self.initial_requests), len(self.api_requests)), (2, 1))
+
+    def test_newer_response_eviction_does_not_resurrect_initial(self):
+        self.load_initial_clock_fixture()
+        self.page.evaluate("initialNow += 1000; searchResponseCache.clear(); doSearch()")
+        self.assert_initial_generation('G2')
+        self.initial_generation = 'G3'
+        self.page.evaluate('searchResponseCache.clear()')
+        self.evaluate_bounded('async () => { await searchWithInitialFallbackFresh(); }')
+        self.assert_initial_generation('G3')
+
+    def test_deferred_response_retains_acquisition_age(self):
+        result = self.page.evaluate('''async () => {
+          cancelPendingSearchCacheWrites();
+          const clock=Date.now, raf=requestAnimationFrame, cancel=cancelAnimationFrame;
+          let now=1000000, flush;
+          Date.now=()=>now; requestAnimationFrame=callback=>{flush=callback;return 987654;};
+          cancelAnimationFrame=()=>{};
+          const key=getCurrentSearchCacheKey(2), data={page:2,page_size:100,total:101,results:[{File:'age',Repo:'VoiceOfML/Test',Extension:'txt',Folder:[]}]};
+          try {
+            setCachedSearchResponse(key,data,true);
+            now+=SEARCH_CACHE_TTL;
+            const expiredPending=getCachedSearchResponse(key)===null;
+            flush(); await new Promise(resolve=>setTimeout(resolve,20));
+            const expiredAfterFlush=getCachedSearchResponse(key)===null;
+            now+=1000; const acquired=now;
+            setCachedSearchResponse(key,data,true); now+=SEARCH_CACHE_TTL-1;
+            flush(); await new Promise(resolve=>setTimeout(resolve,20));
+            const keptAge=searchResponseCache.get(key)?.time===acquired;
+            now++; const expiredAtBoundary=getCachedSearchResponse(key)===null;
+            setCachedSearchResponse(key,data,true); now+=SEARCH_CACHE_TTL;
+            flush(); await new Promise(resolve=>setTimeout(resolve,20));
+            const flushDropsExpired=!searchResponseCache.has(key) && !pendingSearchCacheWrites.has(key);
+            return {expiredPending,expiredAfterFlush,keptAge,expiredAtBoundary,flushDropsExpired};
+          } finally {
+            cancelPendingSearchCacheWrites();searchResponseCache.delete(key);
+            Date.now=clock;requestAnimationFrame=raf;cancelAnimationFrame=cancel;
+          }
+        }''')
+        self.assertEqual(result, dict(expiredPending=True, expiredAfterFlush=True,
+                                     keptAge=True, expiredAtBoundary=True, flushDropsExpired=True))
+
     def hold_initial_and_search(self):
         self.page.evaluate('''() => {
           cancelSearchPrefetch();
@@ -145,7 +260,7 @@ class InitialIntentReaderRouteTests(unittest.TestCase):
         self.evaluate_bounded("async () => { initialFlights[1].resolve(payload('new A')); await newInitial; }")
         self.evaluate_bounded("async () => { initialFlights[0].resolve(payload('old A')); await oldInitial; }")
         self.assertEqual(self.page.evaluate('STATE.results[0].File'), 'new A')
-        self.assertEqual(self.page.evaluate('initialPayloadCache.get(initialFlights[0].url).results[0].File'), 'new A')
+        self.assertEqual(self.page.evaluate('initialPayloadCache.get(initialFlights[0].url).data.results[0].File'), 'new A')
         self.assertEqual(self.page.evaluate('searchFlights.length'), 1)
 
     def test_a_b_a_initial_failure_does_not_restart_latest_a(self):
