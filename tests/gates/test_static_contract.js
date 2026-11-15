@@ -70,7 +70,9 @@ test("filter metadata rejects stale requests and uses static sidebar fallback", 
   assert.match(filters, /let extensionFilterRenderId = 0/);
   assert.match(filters, /if \(renderId !== extensionFilterRenderId\) return/);
   assert.match(filters, /if \(deps\.readView\(\)\.mode !== renderMode \|\| deps\.readView\(\)\.repo !== renderRepo \|\| deps\.readView\(\)\.repoFull !== renderRepoFull\) return/);
-  assert.match(app, /async function renderRepoList\(routeId\) \{[\s\S]*?var initial = await loadSidebarInitial\(null\)/);
+  const directory = fs.readFileSync("static/search/sidebar/application/directory.js", "utf8");
+  assert.match(directory, /async function renderRepoList\(routeId\) \{[\s\S]*?var initial = await deps\.initial\(null\)/);
+  assert.match(app, /function renderRepoList\(routeId\) \{\s*return getSidebarDirectory\(\)\.repos\(routeId\)/);
   assert.doesNotMatch(app, /if \(!currentExtNames\.length && STATE\.mode === "repo"\) currentExtNames = extensionList\.slice\(\)\.sort\(\)/);
 });
 test("background corpus loading uses idle scheduling independently of API prefetch", () => {

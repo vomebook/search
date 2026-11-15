@@ -66,3 +66,51 @@ interface VoiceOfMLFilterController {
 declare var VoiceOfMLSidebarFolderTree: {create(deps: VoiceOfMLFolderTreeDependencies): VoiceOfMLFolderTree};
 declare var VoiceOfMLSidebarFilterList: {create(deps: VoiceOfMLFilterListDependencies): VoiceOfMLFilterList};
 declare var VoiceOfMLSidebarFilters: {create(deps: VoiceOfMLFilterDependencies): VoiceOfMLFilterController};
+
+interface VoiceOfMLSidebarEntries {
+  folders?: VoiceOfMLSidebarFolder[] | null; files?: VoiceOfMLSidebarFile[] | null;
+  repos?: VoiceOfMLFilterCount[];
+}
+interface VoiceOfMLSidebarScrollDependencies {content(): HTMLElement; storageKey: string}
+interface VoiceOfMLSidebarScrollController {
+  keyFor(repo: string | null, path: string): string;
+  activate(key: string): void; remember(): void; restore(): void; flush(): void; install(): void;
+  readonly activeKey: string; readonly restoring: boolean; readonly positions: Map<string, number>;
+}
+interface VoiceOfMLSidebarDirectoryViewDependencies {
+  content: HTMLElement; sidebar: HTMLElement; scroll: VoiceOfMLSidebarScrollController;
+  surface: 'pages' | 'space'; escape(value: unknown): string | undefined;
+  updateHeader(): void; navigate(path: string | undefined): void; setPath(path: string): void;
+  markup: Parameters<typeof VoiceOfMLSearchSidebarRender.browserMarkup>[4];
+}
+interface VoiceOfMLSidebarDirectoryPresentation {
+  repos(repos: VoiceOfMLFilterCount[]): void;
+  items(list: HTMLElement, data: VoiceOfMLSidebarEntries, repo: string, path: string): void;
+  breadcrumb(path: string): HTMLElement; begin(path: string, readRepo: () => string): {list: HTMLElement; currentRepo: string}; message(html: string): void;
+}
+interface VoiceOfMLSidebarDirectoryView {
+  mode: string; repo: string; repoFull: string; browserPath: string; routeId: number;
+  repos: VoiceOfMLFilterCount[]; apiAvailable: boolean; useLocalMode: boolean; dataLoaded: boolean;
+  tree: VoiceOfMLFilterFolder[] | null;
+}
+interface VoiceOfMLSidebarDirectoryDependencies {
+  readView(): VoiceOfMLSidebarDirectoryView;
+  view: VoiceOfMLSidebarDirectoryPresentation; scroll: VoiceOfMLSidebarScrollController;
+  renderRepos(repos: VoiceOfMLFilterCount[]): void; updateHeader(): void;
+  initial(repo: string | null): Promise<VoiceOfMLSidebarEntries | null>;
+  fetchRepos(): Promise<VoiceOfMLFilterCount[] | null>;
+  publishRepos(repos: VoiceOfMLFilterCount[] | null): void;
+  fetchContents(repo: string, path: string): Promise<VoiceOfMLSidebarEntries | null>;
+  localContents(repo: string, path: string): Promise<VoiceOfMLSidebarEntries | null>;
+  ensureLocal(force: boolean, silent: boolean): Promise<boolean>;
+  cache: Map<string, VoiceOfMLSidebarEntries>;
+  refreshAssets(list: HTMLElement, repo: string, path: string, routeId: number | undefined,
+    readDisplayed: () => VoiceOfMLSidebarEntries | null, isCurrent?: () => boolean): void;
+}
+interface VoiceOfMLSidebarDirectoryController {
+  render(routeId?: number): void | Promise<void>; repos(routeId?: number): Promise<void>;
+  browse(path: string, routeId?: number): Promise<void>; resetRetries(): void;
+}
+declare var VoiceOfMLSidebarScroll: {create(deps: VoiceOfMLSidebarScrollDependencies): VoiceOfMLSidebarScrollController};
+declare var VoiceOfMLSidebarDirectoryView: {create(deps: VoiceOfMLSidebarDirectoryViewDependencies): VoiceOfMLSidebarDirectoryPresentation};
+declare var VoiceOfMLSidebarDirectory: {create(deps: VoiceOfMLSidebarDirectoryDependencies): VoiceOfMLSidebarDirectoryController};

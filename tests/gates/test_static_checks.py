@@ -2997,6 +2997,9 @@ class StaticGateTests(unittest.TestCase):
             "static/search/sidebar/presentation/filter-list.js",
             "static/search/sidebar/presentation/folder-tree.js",
             "static/search/sidebar/application/filters.js",
+            "static/search/sidebar/infrastructure/scroll.js",
+            "static/search/sidebar/presentation/directory.js",
+            "static/search/sidebar/application/directory.js",
         })
         self.assertEqual(set(original["files"]) - {"typings/reader-globals.d.ts", "typings/search-sidebar.d.ts"}, required)
         self.assertIn("tsc --project config/types/jsconfig.search-exact.json", json.loads((ROOT / "package.json").read_text())["scripts"]["types"])

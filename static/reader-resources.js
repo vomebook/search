@@ -271,6 +271,9 @@
       "search/sidebar/presentation/filter-list.js",
       "search/sidebar/presentation/folder-tree.js",
       "search/sidebar/application/filters.js",
+      "search/sidebar/infrastructure/scroll.js",
+      "search/sidebar/presentation/directory.js",
+      "search/sidebar/application/directory.js",
       "style.css",
       ...(project === "github" ? ["search/index-worker.js"] : []),
       "app.js"
