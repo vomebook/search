@@ -2,6 +2,8 @@ const fs = require("fs");
 const assert = require("assert");
 const vm = require("vm");
 const { test, run } = require("../../support/test_harness");
+// Run application lifecycle races through the existing CI Worker entrypoint.
+require(require("path").resolve("tests/search/worker/test_app_worker_lifecycle.js"));
 
 const source = fs.readFileSync("static/search/index-worker.js", "utf8");
 const app = fs.readFileSync("static/app.js", "utf8");

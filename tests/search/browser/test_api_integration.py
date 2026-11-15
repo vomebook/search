@@ -46,6 +46,8 @@ class ApiIntegrationTest(unittest.TestCase):
     def setUp(self):
         self.server_state.reset()
         self.context = self.browser.new_context(viewport={"width": 1280, "height": 800})
+        # API responses are routed locally; OS network isolation must not disable prefetch.
+        self.context.add_init_script("Object.defineProperty(navigator, 'onLine', {configurable: true, get: () => true});")
         self.page = self.context.new_page()
         self.search_requests = []
         self.probe_requests = 0
@@ -508,6 +510,67 @@ class ApiIntegrationTest(unittest.TestCase):
         self.page.wait_for_function("apiAvailable === true", timeout=10000)
         self.assertGreater(self.probe_requests, baseline_probes)
         self.assertEqual(self.page.evaluate("apiFailureCount"), 0)
+
+    def test_failed_waiters_share_real_bootstrap_and_ignore_retired_worker_events(self):
+        self.load()
+        self.page.wait_for_function("STATE.dataLoaded", timeout=30000)
+        observed = self.page.evaluate("""async () => {
+          const old = corpusWorker, before = corpusWorkerRestartCount;
+          old.postMessage = () => {};
+          const a = corpusWorkerRequest('metadata', {});
+          const b = corpusWorkerRequest('folder-tree', {repo:'VoiceOfML/VOMEBOOK'});
+          await Promise.resolve();
+          old.dispatchEvent(new ErrorEvent('error', {message:'controlled failure'}));
+          for (let i=0;i<5;i++) await Promise.resolve();
+          const replacement = corpusWorker;
+          old.dispatchEvent(new MessageEvent('messageerror'));
+          const [metadata, tree] = await Promise.all([a,b]);
+          return {count:metadata.count, hasTree:!!tree.tree,
+            same:replacement===corpusWorker, replaced:old!==replacement,
+            restarts:corpusWorkerRestartCount-before, pending:corpusWorkerPending.size};
+        }""")
+        self.assertGreater(observed.pop('count'), 0)
+        self.assertEqual(observed, {'hasTree': True, 'same': True, 'replaced': True,
+                                    'restarts': 1, 'pending': 0})
+
+    def test_abort_while_real_replacement_bootstrap_waits_does_not_retry_search(self):
+        self.load()
+        self.page.wait_for_function("STATE.dataLoaded", timeout=30000)
+        observed = self.page.evaluate("""async () => {
+          const NativeWorker = window.Worker, old = corpusWorker;
+          let release, entered;
+          const bootstrapEntered = new Promise(resolve => { entered = resolve; });
+          const posted = [];
+          window.Worker = class extends NativeWorker {
+            postMessage(message) {
+              posted.push(message.type);
+              if (message.type === 'load-corpus') {
+                release = () => super.postMessage(message);
+                entered();
+              } else super.postMessage(message);
+            }
+          };
+          try {
+            old.postMessage = () => {};
+            const controller = new AbortController();
+            const stale = corpusWorkerRequest('local-search', {q:'alpha'}, 10000, controller.signal)
+              .then(()=>'unexpected success', error=>error.name);
+            const current = corpusWorkerRequest('metadata', {});
+            await Promise.resolve();
+            old.dispatchEvent(new ErrorEvent('error', {message:'controlled failure'}));
+            await bootstrapEntered;
+            controller.abort();
+            release();
+            const [cancelled, metadata] = await Promise.all([stale, current]);
+            return {cancelled, count:metadata.count,
+              bootstraps:posted.filter(type=>type==='load-corpus').length,
+              searches:posted.filter(type=>type==='local-search').length,
+              pending:corpusWorkerPending.size};
+          } finally { window.Worker = NativeWorker; }
+        }""")
+        self.assertGreater(observed.pop('count'), 0)
+        self.assertEqual(observed, {'cancelled':'AbortError', 'bootstraps':1,
+                                    'searches':0, 'pending':0})
 
     def test_separate_worker_failures_each_get_one_bounded_restart(self):
         self.load()

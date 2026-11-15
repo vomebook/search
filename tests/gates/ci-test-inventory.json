@@ -618,6 +618,10 @@
       "kind": "direct",
       "source": ".github/workflows/reader-refactor.yml"
     },
+    "tests/search/browser/test_download_uncertain.py": {
+      "kind": "script",
+      "source": "tests/search/browser/test_download_lifecycle.py"
+    },
     "tests/search/browser/test_paging_recovery.py": {
       "kind": "direct",
       "source": ".github/workflows/reader-refactor.yml"
@@ -657,6 +661,10 @@
     "tests/search/browser/test_segmented_scroll.py": {
       "kind": "direct",
       "source": ".github/workflows/reader-refactor.yml"
+    },
+    "tests/search/browser/test_initial_intent_reader_routes.py": {
+      "kind": "script",
+      "source": "scripts/check_sidebar_payload_regressions.py"
     },
     "tests/search/browser/test_sidebar_initial_payload_route_race.py": {
       "kind": "script",
@@ -729,6 +737,10 @@
     "tests/search/ui/test_snapshot_clone_geometry.js": {
       "kind": "direct",
       "source": ".github/workflows/reader-refactor.yml"
+    },
+    "tests/search/worker/test_app_worker_lifecycle.js": {
+      "kind": "script",
+      "source": "tests/search/worker/test_worker_contract.js"
     },
     "tests/search/worker/test_worker_contract.js": {
       "kind": "direct",

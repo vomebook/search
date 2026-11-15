@@ -4,6 +4,15 @@ import unittest
 from urllib.parse import parse_qs
 
 from tests.search.browser import test_browser_smoke as smoke
+from tests.search.browser.test_initial_intent_reader_routes import evaluate_bounded
+
+
+def load_tests(loader, tests, pattern):
+    # Keep the Sidebar class's exact discovery contract while exercising the
+    # additional intent/Reader cases through this existing CI entry point.
+    from tests.search.browser.test_initial_intent_reader_routes import InitialIntentReaderRouteTests
+    tests.addTests(loader.loadTestsFromTestCase(InitialIntentReaderRouteTests))
+    return tests
 
 
 @unittest.skipIf(smoke.sync_playwright is None, "install requirements-test.txt to run browser tests")
@@ -68,7 +77,7 @@ class SidebarInitialPayloadRouteRaceTests(unittest.TestCase):
         })();''')
         self.load()
         self.page.wait_for_function("typeof window.__releaseInitialPayload === 'function'")
-        observed = self.page.evaluate('''async () => {
+        observed = evaluate_bounded(self.page, '''async () => {
           const before = {hash:location.hash, length:history.length};
           const applied = new Promise(resolve => {
             const original = applyInitialSearchPayload;
@@ -168,7 +177,7 @@ class SidebarInitialPayloadRouteRaceTests(unittest.TestCase):
     def test_navigated_destination_is_persisted_before_hashchange(self):
         self.load("#/VOMEBOOK?local=0")
         self.page.wait_for_function("STATE.mode === 'repo' && !STATE.isLoading && STATE._loadedPage >= 1")
-        result = self.page.evaluate('''async () => {
+        result = evaluate_bounded(self.page, '''async () => {
           // Block hashchange application to observe the payload's own session
           // write independently from ROUTER.apply's later persistence.
           const originalApply = ROUTER.apply;
@@ -222,15 +231,16 @@ class SidebarInitialPayloadRouteRaceTests(unittest.TestCase):
     def test_actual_delayed_payload_survives_a_pending_folder_navigation(self):
         self.load("#/VOMEBOOK")
         self.page.wait_for_function("STATE.dataLoaded && STATE.mode === 'repo' && !STATE.isLoading", timeout=30000)
-        result = self.page.evaluate('''async () => {
+        result = evaluate_bounded(self.page, '''async () => {
           const previous = fetchJsonWithTimeout;
           let release;
           const held = new Promise(resolve => { release = resolve; });
           const originalApply = applyInitialSearchPayload;
           const originalNavigate = ROUTER.navigate;
           const path = STATE.browserPath;
-          initialPayloadCache.delete(getInitialPayloadUrl());
-          fetchJsonWithTimeout = () => held;
+          const initialUrl = getInitialPayloadUrl();
+          initialPayloadCache.delete(initialUrl);
+          fetchJsonWithTimeout = (url, ...args) => url === initialUrl ? held : previous(url, ...args);
           try {
             const pending = tryInitialSearchPayload(STATE.mode, STATE.repo);
             ROUTER.navigate('repo', STATE.repo, 'docs');

@@ -71,6 +71,7 @@ let extensionList = [];
 let readerMetadata = { available: false, count: 0, byRepo: {} };
 let corpusWorker = null;
 let corpusWorkerStartPromise = null;
+let corpusWorkerEpoch = null;
 let corpusWorkerRequestId = 0;
 let corpusWorkerRestartCount = 0;
 let corpusWorkerConsecutiveRestarts = 0;
@@ -488,7 +489,7 @@ function restoreReaderReturnScroll(windowRendered = false) {
   var generation = ++readerReturnRestoreGeneration;
   var attempts = 0;
   function restore() {
-    if (generation !== readerReturnRestoreGeneration) return;
+    if (generation !== readerReturnRestoreGeneration || saved.viewKey !== getSearchViewKey() || saved.route !== location.href) return;
     if (!DOM.resultsContainer || !STATE.results.length) {
       if (++attempts < 20) requestAnimationFrame(restore);
       return;
@@ -551,9 +552,23 @@ function openReaderOverlay(url, addHistory) {
   if (addHistory !== false) readerNavigation.remember(url, readerReturnScrollState);
 }
 
+function reconcileSearchDestination() {
+  // remember() puts a Reader share URL in the parent history entry.
+  // Only a search destination can be reconciled with the underlying view.
+  if (location.pathname !== "/search/" || history.state?.voiceReaderOverlay) return;
+  const changed = location.hash !== appliedRouteHash;
+  if (changed) {
+    readerReturnRestoreGeneration++;
+    readerReturnScrollState = null;
+    readerReturnSnapshot = null;
+    ROUTER.apply();
+  }
+  closeReaderOverlay(true, !changed);
+}
+
 function restoreReaderOverlay(state) {
   if (!state || !state.voiceReaderOverlay || !state.readerUrl) {
-    closeReaderOverlay();
+    reconcileSearchDestination();
     return;
   }
   try {
@@ -581,9 +596,8 @@ function handleReaderMessage(event) {
       // Without this Reader's own overlay entry, history.back() can reach an unrelated page.
       if (!history.state || !history.state.voiceReaderOverlay) {
         var returnFocus = readerNavigation.returnFocus;
-        closeReaderOverlay(false);
         history.replaceState(null, "", target.href);
-        ROUTER.apply();
+        reconcileSearchDestination();
         if (returnFocus && returnFocus.isConnected) returnFocus.focus();
         return;
       }
@@ -598,9 +612,8 @@ function handleReaderMessage(event) {
         var stuck = new URL(new URL(overlay.src, location.origin).searchParams.get("return") || fallback, location.origin);
         if (stuck.origin === location.origin && stuck.pathname === "/search/") fallback = stuck.href;
       } catch (_) {}
-      closeReaderOverlay();
       history.replaceState(null, "", fallback);
-      ROUTER.apply();
+      reconcileSearchDestination();
     }, 1000);
     return;
   }
@@ -630,9 +643,8 @@ function handleReaderMessage(event) {
       hashRoute: true,
       keys: READER_RETURN_SEARCH_KEYS
     });
-    closeReaderOverlay();
     history.replaceState(null, "", mergedTarget.href);
-    ROUTER.apply();
+    reconcileSearchDestination();
   } catch (_) {}
 }
 
@@ -821,18 +833,48 @@ function triggerDownload(url) {
 
 let downloadBatch = null;
 /** @type {{filename: string, link: string}[]} */
-const uncertainDownloads = [];
+const uncertainDownloads = restoreUncertainDownloads();
+
+function restoreUncertainDownloads() {
+  try {
+    const saved = JSON.parse(sessionStorage.getItem("uncertain-downloads") || "[]");
+    return Array.isArray(saved) ? saved.filter(item => item && typeof item.filename === "string" && typeof item.link === "string" && item.link) : [];
+  } catch { return []; }
+}
+
+function saveUncertainDownloads() {
+  try { sessionStorage.setItem("uncertain-downloads", JSON.stringify(uncertainDownloads)); }
+  catch { /* Keep the current tab's in-memory record when storage is unavailable. */ }
+}
+
+function acknowledgeUncertainDownload(link) {
+  const index = uncertainDownloads.findIndex(item => item.link === link);
+  if (index === -1) return;
+  uncertainDownloads.splice(index, 1);
+  saveUncertainDownloads();
+  if (downloadBatch) {
+    const blocked = downloadBatch.blockedFailures.filter(item => item.link === link);
+    downloadBatch.blockedFailures = downloadBatch.blockedFailures.filter(item => item.link !== link);
+    downloadBatch.skippedUncertain = downloadBatch.skippedUncertain.filter(item => item.link !== link);
+    for (const item of blocked) {
+      if (!downloadBatch.failed.some(failed => failed.link === item.link)) downloadBatch.failed.push(item);
+    }
+  }
+  renderDownloadBatch();
+}
+
 const downloadController = VoiceOfMLDownloadController.createDownloadController({
   buildCheckUrl: link => API_BASE + "/api/download/check?link=" + encodeURIComponent(link || ""),
   buildDownloadUrl,
   triggerDownload: url => triggerDownload(url),
   onUncertain(filename, link) {
     if (!uncertainDownloads.some(item => item.link === link)) uncertainDownloads.push({filename, link});
+    saveUncertainDownloads();
     if (downloadBatch) {
       const index = downloadBatch.failed.findIndex(item => item.link === link);
       if (index !== -1) downloadBatch.blockedFailures.push(...downloadBatch.failed.splice(index, 1));
-      renderDownloadBatch();
     }
+    renderDownloadBatch();
   },
   showToast,
   isSpeculativeAllowed: () => !document.hidden && navigator.onLine,
@@ -856,9 +898,12 @@ Object.defineProperty(globalThis, "activeDownloadChecks", {
 });
 
 function renderDownloadBatch() {
-  const batch = downloadBatch;
-  if (!batch) return;
   let panel = document.getElementById("download-queue");
+  if (!downloadBatch && !uncertainDownloads.length) { panel?.remove(); return; }
+  const batch = downloadBatch || {
+    items: [], started: 0, failed: [], blockedFailures: [], skippedUncertain: [],
+    uncertain: uncertainDownloads, cancelled: false, done: true,
+  };
   if (!panel) {
     panel = document.createElement("section");
     panel.id = "download-queue";
@@ -866,21 +911,23 @@ function renderDownloadBatch() {
     panel.style.maxHeight = "calc(100vh - 32px)";
     panel.style.overflowY = "auto";
     panel.setAttribute("aria-label", "批量下载");
-    panel.innerHTML = '<span role="status" aria-live="polite"></span><button type="button" data-queue="cancel">取消待下载</button><button type="button" data-queue="retry">重试失败项</button><button type="button" data-queue="close">关闭</button>';
+    panel.innerHTML = '<span role="status" aria-live="polite"></span><div data-uncertain-list></div><button type="button" data-queue="cancel">取消待下载</button><button type="button" data-queue="retry">重试失败项</button><button type="button" data-queue="close">关闭</button>';
     const status = /** @type {HTMLElement} */ (panel.querySelector('[role="status"]'));
     status.style.maxHeight = "min(40vh, 240px)";
     status.style.overflowY = "auto";
     status.style.overflowWrap = "anywhere";
     status.style.wordBreak = "break-word";
     panel.addEventListener("click", event => {
-      const action = /** @type {HTMLElement} */ (event.target).dataset.queue;
-      if (action === "cancel") {
+      const target = /** @type {HTMLElement} */ (event.target);
+      if (target.dataset.acknowledgeLink && (!downloadBatch || downloadBatch.done)) acknowledgeUncertainDownload(target.dataset.acknowledgeLink);
+      const action = target.dataset.queue;
+      if (action === "cancel" && downloadBatch) {
         downloadBatch.cancelled = true;
         downloadBatch.abortController?.abort();
         renderDownloadBatch();
       }
-      if (action === "retry" && downloadBatch.done) startDownloadBatch(downloadBatch.failed, true);
-      if (action === "close" && downloadBatch.done) { panel.remove(); downloadBatch = null; }
+      if (action === "retry" && downloadBatch?.done) startDownloadBatch(downloadBatch.failed, true);
+      if (action === "close" && downloadBatch?.done) { panel.remove(); downloadBatch = null; renderDownloadBatch(); }
     });
     document.body.appendChild(panel);
   }
@@ -889,9 +936,23 @@ function renderDownloadBatch() {
   const blockedFiles = batch.blockedFailures.map(describe).join("、");
   const skippedFiles = batch.skippedUncertain.map(describe).join("、");
   panel.querySelector('[role="status"]').textContent = `${batch.cancelled ? "已取消待下载 · " : ""}已发起 ${batch.started}/${batch.items.length} · 失败 ${batch.failed.length} · 本次失败但此前状态不确定（不自动重试） ${batch.blockedFailures.length}${blockedFiles ? `：${blockedFiles}` : ""} · 因状态不确定跳过重试 ${batch.skippedUncertain.length}${skippedFiles ? `：${skippedFiles}` : ""} · 状态不确定 ${batch.uncertain.length}${uncertainFiles ? `：${uncertainFiles}` : ""}。请在浏览器下载列表查看文件进度，不确定项请检查后再手动重试。`;
+  const uncertainList = panel.querySelector('[data-uncertain-list]');
+  uncertainList.replaceChildren();
+  for (const item of batch.uncertain) {
+    const row = document.createElement("div");
+    const label = document.createElement("span");
+    label.textContent = describe(item) + " ";
+    const button = document.createElement("button");
+    button.type = "button";
+    button.textContent = "已检查下载列表，清除此项记录";
+    button.dataset.acknowledgeLink = item.link;
+    button.disabled = !batch.done;
+    row.append(label, button);
+    uncertainList.append(row);
+  }
   /** @type {HTMLElement} */ (panel.querySelector('[data-queue="cancel"]')).hidden = batch.done || batch.cancelled;
   /** @type {HTMLElement} */ (panel.querySelector('[data-queue="retry"]')).hidden = !batch.done || !batch.failed.length;
-  /** @type {HTMLElement} */ (panel.querySelector('[data-queue="close"]')).hidden = !batch.done;
+  /** @type {HTMLElement} */ (panel.querySelector('[data-queue="close"]')).hidden = !batch.done || !downloadBatch;
 }
 
 function getSelectedFiles() {
@@ -1155,6 +1216,7 @@ function updateVisibleSelection() {
 }
 
 async function loadData() {
+  const intent = searchIntentId, key = getSearchViewKey();
   try {
     const metadata = await corpusWorkerRequest("load-corpus", { url: new URL(DATA_URL, document.baseURI).href }, WORKER_LOAD_TIMEOUT);
     repoList = Array.isArray(metadata.repos) ? metadata.repos : [];
@@ -1166,7 +1228,7 @@ async function loadData() {
     return true;
   } catch (e) {
     console.error("Data load failed:", e);
-    if (e && e.code === "PROTOCOL_MISMATCH") showToast("本地搜索版本不匹配，请刷新页面");
+    if (e && e.code === "PROTOCOL_MISMATCH" && intent === searchIntentId && key === getSearchViewKey()) showToast("本地搜索版本不匹配，请刷新页面");
     return false;
   }
 }
@@ -1184,26 +1246,27 @@ function rejectCorpusWorkerPending(error) {
   corpusWorkerPending.clear();
 }
 
-function terminateCorpusWorker(error) {
-  var worker = corpusWorker;
+function terminateCorpusWorker(error, worker = corpusWorker) {
+  // A timeout/error from a retired instance must not destroy its replacement.
+  if (worker !== corpusWorker) return;
   corpusWorker = null;
   corpusWorkerStartPromise = null;
   if (worker) worker.terminate();
   rejectCorpusWorkerPending(error || makeWorkerError("WORKER_TERMINATED", "Search Worker terminated"));
 }
 
-function postCorpusWorkerRequest(type, payload, timeoutMs, signal) {
-  if (!corpusWorker) return Promise.reject(makeWorkerError("WORKER_UNAVAILABLE", "Search Worker is unavailable"));
+function postCorpusWorkerRequest(type, payload, timeoutMs, signal, worker = corpusWorker) {
   if (signal?.aborted) return Promise.reject(new DOMException("Cancelled", "AbortError"));
+  if (!worker || worker !== corpusWorker) return Promise.reject(makeWorkerError("WORKER_UNAVAILABLE", "Search Worker is unavailable"));
   const id = ++corpusWorkerRequestId;
   return new Promise(function(resolve, reject) {
     const expire = function() {
       if (!corpusWorkerPending.has(id)) return;
       clearTimeout(timer);
-      corpusWorkerPending.get(id).cleanup?.();
+      cleanup();
       corpusWorkerPending.delete(id);
       const error = makeWorkerError("WORKER_TIMEOUT", "Search Worker request timed out");
-      terminateCorpusWorker(error);
+      terminateCorpusWorker(error, worker);
       reject(error);
     };
     const duration = timeoutMs || WORKER_REQUEST_TIMEOUT;
@@ -1211,78 +1274,135 @@ function postCorpusWorkerRequest(type, payload, timeoutMs, signal) {
     const cancel = () => {
       if (!corpusWorkerPending.has(id)) return;
       corpusWorkerPending.delete(id); clearTimeout(timer); cleanup();
-      corpusWorker?.postMessage({protocol: WORKER_PROTOCOL_VERSION, type: "cancel-search", id: ++corpusWorkerRequestId, payload: {requestId: id}});
+      // Cancellation must settle even if structured cloning/posting fails.
+      try {
+        if (worker === corpusWorker) worker.postMessage({protocol: WORKER_PROTOCOL_VERSION, type: "cancel-search", id: ++corpusWorkerRequestId, payload: {requestId: id}});
+      } catch (_) {}
       reject(new DOMException("Cancelled", "AbortError"));
     };
     const cleanup = () => signal?.removeEventListener("abort", cancel);
-    corpusWorkerPending.set(id, { resolve: resolve, reject: reject, timer: timer, expire: expire, cleanup, deadline: Date.now() + duration });
+    corpusWorkerPending.set(id, { worker, resolve, reject, timer, expire, cleanup, deadline: Date.now() + duration });
     signal?.addEventListener("abort", cancel, {once: true});
-    corpusWorker.postMessage({ protocol: WORKER_PROTOCOL_VERSION, type: type, id: id, payload: payload || {} });
+    try {
+      worker.postMessage({ protocol: WORKER_PROTOCOL_VERSION, type: type, id: id, payload: payload || {} });
+    } catch (error) {
+      corpusWorkerPending.delete(id); clearTimeout(timer); cleanup();
+      reject(error);
+    }
     if (signal?.aborted) cancel();
   });
 }
 
 function ensureCorpusWorker() {
-  if (corpusWorker) return Promise.resolve(corpusWorker);
   if (corpusWorkerStartPromise) return corpusWorkerStartPromise;
+  if (corpusWorker) return Promise.resolve(corpusWorker);
+  const epoch = { worker: null, recovery: null, bootstrap: null };
+  corpusWorkerEpoch = epoch;
   if (!window.Worker) return Promise.reject(makeWorkerError("WORKER_UNAVAILABLE", "Web Workers are unavailable"));
-  corpusWorkerStartPromise = new Promise(function(resolve, reject) {
-    const worker = new Worker("static/search/index-worker.js");
-    corpusWorker = worker;
-    worker.addEventListener("message", function(event) {
-      const message = event.data || {};
-      if (message.type !== "response") return;
-      const pending = corpusWorkerPending.get(message.id);
-      if (!pending) return;
-      corpusWorkerPending.delete(message.id);
-      clearTimeout(pending.timer);
-      pending.cleanup?.();
-      if (message.protocol !== WORKER_PROTOCOL_VERSION) {
-        pending.reject(makeWorkerError("PROTOCOL_MISMATCH", "Refresh required: app/Worker protocol mismatch"));
-        return;
-      }
-      if (!message.ok) pending.reject(makeWorkerError(message.error && message.error.code || "WORKER_ERROR", message.error && message.error.message));
-      else pending.resolve(message.result);
-    });
-    function fail(event) {
-      const error = makeWorkerError("WORKER_ERROR", event && event.message || "Search Worker failed");
-      terminateCorpusWorker(error);
-      reject(error);
+  let worker;
+  try {
+    worker = new Worker("static/search/index-worker.js");
+  } catch (error) {
+    return Promise.reject(error);
+  }
+  epoch.worker = worker;
+  corpusWorker = worker;
+  worker.addEventListener("message", function(event) {
+    if (worker !== corpusWorker) return;
+    const message = event.data || {};
+    if (message.type !== "response") return;
+    const pending = corpusWorkerPending.get(message.id);
+    if (!pending || pending.worker !== worker) return;
+    corpusWorkerPending.delete(message.id);
+    clearTimeout(pending.timer);
+    pending.cleanup?.();
+    if (message.protocol !== WORKER_PROTOCOL_VERSION) {
+      pending.reject(makeWorkerError("PROTOCOL_MISMATCH", "Refresh required: app/Worker protocol mismatch"));
+      return;
     }
-    worker.addEventListener("error", fail, { once: true });
-    worker.addEventListener("messageerror", fail, { once: true });
-    postCorpusWorkerRequest("handshake", {}, WORKER_REQUEST_TIMEOUT).then(function(result) {
-      if (!result || result.protocol !== WORKER_PROTOCOL_VERSION) throw makeWorkerError("PROTOCOL_MISMATCH", "Refresh required: app/Worker protocol mismatch");
-      corpusWorkerStartPromise = null;
-      resolve(worker);
-    }).catch(function(error) {
-      terminateCorpusWorker(error);
-      reject(error);
-    });
+    if (!message.ok) pending.reject(makeWorkerError(message.error && message.error.code || "WORKER_ERROR", message.error && message.error.message));
+    else pending.resolve(message.result);
+  });
+  function fail(event) {
+    const error = makeWorkerError("WORKER_ERROR", event && event.message || "Search Worker failed");
+    terminateCorpusWorker(error, worker);
+  }
+  worker.addEventListener("error", fail, { once: true });
+  worker.addEventListener("messageerror", fail, { once: true });
+  // Publish the shared startup promise before posting, including synchronous failures.
+  corpusWorkerStartPromise = Promise.resolve().then(function() {
+    return postCorpusWorkerRequest("handshake", {}, WORKER_REQUEST_TIMEOUT, null, worker);
+  }).then(function(result) {
+    if (!result || result.protocol !== WORKER_PROTOCOL_VERSION) throw makeWorkerError("PROTOCOL_MISMATCH", "Refresh required: app/Worker protocol mismatch");
+    if (worker !== corpusWorker) throw makeWorkerError("WORKER_TERMINATED", "Search Worker terminated");
+    corpusWorkerStartPromise = null;
+    return worker;
+  }).catch(function(error) {
+    terminateCorpusWorker(error, worker);
+    throw error;
   });
   return corpusWorkerStartPromise;
 }
 
 async function corpusWorkerRequest(type, payload, timeoutMs, signal) {
+  const checkCancelled = () => {
+    if (signal?.aborted) throw new DOMException("Cancelled", "AbortError");
+  };
+  checkCancelled();
+  const start = ensureCorpusWorker();
+  const epoch = corpusWorkerEpoch;
   try {
-    await ensureCorpusWorker();
-    const result = await postCorpusWorkerRequest(type, payload, timeoutMs, signal);
+    const worker = await start;
+    checkCancelled();
+    const metadata = epoch.bootstrap ? await epoch.bootstrap : null;
+    checkCancelled();
+    const result = metadata && type === "load-corpus" && payload?.url === new URL(DATA_URL, document.baseURI).href
+      ? metadata : await postCorpusWorkerRequest(type, payload, timeoutMs, signal, worker);
+    checkCancelled();
+    if (worker !== corpusWorker) throw makeWorkerError("WORKER_TERMINATED", "Search Worker terminated");
     corpusWorkerConsecutiveRestarts = 0;
     return result;
   } catch (error) {
-    if (signal?.aborted || error?.name === "AbortError") throw error;
-    if (error && error.code === "PROTOCOL_MISMATCH") throw error;
-    if (corpusWorkerConsecutiveRestarts >= CORPUS_WORKER_MAX_CONSECUTIVE_RESTARTS) throw error;
-    corpusWorkerConsecutiveRestarts++;
-    corpusWorkerRestartCount++;
-    terminateCorpusWorker(error);
-    await ensureCorpusWorker();
-    if (type !== "load-corpus") {
-      await postCorpusWorkerRequest("load-corpus", {
-        url: new URL(DATA_URL, document.baseURI).href,
-      }, WORKER_LOAD_TIMEOUT);
+    checkCancelled();
+    if (error?.name === "AbortError" || error?.code === "PROTOCOL_MISMATCH") throw error;
+    // All failed waiters on an epoch join one recovery, including late catch callbacks.
+    if (!epoch.recovery) {
+      if (corpusWorkerConsecutiveRestarts >= CORPUS_WORKER_MAX_CONSECUTIVE_RESTARTS) throw error;
+      corpusWorkerConsecutiveRestarts++;
+      corpusWorkerRestartCount++;
+      epoch.recovery = Promise.resolve().then(async function() {
+        terminateCorpusWorker(error, epoch.worker);
+        const ready = ensureCorpusWorker();
+        const replacement = corpusWorkerEpoch;
+        if (!replacement.bootstrap) {
+          replacement.bootstrap = ready.then(worker => postCorpusWorkerRequest("load-corpus", {
+            url: new URL(DATA_URL, document.baseURI).href,
+          }, WORKER_LOAD_TIMEOUT, null, worker));
+        }
+        const bootstrap = replacement.bootstrap;
+        try {
+          const metadata = await bootstrap;
+          return { worker: replacement.worker, metadata };
+        } finally {
+          // A rejected load must not poison this live instance permanently.
+          // Release only our bootstrap; retain the exhausted automatic retry
+          // budget until a later explicit request actually succeeds.
+          if (replacement.bootstrap === bootstrap) replacement.bootstrap = null;
+        }
+      });
     }
-    const result = await postCorpusWorkerRequest(type, payload, timeoutMs, signal);
+    // Bootstrap belongs to the shared replacement; cancelling one waiter must
+    // not cancel it for the remaining callers.
+    const { worker, metadata } = await epoch.recovery.catch(function(recoveryError) {
+      checkCancelled();
+      throw recoveryError;
+    });
+    checkCancelled();
+    if (worker !== corpusWorker) throw makeWorkerError("WORKER_TERMINATED", "Search Worker terminated");
+    const result = type === "load-corpus" && payload?.url === new URL(DATA_URL, document.baseURI).href
+      ? metadata : await postCorpusWorkerRequest(type, payload, timeoutMs, signal, worker);
+    checkCancelled();
+    if (worker !== corpusWorker) throw makeWorkerError("WORKER_TERMINATED", "Search Worker terminated");
     corpusWorkerConsecutiveRestarts = 0;
     return result;
   }
@@ -2243,7 +2363,6 @@ const ROUTER = {
     const previousSearchKey = routeInitialized && prevMode === "repo" ? getSearchViewKey() : null;
     const wasSidebarExpanded = DOM.leftSidebar && DOM.leftSidebar.classList.contains("expanded-wide");
     saveSearchViewSnapshot();
-    cancelPositionRestore();
     STATE.mode = route.mode;
     STATE.repo = route.repo;
     STATE.repoFull = route.repo ? "VoiceOfML/" + route.repo : null;
@@ -2458,6 +2577,8 @@ let searchTimer = null;
 let searchComposing = false;
 let composeSafetyTimer = null;
 let searchId = 0;
+// Distinguish repeated searches/restorations of the same view, independently of paging.
+let searchIntentId = 0;
 let searchAbortController = null;
 let searchPrefetchAbortController = null;
 let searchRequestId = 0;
@@ -3076,6 +3197,7 @@ function tryRestoreSearchPosition(key, options = {}) {
   const previous = positionRestore?.key === key && positionRestore.failed && !options.position ? positionRestore : null;
   let position = options.position || previous?.position || searchPositions.get(key);
   if (!validSearchPosition(position)) return false;
+  searchIntentId++;
   cancelPendingSearchControls();
   if (!options.position && positionRestore?.key === key && !positionRestore.failed) return true;
   cancelPositionRestore();
@@ -3710,6 +3832,7 @@ function startSnapshotClone() {
 function restoreSearchViewSnapshot(key, restoreScroll = true, preserveRestore = false) {
   const snapshot = searchViewSnapshots.get(key);
   if (!snapshot || snapshot.version !== SEARCH_VIEW_SNAPSHOT_VERSION || snapshot.loadedPage < 1) return restoreScroll && tryRestoreSearchPosition(key);
+  searchIntentId++;
   if (!preserveRestore) cancelPositionRestore();
   cancelPendingSearchControls();
   if (searchAbortController) searchAbortController.abort();
@@ -3878,12 +4001,15 @@ function getInitialPayloadUrl() {
   return INITIAL_BASE_URL + "/global.json";
 }
 
-function applyInitialSearchPayload(data) {
+function applyInitialSearchPayload(data, intent = searchIntentId) {
+  if (intent !== searchIntentId) return false;
   if (!data || !Array.isArray(data.results) || !canUseInitialSearchPayload()) return false;
   if (STATE.mode === "repo" && data.repo !== STATE.repoFull) return false;
   if (STATE.mode === "global" && data.mode !== "global") return false;
   if (searchAbortController) searchAbortController.abort();
+  if (intent !== searchIntentId) return false;
   cancelSearchPrefetch();
+  if (intent !== searchIntentId) return false;
   searchAbortController = new AbortController();
   searchRequestId++;
   STATE.total = data.total || 0;
@@ -3925,9 +4051,11 @@ function applyInitialSearchPayload(data) {
   return true;
 }
 
-async function tryInitialSearchPayload(searchMode, searchRepo) {
+async function tryInitialSearchPayload(searchMode, searchRepo, intent = ++searchIntentId) {
+  const searchKey = getSearchViewKey();
   function isCurrentSearchRoute() {
-    return STATE.mode === searchMode && STATE.repo === searchRepo;
+    return intent === searchIntentId && getSearchViewKey() === searchKey &&
+      STATE.mode === searchMode && STATE.repo === searchRepo;
   }
   if (!canUseInitialSearchPayload()) return false;
   var url = getInitialPayloadUrl();
@@ -3940,15 +4068,23 @@ async function tryInitialSearchPayload(searchMode, searchRepo) {
       initialPayloadCache.set(url, data);
     }
     if (!isCurrentSearchRoute()) return false;
-    return applyInitialSearchPayload(data);
+    return applyInitialSearchPayload(data, intent);
   } catch (e) {
     return false;
   }
 }
 
 async function searchWithInitialFallback() {
+  const intent = ++searchIntentId;
   saveSearchViewSnapshot();
   cancelPositionRestore();
+  // Retire the previous view before asynchronous viewport restoration can yield.
+  searchId++;
+  searchRequestId++;
+  if (searchAbortController) searchAbortController.abort();
+  if (intent !== searchIntentId) return false;
+  cancelSearchPrefetch();
+  if (intent !== searchIntentId) return false;
   const key = getSearchViewKey(), entry = positionEntryId;
   prepareReturnPosition(key);
   if (searchViewSnapshots.has(key)) {
@@ -3957,22 +4093,22 @@ async function searchWithInitialFallback() {
   }
   const position = getReturnPositionTarget(key);
   const viewport = position ? await readSearchViewport(key) : null;
-  if (entry !== positionEntryId || key !== getSearchViewKey()) return false;
+  if (intent !== searchIntentId || entry !== positionEntryId || key !== getSearchViewKey()) return false;
   if (validSearchViewport(viewport, position)) return tryRestoreSearchPosition(key, {position, viewport});
-  return searchWithInitialFallbackFresh();
+  return searchWithInitialFallbackFresh(intent);
 }
 
-function searchWithInitialFallbackFresh() {
+function searchWithInitialFallbackFresh(intent = ++searchIntentId) {
   var searchMode = STATE.mode;
   var searchRepo = STATE.repo;
   // A query/filter change while the payload loads has already started its own search;
   // a late fallback must not abort it and reset the user to page one.
   var searchKey = getSearchViewKey();
   function isCurrentSearchRoute() {
-    return STATE.mode === searchMode && STATE.repo === searchRepo && getSearchViewKey() === searchKey;
+    return intent === searchIntentId && STATE.mode === searchMode && STATE.repo === searchRepo && getSearchViewKey() === searchKey;
   }
   if (canUseInitialSearchPayload()) {
-    return tryInitialSearchPayload(searchMode, searchRepo).then(function(applied) {
+    return tryInitialSearchPayload(searchMode, searchRepo, intent).then(function(applied) {
       if (!applied && isCurrentSearchRoute()) doSearch();
       return applied;
     });
@@ -3983,7 +4119,8 @@ function searchWithInitialFallbackFresh() {
 
 function ensureLocalDataLoaded(triggerSearchAfterLoad, background) {
   if (STATE.dataLoaded) return Promise.resolve(true);
-  if (localDataPromise) return localDataPromise;
+  const intent = searchIntentId, key = getSearchViewKey();
+  const isCurrent = () => intent === searchIntentId && key === getSearchViewKey();
   if (!background && STATE.filterExtensions.length === 0) {
     STATE.isLoading = true;
     setSearchVisualLoading(true);
@@ -4001,12 +4138,25 @@ function ensureLocalDataLoaded(triggerSearchAfterLoad, background) {
     DOM.emptyState.style.display = "none";
     setSearchVisualLoading(false);
   }
-  localDataPromise = loadData().then(function(ok) {
-    STATE.dataLoaded = ok;
-    localDataPromise = null;
+  // Share only data acquisition. Every caller keeps its own intent/continuation,
+  // so an obsolete first caller cannot strand a newer search joining the load.
+  if (!localDataPromise) {
+    localDataPromise = loadData().catch(function(err) {
+      console.error("Local data load failed:", err);
+      return false;
+    }).then(function(ok) {
+      STATE.dataLoaded = ok;
+      localDataPromise = null;
+      if (ok) {
+        STATE.extensionList = extensionList;
+        updateRandomTxtVisibility();
+      }
+      return ok;
+    });
+  }
+  return localDataPromise.then(function(ok) {
+    if (!isCurrent()) return ok;
     if (ok) {
-      STATE.extensionList = extensionList;
-      updateRandomTxtVisibility();
       if (STATE.mode === "repo") {
         renderFilters(routeRenderId);
       } else {
@@ -4036,23 +4186,7 @@ function ensureLocalDataLoaded(triggerSearchAfterLoad, background) {
       if (triggerSearchAfterLoad) doSearch();
     }
     return ok;
-  }).catch(function(err) {
-    console.error("Local data load failed:", err);
-    STATE.dataLoaded = false;
-    localDataPromise = null;
-    if (!background) {
-      STATE.isLoading = false;
-      STATE.resultsSkeletonActive = false;
-      setSearchVisualLoading(false);
-    }
-    if (DOM.localModeToggle) DOM.localModeToggle.checked = false;
-    STATE.useLocalMode = false;
-    showToast("本地数据加载失败");
-    syncStateToURL();
-    if (triggerSearchAfterLoad) doSearch();
-    return false;
   });
-  return localDataPromise;
 }
 
 function submitSearchQuery(query, { restore = false, record = false, refreshHistory = false, clearResults = false, blur = false, updateInput = restore } = {}) {
@@ -4141,6 +4275,7 @@ function buildLocalSearchParams(page) {
 }
 
 function doSearch(append, fromStart = false, restorePosition = false) {
+  if (!append) searchIntentId++;
   if (append && resultWindow) { loadResultWindowPage(STATE._loadedPage + 1); return; }
   if (!append && prepareSearchPositionNavigation({ fromStart, restorePosition })) return;
   if (append && STATE.isLoading) return;
@@ -4149,6 +4284,7 @@ function doSearch(append, fromStart = false, restorePosition = false) {
   clearTimeout(filterSearchTimer);
   filterSearchTimer = null;
   const id = ++searchId;
+  const intent = searchIntentId;
   const params = buildLocalSearchParams(STATE.page);
   const folderMatchMode = params.folderMatchMode;
   if (append && STATE._pageCache[STATE.page]) {
@@ -4191,7 +4327,7 @@ function doSearch(append, fromStart = false, restorePosition = false) {
   if (shouldUseLocalSearch) {
     if (!STATE.dataLoaded) {
       ensureLocalDataLoaded(false, false).then(ok => {
-        if (id !== searchId) return;
+        if (id !== searchId || intent !== searchIntentId) return;
         STATE.isLoading = false;
         if (ok) doSearch(append);
         else if (!append && folderMatchMode !== "mixed") doSearch();
@@ -4222,7 +4358,7 @@ function doSearch(append, fromStart = false, restorePosition = false) {
     let pagingError = null;
     doSearchAPI(params, append, requestId).then(function(applied) {
       if (!applied) return;
-      if (id !== searchId) return;
+      if (id !== searchId || intent !== searchIntentId) return;
       if (STATE._deferredAppendWhileDragging) return;
       STATE.page = STATE._loadedPage;
       pagingSucceeded = true;
@@ -4231,11 +4367,11 @@ function doSearch(append, fromStart = false, restorePosition = false) {
       warmConnection();
       syncStateToURL();
     }).catch(function(err) {
-      if (id !== searchId) return;
+      if (id !== searchId || intent !== searchIntentId) return;
       pagingError = err.name === "AbortError" ? null : err;
       if (err.message === "API_TIMEOUT") {
         console.warn("API timeout");
-        return handleApiSearchFailure(append, id);
+        return handleApiSearchFailure(append, id, intent);
       }
       if (err.name === "AbortError") {
         if (id === searchId) {
@@ -4246,9 +4382,9 @@ function doSearch(append, fromStart = false, restorePosition = false) {
         return;
       }
       console.warn("API search failed:", err);
-      return handleApiSearchFailure(append, id);
+      return handleApiSearchFailure(append, id, intent);
     }).finally(function() {
-      if (id === searchId) {
+      if (id === searchId && intent === searchIntentId) {
         STATE._pendingPage = 0;
         STATE.isLoading = false;
         STATE.resultsSkeletonActive = false;
@@ -4280,8 +4416,8 @@ function doSearch(append, fromStart = false, restorePosition = false) {
   doSearchFallbackLocal({...params, signal: searchAbortController.signal}, append, id);
 }
 
-function handleApiSearchFailure(append, id) {
-  if (id !== searchId) return Promise.resolve();
+function handleApiSearchFailure(append, id, intent = searchIntentId) {
+  if (id !== searchId || intent !== searchIntentId) return Promise.resolve();
   if (append) {
     STATE.page = Math.max(1, STATE._loadedPage);
     showToast("加载更多失败，请重试");
@@ -4289,7 +4425,7 @@ function handleApiSearchFailure(append, id) {
   }
   showToast("在线搜索失败，正在切换本地搜索...");
   return ensureLocalDataLoaded(false, false).then(function(ok) {
-    if (!ok || id !== searchId) return;
+    if (!ok || id !== searchId || intent !== searchIntentId) return;
     STATE.useLocalMode = true;
     if (DOM.localModeToggle) DOM.localModeToggle.checked = true;
     syncStateToURL();
@@ -5018,6 +5154,7 @@ function setupSizeFilterControls() {
 }
 
 function scheduleFilterSearch(clearResults = false) {
+  searchIntentId++;
   prepareFilterChange(clearResults);
   cancelPositionRestore();
   resetPagingRecovery();
@@ -6775,6 +6912,7 @@ function setupResultDelegation() {
 
 async function init() {
   cacheDOM();
+  renderDownloadBatch();
   loadSidebarScrollPositions();
   DOM.sidebarContent.addEventListener("scroll", handleSidebarScroll, { passive: true });
   window.addEventListener("pagehide", flushSidebarScroll);
@@ -6916,9 +7054,11 @@ async function init() {
       syncStateToURL();
       const key = getSearchViewKey();
       const id = ++searchId;
+      const intent = ++searchIntentId;
       ensureLocalDataLoaded(false, false).then(ok => {
-        if (ok && id === searchId && key === getSearchViewKey()) doFilterSearch();
-        else if (!ok && id === searchId) doSearch();
+        if (id !== searchId || intent !== searchIntentId || key !== getSearchViewKey()) return;
+        if (ok) doFilterSearch();
+        else doSearch();
       });
       return;
     }
@@ -7004,14 +7144,18 @@ async function init() {
     // System back leaves the Reader even with its directory/search panel open.
     // Re-pushing an entry here (without a user activation) made Chromium mark
     // the whole search document skippable, so the next swipe skipped it.
-    if (readerOverlay || event.state?.voiceReaderOverlay) {
+    if (event.state?.voiceReaderOverlay) {
       restoreReaderOverlay(event.state);
       return;
     }
+    // Setting location.hash can emit popstate before the caller returns.
+    // Ordinary hash navigation belongs to hashchange; only Reader exits need
+    // immediate reconciliation here (including traversals across two entries).
+    if (readerOverlay) reconcileSearchDestination();
   });
   window.addEventListener("hashchange", function() {
     if (readerOverlay) return;
-    ROUTER.apply();
+    reconcileSearchDestination();
   });
   window.addEventListener("resize", function() {
     if (!readSearchPreference("mobileMode")) {
