@@ -156,14 +156,10 @@ export function createDjvuScheduler(decoder, { maxBytes = 64 * 1024 * 1024, maxP
     if (hit) return hit;
     return ephemeral?.page === page ? ephemeral.value : null;
   }
-  /** @param {number} page @param {number} [priority] @param {{signal?: AbortSignal | undefined, geometry?: {width: number, height: number} | undefined}} [options]
-   * @returns {Promise<DjvuPage>} */
-  function request(page, priority = 0, options = {}) {
-    const { signal } = options;
-    if (closed || signal?.aborted) return Promise.reject(signal?.reason || abort());
-    if (!validPage(page)) return Promise.reject(new Error("DJVU_PAGE_INVALID"));
-    const hit = cachedPage(page);
-    if (hit) return Promise.resolve(hit);
+  /** @param {number} page @param {number} priority
+   * @param {{geometry?: {width: number, height: number} | undefined}} options
+   * @param {AbortSignal | undefined} signal @returns {Promise<DjvuPage>} */
+  function enqueuePage(page, priority, options, signal) {
     const task = pageTask(page,priority);
     const {width, height} = options.geometry || {};
     let bytes, geometryKey;
@@ -174,6 +170,16 @@ export function createDjvuScheduler(decoder, { maxBytes = 64 * 1024 * 1024, maxP
     }
     const promise = pageClient(task,signal,Number(priority) || 0,bytes,geometryKey);
     next(); return promise;
+  }
+  /** @param {number} page @param {number} [priority] @param {{signal?: AbortSignal | undefined, geometry?: {width: number, height: number} | undefined}} [options]
+   * @returns {Promise<DjvuPage>} */
+  function request(page, priority = 0, options = {}) {
+    const { signal } = options;
+    if (closed || signal?.aborted) return Promise.reject(signal?.reason || abort());
+    if (!validPage(page)) return Promise.reject(new Error("DJVU_PAGE_INVALID"));
+    const hit = cachedPage(page);
+    if (hit) return Promise.resolve(hit);
+    return enqueuePage(page, priority, options, signal);
   }
   /** @template T @param {Set<DjvuClient<T>>} clients @returns {Promise<T>} */
   function passiveClient(clients) {
