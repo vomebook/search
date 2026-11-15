@@ -20,6 +20,7 @@ const MODULES = ["static/search/execution/domain/policy.js", "static/search/exec
   "static/search/results/snapshots/domain/copy-budget.js", "static/search/results/snapshots/application/store.js",
   "static/search/folder-selection.js", "static/search/domain/height-index.js",
   "static/search/reader-host/presentation/return-position.js", "static/search/reader-host/application/host.js",
+  "static/search/response-cache.js", "static/search/requests/application/response-store.js",
   "static/search/requests/infrastructure/shared-transport.js", "static/search/requests/application/prefetch-controller.js",
   "static/search/results/window/application/page-loader.js", "static/search/results/window/presentation/status.js"];
 const sources = new Map();

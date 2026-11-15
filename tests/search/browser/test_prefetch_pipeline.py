@@ -100,8 +100,13 @@ class PrefetchPipelineTests(unittest.TestCase):
         self.start_pipeline()
         self.fixture.reach_bottom()
         self.page.evaluate('''() => {
-          window.pageWork=[];const render=renderVisible,write=searchResponseCache.set;
-          renderVisible=()=>{if(STATE._loadedPage>=2) pageWork.push('render');return render()};
+          window.pageWork=[];const list=DOM.resultsList,insert=list.insertBefore,write=searchResponseCache.set;
+          // Observe actual row publication, including module-internal renders.
+          list.insertBefore=function(row,before){
+            const result=insert.call(this,row,before);
+            if(STATE._loadedPage>=2 && row.classList?.contains('result-item')) pageWork.push('render');
+            return result;
+          };
           searchResponseCache.set=function(key,value){
             if(value.data.page===2) pageWork.push('cache');return write.call(this,key,value);
           };

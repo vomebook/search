@@ -274,6 +274,7 @@
       "search/results/application/paging-controller.js",
       "search/requests/infrastructure/shared-transport.js",
       "search/requests/application/prefetch-controller.js",
+      "search/requests/application/response-store.js",
       "search/results/presentation/paging-status.js",
       "search/results/window/application/page-loader.js",
       "search/results/window/presentation/status.js",

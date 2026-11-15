@@ -29,9 +29,7 @@ function createFixture(source, root) {
     positionRestore:null, readerHost:{overlay:null}, resultSnapshots:{cloneTask:null},
     APPEND_REQUEST_TIMEOUT:5000, RECENT_SEARCH_PAGE_TTL:604800000,
     searchPageMetadata:new WeakMap([[first,{generation:"stable",total:801}]]),
-    recentSearchPages:new Map(), searchResponseCache:new Map(),
-    pendingSearchCacheWrites:new Map(), searchResponseCacheIdentities:new WeakMap(),
-    searchCacheWriteFrame:0, searchCacheWriteTimer:null, SEARCH_CACHE_TTL:60000,
+    recentSearchPages:new Map(), SEARCH_CACHE_TTL:60000,
     searchPositionDB:{close(){}, objectStoreNames:{contains:()=>true}, transaction(name){
       const tx = {objectStore:()=>({
         getAll:()=>({result:[]}),
@@ -69,6 +67,12 @@ function createFixture(source, root) {
   };
   vm.createContext(context);
   installClassicSearchModules(root, context);
+  context.searchResponseStore = context.VoiceOfMLSearchResponseStore.create({
+    limit:100, ttl:context.SEARCH_CACHE_TTL,
+    getSearchViewKey:context.getSearchViewKey,
+    rememberSearchPageMetadata:context.rememberSearchPageMetadata,
+  });
+  context.searchResponseCache = context.searchResponseStore.cache;
   context.VSCROLL = context.VoiceOfMLVirtualHeights.createState();
   let virtual;
   context.getVirtualResults = () => virtual ||= context.VoiceOfMLVirtualResults.create(context.VSCROLL, {
@@ -229,11 +233,11 @@ for (const {name:project,root} of searchTestProjects()) {
     for (const afterFrame of [false,true]) {
       const f=fixture(source),c=f.context;
       for(let page=2;page<=6;page++) c.setCachedSearchResponse(String(page),f.data(page),true);
-      assert.strictEqual(c.pendingSearchCacheWrites.size,3);
+      assert.strictEqual(c.searchResponseStore.pendingWrites.size,3);
       if(afterFrame) f.frames[0]();
       c.cancelSearchPrefetch();
       f.frames[0](); await f.advance(0);
-      assert.strictEqual(c.pendingSearchCacheWrites.size,0);assert.strictEqual(c.searchResponseCache.size,0);
+      assert.strictEqual(c.searchResponseStore.pendingWrites.size,0);assert.strictEqual(c.searchResponseCache.size,0);
     }
   });
   test(project + " stale deferred cache writes cannot cross query boundaries",async()=>{
