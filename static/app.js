@@ -2693,34 +2693,55 @@ function buildSearchApiBody(params) {
   return body;
 }
 
+function readInitialSearchView() {
+  return {
+    page: STATE.page, query: STATE.query, sort: STATE.sort || "relevance",
+    searchFolders: STATE.searchFolders, exact: STATE.exact,
+    repoFilters: STATE.filterRepos.length, extensionFilters: STATE.filterExtensions.length,
+    folderFilters: STATE.filterFolders.length, folderSelfFilters: STATE.filterFolderSelfs.length,
+    folderSubtreeFilters: STATE.filterFolderSubtrees.length,
+    minSize: STATE.filterMinSize, maxSize: STATE.filterMaxSize,
+    mode: STATE.mode, repo: STATE.repo, repoFull: STATE.repoFull,
+  };
+}
+
+var searchBootstrap;
+function getSearchBootstrap() {
+  return searchBootstrap ||= VoiceOfMLSearchBootstrap.create({
+    view: () => readInitialSearchView(), intent: () => searchIntentId,
+    viewKey: () => getSearchViewKey(),
+    cache: initialPayloadCache, fetchJSON: (url, timeout) => fetchJsonWithTimeout(url, timeout),
+    eligible: () => canUseInitialSearchPayload(), payloadURL: () => getInitialPayloadUrl(),
+    tryPayload: (mode, repo, intent) => tryInitialSearchPayload(mode, repo, intent),
+    applyPayload: (data, intent) => applyInitialSearchPayload(data, intent),
+    cancelSearch: () => cancelActiveSearch(), commitPage: data => commitInitialSearchPage(data),
+    cacheResponse: page => setCachedSearchResponse(getCurrentSearchCacheKey(1), page),
+    markUnverified: (record, page) => searchPageMetadata.set(record, { unverifiedInitial: true,
+      total: page.total, page: 1, page_size: page.page_size }),
+    renderPage: () => renderInitialSearchPage(),
+    syncRoute: () => {
+      // A pending hash navigation must not be overwritten by an arriving payload.
+      if (window.location.hash === appliedRouteHash) syncStateToURL();
+      else if (!readerHost.overlay) persistSearchSession();
+    },
+    prefetch: () => prefetchNextPage(), scheduleLocalData: () => scheduleBackgroundLocalDataLoad(),
+    search: () => doSearch(),
+  });
+}
+
 function canUseInitialSearchPayload() {
-  return (STATE.page || 1) === 1
-    && !STATE.query
-    && (STATE.sort || "relevance") === "relevance"
-    && STATE.searchFolders
-    && STATE.exact
-    && STATE.filterRepos.length === 0
-    && STATE.filterExtensions.length === 0
-    && STATE.filterFolders.length === 0
-    && STATE.filterFolderSelfs.length === 0
-    && STATE.filterFolderSubtrees.length === 0
-    && STATE.filterMinSize === null
-    && STATE.filterMaxSize === null;
+  return VoiceOfMLInitialPayload.eligible(readInitialSearchView());
 }
 
 function getInitialPayloadUrl() {
-  if (STATE.mode === "repo" && STATE.repo) {
-    return INITIAL_BASE_URL + "/repos/" + encodeURIComponent(STATE.repo) + ".json";
-  }
-  return INITIAL_BASE_URL + "/global.json";
+  return VoiceOfMLInitialPayload.url(readInitialSearchView(), INITIAL_BASE_URL);
 }
 
 function applyInitialSearchPayload(data, intent = searchIntentId) {
-  if (intent !== searchIntentId) return false;
-  if (!data || !Array.isArray(data.results) || !canUseInitialSearchPayload()) return false;
-  if (STATE.mode === "repo" && data.repo !== STATE.repoFull) return false;
-  if (STATE.mode === "global" && data.mode !== "global") return false;
-  if (!cancelActiveSearch() || intent !== searchIntentId) return false;
+  return getSearchBootstrap().apply(data, intent);
+}
+
+function commitInitialSearchPage(data) {
   STATE.total = data.total || 0;
   STATE.page = 1;
   STATE.results = data.results.slice();
@@ -2734,17 +2755,11 @@ function applyInitialSearchPayload(data, intent = searchIntentId) {
   STATE.isLoading = false;
   STATE.resultsSkeletonActive = false;
   setSearchVisualLoading(false);
-  setCachedSearchResponse(getCurrentSearchCacheKey(1), {
-    results: STATE.results,
-    total: STATE.total,
-    page: 1,
-    page_size: STATE.pageSize,
-    generation: data.generation,
-  });
-  if (STATE.results[0] && !(typeof data.generation === "string" && data.generation)) {
-    searchPageMetadata.set(STATE.results[0], { unverifiedInitial: true,
-      total: STATE.total, page: 1, page_size: STATE.pageSize });
-  }
+  return { results: STATE.results, total: STATE.total, page: 1,
+    page_size: STATE.pageSize, generation: data.generation };
+}
+
+function renderInitialSearchPage() {
   resetVirtualScrollState();
   clearResultsSkeleton();
   if (STATE.results.length === 0) {
@@ -2756,36 +2771,10 @@ function applyInitialSearchPayload(data, intent = searchIntentId) {
   }
   updateStatusBar();
   updateLoadInfo();
-  // A hash navigation can be pending while this asynchronous payload arrives.
-  // Keep the usual URL/session sync unless it would overwrite a newer route.
-  if (window.location.hash === appliedRouteHash) syncStateToURL();
-  else if (!readerHost.overlay) persistSearchSession();
-  prefetchNextPage();
-  scheduleBackgroundLocalDataLoad();
-  return true;
 }
 
 async function tryInitialSearchPayload(searchMode, searchRepo, intent = ++searchIntentId) {
-  const searchKey = getSearchViewKey();
-  function isCurrentSearchRoute() {
-    return intent === searchIntentId && getSearchViewKey() === searchKey &&
-      STATE.mode === searchMode && STATE.repo === searchRepo;
-  }
-  if (!canUseInitialSearchPayload()) return false;
-  var url = getInitialPayloadUrl();
-  try {
-    var data = initialPayloadCache.get(url);
-    if (!data) {
-      data = await fetchJsonWithTimeout(url, 6000);
-      if (!isCurrentSearchRoute()) return false;
-      if (!data) return false;
-      initialPayloadCache.set(url, data);
-    }
-    if (!isCurrentSearchRoute()) return false;
-    return applyInitialSearchPayload(data, intent);
-  } catch (e) {
-    return false;
-  }
+  return getSearchBootstrap().tryPayload(searchMode, searchRepo, intent);
 }
 
 async function searchWithInitialFallback() {
@@ -2810,22 +2799,7 @@ async function searchWithInitialFallback() {
 }
 
 function searchWithInitialFallbackFresh(intent = ++searchIntentId) {
-  var searchMode = STATE.mode;
-  var searchRepo = STATE.repo;
-  // A query/filter change while the payload loads has already started its own search;
-  // a late fallback must not abort it and reset the user to page one.
-  var searchKey = getSearchViewKey();
-  function isCurrentSearchRoute() {
-    return intent === searchIntentId && STATE.mode === searchMode && STATE.repo === searchRepo && getSearchViewKey() === searchKey;
-  }
-  if (canUseInitialSearchPayload()) {
-    return tryInitialSearchPayload(searchMode, searchRepo, intent).then(function(applied) {
-      if (!applied && isCurrentSearchRoute()) doSearch();
-      return applied;
-    });
-  }
-  if (isCurrentSearchRoute()) doSearch();
-  return Promise.resolve(false);
+  return getSearchBootstrap().fresh(intent);
 }
 
 function ensureLocalDataLoaded(triggerSearchAfterLoad, background) {
