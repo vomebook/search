@@ -159,13 +159,10 @@ export function createReaderDocumentLoader(readerContext) {
     image.className = "reader-image";
     image.alt = readerContext.documentState.title;
     image.decoding = "async";
-    try {
-      return await readerContext.imageLoader.load(image, readerContext.readerContentUrl(target), readerContext.readerAbortController.signal, deadline);
-    } catch (error) {
-      readerContext.assertReaderActive();
-      if (/** @type {ReaderLoaderError | null | undefined} */ (error)?.code === "READER_RESOURCE_LIMIT") throw error;
-      return readerContext.imageLoader.load(image, target, readerContext.readerAbortController.signal, deadline);
-    }
+    readerContext.assertReaderActive();
+    // Do not fall through to the dataset URL. huggingface.co does not open on
+    // this network, so a failed proxy must stay on the proxied URL.
+    return readerContext.imageLoader.load(image, readerContext.readerContentUrl(target), readerContext.readerAbortController.signal, deadline);
   }
 
   function loadChapterManifestDocument() {

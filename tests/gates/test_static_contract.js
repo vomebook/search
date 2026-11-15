@@ -97,9 +97,8 @@ test("reader intent prefetches the shell and format engines", () => {
   assert.match(app, /var warmedReaderSources = new Set\(\)/);
   assert.match(app, /warmedReaderSources\.size >= 8/);
   assert.match(app, /method: readerId \? "GET" : "HEAD", cache: "no-store"/);
-  assertCode(reader, 'return await imageLoader.load(image, readerContentUrl(target), readerAbortController.signal, deadline)');
-  assertCode(reader, 'if (/** @type {ReaderLoaderError | null | undefined} */ (error)?.code === "READER_RESOURCE_LIMIT") throw error');
-  assertCode(reader, 'return imageLoader.load(image, target, readerAbortController.signal, deadline)');
+  assertCode(reader, 'return imageLoader.load(image, readerContentUrl(target), readerAbortController.signal, deadline)');
+  assert.equal(reader.includes('return imageLoader.load(image, target, readerAbortController.signal, deadline)'), false);
   assert.match(reader, /disableStream: true/);
   assert.match(reader, /capability = readerRuntime\.negotiate\(VoiceOfMLReader\.capability\(extension\)\)/);
   assert.match(reader, /resolved\.extension[\s\S]*content\.dataset\.mode = capability\.mode/);
@@ -384,7 +383,7 @@ test("reader uses original files and lazy PDF canvas rendering", () => {
   assertCode(reader, '}, READER_PROXY_TIMEOUT_MS)');
   assert.match(reader, /function fetchWithReaderTimeout/);
   assertCode(reader, 'retryReaderProxy(() => loadPdfTaskWithTimeout(pdfjs, options, proxy, takeInitial(proxy)))');
-  assertCode(reader, 'return loadPdfTaskWithTimeout(pdfjs, options, target)');
+  assert.equal(reader.includes('return loadPdfTaskWithTimeout(pdfjs, options, target)'), false);
   assert.match(reader, /function loadPdfWithTimeout/);
   assertCode(reader, 'trackReaderResource(destroy)');
   assertCode(reader, 'Promise.resolve(task.destroy()).catch(() => {})');

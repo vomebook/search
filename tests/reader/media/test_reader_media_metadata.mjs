@@ -48,10 +48,26 @@ test('media readiness waits for metadata and reports player timing', async () =>
   } finally {f.restore();}
 });
 
+test('stalled proxy retries the proxy instead of the blocked dataset host', async () => {
+  const f=fixture();try {
+    f.context.sourceUrl=f.context.downloadUrl='https://huggingface.co/datasets/VoiceOfML/VOMEBOOK/resolve/main/audio.mp3';
+    f.context.contentUrl='https://voiceofml-search.hf.space/api/reader-content?url=audio';
+    const promise=f.context.renderMedia('audio');await tick();
+    f.media.dispatchEvent(new Event('error'));
+    assert.equal(f.media.src,f.context.contentUrl);
+    assert.equal(f.media.src.includes('huggingface.co'),false);
+    f.media.dispatchEvent(new Event('error'));
+    assert.equal(f.media.loads,1);
+    assert.ok(f.events.some(value=>Array.isArray(value)&&value[0]==='fail'&&value[2]==='READER_MEDIA'));
+    f.media.readyState=1;f.media.dispatchEvent(new Event('loadedmetadata'));
+    await assert.rejects(promise,{name:'AbortError'});
+  } finally {f.restore();}
+});
+
 test('media source retries only once and restores position on metadata', async () => {
   const f=fixture();try {
     const promise=f.context.renderMedia('audio');await tick();
-    f.media.dispatchEvent(new Event('error'));assert.equal(f.media.src,'https://test/original');assert.equal(f.media.loads,1);
+    f.media.dispatchEvent(new Event('error'));assert.equal(f.media.src,'https://test/proxy');assert.equal(f.media.loads,1);
     f.media.currentTime=0;f.media.readyState=1;f.media.dispatchEvent(new Event('loadedmetadata'));await promise;
     assert.equal(f.media.currentTime,4);assert.equal(f.media._readerSourceRetry,false);
     f.media.dispatchEvent(new Event('error'));assert.equal(f.media.loads,1);
@@ -92,7 +108,7 @@ test('idle deadline retries original once and rearms without changing hard deadl
     const promise=f.context.renderMedia('audio');
     const hard=[...callbacks].find(([,item])=>item.delay===20000)[0];
     const idle=[...callbacks].find(([,item])=>item.delay===15000)[1];idle.callback();
-    assert.equal(f.media.src,'https://test/original');assert.equal(f.media.loads,1);
+    assert.equal(f.media.src,'https://test/proxy');assert.equal(f.media.loads,1);
     assert.ok(callbacks.has(hard));assert.equal([...callbacks.values()].filter(item=>item.delay===20000).length,1);
     f.media.readyState=1;f.media.dispatchEvent(new Event('loadedmetadata'));await promise;
     assert.equal(callbacks.size,0);

@@ -171,24 +171,24 @@ test("script load releases timers, handlers and resources on success, error and 
   } finally {globalThis.document = oldDocument; globalThis.setTimeout = oldSet; globalThis.clearTimeout = oldClear;}
 });
 
-test("image fallback is not used for budget failures or closed readers", {timeout: 10000}, async () => {
+test("image load stays on the proxy when the dataset host is unreachable", {timeout: 10000}, async () => {
   const oldImage = globalThis.Image;
   globalThis.Image = class {};
   try {
     const h = fixture(), calls = [];
+    h.context.sourceUrl = "https://huggingface.co/datasets/VoiceOfML/VOMEBOOK/resolve/main/page.webp";
     h.context.imageLoader = {load: async (image, url, signal, deadline) => {
       calls.push({image, url, signal, deadline});
-      if (calls.length === 1) throw new Error("proxy unsupported");
+      if (url === h.context.sourceUrl) throw new Error("direct dataset request");
       return image;
     }};
     const image = await h.loader.loadImageDocument();
-    assert.equal(image.alt, "book"); assert.equal(calls.length, 2);
-    assert.equal(calls[1].url, h.context.sourceUrl); assert.equal(calls[0].deadline, calls[1].deadline);
-    let limitCalls = 0;
-    h.context.imageLoader.load = async () => {limitCalls++; throw Object.assign(new Error("limit"), {code:"READER_RESOURCE_LIMIT"});};
+    assert.equal(image.alt, "book"); assert.equal(calls.length, 1);
+    assert.notEqual(calls[0].url, h.context.sourceUrl);
+    assert.equal(calls[0].url, h.context.readerContentUrl(h.context.sourceUrl));
+    h.context.imageLoader.load = async () => {throw Object.assign(new Error("limit"), {code:"READER_RESOURCE_LIMIT"});};
     await assert.rejects(h.loader.loadImageDocument(), {code:"READER_RESOURCE_LIMIT"});
-    assert.equal(limitCalls, 1, "resource-limit errors cannot start a direct fallback");
-    h.close(); h.context.imageLoader.load = async () => {throw new Error("failed");};
+    h.close();
     await assert.rejects(h.loader.loadImageDocument(), {name:"AbortError"});
   } finally {globalThis.Image = oldImage;}
 });
