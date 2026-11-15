@@ -169,26 +169,35 @@ class InitialIntentReaderRouteTests(unittest.TestCase):
         self.assert_initial_generation('G3')
 
     def test_deferred_response_retains_acquisition_age(self):
-        result = self.page.evaluate('''async () => {
+        result = self.page.evaluate('''() => {
           cancelPendingSearchCacheWrites();
-          const clock=Date.now, raf=requestAnimationFrame, cancel=cancelAnimationFrame;
+          const clock=Date.now, raf=requestAnimationFrame, cancel=cancelAnimationFrame, timer=setTimeout;
           let now=1000000, flush;
           Date.now=()=>now; requestAnimationFrame=callback=>{flush=callback;return 987654;};
           cancelAnimationFrame=()=>{};
+          // Capture only the timer scheduled by the real RAF callback; run it once.
+          function flushWrite() {
+            let callback;
+            setTimeout=fn=>{ if (callback) throw new Error('multiple flush timers'); callback=fn; return 987655; };
+            try { const frame=flush; flush=null; if (!frame) throw new Error('missing flush frame'); frame(); }
+            finally { setTimeout=timer; }
+            if (!callback) throw new Error('missing flush timer');
+            callback();
+          }
           const key=getCurrentSearchCacheKey(2), data={page:2,page_size:100,total:101,results:[{File:'age',Repo:'VoiceOfML/Test',Extension:'txt',Folder:[]}]};
           try {
             setCachedSearchResponse(key,data,true);
             now+=SEARCH_CACHE_TTL;
             const expiredPending=getCachedSearchResponse(key)===null;
-            flush(); await new Promise(resolve=>setTimeout(resolve,20));
+            flushWrite();
             const expiredAfterFlush=getCachedSearchResponse(key)===null;
             now+=1000; const acquired=now;
             setCachedSearchResponse(key,data,true); now+=SEARCH_CACHE_TTL-1;
-            flush(); await new Promise(resolve=>setTimeout(resolve,20));
+            flushWrite();
             const keptAge=searchResponseCache.get(key)?.time===acquired;
             now++; const expiredAtBoundary=getCachedSearchResponse(key)===null;
             setCachedSearchResponse(key,data,true); now+=SEARCH_CACHE_TTL;
-            flush(); await new Promise(resolve=>setTimeout(resolve,20));
+            flushWrite();
             const flushDropsExpired=!searchResponseCache.has(key) && !pendingSearchCacheWrites.has(key);
             return {expiredPending,expiredAfterFlush,keptAge,expiredAtBoundary,flushDropsExpired};
           } finally {
