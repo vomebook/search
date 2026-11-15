@@ -377,7 +377,7 @@ process.stdout.write(stripBundledScripts(readFileSync('static/index.html','utf8'
         self.page.evaluate('navigateToReader("/search/static/reader.html?ext=txt")')
         self.page.frame_locator('.reader-overlay').locator('body').wait_for()
         self.page.evaluate("""() => {
-          history.replaceState(null, "", location.href);
+          history.replaceState({foreign:{nested:{items:['keep', 7]}}}, "", location.href);
           handleReaderMessage({origin:location.origin,source:readerOverlay.contentWindow,
             data:{type:'voice-reader-ui-state',state:'panel'}});
           handleReaderMessage({origin:location.origin,source:readerOverlay.contentWindow,
@@ -386,6 +386,7 @@ process.stdout.write(stripBundledScripts(readFileSync('static/index.html','utf8'
         self.page.locator('.reader-overlay').wait_for(state='detached', timeout=3000)
         self.assertFalse(self.page.evaluate('readerClosing'))
         self.assertEqual(self.page.evaluate('() => new URL(location.href).pathname'), before)
+        self.assertEqual(self.page.evaluate('history.state'), {'foreign': {'nested': {'items': ['keep', 7]}}})
 
     def test_back_tap_recovers_when_history_traversal_never_arrives(self):
         self.page.evaluate('navigateToReader("/search/static/reader.html?ext=txt")')
@@ -421,7 +422,7 @@ process.stdout.write(stripBundledScripts(readFileSync('static/index.html','utf8'
         self.page.frame_locator('.reader-overlay').locator('body').wait_for()
         traversed = self.page.evaluate("""() => {
           let calls = 0; const back = history.back; history.back = () => { calls++; };
-          history.replaceState(null, "", location.href);
+          history.replaceState({foreign:{nested:{items:['keep', 7]}}}, "", location.href);
           try {
             handleReaderMessage({origin:location.origin,source:readerOverlay.contentWindow,data:{type:'voice-reader-close'}});
           } finally { history.back = back; }
@@ -429,6 +430,7 @@ process.stdout.write(stripBundledScripts(readFileSync('static/index.html','utf8'
         }""")
         self.page.locator('.reader-overlay').wait_for(state='detached', timeout=3000)
         self.assertEqual(traversed, 0)
+        self.assertEqual(self.page.evaluate('history.state'), {'foreign': {'nested': {'items': ['keep', 7]}}})
         self.assertEqual(self.page.evaluate('() => new URL(location.href).pathname'), '/search/')
         self.assertFalse(self.page.evaluate('readerClosing'))
 

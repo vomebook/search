@@ -660,7 +660,7 @@ function handleReaderMessage(event) {
       // Without this Reader's own overlay entry, history.back() can reach an unrelated page.
       if (!history.state || !history.state.voiceReaderOverlay) {
         var returnFocus = readerNavigation.returnFocus;
-        history.replaceState(null, "", target.href);
+        history.replaceState(history.state, "", target.href);
         reconcileSearchDestination();
         if (returnFocus && returnFocus.isConnected) returnFocus.focus();
         return;
