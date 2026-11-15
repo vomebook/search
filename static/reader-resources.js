@@ -129,6 +129,7 @@
     "search/reader-navigation.js",
   "search/reader-host/presentation/return-position.js", "search/reader-host/application/host.js",
   "search/positions/domain/policy.js", "search/positions/infrastructure/indexed-db.js", "search/positions/application/persistence.js", "search/positions/application/restoration.js",
+  "search/results/presentation/row.js", "search/results/application/interactions.js",
   "search/results/snapshots/domain/copy-budget.js", "search/results/snapshots/application/store.js",
     "reader/core/reader-store.js",
     "reader/core/reader-request-manager.js",
