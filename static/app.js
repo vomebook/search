@@ -3436,6 +3436,11 @@ function tryRestoreSearchPosition(key, options = {}) {
 function applyValidatedSearchViewport(snapshot) {
   const anchor = captureReaderReturnScroll();
   const previous = STATE.results;
+  // Preview selections belong to records, not to slots replaced by validation.
+  const sameIdentity = index => previous[index] && snapshot.results[index] &&
+    getResultStableId(previous[index]) === getResultStableId(snapshot.results[index]);
+  for (const index of Object.keys(selectedIndices)) if (!sameIdentity(index)) delete selectedIndices[index];
+  if (!sameIdentity(lastSelectedIndex)) lastSelectedIndex = -1;
   for (const key of Object.keys(snapshot.results)) {
     if (previous[key] && JSON.stringify(previous[key]) === JSON.stringify(snapshot.results[key])) snapshot.results[key] = previous[key];
     else { VSCROLL.templateCache.delete(Number(key)); VSCROLL.measuredRowKeys[key] = null; }
@@ -3452,7 +3457,7 @@ function applyValidatedSearchViewport(snapshot) {
   refreshVirtualAfterAppend(false);
   setResultScrollTop(getVirtualOffset(Math.min(anchor.index, STATE.results.length - 1)) + anchor.offset);
   VSCROLL.renderStart = -1; VSCROLL.renderEnd = -1;
-  rememberDisplayedSearchView(); renderVisible(); updateStatusBar(); updateLoadInfo(); updatePagingStatus();
+  rememberDisplayedSearchView(); renderVisible(); updateSelectionUI(); updateStatusBar(); updateLoadInfo(); updatePagingStatus();
   clearTimeout(positionSaveTimer); positionSaveTimer = setTimeout(saveSearchPosition, 250);
 }
 

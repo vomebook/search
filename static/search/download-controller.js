@@ -105,10 +105,10 @@
         try {
           const response = await fetch(buildCheckUrl(link), { signal: controller.signal });
           // Gateway errors may return HTML; never surface a JSON parse error as the message.
-          const data = await response.json().catch(error => {
+          const data = (await response.json().catch(error => {
             if (error && error.name === "AbortError") throw error;
             return {};
-          });
+          })) ?? {};
           if (controller.signal.aborted) throw new DOMException("Aborted", "AbortError");
           if (!response.ok || data.ok !== true)
             throw new Error((typeof data.error === "string" && data.error) ||

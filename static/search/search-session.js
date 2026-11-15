@@ -115,11 +115,28 @@
           try {
             db = await opening.result;
             const transaction = db.transaction("session", "readwrite");
-            completion = watchTransaction(transaction);
+            const watched = watchTransaction(transaction);
+            completion = watched;
             try {
-              transaction.objectStore("session").put(batch.snapshot, "last-search");
+              const store = transaction.objectStore("session");
+              const request = store.get("last-search");
+              request.onerror = watched.fail;
+              request.onsuccess = () => {
+                // Other documents have independent queues. Compare and write
+                // under the same transaction so a late open cannot regress it.
+                // A future timestamp is not authoritative after clock rollback.
+                const saved = request.result;
+                if (saved && typeof saved.updatedAt === "number" &&
+                    Number.isFinite(saved.updatedAt) && saved.updatedAt > batch.snapshot.updatedAt &&
+                    saved.updatedAt <= Date.now()) return;
+                try {
+                  store.put(batch.snapshot, "last-search");
+                } catch (_) {
+                  watched.fail();
+                }
+              };
             } catch (_) {
-              completion.fail();
+              watched.fail();
             }
             await completion.result;
           } catch (_) {
