@@ -17,7 +17,7 @@ function fixture() {
     STATE: {repo: 'A & B', repoFull: 'VoiceOfML/A & B', mode: 'repo', dataLoaded: false},
     DOM: {randomTxtBtn: {style: {display: ''}, disabled: true}},
     API_BASE: 'https://api.test', WORKER_REQUEST_TIMEOUT: 1234,
-    readerMetadata: {count: 3, byRepo: {'VoiceOfML/A & B': 3}}, readerAssets: {},
+    readerMetadata: {count: 3, byRepo: {'VoiceOfML/A & B': 3}}, readerAssetController: {state: {assets: {}}},
     location: {href: 'https://site.test/?q=book'}, navigator: {onLine: true},
     AbortController, SyntaxError, console: {error() {}}, Math: Object.create(Math),
     setTimeout(fn, delay) { const timer = {fn, delay}; timers.add(timer); return timer; },

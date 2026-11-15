@@ -125,7 +125,7 @@ class BrowserBehaviorTest(unittest.TestCase):
                   const relative = buildRecordRelativePath(record);
                   const profile = extension === 'odt' ? 'calibre-odt-html-v1' : 'calibre-rtf-html-v1';
                   const key = `${repo}\\0${relative}`;
-                  readerAssets = {[key]: {s: 2, m: 'h', p: `objects/${digest.slice(0, 2)}/${digest}/${profile}/document.html`}};
+                  readerAssetController.state.assets = {[key]: {s: 2, m: 'h', p: `objects/${digest.slice(0, 2)}/${digest}/${profile}/document.html`}};
                   const enriched = applyReaderAsset(record, repo, relative, buildRecordLink(record));
                   return {readerLink: enriched.ReaderLink, readerExtension: enriched.ReaderExtension,
                     readable: isReadableRecord(enriched), html: buildResultHTML(record, 0)};
@@ -157,7 +157,7 @@ class BrowserBehaviorTest(unittest.TestCase):
           const repo='VoiceOfML/MLMRL-Hub';
           const record={Repo:repo,File:'sample',Extension:'aac',Folder:['music'],Size:100};
           const path=buildRecordRelativePath(record),source=buildRecordLink(record),hash='a'.repeat(64);
-          readerAssets = {[repo+'\\0'+path]:{s:2,m:'a',b:'vomebook/reader-assets-v2',p:`media/audio/aac/${hash}/audio.mp3`}};
+          readerAssetController.state.assets = {[repo+'\\0'+path]:{s:2,m:'a',b:'vomebook/reader-assets-v2',p:`media/audio/aac/${hash}/audio.mp3`}};
           const converted=applyReaderAsset(record,repo,path,source);
           return {source,download:converted.DownloadLink,readerLink:converted.ReaderLink,
             mode:converted.ReaderExtension,icon:getFileIconType('aac'),html:buildResultHTML(record,0)};
@@ -835,11 +835,11 @@ class BrowserBehaviorTest(unittest.TestCase):
         self.load("#/VOMEBOOK")
         self.page.wait_for_function("() => STATE.dataLoaded && STATE.mode === 'repo'", timeout=30000)
         self.page.evaluate("""() => {
-            readerAssets = null;
+            readerAssetController.state.assets = null;
             loadReaderAssets = () => new Promise(resolve => {
-                window.finishDirectoryAssets = () => { readerAssets = {}; resolve(readerAssets); };
+                window.finishDirectoryAssets = () => { readerAssetController.state.assets = {}; resolve(readerAssetController.state.assets); };
             });
-            applyReaderAsset = record => readerAssets
+            applyReaderAsset = record => readerAssetController.state.assets
                 ? {...record, ReaderLink: 'https://voiceofml-search.hf.space/test.epub', ReaderExtension: 'epub'}
                 : record;
             getFolderContents = () => Promise.resolve({
@@ -851,7 +851,7 @@ class BrowserBehaviorTest(unittest.TestCase):
         self.page.evaluate("window.directoryFileRow = document.querySelector('.browser-list .browser-item[data-link]')")
         before = self.page.evaluate("window.directoryFileRow.dataset.readerUrl || ''")
         self.page.evaluate("window.finishDirectoryAssets()")
-        self.page.wait_for_function("() => !!window.directoryFileRow.dataset.readerUrl && !!readerAssets")
+        self.page.wait_for_function("() => !!window.directoryFileRow.dataset.readerUrl && !!readerAssetController.state.assets")
         self.assertNotEqual(self.page.evaluate("window.directoryFileRow.dataset.readerUrl"), before)
         self.assertTrue(self.page.evaluate("window.directoryFileRow.isConnected"))
         self.assertEqual(self.page_errors, [])
@@ -860,13 +860,13 @@ class BrowserBehaviorTest(unittest.TestCase):
         self.load("#/VOMEBOOK")
         self.page.wait_for_function("() => STATE.dataLoaded && STATE.mode === 'repo'", timeout=30000)
         state = self.page.evaluate("""async () => {
-          readerAssets=null;
+          readerAssetController.state.assets=null;
           const pendingAssets=new Promise(resolve=>{
             window.releaseMixedAssets=()=>{
               const digest='a'.repeat(64);
-              readerAssets={[STATE.repoFull+'\\0mixed-assets/book.chm']:
+              readerAssetController.state.assets={[STATE.repoFull+'\\0mixed-assets/book.chm']:
                 {s:2,m:'h',p:`objects/aa/${digest}/0123456789abcdef/document.html`}};
-              resolve(readerAssets);
+              resolve(readerAssetController.state.assets);
             };
           });
           loadReaderAssets=()=>pendingAssets;
