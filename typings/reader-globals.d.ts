@@ -113,10 +113,10 @@ interface ReaderSecurityApi {
   readBytes(response: Response, limit?: number, budget?: ReturnType<ReaderSecurityApi["createByteBudget"]>): Promise<Uint8Array<ArrayBuffer>>;
   readText(response: Response, limit?: number, encoding?: string, budget?: ReturnType<ReaderSecurityApi["createByteBudget"]>): Promise<string>;
   inspectZip(bytes: ArrayBuffer | Uint8Array, limits?: ReaderSecurityApi["LIMITS"]): {entries: number; compressed: number; expanded: number};
-  validateChapterManifest<T>(manifest: T): T;
-  validatePdfPageManifest<T>(manifest: T): T;
-  validatePdfOcrManifest<T>(manifest: T): T;
-  validatePdfOcrPage<T>(payload: T, pageNumber: number): T;
+  validateChapterManifest(manifest: unknown): import("./reader-security-strict").ValidatedChapterManifest;
+  validatePdfPageManifest(manifest: unknown): import("./reader-security-strict").ValidatedPdfPageManifest;
+  validatePdfOcrManifest(manifest: unknown): import("./reader-security-strict").ValidatedPdfOcrManifest;
+  validatePdfOcrPage(payload: unknown, pageNumber: number): import("./reader-security-strict").ValidatedPdfOcrPage;
   isZipContainer(extension: string, bytes?: Uint8Array): boolean;
 }
 
@@ -137,7 +137,7 @@ interface ReaderResourcesApi {
 interface ReaderContractApi {
   readonly ReaderMode: Readonly<Record<string, number>>;
   readonly articleExtensions: readonly string[];
-  capability(extension: string): any;
+  capability(extension: string): ReaderContractCapability;
   readonly features: Readonly<Record<string, object>>;
   clampNumber(value: number, min: number, max: number, fallback: number): number;
   assetFields(asset: any, base: string, extension: string): any;
@@ -152,21 +152,7 @@ interface ReaderContractApi {
 declare var VoiceOfMLReaderSecurity: ReaderSecurityApi;
 declare var VoiceOfMLReaderResources: ReaderResourcesApi;
 declare var VoiceOfMLReader: ReaderContractApi;
-interface ReaderStoreApi {
-  readonly STORE_VERSION: string;
-  get(url: string): Promise<any>;
-  put(entry: any): Promise<void>;
-  list(): Promise<any[]>;
-  isHistoryFull(): Promise<boolean>;
-  remove(url: string): Promise<void>;
-  clearHistory(): Promise<void>;
-  putBookmark(entry: any): Promise<void>;
-  listBookmarks(url: string): Promise<any[]>;
-  listAllBookmarks(): Promise<any[]>;
-  removeBookmark(id: string): Promise<void>;
-  subscribe(callback: (message: any) => void): () => void;
-  dispose(): void;
-}
+type ReaderStoreApi = import("./reader-store-strict").ReaderStoreStrictApi;
 declare var VoiceOfMLReaderStore: ReaderStoreApi;
 interface ReaderRequestManagerOptions {
   fetchImpl?: typeof fetch;
@@ -184,7 +170,69 @@ interface ReaderRequestManager {
   readonly disposed: boolean;
 }
 interface ReaderRequestManagerApi { createReaderRequestManager(options?: ReaderRequestManagerOptions): Readonly<ReaderRequestManager> }
-interface ReaderRuntimeApi { createReaderRuntime(): any }
+interface ReaderContractCapability {
+  readonly [key: string]: unknown;
+  readonly extension: string; readonly mode: string | null; readonly readerMode: number; readonly article: boolean;
+  readonly features: Readonly<{toc: boolean; search: boolean; zoom: boolean; bookmarks: boolean; pagination: boolean; media: boolean}>;
+}
+interface ReaderRuntimeCapability { mode?: string | null; features?: object; [key: string]: unknown }
+interface ReaderRuntimeState {
+  lifecycle: {phase: string; stage: string; disposed: boolean; errorCode: string};
+  source: {id: string; url: string; contentUrl: string; downloadUrl: string; extension: string; metadata: unknown};
+  document: {title: string; zoom: number; page: number; pageCount: number; restoredEntry: unknown; restorationReady: boolean};
+  navigation: {tocEntries: unknown[]; currentChapterIndex: number};
+  search: {query: string; results: unknown[]; index: number};
+  panel: {open: boolean; selected: string; showingAllBookmarks: boolean; editingBookmark: unknown};
+  formats: {active: unknown; pdf: Record<string, unknown>; foliate: Record<string, unknown>; html: Record<string, unknown>; media: Record<string, unknown>; [key: string]: unknown};
+  capability: ReaderRuntimeCapability | null;
+}
+type ReaderRuntimeDisposable = (() => void) | {dispose?: () => void};
+interface ReaderEventBus {
+  on(type: string, listener: (detail: unknown, type: string) => void): () => void;
+  emit(type: string, detail: unknown): void;
+  dispose(): void;
+  readonly disposed: boolean;
+}
+type ReaderRuntimeFormatSnapshot = Readonly<Record<string, unknown>>;
+interface ReaderRuntimeFormatsSnapshot {
+  readonly active: ReaderRuntimeFormatSnapshot;
+  readonly pdf: ReaderRuntimeFormatSnapshot;
+  readonly foliate: ReaderRuntimeFormatSnapshot;
+  readonly html: ReaderRuntimeFormatSnapshot;
+  readonly media: ReaderRuntimeFormatSnapshot;
+  readonly [key: string]: ReaderRuntimeFormatSnapshot | undefined;
+}
+type ReaderRuntimeUpdateDomain = Exclude<keyof ReaderRuntimeState, "capability">;
+type ReaderRuntimeSnapshot = Readonly<{
+  [K in Exclude<keyof ReaderRuntimeState, "formats" | "capability">]: Readonly<ReaderRuntimeState[K]>
+}> & {readonly formats: ReaderRuntimeFormatsSnapshot; readonly capability: ReaderRuntimeCapability | null};
+interface ReaderRuntime {
+  readonly state: ReaderRuntimeState;
+  readonly events: Readonly<ReaderEventBus>;
+  snapshot(): ReaderRuntimeSnapshot;
+  update<K extends ReaderRuntimeUpdateDomain>(domain: K, patch: Partial<ReaderRuntimeState[K]>): boolean;
+  updateFormat(format: string, patch: Record<string, unknown>): boolean;
+  setPhase(phase: string): boolean;
+  setStage(stage: string): boolean;
+  fail(code: string): void;
+  nextGeneration(name: string): number;
+  currentGeneration(name: string): number;
+  isCurrent(name: string, value: number): boolean;
+  track<T extends ReaderRuntimeDisposable | null | undefined>(disposable: T): T;
+  untrack(disposable: ReaderRuntimeDisposable): void;
+  schedule(callback: () => void, delay?: number): ReturnType<typeof setTimeout>;
+  cancel(handle: ReturnType<typeof setTimeout>): void;
+  frame(callback: () => void): number;
+  cancelFrame(handle: number): void;
+  negotiate<T extends ReaderRuntimeCapability>(capability: T): Readonly<T & {features: object}>;
+  negotiate(capability: null | undefined): Readonly<{features: object}>;
+  dispose(): void;
+}
+interface ReaderRuntimeApi {
+  readonly FEATURE_MATRIX: Readonly<Record<string, object>>;
+  createEventBus(): Readonly<ReaderEventBus>;
+  createReaderRuntime(options?: {events?: Readonly<ReaderEventBus>; initialState?: Partial<ReaderRuntimeState>}): Readonly<ReaderRuntime>;
+}
 interface ReaderFormatAdapter {
   open(): unknown;
   render(prepared: unknown): unknown;

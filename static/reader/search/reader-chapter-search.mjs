@@ -1,11 +1,21 @@
+/** @typedef {import('../../../typings/reader-chapter-search-strict').Response} SearchResponse */
+/** @param {import('../../../typings/reader-chapter-search-strict').Configuration} configuration */
 export function createChapterSearch(configuration) {
   const worker = new Worker("/search/static/reader/search/workers/reader-chapter-search-worker.mjs", { type: "module" });
-  let sequence = 0, pending = null, disposed = false, session = null, failure = null;
+  let sequence = 0, disposed = false;
+  /** @type {import('../../../typings/reader-chapter-search-strict').Pending | null} */
+  let pending = null;
+  /** @type {number | null} */
+  let session = null;
+  /** @type {Error | null} */
+  let failure = null;
   const cancelPending = () => {
     pending?.reject(new DOMException("Search cancelled", "AbortError"));
     pending = null;
   };
-  worker.onmessage = ({ data }) => {
+  worker.onmessage = (event) => {
+    /** @type {SearchResponse} */
+    const data = event.data;
     if (!pending || pending.id !== data.id) return;
     if (data.progress) {
       pending.progress?.(data);
@@ -13,8 +23,11 @@ export function createChapterSearch(configuration) {
     }
     const task = pending;
     pending = null;
-    if (data.error) task.reject(new Error(data.error));
-    else { session = data.session; task.resolve(data); }
+    if ("error" in data && data.error) task.reject(new Error(data.error));
+    else {
+      const page = /** @type {import('../../../typings/reader-chapter-search-strict').Page} */ (data);
+      session = page.session; task.resolve(page);
+    }
   };
   worker.onerror = event => {
     event.preventDefault();
@@ -23,6 +36,9 @@ export function createChapterSearch(configuration) {
     pending = null;
   };
   worker.postMessage({ type: "init", configuration });
+  /** @param {string} type @param {{query: string} | {offset: number, session: number | null}} values
+   * @param {((value: import('../../../typings/reader-chapter-search-strict').Progress) => void) | null} [progress]
+   * @returns {Promise<import('../../../typings/reader-chapter-search-strict').Page>} */
   function request(type, values, progress = null) {
     if (disposed) return Promise.reject(new DOMException("Reader closed", "AbortError"));
     if (failure) return Promise.reject(failure);
@@ -35,8 +51,8 @@ export function createChapterSearch(configuration) {
   }
   return {
     get failed() { return !!failure; },
-    search: (query, progress) => request("search", { query }, progress),
-    page: offset => request("page", { offset, session }),
+    search: (/** @type {string} */ query, /** @type {((value: import('../../../typings/reader-chapter-search-strict').Progress) => void) | null} */ progress = null) => request("search", { query }, progress),
+    page: (/** @type {number} */ offset) => request("page", { offset, session }),
     cancel() { cancelPending(); session = null; worker.postMessage({ type: "cancel" }); },
     dispose() { disposed = true; cancelPending(); worker.terminate(); }
   };
@@ -45,13 +61,20 @@ export function createChapterSearch(configuration) {
 // Reproduce the bundle's text extraction: skip script/style/noscript, separate
 // text nodes and collapse whitespace. Only legacy indexes decode DOM text again.
 // Runs map normalized offsets back to the exact text nodes being displayed.
+/** @param {(Node | null | undefined)[]} roots @param {string} [textProfile] */
 export function chapterTextMap(roots, textProfile) {
   if (textProfile !== undefined && textProfile !== "dom-text-v1")
     throw new Error("全文搜索文本格式不受支持");
   const legacy = textProfile === undefined;
-  const runs = [], chunks = [];
-  let length = 0, pendingSpace = null;
+  /** @type {import('../../../typings/reader-chapter-search-strict').Run[]} */
+  const runs = [];
+  /** @type {string[]} */
+  const chunks = [];
+  let length = 0;
+  /** @type {import('../../../typings/reader-chapter-search-strict').Space | null} */
+  let pendingSpace = null;
   const decoder = legacy ? document.createElement("textarea") : null;
+  /** @param {string} text @param {Text} node @param {number} start @param {number} end @param {boolean} linear */
   const append = (text, node, start, end, linear) => {
     if (!text) return;
     if (pendingSpace && length) {
@@ -64,6 +87,7 @@ export function chapterTextMap(roots, textProfile) {
     length += text.length;
   };
   for (const root of roots.filter(Boolean)) {
+    if (!root) continue;
     const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
     while (walker.nextNode()) {
       const node = /** @type {Text} */ (walker.currentNode);
@@ -76,7 +100,7 @@ export function chapterTextMap(roots, textProfile) {
       for (const match of node.data.matchAll(pattern)) {
         const raw = match[0], start = match.index, end = start + raw.length;
         let text = raw;
-        if (legacy && raw.startsWith("&")) { decoder.innerHTML = raw; text = decoder.value; }
+        if (decoder && raw.startsWith("&")) { decoder.innerHTML = raw; text = decoder.value; }
         if (/^[\s\u0085\u001c-\u001f]+$/u.test(text)) {
           pendingSpace ||= { node, start, end };
         } else append(text, node, start, end, text === raw);
@@ -85,7 +109,9 @@ export function chapterTextMap(roots, textProfile) {
   }
   return {
     text: chunks.join(""),
+    /** @param {number} start @param {number} end @param {Node} body */
     parts(start, end, body) {
+      /** @type {import('../../../typings/reader-chapter-search-strict').TextPart[]} */
       const output = [];
       // Runs are append-only, strictly ordered ranges. Seek directly to the
       // first intersecting range rather than rescanning a whole long chapter.

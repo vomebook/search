@@ -1,4 +1,6 @@
+/** @param {import('../../../typings/reader-ui-component-strict').ReaderUiContext} readerContext */
 export function createReaderUi(readerContext) {
+  /** @param {string} message @param {number} [duration] */
   function showDownloadFeedback(message, duration = 4000) {
     clearTimeout(readerContext.downloadFeedbackTimer);
     readerContext.downloadFeedback.textContent = message;
@@ -6,10 +8,12 @@ export function createReaderUi(readerContext) {
     if (message && duration) readerContext.downloadFeedbackTimer = setTimeout(() => readerContext.showDownloadFeedback(""), duration);
   }
 
+  /** @param {import('../../../typings/reader-ui-component-strict').ReaderUiDocumentPatch} patch */
   function updateDocumentState(patch) {
     return readerContext.readerRuntime.update("document", patch);
   }
 
+  /** @param {import('../../../typings/reader-ui-component-strict').ReaderUiPanelPatch} patch */
   function updatePanelState(patch) {
     return readerContext.readerRuntime.update("panel", patch);
   }
@@ -25,6 +29,7 @@ export function createReaderUi(readerContext) {
     }
   }
 
+  /** @param {string} theme @param {boolean} [persist] @param {boolean} [animate] */
   function applyReaderTheme(theme, persist = true, animate = true) {
     const anchor = readerContext.foliateScrollAnchors.capture();
     if (animate) {
@@ -55,9 +60,11 @@ export function createReaderUi(readerContext) {
     readerContext.foliateScrollAnchors.restore(anchor);
   }
 
+  /** @param {number} percent @param {boolean} [persist] */
   function setZoom(percent, persist = true) {
     const anchor = readerContext.foliateScrollAnchors.capture();
-    const pdfAnchor = ["pdf", "pdf-pages", "image-pages"].includes(readerContext.capability.mode)
+    const mode = readerContext.capability.mode;
+    const pdfAnchor = mode === "pdf" || mode === "pdf-pages" || mode === "image-pages"
       ? readerContext.pageAtMarker() : null;
     const pdfBounds = pdfAnchor?.getBoundingClientRect();
     const pdfOffset = pdfBounds ? (readerContext.viewport.getBoundingClientRect().top - pdfBounds.top) / Math.max(1, pdfBounds.height) : 0;
@@ -92,16 +99,20 @@ export function createReaderUi(readerContext) {
     if (persist) readerContext.scheduleSave();
   }
 
+  /** @param {Element} list @param {string} message */
   function emptyPanel(list, message) {
     list.innerHTML = `<div class="panel-empty">${message}</div>`;
   }
 
+  /** @param {HTMLElement} item @param {string} query */
   function highlightPanelItem(item, query) {
+    /** @type {Text[]} */
     const nodes = [];
     const walker = document.createTreeWalker(item, NodeFilter.SHOW_TEXT);
-    while (walker.nextNode())
-      if (!walker.currentNode.parentElement.closest(".panel-item-remove"))
-        nodes.push(walker.currentNode);
+    while (walker.nextNode()) {
+      const node = /** @type {Text} */ (walker.currentNode);
+      if (!/** @type {HTMLElement} */ (node.parentElement).closest(".panel-item-remove")) nodes.push(node);
+    }
     const pattern = new RegExp(query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "giu");
     for (const node of nodes) {
       const text = node.data,
@@ -122,10 +133,11 @@ export function createReaderUi(readerContext) {
     }
   }
 
+  /** @param {HTMLElement} view @param {{resetScroll?: boolean}} [options] */
   function filterPanel(view, {resetScroll = true} = {}) {
-    const input = view.querySelector(".panel-search");
+    const input = /** @type {HTMLInputElement} */ (view.querySelector(".panel-search"));
     const query = input.hidden ? "" : (input.value || "").trim().toLowerCase();
-    let status = view.querySelector(".panel-filter-empty");
+    let status = /** @type {HTMLElement | null} */ (view.querySelector(".panel-filter-empty"));
     if (!status) {
       status = document.createElement("div");
       status.className = "panel-filter-empty panel-empty";
@@ -155,7 +167,7 @@ export function createReaderUi(readerContext) {
     }
     readerContext.clearSearchHighlights(view);
     let count = 0;
-    for (const item of view.querySelectorAll(".panel-item")) {
+    for (const item of /** @type {NodeListOf<HTMLElement>} */ (view.querySelectorAll(".panel-item"))) {
       const searchableText = [...item.children]
         .filter((child) => !child.classList.contains("panel-item-remove"))
         .map((child) => child.textContent)
@@ -171,18 +183,20 @@ export function createReaderUi(readerContext) {
     status.hidden = !query || count > 0 || !!empty;
   }
 
+  /** @param {string} state */
   function notifyReaderUiState(state) {
     readerContext.readerUiHistoryState = state;
     if (readerContext.isReaderOverlayFrame())
       window.parent.postMessage({ type: "voice-reader-ui-state", state }, location.origin);
   }
 
+  /** @param {boolean} open @param {boolean} [restoreFocus] @param {boolean} [focusPanel] */
   function setReaderPanelOpen(open, restoreFocus = false, focusPanel = false) {
     readerContext.readerRuntime.update("panel", { open });
     const panel = /** @type {HTMLElement} */ (document.querySelector("#history-panel"));
     const focusWasInside = panel.contains(document.activeElement);
     clearTimeout(readerContext.panelAnimationTimer);
-    document.querySelector("#history").setAttribute("aria-expanded", String(open));
+    /** @type {HTMLElement} */ (document.querySelector("#history")).setAttribute("aria-expanded", String(open));
     if (open) {
       readerContext.readerPanelInteractionSerial++;
       panel.hidden = false;
@@ -208,8 +222,9 @@ export function createReaderUi(readerContext) {
     if (restoreFocus || focusWasInside) /** @type {HTMLElement} */ (document.querySelector("#history")).focus({ preventScroll: true });
   }
 
+  /** @param {HTMLElement} button @param {boolean} open */
   function setPanelSearchOpen(button, open) {
-    const view = button.closest(".reader-panel-view"), input = view.querySelector(".panel-search");
+    const view = /** @type {HTMLElement} */ (button.closest(".reader-panel-view")), input = /** @type {HTMLInputElement} */ (view.querySelector(".panel-search"));
     button.setAttribute("aria-expanded", String(open));
     input.inert = !open;
     if (open) {
@@ -228,6 +243,7 @@ export function createReaderUi(readerContext) {
     button.focus();
   }
 
+  /** @param {string} name */
   function selectPanel(name) {
     if (name === "media" && readerContext.mediaTab.hidden) name = "bookmarks";
     readerContext.updatePanelState({ selected: name });
@@ -244,13 +260,13 @@ export function createReaderUi(readerContext) {
     if (name === "bookmarks") readerContext.renderBookmarks();
     if (name === "history") readerContext.renderHistory();
     if (name === "media" && readerContext.mediaElement)
-      readerContext.mediaPanel.querySelector(".media-panel-time").textContent =
+      /** @type {HTMLElement} */ (readerContext.mediaPanel.querySelector(".media-panel-time")).textContent =
         `${readerContext.formatMediaTime(readerContext.mediaElement.currentTime)} / ${readerContext.formatMediaTime(readerContext.mediaElement.duration)}`;
     readerContext.updateProgressTools();
   }
 
   async function renderHistory() {
-    const list = document.querySelector("#history-list"),
+    const list = /** @type {HTMLElement} */ (document.querySelector("#history-list")),
       generation = readerContext.nextReaderGeneration("history");
     try {
       const entries = await VoiceOfMLReaderStore.list();
@@ -264,7 +280,7 @@ export function createReaderUi(readerContext) {
         link.type = "button";
         link.className = "panel-item-main";
         link.textContent = entry.title || entry.url;
-        link.addEventListener("click", () => readerContext.navigateReader(entry.readerUrl));
+        link.addEventListener("click", () => readerContext.navigateReader(/** @type {string} */ (entry.readerUrl)));
         const meta = document.createElement("small");
         meta.textContent = `${entry.pageCount ? `第 ${entry.page || 1} / ${entry.pageCount} 页 · ` : ""}${new Date(entry.lastReadAt).toLocaleString()}`;
         const remove = document.createElement("button");
@@ -284,7 +300,7 @@ export function createReaderUi(readerContext) {
         list.appendChild(row);
       }
       if (!list.childElementCount) readerContext.emptyPanel(list, "暂无阅读记录");
-      readerContext.filterPanel(document.querySelector("#history-view"));
+      readerContext.filterPanel(/** @type {HTMLElement} */ (document.querySelector("#history-view")));
     } catch (_) {
       if (readerContext.isReaderGenerationCurrent("history", generation)) readerContext.emptyPanel(list, "无法读取本地记录");
     }

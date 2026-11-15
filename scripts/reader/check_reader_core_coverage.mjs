@@ -13,6 +13,42 @@ const gates = [
     tests:["tests/reader/layout/test_reader_scroll_anchor.js"] }
 ];
 
+// Run boundary regressions separately so they cannot change the coverage gates below.
+const boundaryTests = [
+  {file: "tests/reader/chapters/test_chapter_format_validation.mjs", names: ["tests/reader/chapters/test_chapter_format_validation.mjs"], marker: "chapter metadata validation and prefetch sizes passed"},
+  {file: "tests/reader/core/test_pdf_text_context.js", names: ["tests/reader/core/test_pdf_text_context.js"]},
+  {file: "tests/reader/core/test_reader_contract_pdf_document.js", names: ["tests/reader/core/test_reader_contract_pdf_document.js"]},
+  {file: "tests/reader/core/test_reader_format_controller_boundary.mjs", names: [
+    "DjVu loader remains a separate module at the Pages runtime URL",
+    "resolution ignores non-string extensions and preserves the existing extension",
+    "resolution retains string and legacy DJVU semantics",
+    "classification is narrowed at the fail boundary without coercion",
+    "dynamic lifecycle code remains uncoerced and is narrowed by the controller",
+    "image fallback only accepts a string original extension"]},
+  {file: "tests/reader/core/test_reader_source_boundary.mjs", names: [
+    "download validates unknown JSON and preserves server messages",
+    "download handles null, primitive and abort errors without losing cleanup",
+    "normal and early resolution validate metadata while retaining extra fields",
+    "non-record metadata is rejected before use in both resolution paths and application",
+    "optional nulls and mixed folders survive resolution and application",
+    "early lookup retries timeout and rethrows null rejection"]},
+  {file: "tests/reader/security/test_reader_security_boundary.js", names: ["tests/reader/security/test_reader_security_boundary.js"]}
+];
+for (const {file, names, marker} of boundaryTests) {
+  const result = spawnSync(process.execPath, ["--test", "--test-concurrency=1", "--test-reporter=tap", file], {encoding: "utf8"});
+  if (result.stdout) process.stdout.write(result.stdout);
+  if (result.stderr) process.stderr.write(result.stderr);
+  if (result.error) throw result.error;
+  const lines = (result.stdout || "").split(/\r?\n/);
+  const summaries = [`1..${names.length}`, `# tests ${names.length}`, `# pass ${names.length}`,
+    "# fail 0", "# cancelled 0", "# skipped 0", "# todo 0"];
+  if (result.status !== 0 || !hasPassingTapContracts(result.stdout || "", names.map(name => marker ? {name, marker} : {name})) ||
+      !summaries.every(line => lines.filter(item => item === line).length === 1)) {
+    console.error(`Reader boundary gate requires all named tests to pass: ${file}`);
+    process.exitCode = 1;
+  }
+}
+
 for (const gate of gates) {
   const result = spawnSync(process.execPath, [
     "--test", "--test-concurrency=1", "--test-reporter=tap", "--experimental-test-coverage",

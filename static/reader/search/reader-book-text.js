@@ -4,6 +4,7 @@ import {validatePdfBookText} from "./reader-pdf-book-validate.mjs";
 // Keep the public legacy export and argument order while validation is isolated.
 export {validatePdfBookText as validateBookText};
 
+/** @param {string} query */
 function pattern(query) {
   return new RegExp(query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "giu");
 }
@@ -14,12 +15,14 @@ const CHECKPOINT_PROJECTION_COUNT = 4096;
 const SEARCH_YIELD_MS = 8;
 const SEARCH_YIELD_UNITS = 256 * 1024;
 
+/** @param {import('../../../typings/reader-book-text-strict').TextMapping} page @param {number} start @param {number} length */
 export function hitBoxes(page, start, length) {
   const begin = codePointLength(page.text.slice(0, start));
   const end = begin + codePointLength(page.text.slice(start, start + length));
   return hitBoxesAtOffsets(page, begin, end);
 }
 
+/** @param {import('../../../typings/reader-book-text-strict').TextMapping} page @param {number} begin @param {number} end */
 function hitBoxesAtOffsets(page, begin, end) {
   const spans = page.text_spans || [], boxes = [];
   let low = 0, high = spans.length;
@@ -35,16 +38,23 @@ function hitBoxesAtOffsets(page, begin, end) {
   return boxes;
 }
 
-/** @param {{current?: () => boolean, yieldTask?: () => Promise<unknown>, progress?: ((index: any, scanned: number, total: number) => Promise<unknown> | void) | null}} [options] */
+/** @param {import('../../../typings/reader-book-text-strict').Book} book @param {string} query @param {import('../../../typings/reader-book-text-strict').Options} [options] @returns {Promise<import('../../../typings/reader-book-text-strict').SearchIndex>} */
 export async function searchBookText(book, query, options = {}) {
   const { current = () => true, yieldTask = () => new Promise(r => setTimeout(r, 0)), progress = null } = options;
-  const counts = [], checkpoints = [], re = pattern(query);
+  /** @type {number[]} */
+  const counts = [];
+  /** @type {import('../../../typings/reader-book-text-strict').Checkpoint[]} */
+  const checkpoints = [];
+  const re = pattern(query);
   let total = 0, deadline = performance.now() + SEARCH_YIELD_MS, pendingUnits = 0;
   if (!query) return { total: 0, page: () => ({ total: 0, offset: 0, pageSize: 50, results: [] }) };
+  /** @type {Map<string, import('../../../typings/reader-book-text-strict').ResultPage>} */
   const pageCache = new Map();
   // Materialize code-point checkpoints only for the page actually opened by
   // the reader. Never add work to the foreground full-book scan.
+  /** @type {import('../../../typings/reader-book-text-strict').ProjectionPage | null} */
   let projectionPage = null;
+  /** @param {import('../../../typings/reader-book-text-strict').TextPage} page @param {number} pageIndex @param {number} target @param {number} checkpointPosition */
   function projectionFor(page, pageIndex, target, checkpointPosition) {
     if (!page.text_spans?.length || page.text.length > CHECKPOINT_PROJECTION_UNITS || target < CHECKPOINT_STRIDE) return null;
     if (!projectionPage || projectionPage.text !== page.text || projectionPage.pageIndex !== pageIndex)
@@ -73,6 +83,7 @@ export async function searchBookText(book, query, options = {}) {
     }
     return state.checkpoints.get(target) || null;
   }
+  /** @type {import('../../../typings/reader-book-text-strict').SearchIndex} */
   const indexResult = { get total() { return total; }, page(offset = 0, pageSize = 50) {
     offset = Math.max(0, Math.min(Math.max(0, total - 1), Math.floor(offset)));
     offset = Math.floor(offset / pageSize) * pageSize;
@@ -110,6 +121,7 @@ export async function searchBookText(book, query, options = {}) {
         const matchIndex = start + match.index;
         if (passed++ < offset) continue;
         const begin = Math.max(0, matchIndex - 72), end = Math.min(page.text.length, matchIndex + match[0].length + 88);
+        /** @type {import('../../../typings/reader-book-text-strict').Box[]} */
         let boxes = [];
         if (hasBoxes) {
           // If the checkpoint already counted this match, recover its start
@@ -133,7 +145,10 @@ export async function searchBookText(book, query, options = {}) {
     if (pageSize <= 50) {
       pageCache.delete(key);
       pageCache.set(key, page);
-      if (pageCache.size > 4) pageCache.delete(pageCache.keys().next().value);
+      if (pageCache.size > 4) {
+        const oldest = pageCache.keys().next();
+        if (!oldest.done) pageCache.delete(oldest.value);
+      }
     }
     return page;
   } };
@@ -170,8 +185,12 @@ export async function searchBookText(book, query, options = {}) {
   return indexResult;
 }
 
+/** @template T @param {() => T | PromiseLike<T>} load */
 export function createBookTextCache(load) {
-  let value = null, pending = null;
+  /** @type {T | null} */
+  let value = null;
+  /** @type {Promise<T> | null} */
+  let pending = null;
   return { async get() {
     if (value) return value;
     if (!pending) pending = Promise.resolve().then(load).then(book => (value = book)).finally(() => { pending = null; });
@@ -179,6 +198,7 @@ export function createBookTextCache(load) {
   }, clear() { value = null; pending = null; } };
 }
 
+/** @param {import('../../../typings/reader-book-text-strict').Shell} shell @param {import('../../../typings/reader-book-text-strict').Box[]} boxes @param {{start: number, length: number} | null} [hit] */
 export function paintTextHit(shell, boxes, hit = null) {
   shell.querySelectorAll(".reader-text-hit-box").forEach(node => node.remove());
   const positioned = positionedHitBoxes(shell, hit);
@@ -186,7 +206,7 @@ export function paintTextHit(shell, boxes, hit = null) {
     const mark = shell.ownerDocument.createElement("span");
     mark.className = "reader-text-hit-box";
     mark.setAttribute("aria-hidden", "true");
-    mark.dataset.mappingPrecision = precision || 'block';
+    mark.dataset.mappingPrecision = /** @type {string} */ (precision || 'block');
     Object.assign(mark.style, { position: "absolute", pointerEvents: "none", zIndex: "4",
       left: `${box[0] * 100}%`, top: `${box[1] * 100}%`, width: `${(box[2] - box[0]) * 100}%`,
       height: `${(box[3] - box[1]) * 100}%`, background: "rgb(240 199 94 / 45%)" });
@@ -194,6 +214,7 @@ export function paintTextHit(shell, boxes, hit = null) {
   }
 }
 
+/** @param {string} text */
 function codePointLength(text) {
   let length = 0;
   for (const point of text) length++;
@@ -201,22 +222,28 @@ function codePointLength(text) {
 }
 
 
+/** @param {import('../../../typings/reader-book-text-strict').Shell} shell @param {{start: number, length: number} | null} hit @returns {import('../../../typings/reader-book-text-strict').Box[] | null} */
 function positionedHitBoxes(shell, hit) {
   const layer = shell.querySelector('.reader-pdf-text[data-text-generation]');
-  if (!layer || !Number.isSafeInteger(hit?.start) || hit.start < 0 ||
-      !Number.isSafeInteger(hit?.length) || hit.length < 1) return null;
+  if (!layer || !hit || !Number.isSafeInteger(hit.start) || hit.start < 0 ||
+      !Number.isSafeInteger(hit.length) || hit.length < 1) return null;
   const walker = layer.ownerDocument.createTreeWalker(layer, 4);
-  let offset = 0, start = null, end = null;
+  let offset = 0;
+  /** @type {[import('../../../typings/reader-book-text-strict').TextNode, number] | null} */
+  let start = null;
+  /** @type {[import('../../../typings/reader-book-text-strict').TextNode, number] | null} */
+  let end = null;
   while (walker.nextNode()) {
-    const node = walker.currentNode, next = offset + node.data.length;
-    if (!start && hit.start < next) start = [node, hit.start - offset];
+    // SHOW_TEXT restricts this walker to Text nodes.
+    const textNode = /** @type {import('../../../typings/reader-book-text-strict').TextNode} */ (walker.currentNode), next = offset + textNode.data.length;
+    if (!start && hit.start < next) start = [textNode, hit.start - offset];
     if (start && hit.start + hit.length <= next) {
-      end = [node, hit.start + hit.length - offset];
+      end = [textNode, hit.start + hit.length - offset];
       break;
     }
     offset = next;
   }
-  if (!end) return null;
+  if (!start || !end) return null;
   const range = layer.ownerDocument.createRange();
   range.setStart(...start); range.setEnd(...end);
   const bounds = shell.getBoundingClientRect();

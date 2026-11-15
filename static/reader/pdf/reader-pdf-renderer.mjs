@@ -1,8 +1,9 @@
 // Preserve the previous 2x baseline on desktops and low-memory devices, but
 // use high-density mobile pixels when the additional canvas fits the budget.
+/** @param {import('../../../typings/reader-pdf-renderer-strict').PdfViewport} viewport */
 export function pdfOutputScale(viewport) {
   const dpr = Math.max(1, Number(window.devicePixelRatio) || 1), baseline = Math.min(2, dpr);
-  if (!matchMedia("(max-width: 700px)").matches || (Number(navigator.deviceMemory) > 0 && Number(navigator.deviceMemory) <= 2))
+  if (!matchMedia("(max-width: 700px)").matches || (Number(/** @type {Navigator & {deviceMemory?: number}} */ (navigator).deviceMemory) > 0 && Number(/** @type {Navigator & {deviceMemory?: number}} */ (navigator).deviceMemory) <= 2))
     return baseline;
   const width = Number(viewport.width), height = Number(viewport.height);
   if (!(width > 0 && height > 0 && Number.isFinite(width) && Number.isFinite(height))) return baseline;
@@ -10,7 +11,9 @@ export function pdfOutputScale(viewport) {
   return Math.max(baseline, Math.min(3, dpr, affordable));
 }
 
+/** @param {import('../../../typings/reader-pdf-renderer-strict').PdfRendererContext} readerContext */
 export function createReaderPdfRenderer(readerContext) {
+  /** @param {HTMLElement} pageState @param {string | number | undefined} page */
   function setPdfPageLoadingState(pageState, page) {
     pageState.dataset.state = "loading";
     pageState.setAttribute("role", "status");
@@ -19,12 +22,14 @@ export function createReaderPdfRenderer(readerContext) {
     pageState.hidden = false;
   }
 
+  /** @param {import('../../../typings/reader-pdf-renderer-strict').PdfShell} shell */
   function isPdfPageVisible(shell) {
     const pageRect = shell?.getBoundingClientRect?.();
     const viewportRect = readerContext.viewport?.getBoundingClientRect?.();
     return !!pageRect && !!viewportRect && pageRect.bottom > viewportRect.top && pageRect.top < viewportRect.bottom;
   }
 
+  /** @param {import('../../../typings/reader-pdf-renderer-strict').PdfShell} shell */
   function pdfPagePriority(shell) {
     const pageRect = shell?.getBoundingClientRect?.();
     const viewportRect = readerContext.viewport?.getBoundingClientRect?.();
@@ -35,10 +40,12 @@ export function createReaderPdfRenderer(readerContext) {
       pageRect.top < viewportRect.bottom + readerContext.PDF_PREFETCH_MARGIN ? 1 : 0;
   }
 
+  /** @param {boolean | number} priority */
   function normalizePdfPriority(priority) {
     return priority === true ? 3 : Math.max(0, Math.min(3, Number(priority) || 0));
   }
 
+  /** @param {import('../../../typings/reader-pdf-renderer-strict').PdfShell} shell @param {boolean} [force] @param {boolean | number} [priority] */
   function renderPdfInBackground(shell, force = false, priority = readerContext.pdfPagePriority(shell)) {
     priority = readerContext.normalizePdfPriority(priority);
     if (readerContext.readerAbortController.signal.aborted) return;
@@ -72,7 +79,8 @@ export function createReaderPdfRenderer(readerContext) {
     shell._backgroundRender = task;
     task
       .then(() => { delete shell.dataset.renderRetries; delete shell.dataset.renderFailed; })
-      .catch((error) => {
+      .catch((/** @type {unknown} */ reason) => {
+        const error = /** @type {{ name?: string, message?: string } | null | undefined} */ (reason);
         if (readerContext.readerAbortController.signal.aborted || error?.name === "AbortError") return;
         console.warn(`PDF page ${shell.dataset.page} render failed`, error);
         if (error?.message === "DJVU_CANVAS_LIMIT_EXCEEDED") {
@@ -92,7 +100,7 @@ export function createReaderPdfRenderer(readerContext) {
             pageState.dataset.state = 'error';
             pageState.removeAttribute('aria-label');
             pageState.hidden = false;
-            pageState.textContent = `DjVu 页面解码失败（${error.message}），请重新打开原文件。`;
+            pageState.textContent = `DjVu 页面解码失败（${error?.message}），请重新打开原文件。`;
           }
           shell.dataset.renderFailed = '1';
           return;
@@ -170,6 +178,7 @@ export function createReaderPdfRenderer(readerContext) {
 
   // Applies a page-geometry change (aspect ratio, surface swap) while keeping
   // the reading anchor at the same visual position.
+  /** @param {() => void} change */
   function applyPdfShellGeometry(change) {
     const anchor = readerContext.content.querySelector(`.reader-page[data-page="${readerContext.documentState.page}"]`);
     const viewportTop = readerContext.viewport.getBoundingClientRect().top;
@@ -178,7 +187,7 @@ export function createReaderPdfRenderer(readerContext) {
       readerContext.viewport.scrollHeight - readerContext.viewport.clientHeight - readerContext.viewport.scrollTop <= 2;
     const fraction = before ? Math.max(0, (viewportTop - before.top) / Math.max(1, before.height)) : 0;
     change();
-    if (!before || !anchor.isConnected) return;
+    if (!before || !anchor || !anchor.isConnected) return;
     if (atEnd) {
       readerContext.viewport.scrollTop = readerContext.viewport.scrollHeight - readerContext.viewport.clientHeight;
       return;
@@ -189,12 +198,14 @@ export function createReaderPdfRenderer(readerContext) {
   }
 
   // Reveal ordinary image pages only after decoding; respect reduced motion.
+  /** @param {import('../../../typings/reader-pdf-renderer-strict').PdfShell} shell @param {HTMLElement} surface @param {boolean} fade */
   function revealPdfSurface(shell, surface, fade) {
     surface.classList.add("ready");
     if (fade && readerContext.capability?.mode === "image-pages")
       surface.animate?.([{ opacity: 0 }, { opacity: 1 }], { duration: 120, easing: "ease" });
   }
 
+  /** @param {import('../../../typings/reader-pdf-renderer-strict').PdfShell} shell */
   function pdfSurfaceFades(shell) {
     return !shell.querySelector("canvas.ready, img.ready") && readerContext.isPdfPageVisible(shell) &&
       !globalThis.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches;
@@ -203,6 +214,7 @@ export function createReaderPdfRenderer(readerContext) {
   // Waits until a loaded page image is decoded, so its first painted frame is
   // the complete page rather than rows arriving from the top. Bounded: a
   // hidden (parked) Reader may defer decoding without blocking the page.
+  /** @param {HTMLImageElement} image @param {AbortSignal} signal */
   async function decodePdfImage(image, signal) {
     if (typeof image.decode !== "function") return;
     let timer = 0;
@@ -216,7 +228,7 @@ export function createReaderPdfRenderer(readerContext) {
     }
   }
 
-  /** @param {boolean | number} priority */
+  /** @param {import('../../../typings/reader-pdf-renderer-strict').PdfShell} shell @param {boolean} [force] @param {boolean | number} [priority] */
   function renderPdfImageShell(shell, force = false, priority = false) {
     if (!shell) return Promise.reject(new Error("PDF page shell missing"));
     if (readerContext.capability?.mode !== "image-pages")
@@ -253,8 +265,8 @@ export function createReaderPdfRenderer(readerContext) {
         shell._renderActivePriority = String(priority);
         const entry = readerContext.pdfPageEntry(Number(shell.dataset.page));
         if (!entry) throw new Error("PDF page entry missing");
-        const target = readerContext.pdfPageManifest.pageUrl(entry.page);
-        const progressive = (readerContext.pdfPageManifest.pageCodec?.(entry.page) || readerContext.pdfPageManifest.codec) === "jxl";
+        const target = /** @type {import('../../../typings/reader-pdf-renderer-strict').PdfPageManifest} */ (readerContext.pdfPageManifest).pageUrl(entry.page);
+        const progressive = (/** @type {import('../../../typings/reader-pdf-renderer-strict').PdfPageManifest} */ (readerContext.pdfPageManifest).pageCodec?.(entry.page) || /** @type {import('../../../typings/reader-pdf-renderer-strict').PdfPageManifest} */ (readerContext.pdfPageManifest).codec) === "jxl";
         let loadText = null;
         let image = shell.querySelector("img");
         const pageState = shell.querySelector(".reader-page-state");
@@ -266,7 +278,7 @@ export function createReaderPdfRenderer(readerContext) {
         }
         image.fetchPriority = priority >= 3 ? "high" : priority >= 1 ? "auto" : "low";
         if (progressive) image.classList.add("progressive");
-        if (priority >= 2 && readerContext.ocrManifestUrl && !navigator.connection?.saveData)
+        if (priority >= 2 && readerContext.ocrManifestUrl && !/** @type {Navigator & {connection?: {saveData?: boolean}}} */ (navigator).connection?.saveData)
           loadText = readerContext.renderPdfOcrText(shell);
         loadText?.catch(() => {});
         await readerContext.imageLoader.load(image, target, renderController.signal);
@@ -284,7 +296,7 @@ export function createReaderPdfRenderer(readerContext) {
         // A speculative page may become visible while its image is loading.
         // The visibility observer saw "rendering" then, so it could not attach
         // text; do not keep the stale admission priority after image completion.
-        if ((priority >= 2 || readerContext.isPdfPageVisible(shell)) && readerContext.ocrManifestUrl && !navigator.connection?.saveData)
+        if ((priority >= 2 || readerContext.isPdfPageVisible(shell)) && readerContext.ocrManifestUrl && !/** @type {Navigator & {connection?: {saveData?: boolean}}} */ (navigator).connection?.saveData)
           loadText ||= readerContext.renderPdfOcrText(shell);
         loadText?.catch(() => {});
         if (pageState) pageState.hidden = true;
@@ -316,6 +328,7 @@ export function createReaderPdfRenderer(readerContext) {
     return task;
   }
 
+  /** @param {import('../../../typings/reader-pdf-renderer-strict').PdfShell} shell @param {boolean} [force] @param {boolean | number} [priority] */
   function renderPdfShell(shell, force = false, priority = false) {
     if (shell._renderPromise) {
       if (force) shell.dataset.pendingRerender = "1";
@@ -328,6 +341,7 @@ export function createReaderPdfRenderer(readerContext) {
       readerContext.setPdfPageLoadingState(loadingState, shell.dataset.page);
     const renderController = new AbortController();
     priority = readerContext.normalizePdfPriority(priority || readerContext.pdfPagePriority(shell));
+    /** @type {import('../../../typings/reader-pdf-renderer-strict').PdfRenderTask | null} */
     let activeRendering = null;
     shell._renderCancel = () => {
       renderController.abort();
@@ -356,7 +370,7 @@ export function createReaderPdfRenderer(readerContext) {
             viewport = page.getViewport({ scale }),
             outputScale = pdfOutputScale(viewport);
           if (readerContext.pdfV3Map) {
-            const geometry = readerContext.pdfV3Map.pages[pageNumber - 1];
+            const geometry = /** @type {{width: number, height: number}} */ (readerContext.pdfV3Map.pages[pageNumber - 1]);
             if (Math.abs((base.width / base.height) / (geometry.width / geometry.height) - 1) > .01)
               throw new Error("PDF_V3_DOCUMENT_GEOMETRY_MISMATCH");
           }

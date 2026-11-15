@@ -1,3 +1,4 @@
+/** @param {string | null | undefined} markdown */
 export function stripMarkdownFrontMatter(markdown) {
   // Marxists-Library Markdown carries YAML metadata for EPUB generation and
   // source provenance. It is not article text; remove only a leading, keyed
@@ -8,7 +9,9 @@ export function stripMarkdownFrontMatter(markdown) {
   return text.slice(match[0].length);
 }
 
+/** @param {import('../../../typings/reader-html-format-strict').HtmlFormatContext} readerContext */
 export function createReaderHtmlFormat(readerContext) {
+  /** @param {Document} doc */
   function normalizeEpubDocument(doc) {
     // Legacy CHM conversions can use an XHTML prefix even in HTML content.
     for (const element of [...doc.querySelectorAll("*")]) {
@@ -35,6 +38,7 @@ export function createReaderHtmlFormat(readerContext) {
     return doc;
   }
 
+  /** @param {Document} doc @param {{preserveEpubStyles?: boolean, keepBlobImports?: boolean}} [options] */
   function sanitizeReaderDocument(doc, { preserveEpubStyles = false, keepBlobImports = false } = {}) {
     const blocked = preserveEpubStyles
       ? "script,iframe,object,embed,base,form"
@@ -96,6 +100,7 @@ export function createReaderHtmlFormat(readerContext) {
     "cite", "data", "longdesc", "ping", "usemap", "codebase", "manifest", "lowsrc", "dynsrc"
   ]);
   const OFFLINE_INLINE_IMAGE = /^data:image\/(?:gif|png|jpeg|webp|svg\+xml);/i;
+  /** @param {Element} _node @param {{attrName: string, attrValue: string, keepAttr: boolean}} data */
   function restrictOfflineUrlAttribute(_node, data) {
     if (OFFLINE_URL_ATTRIBUTES.has(data.attrName) &&
         !OFFLINE_INLINE_IMAGE.test(String(data.attrValue || "").replace(/[\u0000-\u0020\u007f-\u009f]/g, "")))
@@ -115,11 +120,13 @@ export function createReaderHtmlFormat(readerContext) {
   const CSS_IMPORT_MAX_DEPTH = 4;
   const CSS_IMPORT_MAX_PER_SHEET = 32;
 
+  /** @param {number} code */
   function cssNameChar(code) {
     return (code >= 0x61 && code <= 0x7a) || (code >= 0x41 && code <= 0x5a) ||
       (code >= 0x30 && code <= 0x39) || code === 0x2d || code === 0x5f || code >= 0x80;
   }
 
+  /** @param {number} code */
   function cssWhitespace(code) {
     return code === 0x20 || code === 0x09 || code === 0x0a || code === 0x0c || code === 0x0d;
   }
@@ -128,6 +135,7 @@ export function createReaderHtmlFormat(readerContext) {
   // data: cannot fetch, blob: is an unguessable same-origin object, and any scheme
   // (https:, javascript:, file:...) or protocol-relative reference is rejected
   // after control/whitespace normalization, matching URL parser leniency.
+  /** @param {string | null} raw @param {{strict?: boolean}} [options] */
   function safeCssReference(raw, { strict = false } = {}) {
     if (strict) return false;
     const value = String(raw || "").replace(/[\u0000-\u0020\u007f-\u009f]/g, "");
@@ -142,10 +150,13 @@ export function createReaderHtmlFormat(readerContext) {
   // Unsafe url()/image-set()/image() become `none` ("" in strict mode), unsafe
   // custom-property URL strings become "", and unsafe
   // @import rules are removed. Everything else is copied byte-for-byte.
+  /** @param {string | null} source @param {import('../../../typings/reader-html-format-strict').CssOptions} [options] */
   function scanCss(source, { strict = false, keepBlobImports = false, blobImports = null, nonce = "" } = {}) {
     const css = String(source || "");
     const length = css.length;
+    /** @type {[number, number, string][]} */
     const edits = [];
+    /** @type {{start: number, name: string, reference: boolean, unsafe: boolean}[]} */
     const stack = [];
     let i = 0, customValueDepth = -1, imports = 0;
     // Offline HTML historically deletes references; EPUB styles keep a valid
@@ -165,10 +176,11 @@ export function createReaderHtmlFormat(readerContext) {
         return code === 0 || code > 0x10ffff || (code >= 0xd800 && code <= 0xdfff)
           ? "\ufffd" : String.fromCodePoint(code);
       }
-      const char = String.fromCodePoint(css.codePointAt(i));
+      const char = String.fromCodePoint(css.codePointAt(i) ?? 0xfffd);
       i += char.length;
       return char;
     };
+    /** @param {number} at */
     const validEscape = (at) => css[at] === "\\" && at + 1 < length && !/[\n\r\f]/.test(css[at + 1]);
     const readName = () => {
       let name = "";
@@ -241,6 +253,7 @@ export function createReaderHtmlFormat(readerContext) {
         else if (char === ";" && depth === 0) return;
       }
     };
+    /** @param {number} start */
     const handleImport = (start) => {
       // `i` is just after "@import".
       let target = null, cursor;
@@ -361,10 +374,12 @@ export function createReaderHtmlFormat(readerContext) {
     return output + css.slice(cursor);
   }
 
+  /** @param {string | null} css @param {import('../../../typings/reader-html-format-strict').CssOptions} [options] */
   function sanitizeCssReferences(css, options = {}) {
     return scanCss(css, options);
   }
 
+  /** @param {string} url */
   async function readBlobStylesheet(url) {
     try {
       const response = await fetch(url);
@@ -381,7 +396,9 @@ export function createReaderHtmlFormat(readerContext) {
   // Replace blob @imports with their sanitized contents, preserving cascade
   // position and media conditions. Cycles, excessive depth and unreadable
   // sheets are dropped rather than loaded unsanitized.
+  /** @param {string} css @param {number} [depth] @param {Set<string>} [ancestors] @returns {Promise<string>} */
   async function inlineCssImports(css, depth = 0, ancestors = new Set()) {
+    /** @type {{url: string, media: string}[]} */
     const blobImports = [];
     const nonce = `reader-import-${Math.random().toString(36).slice(2)}${Date.now().toString(36)}`;
     const sanitized = scanCss(css, { blobImports, nonce });
@@ -400,9 +417,11 @@ export function createReaderHtmlFormat(readerContext) {
   // Foliate rewrites chapter stylesheets to blob: URLs. Load them as sanitized
   // inline styles so remote references inside packaged CSS cannot escape the
   // archive-only resource policy. Results are cached per blob URL.
+  /** @type {Map<string, Promise<string | null>>} */
   const foliateStyleCache = new Map();
   const FOLIATE_STYLE_CACHE_MAX = 64;
 
+  /** @param {Iterable<Element>} nodes */
   async function sanitizeFoliateStyles(nodes) {
     const output = [];
     for (const node of nodes) {
@@ -414,8 +433,11 @@ export function createReaderHtmlFormat(readerContext) {
           pending = readBlobStylesheet(href).then(text => text === null ? null : inlineCssImports(text, 0, new Set([href])));
           pending.then(text => { if (text === null) foliateStyleCache.delete(href); });
           foliateStyleCache.set(href, pending);
-          while (foliateStyleCache.size > FOLIATE_STYLE_CACHE_MAX)
-            foliateStyleCache.delete(foliateStyleCache.keys().next().value);
+          while (foliateStyleCache.size > FOLIATE_STYLE_CACHE_MAX) {
+            const oldest = foliateStyleCache.keys().next();
+            if (oldest.done) break;
+            foliateStyleCache.delete(oldest.value);
+          }
         }
         const text = await pending;
         if (text === null) continue;
@@ -433,10 +455,12 @@ export function createReaderHtmlFormat(readerContext) {
     return output;
   }
 
+  /** @param {Document} doc @param {{keepBlobImports?: boolean}} [options] */
   function sanitizeEpubDocument(doc, options = {}) {
     return readerContext.sanitizeReaderDocument(readerContext.normalizeEpubDocument(doc), { ...options, preserveEpubStyles: true });
   }
 
+  /** @param {string} text */
   function parseChapterDocument(text) {
     // Parse generated XHTML before HTML's void-element rules can swallow children
     // of prefixed elements such as <html:meta/> (including the following title).
@@ -446,11 +470,13 @@ export function createReaderHtmlFormat(readerContext) {
     return readerContext.sanitizeEpubDocument(new DOMParser().parseFromString(text, "text/html"));
   }
 
+  /** @param {Document} doc */
   function epubContentBody(doc) {
     const nestedBody = [...doc.querySelectorAll("body")].find((body) => body !== doc.body);
     return nestedBody || doc.body || doc.documentElement;
   }
 
+  /** @param {string | null} raw @param {string} source */
   function readerMarkdownLink(raw, source) {
     const value = String(raw || "").trim();
     if (!value || value.startsWith("#") || /[\u0000-\u001f\u007f\\]/.test(value)) return null;
@@ -485,6 +511,7 @@ export function createReaderHtmlFormat(readerContext) {
     }
   }
 
+  /** @param {HTMLElement} article */
   function prepareMarkdownLinks(article) {
     const original = readerContext.downloadUrl || readerContext.sourceUrl;
     const readerLinks = new WeakSet();
@@ -498,7 +525,7 @@ export function createReaderHtmlFormat(readerContext) {
     }
     article.addEventListener("click", (event) => {
       if (event.defaultPrevented || event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
-      const link = event.target.closest?.("a[href]");
+      const link = /** @type {HTMLAnchorElement | null | undefined} */ (/** @type {Element | null} */ (event.target)?.closest?.("a[href]"));
       if (!link || !readerLinks.has(link) || !article.contains(link) || link.hasAttribute("download") ||
           (link.target && link.target.toLowerCase() !== "_self")) return;
       try {
@@ -514,6 +541,7 @@ export function createReaderHtmlFormat(readerContext) {
     });
   }
 
+  /** @param {boolean} markdown @param {import('../../../typings/reader-html-format-strict').PreparedText} prepared */
   async function renderText(markdown, prepared) {
     let response = await prepared.response;
     if (!response.ok) response = await readerContext.fetchReaderResponse();
@@ -533,6 +561,7 @@ export function createReaderHtmlFormat(readerContext) {
     readerContext.status.textContent = "已加载";
   }
 
+  /** @param {string} text */
   function sanitizeOfflineHtml(text) {
     // A global ALLOWED_URI_REGEXP would also strip every non-allow-listed plain
     // attribute (colspan/rowspan/width), so scope the inline-image rule to URLs.
@@ -551,6 +580,7 @@ export function createReaderHtmlFormat(readerContext) {
     }
     const template = document.createElement("template");
     template.content.appendChild(clean);
+    /** @param {string | null} value */
     const stripUrls = (value) => sanitizeCssReferences(value, { strict: true });
     for (const style of template.content.querySelectorAll("style")) {
       const value = style.textContent, stripped = stripUrls(value);
@@ -563,6 +593,7 @@ export function createReaderHtmlFormat(readerContext) {
     return template.innerHTML;
   }
 
+  /** @param {string} text */
   function buildDiscourseDocument(text) {
     try {
       const source = new DOMParser().parseFromString(text, "text/html");
@@ -590,6 +621,7 @@ export function createReaderHtmlFormat(readerContext) {
     }
   }
 
+  /** @param {string} text */
   function prepareHtmlDocument(text) {
     const discourse = readerContext.buildDiscourseDocument(text);
     const html = readerContext.sanitizeOfflineHtml(discourse || text);
@@ -600,6 +632,7 @@ export function createReaderHtmlFormat(readerContext) {
     };
   }
 
+  /** @param {import('../../../typings/reader-html-format-strict').HtmlDocumentData} documentData */
   function buildHtmlFrameSource(documentData) {
     // A CSP <meta> only applies as a <head> child, so it must precede any body
     // content; the remaining frame styles keep their later cascade position.
@@ -610,11 +643,13 @@ export function createReaderHtmlFormat(readerContext) {
       (documentData.spreadsheet ? readerContext.SPREADSHEET_HTML_STYLE : "");
   }
 
+  /** @param {HTMLIFrameElement} frame */
   async function waitForSpreadsheetImages(frame) {
     if (frame.contentDocument)
       await readerContext.settleReaderImages(frame.contentDocument, 30000);
   }
 
+  /** @param {import('../../../typings/reader-html-format-strict').PreparedHtml} prepared */
   async function renderHtml(prepared) {
     const bytes = await readerContext.readPreparedBytes(prepared.response, prepared.engine);
     const text = new TextDecoder(readerContext.detectHtmlEncoding(bytes, readerContext.documentState.title)).decode(bytes);
@@ -645,7 +680,7 @@ export function createReaderHtmlFormat(readerContext) {
           readerContext.assertReaderActive();
           readerContext.repairHtmlContrast(frame);
           frame.contentDocument.documentElement.style.zoom = String(readerContext.documentState.zoom);
-          frame.contentWindow.addEventListener("scroll", readerContext.handleReaderPositionChange, {
+          /** @type {Window} */ (frame.contentWindow).addEventListener("scroll", readerContext.handleReaderPositionChange, {
             passive: true
           });
            frame.contentDocument.addEventListener("keydown", readerContext.handleReaderKeydown);
@@ -683,6 +718,7 @@ export function createReaderHtmlFormat(readerContext) {
      readerContext.status.textContent = documentData.spreadsheet ? "表格" : "HTML";
   }
 
+  /** @param {Uint8Array} bytes @param {string} [hint] */
   function detectHtmlEncoding(bytes, hint = "") {
     const probe = String.fromCharCode(...bytes.subarray(0, 8192));
     const match = probe.match(/charset\s*=\s*["']?\s*([a-z0-9._:-]+)/i);
@@ -699,9 +735,12 @@ export function createReaderHtmlFormat(readerContext) {
     return readerContext.detectTextEncoding(bytes, hint);
   }
 
+  /** @param {HTMLIFrameElement} frame */
   function repairHtmlContrast(frame) {
     const doc = frame.contentDocument;
-    if (!doc || !doc.body) return;
+    if (!doc || !doc.body || !frame.contentWindow) return;
+    const frameWindow = frame.contentWindow;
+    /** @param {string} value @returns {[number, number, number, number] | null} */
     const parseColor = (value) => {
       const parts = String(value).match(/[\d.]+/g);
       return parts && parts.length >= 3
@@ -713,6 +752,7 @@ export function createReaderHtmlFormat(readerContext) {
           ]
         : null;
     };
+    /** @param {[number, number, number, number]} color */
     const luminance = (color) => {
       const channels = color.slice(0, 3).map((value) => {
         const normalized = value / 255;
@@ -720,18 +760,21 @@ export function createReaderHtmlFormat(readerContext) {
       });
       return channels[0] * 0.2126 + channels[1] * 0.7152 + channels[2] * 0.0722;
     };
+    /** @type {Map<Element, number>} */
     const backgrounds = new Map();
+    /** @param {HTMLElement} element @param {CSSStyleDeclaration} style */
     const background = (element, style) => {
       const pending = [];
       let light = 1;
-      for (let current = element; current; current = current.parentElement) {
-        if (backgrounds.has(current)) {
-          light = backgrounds.get(current);
+      for (let current = /** @type {HTMLElement | null} */ (element); current; current = current.parentElement) {
+        const cached = backgrounds.get(current);
+        if (cached !== undefined) {
+          light = cached;
           break;
         }
         pending.push(current);
         const color = parseColor((current === element ? style :
-          frame.contentWindow.getComputedStyle(current)).backgroundColor);
+          frameWindow.getComputedStyle(current)).backgroundColor);
         if (color && color[3] > 0.1) {
           light = luminance(color);
           break;
@@ -741,11 +784,14 @@ export function createReaderHtmlFormat(readerContext) {
       return light;
     };
     const walker = doc.createTreeWalker(doc.body, NodeFilter.SHOW_TEXT);
+    /** @type {Set<HTMLElement>} */
     const elements = new Set();
-    while (walker.nextNode() && elements.size < 10000)
-      if (walker.currentNode.data.trim()) elements.add(walker.currentNode.parentElement);
+    while (walker.nextNode() && elements.size < 10000) {
+      const node = walker.currentNode;
+      if (node.textContent?.trim() && node.parentElement) elements.add(node.parentElement);
+    }
     for (const element of elements) {
-      const style = frame.contentWindow.getComputedStyle(element);
+      const style = frameWindow.getComputedStyle(element);
       const foreground = parseColor(style.color);
       const dark = background(element, style);
       if (!foreground) continue;

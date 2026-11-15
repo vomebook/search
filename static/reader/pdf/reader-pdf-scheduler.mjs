@@ -1,12 +1,16 @@
+/** @param {import('../../../typings/reader-pdf-scheduler-strict').SchedulerContext} readerContext */
 export function createReaderPdfScheduler(readerContext) {
   let pdfVisibleReconcileFrame = 0;
   // Ordinary image-page downloads use a pool separate from canvas renders.
   const PDF_PREVIEW_SLOTS = 2;
-  const pdfPreviewActive = new Map(), pdfPreviewWaiters = [];
+  /** @type {Map<import('../../../typings/reader-pdf-scheduler-strict').PdfShell | null, { shell: import('../../../typings/reader-pdf-scheduler-strict').PdfShell | null, cancel(): void }>} */
+  const pdfPreviewActive = new Map();
+  /** @type {import('../../../typings/reader-pdf-scheduler-strict').PreviewWaiter[]} */
+  const pdfPreviewWaiters = [];
   let pdfMotionAt = 0, pdfFastUntil = 0;
 
   function notePdfViewportMotion() {
-    if (!readerContext.documentState.restorationReady || !["pdf", "pdf-pages"].includes(readerContext.capability.mode)) return;
+    if (!readerContext.documentState.restorationReady || !/** @type {(string | null | undefined)[]} */ (["pdf", "pdf-pages"]).includes(readerContext.capability.mode)) return;
     const distance = Math.abs(readerContext.viewport.scrollTop - readerContext.pdfLastScrollTop);
     if (!distance) return;
     const now = performance.now(), elapsed = pdfMotionAt ? now - pdfMotionAt : Infinity;
@@ -36,9 +40,10 @@ export function createReaderPdfScheduler(readerContext) {
 
   function canPrefetchPdfImages() {
     const connection = navigator.connection;
-    return !connection?.saveData && !["slow-2g", "2g"].includes(connection?.effectiveType);
+    return !connection?.saveData && !/** @type {(string | undefined)[]} */ (["slow-2g", "2g"]).includes(connection?.effectiveType);
   }
 
+  /** @param {import('../../../typings/reader-pdf-scheduler-strict').PrefetchRecord | null} record */
   function cancelPdfManifestPrefetch(record) {
     if (!record) return;
     readerContext.pdfManifestPrefetchActive.delete(record);
@@ -69,27 +74,32 @@ export function createReaderPdfScheduler(readerContext) {
     return (lowMemory ? 32 : matchMedia("(max-width: 700px)").matches ? 48 : 96) * 1024 * 1024 / 4;
   }
 
+  /** @param {HTMLCanvasElement | HTMLImageElement | null} surface */
   function pdfSurfacePixels(surface) {
-    return surface?.tagName === "CANVAS" ? surface.width * surface.height :
-      (surface?.naturalWidth || 0) * (surface?.naturalHeight || 0);
+    const canvas = /** @type {HTMLCanvasElement} */ (surface);
+    const image = /** @type {HTMLImageElement | null} */ (surface);
+    return surface?.tagName === "CANVAS" ? canvas.width * canvas.height :
+      (image?.naturalWidth || 0) * (image?.naturalHeight || 0);
   }
 
   function pdfRetainedPixels() {
     let pixels = 0;
-    for (const surface of readerContext.content.querySelectorAll(".reader-page > canvas, .reader-page > img"))
+    for (const surface of /** @type {NodeListOf<HTMLCanvasElement | HTMLImageElement>} */ (readerContext.content.querySelectorAll(".reader-page > canvas, .reader-page > img")))
       pixels += readerContext.pdfSurfacePixels(surface);
     for (const record of readerContext.pdfManifestPrefetches.values()) pixels += readerContext.pdfSurfacePixels(record.image);
     return pixels;
   }
 
+  /** @param {import('../../../typings/reader-pdf-scheduler-strict').PdfShell | null} [protectedShell] */
   function trimPdfSurfaces(protectedShell) {
     readerContext.trimPdfManifestPrefetches();
-    const shells = [...readerContext.content.querySelectorAll('.reader-page[data-render-state="rendered"]')];
+    const shells = [.../** @type {NodeListOf<import('../../../typings/reader-pdf-scheduler-strict').PdfShell>} */ (readerContext.content.querySelectorAll('.reader-page[data-render-state="rendered"]'))];
     const canvasLimit = matchMedia("(max-width: 700px)").matches ? 7 : 11;
     let canvases = shells.filter(shell => shell.querySelector("canvas.ready")).length;
     let images = shells.filter(shell => shell.querySelector("img.ready")).length;
     let pixels = readerContext.pdfRetainedPixels();
     const retentionPage = Number(readerContext.pageAtMarker()?.dataset.page) || readerContext.documentState.page;
+    /** @param {import('../../../typings/reader-pdf-scheduler-strict').PdfShell} shell */
     const distance = shell => {
       const delta = Number(shell.dataset.page) - retentionPage;
       return Math.abs(delta) * (delta * readerContext.pdfScrollDirection < 0 ? 2 : 1);
@@ -97,7 +107,7 @@ export function createReaderPdfScheduler(readerContext) {
     shells.sort((a, b) => distance(b) - distance(a) ||
       Number(a.dataset.renderUsedAt || 0) - Number(b.dataset.renderUsedAt || 0));
     for (const shell of shells) {
-      const canvas = shell.querySelector("canvas.ready"), image = shell.querySelector("img.ready");
+      const canvas = /** @type {HTMLCanvasElement | null} */ (shell.querySelector("canvas.ready")), image = /** @type {HTMLImageElement | null} */ (shell.querySelector("img.ready"));
       if (pixels <= readerContext.pdfPixelBudget() && !(canvas && canvases > canvasLimit) && !(image && images > 25)) continue;
       if (readerContext.isPdfPageVisible(shell) || Number(shell.dataset.page) === retentionPage || readerContext.pdfSelectionIntersects(shell)) continue;
       shell._textEpoch = (shell._textEpoch || 0) + 1;
@@ -146,6 +156,7 @@ export function createReaderPdfScheduler(readerContext) {
     readerContext.pdfManifestPrefetches.clear();
   }
 
+  /** @param {string} target */
   function takePdfManifestPrefetch(target) {
     const record = readerContext.pdfManifestPrefetches.get(target);
     if (!record) return null;
@@ -175,13 +186,14 @@ export function createReaderPdfScheduler(readerContext) {
         }
         const next = readerContext.pdfManifestPrefetchNext++;
         const shell = readerContext.pdfManifestShells[next];
-        if (shell && ["rendering", "rendered"].includes(shell.dataset.renderState)) continue;
-        const url = readerContext.pdfPageManifest.pageUrl(next);
+        if (shell && /** @type {(string | undefined)[]} */ (["rendering", "rendered"]).includes(shell.dataset.renderState)) continue;
+        const url = /** @type {{ pageUrl(page: number): string }} */ (readerContext.pdfPageManifest).pageUrl(next);
         if (readerContext.pdfManifestPrefetches.has(url)) continue;
         const image = new Image();
         const record = { image, url, timeout: 0 };
         image.decoding = "async";
         image.fetchPriority = "low";
+        /** @param {boolean} failed */
         const finish = (failed) => {
           if (!readerContext.pdfManifestPrefetchActive.has(record)) return;
           readerContext.pdfManifestPrefetchActive.delete(record);
@@ -206,6 +218,7 @@ export function createReaderPdfScheduler(readerContext) {
     }, delay);
   }
 
+  /** @param {string} target */
   function prioritizePdfManifestPrefetch(target) {
     for (const record of [...readerContext.pdfManifestPrefetchActive]) {
       if (record.url !== target) readerContext.cancelPdfManifestPrefetch(record);
@@ -214,6 +227,7 @@ export function createReaderPdfScheduler(readerContext) {
     if (record && readerContext.pdfManifestPrefetchActive.has(record)) record.image.fetchPriority = "high";
   }
 
+  /** @param {number} page */
   function schedulePdfManifestPrefetch(page) {
     if (readerContext.capability.mode !== "image-pages" || !readerContext.pdfPageManifest) return;
     const origin = Math.max(1, Math.min(readerContext.documentState.pageCount + 1, page + 1));
@@ -227,12 +241,14 @@ export function createReaderPdfScheduler(readerContext) {
     readerContext.queuePdfManifestPrefetch();
   }
 
+  /** @param {import('../../../typings/reader-pdf-scheduler-strict').PdfShell | null} [protectedShell] */
   function trimPdfManifestImages(protectedShell) {
     readerContext.trimPdfSurfaces(protectedShell);
   }
 
+  /** @param {import('../../../typings/reader-pdf-scheduler-strict').PdfShell | null} [protectedShell] */
   function cancelSpeculativePdfRenders(protectedShell) {
-    for (const shell of readerContext.content.querySelectorAll('.reader-page')) {
+    for (const shell of /** @type {NodeListOf<import('../../../typings/reader-pdf-scheduler-strict').PdfShell>} */ (readerContext.content.querySelectorAll('.reader-page'))) {
       if (shell.dataset.renderState !== "rendering") continue;
       if (!shell._pdfRenderOwnsSlot && !shell._renderStarted) continue;
       if (
@@ -246,6 +262,7 @@ export function createReaderPdfScheduler(readerContext) {
     }
   }
 
+  /** @param {import('../../../typings/reader-pdf-scheduler-strict').PdfShell} shell */
   function promotePdfRenderWaiter(shell) {
     for (const waiter of readerContext.pdfRenderWaiters) {
       if (waiter.shell === shell) waiter.priority = Math.max(waiter.priority, readerContext.pdfPagePriority(shell));
@@ -259,6 +276,7 @@ export function createReaderPdfScheduler(readerContext) {
 
   // Index of the waiter to admit next: live priority first, then the nearest
   // page, with pages behind the scroll direction counted at twice the distance.
+  /** @param {import('../../../typings/reader-pdf-scheduler-strict').PreviewWaiter[]} waiters */
   function nextPdfWaiterIndex(waiters) {
     let index = -1, best = -1, nearest = Infinity;
     const bounds = readerContext.viewport.getBoundingClientRect();
@@ -277,6 +295,7 @@ export function createReaderPdfScheduler(readerContext) {
 
   // Visible demand must not wait behind speculative image downloads: cancel
   // the least useful offscreen holder; its page is requeued if it is needed.
+  /** @param {number} priority @param {import('../../../typings/reader-pdf-scheduler-strict').PdfShell | null} shell */
   function preemptPdfPreview(priority, shell) {
     if (priority < 2 || pdfPreviewActive.size < PDF_PREVIEW_SLOTS) return false;
     let victim = null, lowest = Infinity;
@@ -286,12 +305,14 @@ export function createReaderPdfScheduler(readerContext) {
       if (value < lowest) { lowest = value; victim = entry; }
     }
     if (!victim || lowest >= 2) return false;
-    victim.shell._pdfRenderCancelled = true;
-    victim.shell._pdfRenderNeedsRequeue = true;
+    const victimShell = /** @type {import('../../../typings/reader-pdf-scheduler-strict').PdfShell} */ (victim.shell);
+    victimShell._pdfRenderCancelled = true;
+    victimShell._pdfRenderNeedsRequeue = true;
     victim.cancel();
     return true;
   }
 
+  /** @param {boolean | number} [priority] @param {import('../../../typings/reader-pdf-scheduler-strict').PdfShell | null} [shell] @param {AbortSignal | null} [signal] */
   function acquirePdfPreviewSlot(priority = false, shell = null, signal = null) {
     if (readerContext.readerAbortController.signal.aborted || signal?.aborted)
       return Promise.reject(readerContext.readerAbortError());
@@ -329,6 +350,7 @@ export function createReaderPdfScheduler(readerContext) {
       pdfPreviewWaiters.splice(nextPdfWaiterIndex(pdfPreviewWaiters), 1)[0].resolve();
   }
 
+  /** @param {import('../../../typings/reader-pdf-scheduler-strict').PdfShell | null} shell */
   function releasePdfPreviewSlot(shell) {
     pdfPreviewActive.delete(shell);
     drainPdfPreviewWaiters();
@@ -339,6 +361,7 @@ export function createReaderPdfScheduler(readerContext) {
     return pdfPreviewActive.size;
   }
 
+  /** @param {boolean | number} [priority] @param {import('../../../typings/reader-pdf-scheduler-strict').PdfShell | null} [shell] @param {AbortSignal | null} [signal] */
   function acquirePdfRenderSlot(priority = false, shell = null, signal = null) {
     if (readerContext.readerAbortController.signal.aborted) return Promise.reject(readerContext.readerAbortError());
     if (signal?.aborted) return Promise.reject(readerContext.readerAbortError());
@@ -371,7 +394,7 @@ export function createReaderPdfScheduler(readerContext) {
           readerContext.pdfActiveRenders++;
           resolve();
         },
-        reject: (error) => {
+        reject: (/** @type {unknown} */ error) => {
           if (settled) return;
           settled = true;
           signal?.removeEventListener("abort", abort);
@@ -379,7 +402,7 @@ export function createReaderPdfScheduler(readerContext) {
         }
       };
       signal?.addEventListener("abort", abort, { once: true });
-      const index = readerContext.pdfRenderWaiters.findIndex((item) => item.priority < priority);
+      const index = readerContext.pdfRenderWaiters.findIndex((item) => item.priority < /** @type {number} */ (priority));
       if (index < 0) readerContext.pdfRenderWaiters.push(waiter);
       else readerContext.pdfRenderWaiters.splice(index, 0, waiter);
     }));
@@ -393,6 +416,7 @@ export function createReaderPdfScheduler(readerContext) {
     scheduleVisiblePdfRenderReconciliation();
   }
 
+  /** @param {boolean} [priority] @param {import('../../../typings/reader-pdf-scheduler-strict').TextRequest | null} [request] @returns {Promise<boolean>} */
   function acquirePdfTextSlot(priority = false, request = null) {
     if (readerContext.readerAbortController.signal.aborted) return Promise.reject(readerContext.readerAbortError());
     return new Promise((resolve, reject) => {
@@ -431,13 +455,14 @@ export function createReaderPdfScheduler(readerContext) {
     readerContext.drainPdfTextWaiters();
   }
 
+  /** @param {import('../../../typings/reader-pdf-scheduler-strict').PdfShell | null} [protectedShell] */
   function trimPdfCanvases(protectedShell) {
     readerContext.trimPdfSurfaces(protectedShell);
   }
 
   function rerenderVisiblePdfPages() {
     readerContext.nextReaderGeneration("pdf");
-    const shells = [...readerContext.content.querySelectorAll(".reader-page")].filter(shell => {
+    const shells = [.../** @type {NodeListOf<import('../../../typings/reader-pdf-scheduler-strict').PdfShell>} */ (readerContext.content.querySelectorAll(".reader-page"))].filter(shell => {
       const rect = shell.getBoundingClientRect();
       return rect.bottom >= -1200 && rect.top <= innerHeight + 1200;
     });
@@ -451,26 +476,26 @@ export function createReaderPdfScheduler(readerContext) {
   }
 
   function refreshNearbyPdfPages() {
-    if (!readerContext.documentState.restorationReady || !["pdf", "pdf-pages", "image-pages"].includes(readerContext.capability.mode)) return;
+    if (!readerContext.documentState.restorationReady || !/** @type {(string | null | undefined)[]} */ (["pdf", "pdf-pages", "image-pages"]).includes(readerContext.capability.mode)) return;
     const page = readerContext.documentState.page;
     for (const offset of [0, 1, 2, 3, -1]) {
       const candidate = page + offset * readerContext.pdfScrollDirection;
-      const shell = readerContext.content.querySelector(`.reader-page[data-page="${candidate}"]`);
+      const shell = /** @type {import('../../../typings/reader-pdf-scheduler-strict').PdfShell | null} */ (readerContext.content.querySelector(`.reader-page[data-page="${candidate}"]`));
       if (shell && shell.dataset.renderState !== "rendered") readerContext.renderPdfInBackground(shell);
     }
   }
 
   function scheduleVisiblePdfRenderReconciliation(force = false) {
-    if (!["pdf", "pdf-pages", "image-pages"].includes(readerContext.capability?.mode) ||
+    if (!/** @type {(string | null | undefined)[]} */ (["pdf", "pdf-pages", "image-pages"]).includes(readerContext.capability?.mode) ||
         pdfVisibleReconcileFrame || readerContext.readerAbortController.signal.aborted ||
         typeof readerContext.content?.querySelectorAll !== "function") return;
     const enqueue = typeof requestAnimationFrame === "function"
       ? requestAnimationFrame
-      : (callback) => setTimeout(callback, 0);
+      : (/** @type {FrameRequestCallback} */ callback) => setTimeout(callback, 0);
     pdfVisibleReconcileFrame = enqueue(() => {
       pdfVisibleReconcileFrame = 0;
       if (readerContext.readerAbortController.signal.aborted) return;
-      for (const shell of readerContext.content.querySelectorAll('.reader-page:not([data-render-state="rendered"])')) {
+      for (const shell of /** @type {NodeListOf<import('../../../typings/reader-pdf-scheduler-strict').PdfShell>} */ (readerContext.content.querySelectorAll('.reader-page:not([data-render-state="rendered"])'))) {
         if (!readerContext.isPdfPageVisible(shell) || shell._backgroundRender || shell.dataset.renderFailed === "1") continue;
         if (!force && !shell._pdfRenderNeedsRequeue) continue;
         delete shell._pdfRenderNeedsRequeue;

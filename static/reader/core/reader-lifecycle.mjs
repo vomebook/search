@@ -19,7 +19,7 @@
  * @property {number} foliateScrollFrame
  * @property {number} foliateWindowFrame
  * @property {number} epubSeekFrame
- * @property {{mode: string} | null | undefined} capability
+ * @property {{mode?: string} | null | undefined} capability
  * @property {HTMLElement} loadingIndicator
  * @property {HTMLElement} loadingStatus
  * @property {{preserve<T>(change: () => T): T}} foliateScrollAnchors

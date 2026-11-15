@@ -1,13 +1,24 @@
+/** @param {import('../../../typings/reader-toc-strict').TocContext} readerContext */
 export function createReaderToc(readerContext) {
   // setToc owns normalized entries. Cache parsed page numbers only for those
   // entries; externally replaced arrays retain the original scan path.
-  let ownedTocEntries = null, pageLookupEntries = null, pageLookup = [];
+  /** @type {import('../../../typings/reader-toc-strict').TocEntry[] | null} */
+  let ownedTocEntries = null;
+  /** @type {import('../../../typings/reader-toc-strict').TocEntry[] | null} */
+  let pageLookupEntries = null;
+  /** @type {{page: number, index: number}[]} */
+  let pageLookup = [];
   const PAGE_LOOKUP_MIN_ENTRIES = 256;
 
+  // The shared navigation state publishes TOC-owned entries as unknown[].
+  const tocEntries = () => /** @type {import('../../../typings/reader-toc-strict').TocEntry[]} */ (readerContext.navigationState.tocEntries);
+
+  /** @param {Partial<{tocEntries: import('../../../typings/reader-toc-strict').TocEntry[], currentChapterIndex: number}>} patch */
   function updateNavigationState(patch) {
     return readerContext.readerRuntime.update("navigation", patch);
   }
 
+  /** @param {ParentNode} root */
   function headingTocEntries(root) {
     return [...root.querySelectorAll("h1,h2,h3,h4,h5,h6")]
       .filter((heading) => heading.textContent.trim())
@@ -19,8 +30,14 @@ export function createReaderToc(readerContext) {
       }));
   }
 
+  /** @param {HTMLElement} root
+   * @param {import('../../../typings/reader-toc-strict').TocEntry[]} entries */
   function createHeadingLocationCache(root, entries) {
-    let positions = null, targets = [], width = -1, extent = -1, zoom = -1, wasAnimating = false, live = false;
+    /** @type {{index: number, top: number}[] | null} */
+    let positions = null;
+    /** @type {{entry: import('../../../typings/reader-toc-strict').TocEntry, index: number, target: Element | null | undefined, connected: boolean}[]} */
+    let targets = [];
+    let width = -1, extent = -1, zoom = -1, wasAnimating = false, live = false;
     const invalidate = () => { positions = null; };
     const mutations = new MutationObserver(invalidate), resize = new ResizeObserver(invalidate);
     mutations.observe(root, {subtree:true, childList:true, characterData:true,
@@ -29,6 +46,7 @@ export function createReaderToc(readerContext) {
     root.addEventListener("load", invalidate, true);
     root.ownerDocument.fonts?.addEventListener("loadingdone", invalidate);
     return { root, entries,
+      /** @param {number} marker @param {number} scroll */
       at(marker, scroll) {
         if (mutations.takeRecords().length) invalidate();
         const nextWidth = root.clientWidth, nextExtent = root.scrollHeight, nextZoom = readerContext.documentState.zoom;
@@ -38,12 +56,15 @@ export function createReaderToc(readerContext) {
         wasAnimating = animating;
         if (!positions) {
           targets = entries.map((entry, index) => ({entry, index, target:entry.target, connected:!!entry.target?.isConnected}));
+          /** @type {WeakMap<Element, boolean>} */
           const fixed = new WeakMap();
+          /** @param {Element} target */
           const scrollDependent = target => {
             const ancestors = [];
             let value = false;
-            for (let node = target; node; node = node.parentElement) {
-              if (fixed.has(node)) { value = fixed.get(node); break; }
+            for (let node = /** @type {Element | null} */ (target); node; node = node.parentElement) {
+              const cached = fixed.get(node);
+              if (cached !== undefined) { value = cached; break; }
               ancestors.push(node);
               const position = root.ownerDocument.defaultView?.getComputedStyle(node).position;
               if (position === "fixed" || position === "sticky") { value = true; break; }
@@ -53,9 +74,9 @@ export function createReaderToc(readerContext) {
             return value;
           };
           // Source CSS may pin headings while scrolling; keep their live geometry.
-          live = targets.some(row => row.connected && scrollDependent(row.target));
-          positions = targets.filter(row => row.connected).map(row => ({index:row.index,
-            top:row.target.getBoundingClientRect().top + scroll - marker})).sort((a,b) => a.top-b.top || a.index-b.index);
+          live = targets.some(row => row.connected && row.target && scrollDependent(row.target));
+          positions = targets.flatMap(row => row.connected && row.target ? [{index:row.index,
+            top:row.target.getBoundingClientRect().top + scroll - marker}] : []).sort((a,b) => a.top-b.top || a.index-b.index);
           width = root.clientWidth; extent = root.scrollHeight; zoom = nextZoom;
         }
         let low = 0, high = positions.length;
@@ -78,12 +99,12 @@ export function createReaderToc(readerContext) {
   function syncHeadingLocation() {
     const marker = readerContext.htmlFrame ? 8 : readerContext.viewport.getBoundingClientRect().top + 8;
     const root = readerContext.htmlFrame?.contentDocument?.body || readerContext.content;
-    if (!["foliate", "epub-chapters"].includes(readerContext.capability.mode)) {
+    if (!["foliate", "epub-chapters"].some(mode => mode === readerContext.capability.mode)) {
       if (readerContext.headingLocationCache?.root !== root || readerContext.headingLocationCache?.entries !== readerContext.navigationState.tocEntries) {
         readerContext.headingLocationCache?.dispose();
-        readerContext.headingLocationCache = readerContext.createHeadingLocationCache(root, readerContext.navigationState.tocEntries);
+        readerContext.headingLocationCache = readerContext.createHeadingLocationCache(root, tocEntries());
       }
-      const current = readerContext.headingLocationCache.at(marker, readerContext.htmlFrame ? readerContext.htmlFrame.contentWindow.scrollY : readerContext.viewport.scrollTop);
+      const current = readerContext.headingLocationCache.at(marker, readerContext.htmlFrame ? /** @type {Window} */ (readerContext.htmlFrame.contentWindow).scrollY : readerContext.viewport.scrollTop);
       if (current >= 0 && current !== readerContext.navigationState.currentChapterIndex) {
         readerContext.updateNavigationState({currentChapterIndex:current});
         readerContext.updateTocCurrentMark();
@@ -94,7 +115,7 @@ export function createReaderToc(readerContext) {
       currentPosition = -Infinity,
       first = -1,
       firstPosition = Infinity;
-    for (const [index, entry] of readerContext.navigationState.tocEntries.entries()) {
+    for (const [index, entry] of tocEntries().entries()) {
       if (!entry.target?.isConnected) continue;
       const position = entry.target.getBoundingClientRect().top;
       if (position <= marker && (position > currentPosition || (position === currentPosition && index > current))) {
@@ -113,11 +134,12 @@ export function createReaderToc(readerContext) {
     }
   }
 
+  /** @param {number} index @param {{closePanel?: boolean}} [options] */
   async function navigateTocEntry(index, { closePanel = true } = {}) {
     if (index < 0 || index >= readerContext.navigationState.tocEntries.length) return;
-    if (readerContext.navigationState.tocEntries[index].group) return;
+    if (tocEntries()[index].group) return;
     const generation = readerContext.beginReaderNavigation(),
-      entry = readerContext.navigationState.tocEntries[index];
+      entry = tocEntries()[index];
     try {
       const activated = readerContext.foliateContinuous
         ? await readerContext.activateFoliateTocEntry(entry, generation, { closePanel: false })
@@ -132,6 +154,7 @@ export function createReaderToc(readerContext) {
     }
   }
 
+  /** @param {import('../../../typings/reader-toc-strict').TocEntry} entry @param {number} index */
   function createTocRow(entry, index) {
     const row = document.createElement("div");
     row.className = "panel-item toc-item";
@@ -150,6 +173,7 @@ export function createReaderToc(readerContext) {
     }
     link.tabIndex = 0;
     link.setAttribute("role", "link");
+    /** @param {Event} [event] */
     const activate = (event) => {
       const selection = getSelection();
       if (event?.type === "click" && selection?.toString() && selection.containsNode(link, true)) return;
@@ -190,14 +214,16 @@ export function createReaderToc(readerContext) {
     readerContext.updateTocCurrentMark();
   }
 
-  let tocHintShown = false, tocHintPending = false, tocHintTimer = 0;
+  let tocHintShown = false, tocHintPending = false;
+  /** @type {ReturnType<typeof setTimeout> | 0} */
+  let tocHintTimer = 0;
   // Opening the Reader must not pop the directory for a trivial one (a cover, a
   // preface, a single chapter); the panel stays one tap away in the toolbar.
   const TOC_HINT_MIN_ENTRIES = 3;
   // A one- or two-entry directory (a cover, a preface) is not worth opening the
   // panel for; the reader opens on the content and the panel stays one tap away.
   const tocHintHasEnoughEntries = () =>
-    readerContext.navigationState.tocEntries.filter((entry) => !entry.group).length > TOC_HINT_MIN_ENTRIES;
+    tocEntries().filter((entry) => !entry.group).length > TOC_HINT_MIN_ENTRIES;
   const cancelTocHint = () => {
     clearTimeout(tocHintTimer);
     tocHintTimer = 0;
@@ -219,10 +245,12 @@ export function createReaderToc(readerContext) {
     readerContext.setReaderPanelOpen(true);
     readerContext.selectPanel("toc");
   };
+  /** @type {(() => void) | null} */
   let phaseCleanup = null;
   function ensureTocHintPhaseListener() {
     if (phaseCleanup) return;
-    phaseCleanup = readerContext.readerRuntime.events.on("phase", ({ phase }) => {
+    phaseCleanup = readerContext.readerRuntime.events.on("phase", (detail) => {
+      const { phase } = /** @type {{phase: string}} */ (detail);
       if (phase === "failed" || phase === "disposed") {
         cancelTocHint();
         phaseCleanup?.();
@@ -240,6 +268,7 @@ export function createReaderToc(readerContext) {
     tocHintTimer = setTimeout(finishTocHint, 0);
   }
 
+  /** @param {import('../../../typings/reader-toc-strict').TocEntry[] | null | undefined} entries */
   function setToc(entries) {
     const normalizedEntries = (entries || []).map((entry) => ({
       ...entry,
@@ -257,7 +286,7 @@ export function createReaderToc(readerContext) {
     const tocTab = /** @type {HTMLElement} */ (document.querySelector("#toc-tab"));
     tocTab.hidden = false;
     tocTab.textContent = normalizedEntries.length ? "目录" : "阅读";
-    const previousList = document.querySelector("#toc-list"),
+    const previousList = /** @type {HTMLElement} */ (document.querySelector("#toc-list")),
       list = /** @type {HTMLElement} */ (previousList.cloneNode(false));
     readerContext.tocVirtualState?.destroy();
     readerContext.tocVirtualState = null;
@@ -266,7 +295,7 @@ export function createReaderToc(readerContext) {
     previousList.replaceWith(list);
     const virtualizationThreshold = readerContext.chapterManifestUrl ? 2000 : readerContext.TOC_VIRTUALIZATION_THRESHOLD;
     if (normalizedEntries.length > virtualizationThreshold) {
-      const panelView = list.parentElement;
+      const panelView = /** @type {HTMLElement} */ (list.parentElement);
       list.classList.add("toc-list-virtualized");
       list.style.height = `${normalizedEntries.length * readerContext.TOC_VIRTUAL_ROW_HEIGHT}px`;
       let frame = 0;
@@ -305,6 +334,7 @@ export function createReaderToc(readerContext) {
     hintReaderToc();
   }
 
+  /** @param {unknown} value */
   function cleanTocLabel(value) {
     return (
       String(value || "未命名章节")
@@ -316,6 +346,7 @@ export function createReaderToc(readerContext) {
 
   // The legacy scan selects the *last directory entry* whose page is at or
   // before the current page, even when the outline itself is not page-sorted.
+  /** @param {import('../../../typings/reader-toc-strict').TocEntry[]} entries */
   function indexTocPages(entries) {
     pageLookup = entries.flatMap((entry, index) => {
       const match = entry.label.match(/第\s*(\d+)\s*页/u);
@@ -329,7 +360,7 @@ export function createReaderToc(readerContext) {
   function updateTocCurrentMark() {
     const rows = [...document.querySelectorAll("#toc-list .toc-item")].map(row => /** @type {HTMLElement} */ (row));
     if (readerContext.documentState.pageCount > 1 && readerContext.documentState.page > 0) {
-      const entries = readerContext.navigationState.tocEntries;
+      const entries = tocEntries();
       let pageIndex = -1;
       if (entries.length > PAGE_LOOKUP_MIN_ENTRIES && entries === ownedTocEntries && ownedTocEntries !== pageLookupEntries)
         indexTocPages(ownedTocEntries);
@@ -372,7 +403,7 @@ export function createReaderToc(readerContext) {
     if (!tab) return;
     tab.hidden = !readerContext.navigationState.tocEntries.length;
     if (readerContext.navigationState.tocEntries.length && readerContext.navigationState.currentChapterIndex < 0)
-      readerContext.updateNavigationState({ currentChapterIndex: readerContext.navigationState.tocEntries.findIndex((entry) => !entry.group) });
+      readerContext.updateNavigationState({ currentChapterIndex: tocEntries().findIndex((entry) => !entry.group) });
   }
 
   return {

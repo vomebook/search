@@ -1,3 +1,4 @@
+// @ts-check
 import "../../core/reader-security.js";
 import { searchBookText, validateBookText } from "../reader-book-text.js";
 import { validPdfBookUrl } from "../reader-pdf-book-url.mjs";
@@ -10,10 +11,18 @@ import { readPdfSearchBytes } from "../reader-pdf-search-stream.mjs";
 import { readVerifiedPdfSearchText } from "../reader-pdf-search-decode.mjs";
 import { validatePdfSearchPartition } from "../reader-pdf-partition-shape.mjs";
 
+/** @typedef {import('../../../../typings/reader-pdf-worker-strict').Configuration} Configuration */
+/** @typedef {import('../../../../typings/reader-pdf-worker-strict').Index} Index */
+/** @typedef {import('../reader-pdf-partition-config.mjs').PartitionReference} PartitionReference */
 const aborted = () => new DOMException("Search cancelled", "AbortError");
-const limit = self.VoiceOfMLReaderSecurity.LIMITS.chapterTotalBytes;
+const limit = (/** @type {typeof self & {VoiceOfMLReaderSecurity: {LIMITS: {chapterTotalBytes: number}}}} */ (self)).VoiceOfMLReaderSecurity.LIMITS.chapterTotalBytes;
 const pause = () => new Promise(resolve => setTimeout(resolve, 0));
-let configuration, book, pendingBook, controller, active = 0, session;
+/** @type {Configuration} */ let configuration;
+/** @type {import('../../../../typings/reader-pdf-worker-strict').CompactBook | null} */ let book = null;
+/** @type {Promise<import('../../../../typings/reader-pdf-worker-strict').CompactBook> | null} */ let pendingBook = null;
+/** @type {AbortController | null} */ let controller = null;
+/** @type {import('../../../../typings/reader-pdf-worker-strict').Session | null} */ let session = null;
+let active = 0;
 const partitionRequests = createPdfPartitionRequests();
 
 async function loadBook() {
@@ -28,7 +37,9 @@ async function loadBook() {
   pendingBook = (async () => {
     const response = await fetch(configuration.url, { signal: request.signal, credentials: "omit" });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    let packed = await readPdfSearchBytes(response.body, request.signal, configuration.bytes, limit);
+    // The stream helper calls getReader immediately; its declaration omits the nullable Fetch body.
+    /** @type {Uint8Array<ArrayBuffer> | null} */
+    let packed = await readPdfSearchBytes(/** @type {ReadableStream<Uint8Array>} */ (response.body), request.signal, configuration.bytes, limit);
     if (packed.byteLength !== configuration.bytes) throw new Error("PDF_OCR_SIZE_MISMATCH");
     const decoding = readVerifiedPdfSearchText(packed, configuration.sha256, request.signal, limit);
     packed = null;
@@ -49,7 +60,8 @@ async function loadBook() {
         deadline = performance.now() + 8;
       }
     }
-    book = compact;
+    // Compaction preserves the validated box arrays while dropping other layout data.
+    book = /** @type {import('../../../../typings/reader-pdf-worker-strict').CompactBook} */ (compact);
     self.postMessage({ bookReady: true });
     return book;
   })().finally(() => {
@@ -60,27 +72,37 @@ async function loadBook() {
   return pendingBook;
 }
 
+/** @param {PartitionReference} part @param {AbortSignal} signal */
 async function fetchPartitionBytes(part, signal) {
   const response = await fetch(part.url, {signal, credentials: "omit"});
   if (!response.ok) throw new Error(`HTTP ${response.status}`);
-  return readPdfSearchBytes(response.body, signal, part.bytes, limit);
+  return readPdfSearchBytes(/** @type {ReadableStream<Uint8Array>} */ (response.body), signal, part.bytes, limit);
 }
 
+/** @param {PartitionReference} part @param {() => boolean} current
+ * @param {Set<AbortController> | null} [owners] @param {Uint8Array<ArrayBuffer> | null} [prefetched] */
 async function loadSearchPartition(part, current, owners = null, prefetched = null) {
   return partitionRequests.run(current, owners, async signal => {
+    /** @type {Uint8Array<ArrayBuffer> | null} */
     let packed = prefetched || await fetchPartitionBytes(part, signal);
     const decoding = readVerifiedPdfSearchText(packed, part.sha256, signal, limit);
     packed = null;
     const value = JSON.parse(await decoding);
     if (!current() || signal.aborted) throw aborted();
-    return validatePdfSearchPartition(value, part, configuration);
+    return validatePdfSearchPartition(value, part, /** @type {Configuration & {sourceSha: string, generation: string}} */ (configuration));
   });
 }
 
+/** @param {string} query @param {() => boolean} current
+ * @param {import('../../../../typings/reader-pdf-worker-strict').Progress} progress */
 async function searchPartitions(query, current, progress) {
   validatePdfPartitionConfiguration(configuration, self.location.href, limit);
-  const counts = [], first = [];
-  let total = 0, complete = false, retained = null;
+  /** @type {number[]} */ const counts = [];
+  /** @type {import('../../../../typings/reader-pdf-worker-strict').FirstHits} */ const first = [];
+  let total = 0, complete = false;
+  /** @type {import('../../../../typings/reader-pdf-worker-strict').Retained | null} */ let retained = null;
+  /** @param {number} number @param {import('../reader-pdf-partition-shape.mjs').SearchPartition} part
+   * @param {import('../../../../typings/reader-book-text-strict').SearchIndex} local */
   const remember = (number, part, local) => {
     retained = null;
     // Preserve the per-query owner and avoid retaining oversized verified text.
@@ -92,7 +114,7 @@ async function searchPartitions(query, current, progress) {
   const index = {async page(requested = 0) {
     const offset = pdfPartitionPageOffset(requested, total);
     if (!offset) return {total, offset, pageSize: 50, results: first.slice(), complete};
-    const results = [];
+    /** @type {import('../../../../typings/reader-pdf-worker-strict').FirstHits} */ const results = [];
     let skipped = 0;
     for (let i = 0; i < counts.length && results.length < 50; i++) {
       if (!current()) throw aborted();
@@ -101,7 +123,7 @@ async function searchPartitions(query, current, progress) {
       if (retained?.number === i) ({part, local} = retained);
       else {
         retained = null;
-        part = await loadSearchPartition(configuration.partitions[i], current);
+        part = await loadSearchPartition(/** @type {PartitionReference[]} */ (configuration.partitions)[i], current);
         local = await searchBookText(part, query, {current, yieldTask: pause});
         if (!current()) throw aborted();
         if (local.total !== counts[i]) throw new Error("PDF_V3_GENERATION_CHANGED");
@@ -111,6 +133,7 @@ async function searchPartitions(query, current, progress) {
       let position = Math.max(0, offset - skipped);
       while (position < local.total && results.length < 50) {
         const page = local.page(position);
+        /** @type {import('../../../../typings/reader-book-text-strict').Hit[]} */
         const hits = page.results.slice(position - page.offset, position - page.offset + 50 - results.length);
         results.push(...decoratePdfPartitionHits(hits, part.pages));
         position += hits.length;
@@ -119,12 +142,14 @@ async function searchPartitions(query, current, progress) {
     }
     return {total, offset, pageSize: 50, results, complete};
   }};
-  const owners = new Set(), connection = self.navigator?.connection;
-  let pending = null;
+  const owners = new Set();
+  const connection = (/** @type {typeof self.navigator & {connection?: {saveData?: unknown, effectiveType?: unknown}}} */ (self.navigator))?.connection;
+  /** @type {Promise<import('../../../../typings/reader-pdf-worker-strict').PrefetchOutcome> | null} */ let pending = null;
+  const partitions = /** @type {PartitionReference[]} */ (configuration.partitions);
   try {
-    for (let position = 0; position < configuration.partitions.length; position++) {
+    for (let position = 0; position < partitions.length; position++) {
       if (!current()) throw aborted();
-      const part = configuration.partitions[position], ahead = pending;
+      const part = partitions[position], ahead = pending;
       pending = null;
       const valuePromise = ahead ? ahead.then(outcome => {
         if ("error" in outcome) throw outcome.error;
@@ -132,7 +157,7 @@ async function searchPartitions(query, current, progress) {
       }) : loadSearchPartition(part, current, owners);
       // Own failures immediately, including if starting lookahead throws.
       const valueOutcome = valuePromise.then(value => ({value}), error => ({error}));
-      const next = configuration.partitions[position + 1];
+      const next = partitions[position + 1];
       if (next && canPrefetchPdfPartition(connection, next.bytes)) {
         // Only compressed future bytes are retained. Each of the (at most
         // two) overlapping future transfers is capped independently.
@@ -163,7 +188,10 @@ async function searchPartitions(query, current, progress) {
   }
 }
 
-self.onmessage = async ({ data }) => {
+self.onmessage = async event => {
+  // Messages come from the paired PDF search client; keep the existing protocol behavior.
+  /** @type {import('../../../../typings/reader-pdf-worker-strict').Message} */
+  const data = event.data;
   if (data.type === "init") { configuration = data.configuration; return; }
   if (data.type === "cancel") {
     active++;
@@ -186,6 +214,7 @@ self.onmessage = async ({ data }) => {
       const query = String(data.query || "").trim();
       if (!query || query.length > 2048) throw new Error("请输入 1–2048 个字符");
       if (controller?.signal.aborted && pendingBook) await pendingBook.catch(() => {});
+      /** @param {Index} partial @param {number} scanned @param {number} pages */
       const progress = async (partial, scanned, pages) => {
           const page = await partial.page(0);
           if (!current()) return;
@@ -212,7 +241,9 @@ self.onmessage = async ({ data }) => {
     }
   } catch (error) {
     if (current() && data.type === "search") session = null;
-    if (current()) self.postMessage({ id: data.id, error: error.name === "AbortError"
-      ? "全文搜索已取消或加载超时，请重试" : error.message });
+    // Preserve property access for thrown values, including non-Error rejections.
+    const detail = /** @type {{name?: string, message?: string}} */ (error);
+    if (current()) self.postMessage({ id: data.id, error: detail.name === "AbortError"
+      ? "全文搜索已取消或加载超时，请重试" : detail.message });
   }
 };

@@ -1,3 +1,4 @@
+/** @param {import('../../../typings/reader-ui-strict').NavigationContext} readerContext */
 export function createReaderNavigation(readerContext) {
   function beginReaderNavigation() {
     readerContext.cancelReaderDestinationHold?.();
@@ -43,6 +44,7 @@ export function createReaderNavigation(readerContext) {
     }
   }
 
+  /** @param {number} direction */
   function turnViewport(direction) {
     readerContext.beginReaderNavigation();
     const target = readerContext.htmlFrame?.contentWindow || readerContext.viewport;
@@ -54,6 +56,7 @@ export function createReaderNavigation(readerContext) {
     });
   }
 
+  /** @param {KeyboardEvent} event */
   function handleReaderKeydown(event) {
     if (
       event.defaultPrevented ||
@@ -71,7 +74,7 @@ export function createReaderNavigation(readerContext) {
     }
     // Panel lists scroll independently. Inspect the composed path so a control
     // inside a chapter Shadow DOM is not mistaken for the reading surface.
-    if ((event.composedPath?.() || [event.target]).some(node => node.closest?.(
+    if ((event.composedPath?.() || [event.target]).some(node => /** @type {Element} */ (node).closest?.(
       '#history-panel,input,textarea,select,button,a,audio,video,[role="button"],[role="link"],[contenteditable]:not([contenteditable=false])'
     )))
       return;
@@ -83,22 +86,25 @@ export function createReaderNavigation(readerContext) {
     }
   }
 
+  /** @param {MouseEvent} event */
   function handleReaderOutsideClick(event) {
     if (readerContext.readerLifecycle.disposed || readerContext.readerAbortController.signal.aborted ||
         !readerContext.panelState.open || !readerContext.bookmarkPopover.hidden) return;
     const path = event.composedPath();
-    if (path.includes(document.querySelector("#history-panel")) || path.includes(document.querySelector("#history")) ||
+    if (path.includes(/** @type {Element} */ (document.querySelector("#history-panel"))) || path.includes(/** @type {Element} */ (document.querySelector("#history"))) ||
         path.includes(readerContext.bookmarkPopover) || path.includes(readerContext.bookmarkRibbon)) return;
     // Do not consume the content click or move focus: text selection and book
     // links keep their ordinary behavior, including inside the HTML iframe.
     readerContext.setReaderPanelOpen(false);
   }
 
+  /** @param {Element} shell */
   function readerPageScrollTop(shell) {
     return readerContext.viewport.scrollTop + shell.getBoundingClientRect().top -
       readerContext.viewport.getBoundingClientRect().top - readerContext.viewport.clientTop;
   }
 
+  /** @param {number} value */
   async function goToPage(value, generation = readerContext.beginReaderNavigation()) {
     try {
       if (!readerContext.documentState.pageCount || !readerContext.isReaderGenerationCurrent("navigation", generation))
@@ -107,12 +113,12 @@ export function createReaderNavigation(readerContext) {
       readerContext.pdfShellWindow?.ensure(page);
       // The first page is usable before the background shell queue finishes.
       // Only wait when the requested shell has not been materialized yet.
-      let shell = readerContext.content.querySelector(
+      let shell = /** @type {HTMLElement | null} */ (readerContext.content.querySelector(
         `.reader-page[data-page="${page}"]`
-      );
-      if (!shell && ["pdf-pages", "image-pages"].includes(readerContext.capability.mode)) {
+      ));
+      if (!shell && (readerContext.capability.mode === "pdf-pages" || readerContext.capability.mode === "image-pages")) {
         await readerContext.pdfShellsReady;
-        shell = readerContext.content.querySelector(`.reader-page[data-page="${page}"]`);
+        shell = /** @type {HTMLElement | null} */ (readerContext.content.querySelector(`.reader-page[data-page="${page}"]`));
       }
       if (!readerContext.isReaderGenerationCurrent("navigation", generation)) return false;
       if (!shell) return false;
@@ -157,6 +163,7 @@ export function createReaderNavigation(readerContext) {
     readerContext.foliateScrollAnchors.remember();
   }
 
+  /** @param {string} rawUrl @param {{id: string, url: string} | null} [bookmark] */
   async function navigateReader(rawUrl, bookmark = null) {
     let target;
     try {
@@ -197,24 +204,29 @@ export function createReaderNavigation(readerContext) {
     readerContext.beginReaderNavigation();
   }
 
+  /** @param {HTMLElement} region @param {Document} [eventRoot] */
   function installReaderTapSelectionClear(region, eventRoot = region.ownerDocument) {
+    /** @type {{id: number, x: number, y: number, time: number, selection: Selection, anchor: Node | null, anchorOffset: number, focus: Node | null, focusOffset: number} | null} */
     let tap = null;
+    /** @param {PointerEvent} event */
     const down = (event) => {
       tap = null;
       if (event.pointerType !== "touch" || !event.isPrimary) return;
-      const target = event.composedPath()[0];
+      const target = /** @type {Element} */ (event.composedPath()[0]);
       if (target.closest?.("a,button,input,textarea,select,[contenteditable]")) return;
-      const root = target.getRootNode();
+      const root = /** @type {Document & {getSelection?: () => Selection | null}} */ (target.getRootNode());
       const selection = root.getSelection?.() || eventRoot.getSelection();
       if (!selection || selection.isCollapsed || !selection.rangeCount) return;
       tap = { id: event.pointerId, x: event.clientX, y: event.clientY, time: performance.now(),
         selection, anchor: selection.anchorNode, anchorOffset: selection.anchorOffset,
         focus: selection.focusNode, focusOffset: selection.focusOffset };
     };
+    /** @param {PointerEvent} event */
     const move = (event) => {
       if (tap && event.pointerId === tap.id && Math.hypot(event.clientX - tap.x, event.clientY - tap.y) > 8)
         tap = null;
     };
+    /** @param {PointerEvent} event */
     const up = (event) => {
       const start = tap;
       tap = null;

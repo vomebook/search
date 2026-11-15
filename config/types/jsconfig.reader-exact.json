@@ -12,6 +12,8 @@
   },
   "files": [
     "../../typings/reader-globals.d.ts",
+    "../../static/reader/core/reader-runtime.js",
+    "../../tests/reader/core/test_reader_runtime_types.ts",
     "../../static/reader/core/reader-diagnostics.mjs",
     "../../static/reader/core/reader-lifecycle.mjs",
     "../../static/reader/core/reader-document-loader.mjs",

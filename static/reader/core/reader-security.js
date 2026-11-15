@@ -1,4 +1,5 @@
-(function (root) {
+(/** @param {import('../../../typings/reader-security-strict').SecurityRoot} root */
+function (root) {
   "use strict";
   const LIMITS = Object.freeze({
     documentBytes: 512 * 1024 * 1024,
@@ -15,9 +16,11 @@
     chapterBytes: 8 * 1024 * 1024,
     chapterTotalBytes: 512 * 1024 * 1024
   });
+  /** @param {string} code */
   function error(code) {
     return Object.assign(new Error(code), { code });
   }
+  /** @template {Response} T @param {T} response @param {number} limit @returns {T} */
   function assertResponseSize(response, limit) {
     const length = Number(response?.headers?.get?.("content-length"));
     if (Number.isFinite(length) && length > limit) throw error("READER_RESOURCE_LIMIT");
@@ -26,11 +29,13 @@
   function createByteBudget(limit = LIMITS.chapterTotalBytes) {
     if (!Number.isSafeInteger(limit) || limit < 0) throw new RangeError("Invalid byte budget");
     let used = 0;
+    /** @param {number} bytes */
     function reserve(bytes) {
       if (!Number.isSafeInteger(bytes) || bytes < 0) throw new RangeError("Invalid byte count");
       if (bytes > limit - used) throw error("READER_RESOURCE_LIMIT");
       used += bytes;
     }
+    /** @param {number} bytes */
     function release(bytes) {
       if (!Number.isSafeInteger(bytes) || bytes < 0 || bytes > used)
         throw new RangeError("Invalid byte release");
@@ -50,6 +55,7 @@
 
   // Failed reads release their reservations; successful reads retain them until
   // the caller releases discarded content. Share one budget across a book.
+  /** @param {Response} response @param {number} [limit] @param {import('../../../typings/reader-security-strict').ByteBudget} [budget] */
   async function readBytes(response, limit = LIMITS.documentBytes, budget) {
     let reader,
       reserved = 0;
@@ -92,6 +98,7 @@
       reader?.releaseLock?.();
     }
   }
+  /** @param {Response} response @param {number} [limit] @param {string} [encoding] @param {import('../../../typings/reader-security-strict').ByteBudget} [budget] */
   async function readText(response, limit, encoding = "utf-8", budget) {
     const decoder = new TextDecoder(encoding);
     const bytes = await readBytes(response, limit, budget);
@@ -103,6 +110,7 @@
     }
   }
 
+  /** @param {Uint8Array | ArrayBuffer} bytes @param {import('../../../typings/reader-security-strict').ArchiveLimits} [limits] */
   function inspectZip(bytes, limits = LIMITS) {
     bytes = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
     if (bytes.byteLength > limits.archiveCompressedBytes) throw error("READER_ARCHIVE_LIMIT");
@@ -197,7 +205,10 @@
     if (offset !== end) throw error("READER_ARCHIVE_INVALID");
     return Object.freeze({ entries, compressed, expanded });
   }
-  function validateChapterManifest(manifest) {
+  /** @param {unknown} input @returns {import('../../../typings/reader-security-strict').ValidatedChapterManifest} */
+  function validateChapterManifest(input) {
+    // The candidate is untrusted: the checks below determine what is accepted.
+    const manifest = /** @type {import('../../../typings/reader-security-strict').ChapterManifestCandidate} */ (/** @type {unknown} */ (input));
     if (
       manifest?.version !== 1 ||
       manifest?.kind !== "epub-chapters" ||
@@ -238,9 +249,11 @@
     }
     if (manifest.search_index?.text_profile !== undefined &&
         manifest.search_index.text_profile !== "dom-text-v1") throw error("EPUB_INVALID");
-    return manifest;
+    return /** @type {import('../../../typings/reader-security-strict').ValidatedChapterManifest} */ (/** @type {unknown} */ (manifest));
   }
-  function validatePdfPageManifest(manifest) {
+  /** @param {unknown} input @returns {import('../../../typings/reader-security-strict').ValidatedPdfPageManifest} */
+  function validatePdfPageManifest(input) {
+    const manifest = /** @type {import('../../../typings/reader-security-strict').PdfPageManifestCandidate} */ (/** @type {unknown} */ (input));
     if (!manifest || manifest.version !== 2 || manifest.kind !== "pdf-pages")
       throw error("PDF_MANIFEST_INVALID");
     if (!Number.isInteger(manifest.page_count) || manifest.page_count < 1 || manifest.pages !== undefined)
@@ -250,11 +263,11 @@
     if (manifest.codec !== undefined && !["webp", "jxl", "png", "mixed"].includes(manifest.codec))
       throw error("PDF_MANIFEST_INVALID");
     if (["jxl", "png", "mixed"].includes(manifest.codec) && (!Array.isArray(manifest.images) || manifest.images.length !== pageCount ||
-        manifest.images.some(ref => !/^[0-9a-f]{64}$/.test(ref?.sha256 || "") ||
+        manifest.images.some(ref => (typeof ref?.sha256 !== "string" || !/^[0-9a-f]{64}$/.test(ref.sha256)) ||
           !Number.isSafeInteger(ref.bytes) || ref.bytes < 1 || ref.bytes > LIMITS.chapterBytes)))
       throw error("PDF_MANIFEST_INVALID");
     if (["png", "mixed"].includes(manifest.codec) && (manifest.source_format !== "djvu" ||
-        !/^[0-9a-f]{64}$/.test(manifest.source_sha256 || "") || manifest.codec === "mixed" &&
+        (typeof manifest.source_sha256 !== "string" || !/^[0-9a-f]{64}$/.test(manifest.source_sha256)) || manifest.codec === "mixed" &&
         manifest.images.some(ref => !["png", "jxl", "webp"].includes(ref.codec))))
       throw error("PDF_MANIFEST_INVALID");
     if (manifest.toc !== undefined) {
@@ -287,23 +300,26 @@
         if (!page || page.p !== index + 1 || !PDF_OCR_PATH.test(page.o) ||
             page.o !== `${root}/ocr/page-${expected}.json.gz` ||
             pdfSourceRoot(root) !== `objects/${manifest.source_sha256.slice(0, 2)}/${manifest.source_sha256}` ||
-            !/^[0-9a-f]{64}$/.test(page.os || "") ||
+            (typeof page.os !== "string" || !/^[0-9a-f]{64}$/.test(page.os)) ||
             !Number.isSafeInteger(page.ob) || page.ob < 1)
           throw error("PDF_MANIFEST_INVALID");
       }
     }
-    return manifest;
+    return /** @type {import('../../../typings/reader-security-strict').ValidatedPdfPageManifest} */ (/** @type {unknown} */ (manifest));
   }
   const PDF_OCR_PATH = /^objects\/[0-9a-f]{2}\/[0-9a-f]{64}\/(?:[0-9a-f]{16}\/)?ocr\/(?:page-[0-9]{6}\.json\.gz|book-text\.json\.gz)$/;
   const PDF_OCR_MANIFEST_PATH = /^objects\/[0-9a-f]{2}\/[0-9a-f]{64}\/(?:[0-9a-f]{16}\/)?ocr-manifest\.json$/;
   const PDF_OCR_PAGE_PATH = /^objects\/[0-9a-f]{2}\/[0-9a-f]{64}\/(?:[0-9a-f]{16}\/)?pages\/page-[0-9]{6}\.(?:webp|jxl|png)$/;
   const PDF_OCR_ROOT = /^(objects\/[0-9a-f]{2}\/[0-9a-f]{64}(?:\/[0-9a-f]{16})?)/;
+  /** @param {unknown} path */
   function pdfSourceRoot(path) {
     return typeof path === "string" ? path.split("/").slice(0, 3).join("/") : "";
   }
-  function validatePdfOcrManifest(manifest) {
+  /** @param {unknown} input @returns {import('../../../typings/reader-security-strict').ValidatedPdfOcrManifest} */
+  function validatePdfOcrManifest(input) {
+    const manifest = /** @type {import('../../../typings/reader-security-strict').PdfOcrManifestCandidate} */ (/** @type {unknown} */ (input));
     if (!manifest || manifest.version !== 1 || manifest.kind !== "pdf-ocr" ||
-        manifest.complete !== true || !/^[0-9a-f]{64}$/.test(manifest.source_sha256 || "") ||
+        manifest.complete !== true || (typeof manifest.source_sha256 !== "string" || !/^[0-9a-f]{64}$/.test(manifest.source_sha256)) ||
          !/layout-v\d+(?:-|$)/.test(String(manifest.profile || "")) ||
         !Number.isInteger(manifest.page_count) || manifest.page_count < 1 ||
         manifest.page_count > LIMITS.pdfPages || !Array.isArray(manifest.pages) ||
@@ -324,7 +340,7 @@
           (page.r !== undefined && (typeof page.r !== "string" || !PDF_OCR_PAGE_PATH.test(page.r) ||
             !page.r.endsWith(`/pages/page-${expected}.png`) || pdfSourceRoot(page.r) !== pdfSourceRoot(pageRoot) ||
             manifest.source_format !== "djvu" || page.w !== undefined || page.j !== undefined ||
-            page.rbucket !== "vomebook/pdf-pages-v2" || !/^[0-9a-f]{64}$/.test(page.rs || "") ||
+            page.rbucket !== "vomebook/pdf-pages-v2" || (typeof page.rs !== "string" || !/^[0-9a-f]{64}$/.test(page.rs)) ||
             !Number.isSafeInteger(page.rb) || page.rb < 1)) ||
           pdfSourceRoot(pageRoot) !== `objects/${manifest.source_sha256.slice(0, 2)}/${manifest.source_sha256}` ||
           (root && pdfSourceRoot(root) !== pdfSourceRoot(pageRoot)))
@@ -334,16 +350,18 @@
     if (!manifest.book_text || typeof manifest.book_text.path !== "string" ||
         !PDF_OCR_PATH.test(manifest.book_text.path) || !manifest.book_text.path.endsWith('/ocr/book-text.json.gz') ||
         pdfSourceRoot(manifest.book_text.path) !== pdfSourceRoot(root) ||
-        !/^[0-9a-f]{64}$/.test(manifest.book_text.sha256 || "") ||
+        (typeof manifest.book_text.sha256 !== "string" || !/^[0-9a-f]{64}$/.test(manifest.book_text.sha256)) ||
         !Number.isSafeInteger(manifest.book_text.bytes) || manifest.book_text.bytes < 1 ||
         (manifest.page_manifest !== undefined &&
           (!manifest.page_manifest || typeof manifest.page_manifest.path !== "string" ||
             !/^objects\/[0-9a-f]{2}\/[0-9a-f]{64}\/(?:[0-9a-f]{16}\/)?page-manifest\.json$/.test(manifest.page_manifest.path) ||
             pdfSourceRoot(manifest.page_manifest.path) !== pdfSourceRoot(root))))
       throw error("PDF_OCR_MANIFEST_INVALID");
-    return manifest;
+    return /** @type {import('../../../typings/reader-security-strict').ValidatedPdfOcrManifest} */ (/** @type {unknown} */ (manifest));
   }
-  function validatePdfOcrPage(payload, pageNumber) {
+  /** @param {unknown} input @param {number} pageNumber @returns {import('../../../typings/reader-security-strict').ValidatedPdfOcrPage} */
+  function validatePdfOcrPage(input, pageNumber) {
+    const payload = /** @type {import('../../../typings/reader-security-strict').PdfOcrPageCandidate} */ (/** @type {unknown} */ (input));
     if (!payload || payload.version !== 1 || payload.kind !== "pdf-ocr-page" ||
         payload.page !== pageNumber || !Array.isArray(payload.blocks) || payload.blocks.length > 10000 ||
         !Number.isFinite(payload.width) || payload.width <= 0 ||
@@ -356,8 +374,9 @@
           box[0] < 0 || box[1] < 0 || box[2] > 1 || box[3] > 1 || box[2] < box[0] || box[3] < box[1])
         throw error("PDF_OCR_PAGE_INVALID");
     }
-    return payload;
+    return /** @type {import('../../../typings/reader-security-strict').ValidatedPdfOcrPage} */ (/** @type {unknown} */ (payload));
   }
+  /** @param {unknown} extension @param {Uint8Array | null} [bytes] */
   function isZipContainer(extension, bytes) {
     return (
       ["epub", "fbz"].includes(String(extension || "").toLowerCase()) ||
@@ -377,4 +396,4 @@
     validatePdfOcrPage,
     isZipContainer
   });
-})(typeof self !== "undefined" ? self : globalThis);
+})(/** @type {import('../../../typings/reader-security-strict').SecurityRoot} */ (typeof self !== "undefined" ? self : globalThis));

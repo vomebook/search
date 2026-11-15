@@ -94,7 +94,7 @@ export function createReaderBindings(readerContext) {
     });
     readerContext.readerRuntime.track(
       VoiceOfMLReaderStore.subscribe?.((change) => {
-        if (!change?.remote || readerContext.readerLifecycle.disposed) return;
+        if (!change?.remote || typeof change.type !== "string" || readerContext.readerLifecycle.disposed) return;
         if (
           change.type === "history-clear" ||
           (change.type === "history-remove" && change.url === readerContext.sourceUrl)

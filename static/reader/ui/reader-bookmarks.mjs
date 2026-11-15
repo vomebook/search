@@ -1,14 +1,18 @@
+/** @param {import('../../../typings/reader-bookmarks-strict').BookmarkContext} readerContext */
 export function createReaderBookmarks(readerContext) {
+  /** @param {import('../../../typings/reader-progress-strict').ProgressState | null} entry */
   function consumeBookmarkHandoff(entry) {
     if (!entry || entry.id !== readerContext.params.get("bookmark") || entry.url !== readerContext.params.get("bookmark_source"))
       return;
     const opening = new URL(location.href);
+    /** @param {string | URL} url */
     const shareKey = (url) => {
       const key = new URL(url);
       key.searchParams.delete("return");
       key.searchParams.delete("nav");
       return key.href;
     };
+    /** @param {unknown} raw */
     const cleanMatchingUrl = (raw) => {
       if (typeof raw !== "string" || !raw) return null;
       try {
@@ -26,10 +30,11 @@ export function createReaderBookmarks(readerContext) {
         return null;
       }
     };
+    /** @param {Window} owner */
     const cleanHistory = (owner) => {
       const url = cleanMatchingUrl(owner.location.href);
       if (!url) return;
-      const state = owner.history.state;
+      const state = /** @type {{ voiceReaderOverlay?: boolean, readerUrl?: unknown } | null} */ (owner.history.state);
       const readerUrl = state?.voiceReaderOverlay && cleanMatchingUrl(state.readerUrl);
       owner.history.replaceState(readerUrl ? { ...state, readerUrl } : state, "", url);
     };
@@ -38,13 +43,13 @@ export function createReaderBookmarks(readerContext) {
     try {
       if (
         readerContext.isReaderOverlayFrame() &&
-        window.parent.history.state?.voiceReaderOverlay === true &&
-        cleanMatchingUrl(window.parent.history.state.readerUrl)
+        /** @type {{ voiceReaderOverlay?: boolean } | null} */ (window.parent.history.state)?.voiceReaderOverlay === true &&
+        cleanMatchingUrl(/** @type {{ readerUrl?: unknown }} */ (window.parent.history.state).readerUrl)
       )
         cleanHistory(window.parent);
     } catch (_) {}
     try {
-      const saved = JSON.parse(sessionStorage.getItem("reader-navigation-current") || "null");
+      const saved = /** @type {{ readerUrl?: unknown, shareUrl?: unknown } | null} */ (JSON.parse(sessionStorage.getItem("reader-navigation-current") || "null"));
       const readerUrl = cleanMatchingUrl(saved?.readerUrl),
         shareUrl = cleanMatchingUrl(saved?.shareUrl);
       if (readerUrl && shareUrl)
@@ -60,6 +65,7 @@ export function createReaderBookmarks(readerContext) {
     readerContext.params.delete("bookmark_source");
   }
 
+  /** @param {Document} doc @param {Node} root @param {number} x @param {number} y */
   function excerptFromCaret(doc, root, x, y) {
     let node,
       offset = 0;
@@ -83,14 +89,15 @@ export function createReaderBookmarks(readerContext) {
     }
     const walker = doc.createTreeWalker(root, NodeFilter.SHOW_TEXT);
     walker.currentNode = node;
-    let excerpt = node.data.slice(offset);
-    while (excerpt.length < 220 && walker.nextNode()) excerpt += ` ${walker.currentNode.data}`;
+    let excerpt = /** @type {Text} */ (node).data.slice(offset);
+    while (excerpt.length < 220 && walker.nextNode()) excerpt += ` ${/** @type {Text} */ (walker.currentNode).data}`;
     return excerpt.replace(/\s+/g, " ").trim().slice(0, 160);
   }
 
   function bookmarkExcerpt() {
-    if (["image", "audio", "video"].includes(readerContext.capability.mode)) return "";
-    if (["pdf", "pdf-pages"].includes(readerContext.capability.mode)) {
+    const mode = readerContext.capability.mode;
+    if (mode === "image" || mode === "audio" || mode === "video") return "";
+    if (mode === "pdf" || mode === "pdf-pages") {
       const shell = readerContext.pageAtMarker(),
         items = shell && shell._bookmarkTextItems;
       if (items && items.length) {
@@ -172,6 +179,7 @@ export function createReaderBookmarks(readerContext) {
       : null;
   }
 
+  /** @param {import('../../../typings/reader-progress-strict').ProgressState} entry @param {number} [generation] */
   async function restoreFoliateBookmarkPosition(entry, generation = readerContext.beginReaderNavigation()) {
     try {
       if (
@@ -180,11 +188,12 @@ export function createReaderBookmarks(readerContext) {
         !readerContext.isReaderGenerationCurrent("navigation", generation)
       )
         return false;
-      let article = await readerContext.foliateSectionLoader(entry.foliateSection);
+      const section = /** @type {number} */ (entry.foliateSection);
+      let article = await readerContext.foliateSectionLoader(section);
       if (!readerContext.isReaderGenerationCurrent("navigation", generation)) return false;
       await readerContext.waitForReader(0, true);
       if (!readerContext.isReaderGenerationCurrent("navigation", generation)) return false;
-      if (!article?.isConnected) article = await readerContext.foliateSectionLoader(entry.foliateSection);
+      if (!article?.isConnected) article = await readerContext.foliateSectionLoader(section);
       if (!article?.isConnected || !readerContext.isReaderGenerationCurrent("navigation", generation)) return false;
       const marker = readerContext.viewport.getBoundingClientRect().top + 8;
       const offset = Number(entry.foliateOffset) || 0;
@@ -212,6 +221,7 @@ export function createReaderBookmarks(readerContext) {
     }
   }
 
+  /** @param {number} percent @param {number} generation */
   async function seekFoliateProgress(percent, generation) {
     try {
       const sections = readerContext.epubBook?.sections?.filter((section) => section.linear !== "no") || [];
@@ -250,7 +260,7 @@ export function createReaderBookmarks(readerContext) {
   }
 
   async function renderBookmarks() {
-    const list = document.querySelector("#bookmarks-list"),
+    const list = /** @type {HTMLElement} */ (document.querySelector("#bookmarks-list")),
       generation = readerContext.nextReaderGeneration("bookmarks");
     try {
       const entries = readerContext.panelState.showingAllBookmarks
@@ -271,12 +281,13 @@ export function createReaderBookmarks(readerContext) {
         open.addEventListener("click", () =>
           entry.url !== readerContext.sourceUrl
             ? readerContext.navigateReader(entry.readerUrl, entry)
-            : readerContext.restoreFormat(readerContext.capability.mode, entry)
+            : readerContext.restoreFormat(readerContext.capability.mode || "unsupported", entry)
         );
         const excerpt = document.createElement("p");
         excerpt.className = "bookmark-excerpt";
-        excerpt.textContent = entry.excerpt || "";
-        excerpt.hidden = !entry.excerpt;
+        const excerptText = typeof entry.excerpt === "string" ? entry.excerpt : "";
+        excerpt.textContent = excerptText;
+        excerpt.hidden = !excerptText;
         const meta = document.createElement("small");
         meta.textContent = new Date(entry.createdAt).toLocaleString();
         const remove = document.createElement("button");
@@ -331,11 +342,12 @@ export function createReaderBookmarks(readerContext) {
     const progress = readerContext.readerProgressPercent();
     const htmlScrollTop = readerContext.htmlFrame && readerContext.htmlFrame.contentWindow ? readerContext.htmlFrame.contentWindow.scrollY : 0;
     const scrollTop = readerContext.viewport.scrollTop;
-    const pagedDocument = readerContext.documentState.pageCount && !["text", "markdown"].includes(readerContext.capability.mode);
+    const mode = readerContext.capability.mode;
+    const pagedDocument = readerContext.documentState.pageCount && mode !== "text" && mode !== "markdown";
     const locator = Number.isInteger(foliatePosition?.chapterIndex)
-      ? `chapter:${foliatePosition.chapterIndex}:${Math.round(foliatePosition.chapterOffset)}`
+      ? `chapter:${/** @type {import('../../../typings/reader-progress-strict').ChapterPosition} */ (foliatePosition).chapterIndex}:${Math.round(/** @type {import('../../../typings/reader-progress-strict').ChapterPosition} */ (foliatePosition).chapterOffset)}`
       : foliatePosition
-        ? `foliate:${foliatePosition.foliateSection}:${Math.round(foliatePosition.foliateOffset)}`
+        ? `foliate:${foliatePosition.foliateSection}:${Math.round(/** @type {number} */ (foliatePosition.foliateOffset))}`
         : pagedDocument
           ? `page:${readerContext.documentState.page}:${Math.round(pageOffset)}`
           : `progress:${progress}:${Math.round(readerContext.htmlFrame ? htmlScrollTop : scrollTop)}`;
@@ -354,11 +366,12 @@ export function createReaderBookmarks(readerContext) {
     };
   }
 
+  /** @param {boolean} open */
   function setBookmarkDialogModal(open) {
     document.documentElement.classList.toggle("bookmark-dialog-open", open);
     if (open) {
-      for (let node = readerContext.bookmarkPopover; node && node !== document.body; node = node.parentElement) {
-        for (const sibling of node.parentElement.children)
+      for (let node = /** @type {HTMLElement | null} */ (readerContext.bookmarkPopover); node && node !== document.body; node = node.parentElement) {
+        for (const sibling of /** @type {HTMLCollectionOf<HTMLElement>} */ (/** @type {HTMLElement} */ (node.parentElement).children))
           if (sibling !== node && !readerContext.bookmarkInertSiblings.has(sibling)) {
             readerContext.bookmarkInertSiblings.set(sibling, sibling.inert);
             sibling.inert = true;
@@ -370,19 +383,20 @@ export function createReaderBookmarks(readerContext) {
     }
   }
 
+  /** @param {HTMLElement} [invoker] @param {import('../../../typings/reader-store-strict').BookmarkEntry | null} [entry] */
   function openBookmarkPopover(invoker = readerContext.bookmarkRibbon, entry = null) {
     if (!entry && readerContext.pdfDocument?._pdfInfo?.readerPageCountPending) return;
     if (!readerContext.bookmarkPopover.hidden) return;
     readerContext.bookmarkInvoker = invoker;
     readerContext.pendingBookmarkSnapshot = entry ? null : readerContext.captureBookmarkSnapshot();
     readerContext.updatePanelState({ editingBookmark: entry ? { ...entry } : null });
-    const snapshot = entry || readerContext.pendingBookmarkSnapshot;
-    document.querySelector("#bookmark-prompt").textContent = entry
+    const snapshot = /** @type {import('../../../typings/reader-store-strict').BookmarkEntry | import('../../../typings/reader-bookmarks-strict').BookmarkSnapshot} */ (entry || readerContext.pendingBookmarkSnapshot);
+    /** @type {HTMLElement} */ (document.querySelector("#bookmark-prompt")).textContent = entry
       ? `编辑书签 · ${entry.label}`
       : `在${snapshot.label}添加书签？`;
     readerContext.bookmarkLabelInput.value = snapshot.label || "";
-    readerContext.bookmarkExcerptInput.value = snapshot.excerpt || "";
-    document.querySelector("#bookmark-add").textContent = entry ? "保存书签" : "添加书签";
+    readerContext.bookmarkExcerptInput.value = typeof snapshot.excerpt === "string" ? snapshot.excerpt : "";
+    /** @type {HTMLElement} */ (document.querySelector("#bookmark-add")).textContent = entry ? "保存书签" : "添加书签";
     readerContext.bookmarkPopover.hidden = false;
     invoker.setAttribute("aria-expanded", "true");
     invoker.setAttribute("aria-controls", readerContext.bookmarkPopover.id);
