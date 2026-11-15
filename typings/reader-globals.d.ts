@@ -71,6 +71,31 @@ declare var VoiceOfMLSearchCanonical: {
 declare var VoiceOfMLSearchRecovery: {
   isRecoverable(error: {name?: string | undefined; status?: number | undefined; code?: string | undefined; message?: string | undefined} | null | undefined): boolean;
 };
+interface VoiceOfMLPagingView {
+  generation: number; loadedPage: number; page: number; resultCount: number;
+  hasMore: boolean; loading: boolean; suspended: boolean; inactive: boolean; dragging: boolean;
+  scrollTop: number; loadedHeight: number; viewportHeight: number; appendScrollTop?: number | undefined;
+}
+interface VoiceOfMLPagingRecovery { failures: number; retryAt: number }
+interface VoiceOfMLPagingDependencies {
+  policy: typeof VoiceOfMLPagingPolicy;
+  clock: {now(): number; setTimeout(callback: () => void, delay: number): number; clearTimeout(timer: number): void};
+  readView(): VoiceOfMLPagingView; expireRequests(): void; append(page: number, scrollTop: number): void;
+  onState(state: Readonly<VoiceOfMLPagingRecovery>): void;
+}
+interface VoiceOfMLPagingController {
+  readRecovery(): VoiceOfMLPagingRecovery; updateStatus(): void; reset(): void;
+  schedule(delay?: number, readyPage?: number): void; finish(success: boolean, terminal?: boolean): void;
+  retryBottom(): void; retry(): void; maybeLoad(bottomOnly?: boolean, retry?: boolean): void; dispose(): void;
+}
+interface VoiceOfMLPagingStatusOptions {getHost(): HTMLElement | null | undefined; revealHost: boolean; retry(): void}
+declare var VoiceOfMLPagingPolicy: {
+  isAtBottom(view: VoiceOfMLPagingView): boolean; acceptsReadyPage(view: VoiceOfMLPagingView, readyPage: number): boolean;
+  shouldLoad(view: VoiceOfMLPagingView, recovery: VoiceOfMLPagingRecovery, now: number, bottomOnly: boolean, retry: boolean): boolean;
+  afterAttempt(failures: number, success: boolean, terminal: boolean, now: number): VoiceOfMLPagingRecovery;
+};
+declare var VoiceOfMLPagingController: {create(deps: VoiceOfMLPagingDependencies): VoiceOfMLPagingController};
+declare var VoiceOfMLPagingStatus: {create(options: VoiceOfMLPagingStatusOptions): {render(view: VoiceOfMLPagingView, recovery: VoiceOfMLPagingRecovery): void}};
 interface VoiceOfMLInputDraftOwner {href: string; key: string | undefined; cancelled: boolean}
 interface VoiceOfMLInputVisitOwner {generation: number; viewKey: string | null}
 interface VoiceOfMLInputState {
