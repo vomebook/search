@@ -10,6 +10,7 @@ const MODULES = ["static/search/execution/domain/policy.js", "static/search/exec
   "static/search/results/presentation/row.js", "static/search/results/application/interactions.js",
   "static/search/discovery/application/random.js",
   "static/search/shell/presentation/view.js", "static/search/shell/application/controller.js",
+  "static/search/routing/domain/route.js", "static/search/routing/application/router.js",
   "static/search/history/infrastructure/store.js", "static/search/history/application/controller.js",
   "static/search/ambient/application/quotation.js",
   "static/search/corpus/application/client.js",
