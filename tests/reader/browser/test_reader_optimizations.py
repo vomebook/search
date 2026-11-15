@@ -88,6 +88,129 @@ class ReaderOptimizationTests(unittest.TestCase):
             ''')
         self.page.route('**/static/reader.js*', instrument)
 
+    def expose_progress(self):
+        def instrument(route):
+            response = route.fetch()
+            route.fulfill(response=response, body=response.text() + '''
+              window.__progressContext = readerContext;
+              window.__progressCounts = {updates:0, percents:0};
+              const originalProgressUpdate = updateProgressTools, originalPercent = readerProgressPercent;
+              updateProgressTools = (...args) => { __progressCounts.updates++; return originalProgressUpdate(...args); };
+              readerProgressPercent = (...args) => { __progressCounts.percents++; return originalPercent(...args); };
+            ''')
+        self.page.route('**/static/reader.js*', instrument)
+
+    def test_progress_independent_updates_skip_unchanged_writes_and_accept_late_toc(self):
+        self.expose_progress()
+        self.serve('progress fixture\n' * 300)
+        self.open(self.reader_url('txt'))
+        result = self.page.evaluate('''() => {
+          const c=__progressContext, counts=__progressCounts;
+          c.updateProgressTools();
+          const observer=new MutationObserver(()=>{});
+          observer.observe(document.querySelector('#history-panel'),{subtree:true,attributes:true,childList:true,characterData:true});
+          let writes=0;
+          const descriptor=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value');
+          Object.defineProperty(c.progressRange,'value',{configurable:true,
+            get(){return descriptor.get.call(this)},set(value){writes++;descriptor.set.call(this,value)}});
+          counts.updates=counts.percents=0;
+          c.updateProgressTools();
+          const unchanged={...counts,writes,mutations:observer.takeRecords().length};
+          observer.disconnect();delete c.progressRange.value;
+          c.viewport.scrollTop=200;c.updateReadingProgressSummary();
+          const summary=c.readingProgressSummary.querySelector('.reader-progress-summary-value').textContent,
+            expected=c.readerProgressPercent().toFixed(1)+'%';
+          c.updateProgressTools();
+          const shared=c.progressPercent.textContent===expected && c.progressRange.getAttribute('aria-valuetext')===expected;
+          c.setToc([{label:'Group',group:true},{label:'First',activate:()=>true},{label:'Last',activate:()=>true}]);
+          c.updateNavigationState({currentChapterIndex:1});c.updateProgressTools();
+          const late={parent:c.progressTools.parentElement.id,summaryHidden:c.readingProgressSummary.hidden,
+            prevDisabled:c.chapterPrev.disabled,nextDisabled:c.chapterNext.disabled,visible:!c.chapterNext.hidden};
+          c.previousProgressState={scrollTop:200};c.updateProgressTools();
+          const undoVisible=!c.progressUndo.hidden;
+          c.setToc([]);c.updateProgressTools();
+          return {unchanged,summary,expected,shared,late,undoVisible,
+            reset:c.progressTools.parentElement.id==='toc-panel' && !c.readingProgressSummary.hidden && c.chapterNext.hidden};
+        }''')
+        self.assertEqual(result['unchanged'], dict(updates=1, percents=1, writes=0, mutations=0))
+        self.assertEqual(result['summary'], result['expected'])
+        self.assertTrue(result['shared'] and result['undoVisible'] and result['reset'], result)
+        self.assertEqual(result['late'], dict(parent='history-panel', summaryHidden=True,
+                                             prevDisabled=True, nextDisabled=False, visible=True))
+
+    def test_marker_frame_publishes_once_and_standalone_sync_still_updates(self):
+        self.expose_progress()
+        self.serve('marker fixture')
+        self.open(self.reader_url('txt'))
+        result = self.page.evaluate('''() => {
+          const c=__progressContext, counts=__progressCounts, raf=window.requestAnimationFrame;
+          if(c.markerFrame) cancelAnimationFrame(c.markerFrame);c.markerFrame=0;
+          const original={pageAtMarker:c.pageAtMarker,refresh:c.refreshNearbyPdfPages,
+            heading:c.syncHeadingLocation,save:c.scheduleSave};
+          let next=2,callback,saves=0;
+          c.pageAtMarker=()=>({dataset:{page:String(next)}});
+          c.refreshNearbyPdfPages=()=>{};c.syncHeadingLocation=()=>{};c.scheduleSave=()=>{saves++};
+          window.requestAnimationFrame=fn=>{callback=fn;return 123};
+          function frame(){counts.updates=counts.percents=0;c.scheduleMarkerSync();c.scheduleMarkerSync();callback();
+            return {...counts,page:c.documentState.page};}
+          try {
+            c.pageNavigationLockUntil=0;
+            const changed=frame(),same=frame();
+            next=3;c.pageNavigationLockUntil=Infinity;const locked=frame();
+            c.pageNavigationLockUntil=0;counts.updates=counts.percents=0;c.syncCurrentPageFromMarker();
+            const standalone={...counts,page:c.documentState.page};
+            counts.updates=counts.percents=0;c.syncCurrentPageFromMarker();const standaloneSame={...counts};
+            next=0;const missing=frame();
+            next=4;c.refreshNearbyPdfPages=()=>{throw Error('fixture refresh failure')};
+            let failure;try{frame()}catch(error){failure=error.message}
+            const failed={...counts,page:c.documentState.page,failure};
+            c.refreshNearbyPdfPages=()=>{};c.progressSeeking=true;const seeking=frame();c.progressSeeking=false;
+            return {changed,same,locked,standalone,standaloneSame,missing,failed,seeking,saves};
+          } finally {
+            window.requestAnimationFrame=raf;c.pageAtMarker=original.pageAtMarker;
+            c.refreshNearbyPdfPages=original.refresh;c.syncHeadingLocation=original.heading;c.scheduleSave=original.save;
+            c.pageNavigationLockUntil=0;c.progressSeeking=false;
+          }
+        }''')
+        for name, page in [('changed', 2), ('same', 2), ('locked', 2), ('standalone', 3), ('missing', 3)]:
+            self.assertEqual(result[name], dict(updates=1, percents=1, page=page), name)
+        self.assertEqual(result['standaloneSame'], dict(updates=0, percents=0))
+        self.assertEqual(result['failed'], dict(updates=1, percents=1, page=4, failure='fixture refresh failure'))
+        self.assertEqual(result['seeking'], dict(updates=1, percents=0, page=4))
+        self.assertEqual(result['saves'], 5)
+
+    def test_marker_scroll_tracks_dynamic_pages_and_pdf_bottom(self):
+        self.expose_progress()
+        self.serve('scroll fixture')
+        self.open(self.reader_url('txt'))
+        self.page.evaluate('''() => {
+          const c=__progressContext;c.content.replaceChildren();c.capability={...c.capability,mode:'pdf'};
+          c.updateDocumentState({page:1,pageCount:3});c.pageNavigationLockUntil=0;
+          for(let page=1;page<=3;page++){
+            const shell=document.createElement('section');shell.className='reader-page';shell.dataset.page=page;
+            shell.dataset.renderState='rendered';shell.style.cssText='height:900px;min-height:0';c.content.append(shell);
+          }
+          c.setToc([{label:'First · 第 1 页',activate:()=>true},{label:'Third · 第 3 页',activate:()=>true}]);
+          const shell=c.content.children[1];c.viewport.scrollTop=c.readerPageScrollTop(shell)+100;
+          c.viewport.dispatchEvent(new Event('scroll'));
+        }''')
+        self.page.wait_for_function("()=>__progressContext.documentState.page===2")
+        self.page.evaluate('''() => {
+          const c=__progressContext,shell=document.createElement('section');shell.className='reader-page';shell.dataset.page=4;
+          shell.dataset.renderState='rendered';shell.style.cssText='height:100px;min-height:0';c.content.append(shell);
+          c.updateDocumentState({pageCount:4});c.viewport.scrollTop=c.viewport.scrollHeight;
+          c.viewport.dispatchEvent(new Event('scroll'));
+        }''')
+        self.page.wait_for_function("()=>__progressContext.documentState.page===4")
+        result=self.page.evaluate('''() => {
+          const c=__progressContext,entry=c.captureProgressEntry();
+          return {page:entry.page,count:entry.pageCount,chapter:c.navigationState.currentChapterIndex,
+            percent:c.progressPercent.textContent,input:c.pageInput.value,offset:entry.pageOffset};
+        }''')
+        self.assertEqual((result['page'],result['count'],result['chapter']), (4,4,1))
+        self.assertEqual((result['percent'],result['input']), ('100.0%','4'))
+        self.assertGreaterEqual(result['offset'],0)
+
     def test_pdf_pixel_budget_releases_prefetch_and_protects_selection(self):
         self.expose()
         self.serve('pixel budget fixture')
