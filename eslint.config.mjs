@@ -20,7 +20,7 @@ export default [
       globals: { ...globals.browser, ...globals.serviceworker, ...globals.worker,
         module: "readonly", require: "readonly",
         ...Object.fromEntries(["VoiceOfMLReaderSecurity", "VoiceOfMLReader", "VoiceOfMLReaderResources",
-          "VoiceOfMLInitialPayload", "VoiceOfMLSearchBootstrap", "VoiceOfMLRoute", "VoiceOfMLRouter", "VoiceOfMLShell", "VoiceOfMLShellView", "VoiceOfMLReaderStore", "VoiceOfMLReaderChapters", "VoiceOfMLReaderVirtual", "VoiceOfMLReaderNavigation", "VoiceOfMLReaderHost", "VoiceOfMLReaderReturn",
+          "VoiceOfMLSearchHeightIndex", "VoiceOfMLVirtualHeights", "VoiceOfMLVirtualRows", "VoiceOfMLVirtualResults", "VoiceOfMLInitialPayload", "VoiceOfMLSearchBootstrap", "VoiceOfMLRoute", "VoiceOfMLRouter", "VoiceOfMLShell", "VoiceOfMLShellView", "VoiceOfMLReaderStore", "VoiceOfMLReaderChapters", "VoiceOfMLReaderVirtual", "VoiceOfMLReaderNavigation", "VoiceOfMLReaderHost", "VoiceOfMLReaderReturn",
           "VoiceOfMLDownloadController", "VoiceOfMLDownloadBatch", "VoiceOfMLDownloadQueue", "VoiceOfMLSearchSession", "VoiceOfMLPositionPolicy", "VoiceOfMLPositionStorage", "VoiceOfMLSearchPositions", "VoiceOfMLPositionRestoration", "VoiceOfMLResultRows", "VoiceOfMLResultInteractions", "VoiceOfMLRandomDiscovery", "VoiceOfMLSearchHistoryStore", "VoiceOfMLSearchHistory", "VoiceOfMLQuotation", "VoiceOfMLCorpusClient", "VoiceOfMLSnapshotPolicy", "VoiceOfMLResultSnapshots", "VoiceOfMLSearchWindowPage", "VoiceOfMLReaderRequests", "VoiceOfMLReaderRuntime",
           "VoiceOfMLReaderAdapters", "VoiceOfMLReaderScroll", "VoiceOfMLSearchSidebarRender", "DOMPurify", "marked"]
           .map(name => [name, "readonly"])) }

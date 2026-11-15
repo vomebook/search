@@ -225,11 +225,23 @@ class SearchPositionTests(unittest.TestCase):
 
     def test_snapshot_restore_renders_target_once_without_jump_velocity(self):
         self.page.add_style_tag(content='.result-item {height:160px!important;min-height:0!important;box-sizing:border-box}')
+        self.page.evaluate('''() => {
+          const create=VoiceOfMLVirtualRows.create;
+          VoiceOfMLVirtualRows.create=(...args)=>{
+            const rows=create(...args),original=rows.reconcileVirtualRows;
+            rows.reconcileVirtualRows=(...values)=>{
+              if(window.restoreWindows) restoreWindows.push([values[1],values[2]]);
+              return original(...values);
+            };
+            return rows;
+          };
+          virtualResults=null;getVirtualResults();
+          VoiceOfMLVirtualRows.create=create;
+        }''')
         self.prepare_deep_snapshot()
         result = self.page.evaluate('''async () => {
-          const original=reconcileVirtualRows;const windows=[];
-          reconcileVirtualRows=(...args)=>{windows.push([args[1],args[2]]);return original(...args)};
-          try {restoreSearchViewSnapshot(deepKey);} finally {reconcileVirtualRows=original;}
+          const windows=window.restoreWindows=[];
+          try {restoreSearchViewSnapshot(deepKey);} finally {window.restoreWindows=null;}
           const initialIndex=findVirtualIndex(getResultScrollTop()),initialVelocity=VSCROLL.scrollVelocity;
           const normalRows=3*Math.max(10,Math.floor(DOM.resultsContainer.clientHeight/VSCROLL.estimatedHeight))+
             Math.ceil(DOM.resultsContainer.clientHeight/VSCROLL.estimatedHeight)+1;

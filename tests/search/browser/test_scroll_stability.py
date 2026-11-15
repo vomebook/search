@@ -78,7 +78,11 @@ class ScrollStabilityTests(unittest.TestCase):
           clearResultTemplateCache();DOM.resultsList.replaceChildren();
           const original=getResultsHTMLCacheKey;let keys=0;
           getResultsHTMLCacheKey=(...args)=>{keys++;return original(...args)};
-          const render=()=>reconcileVirtualRows(STATE.results,0,60,0,getVirtualTotalHeight()-getVirtualOffset(60));
+          const rowsView=VoiceOfMLVirtualRows.create(VSCROLL,{origin:0,target:null},{
+            elements:DOM,total:()=>STATE.total,recordForRow:row=>resultRowRecords.get(row),
+            resetKeyboardIndex:index=>{keyboardResultIndex=index},ensureResultTemplateCache,createResultRow,
+            getResultScrollTop,getVirtualOffset,findVirtualIndex});
+          const render=()=>rowsView.reconcileVirtualRows(STATE.results,0,60,0,getVirtualTotalHeight()-getVirtualOffset(60));
           const rows=()=>[...DOM.resultsList.querySelectorAll('.result-item')];
           try {
             render();const createdKeys=keys,first=rows(),version=VSCROLL.contentVersion;
