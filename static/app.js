@@ -1600,110 +1600,11 @@ const browserApiCache = new BoundedResponseCache(BROWSER_API_CACHE_MAX, 5 * 60 *
 const browserApiPending = new Map();
 const sidebarInitialCache = new Map();
 const sidebarInitialPending = new Map();
-const SIDEBAR_SCROLL_STORAGE_KEY = "vomebook-search-sidebar-scroll-v1";
-const SIDEBAR_SCROLL_LIMIT = 80;
-const sidebarScrollPositions = new Map();
-let activeSidebarScrollKey = "";
-let sidebarScrollFrame = 0;
-let sidebarScrollRestoreFrame = 0;
-let sidebarScrollRestoring = false;
-let sidebarScrollPersistTimer = 0;
-
-function sidebarScrollKeyFor(repo, path) {
-  return repo ? `repo:${repo}|path:${path || ""}` : "global";
-}
-
-function setSidebarScrollPosition(key, top) {
-  if (!key || !Number.isFinite(top) || top < 0) return;
-  sidebarScrollPositions.delete(key);
-  sidebarScrollPositions.set(key, Math.round(top));
-  while (sidebarScrollPositions.size > SIDEBAR_SCROLL_LIMIT) {
-    sidebarScrollPositions.delete(sidebarScrollPositions.keys().next().value);
-  }
-  scheduleSidebarScrollPersist();
-}
-
-function scheduleSidebarScrollPersist() {
-  if (sidebarScrollPersistTimer) return;
-  sidebarScrollPersistTimer = setTimeout(() => {
-    sidebarScrollPersistTimer = 0;
-    persistSidebarScrollPositions();
-  }, 250);
-}
-
-function loadSidebarScrollPositions() {
-  try {
-    const raw = sessionStorage.getItem(SIDEBAR_SCROLL_STORAGE_KEY);
-    if (!raw) return;
-    const stored = JSON.parse(raw);
-    if (!stored || typeof stored !== "object") return;
-    for (const [key, value] of Object.entries(stored)) {
-      if (typeof key === "string" && Number.isFinite(value) && value >= 0) {
-        sidebarScrollPositions.set(key, Math.round(value));
-      }
-    }
-    while (sidebarScrollPositions.size > SIDEBAR_SCROLL_LIMIT) {
-      sidebarScrollPositions.delete(sidebarScrollPositions.keys().next().value);
-    }
-  } catch (_) {}
-}
-
-function persistSidebarScrollPositions() {
-  try {
-    const stored = {};
-    for (const [key, value] of sidebarScrollPositions) {
-      if (value > 0) stored[key] = value;
-    }
-    sessionStorage.setItem(SIDEBAR_SCROLL_STORAGE_KEY, JSON.stringify(stored));
-  } catch (_) {}
-}
-
-function rememberSidebarScroll() {
-  if (!DOM.sidebarContent || !activeSidebarScrollKey || sidebarScrollRestoring) return;
-  const top = DOM.sidebarContent.scrollTop;
-  if (Number.isFinite(top) && top >= 0) setSidebarScrollPosition(activeSidebarScrollKey, top);
-}
-
-function activateSidebarScrollKey(key) {
-  if (key === activeSidebarScrollKey) return;
-  rememberSidebarScroll();
-  activeSidebarScrollKey = key;
-}
-
-function restoreSidebarScroll() {
-  if (!DOM.sidebarContent || !activeSidebarScrollKey) return;
-  const target = sidebarScrollPositions.get(activeSidebarScrollKey) || 0;
-  const max = Math.max(0, DOM.sidebarContent.scrollHeight - DOM.sidebarContent.clientHeight);
-  const next = Math.min(target, max);
-  sidebarScrollRestoring = true;
-  if (Math.abs(DOM.sidebarContent.scrollTop - next) > 1) DOM.sidebarContent.scrollTop = next;
-  if (!sidebarScrollRestoreFrame) {
-    sidebarScrollRestoreFrame = requestAnimationFrame(() => {
-      sidebarScrollRestoreFrame = 0;
-      sidebarScrollRestoring = false;
-    });
-  }
-}
-
-function handleSidebarScroll() {
-  if (sidebarScrollRestoring || sidebarScrollFrame) return;
-  sidebarScrollFrame = requestAnimationFrame(() => {
-    sidebarScrollFrame = 0;
-    rememberSidebarScroll();
-  });
-}
-
-function flushSidebarScroll() {
-  rememberSidebarScroll();
-  if (sidebarScrollFrame) {
-    cancelAnimationFrame(sidebarScrollFrame);
-    sidebarScrollFrame = 0;
-  }
-  if (sidebarScrollPersistTimer) {
-    clearTimeout(sidebarScrollPersistTimer);
-    sidebarScrollPersistTimer = 0;
-  }
-  persistSidebarScrollPositions();
+let sidebarScroll;
+function getSidebarScroll() {
+  return sidebarScroll || (sidebarScroll = VoiceOfMLSidebarScroll.create({
+    content: () => DOM.sidebarContent, storageKey: "vomebook-search-sidebar-scroll-v1"
+  }));
 }
 
 async function fetchJsonWithTimeout(url, timeoutMs, requireOK = false) {
@@ -4636,71 +4537,15 @@ function updateLoadInfo() {
   requestAnimationFrame(updateScrollTrack);
 }
 
-function renderSidebar(routeId) {
-  if (STATE.mode === "global") {
-    renderRepoList(routeId);
-  } else {
-    renderBrowser(STATE.browserPath || "", routeId);
-  }
-}
-
-function renderRepoListItems(repos) {
-  const previousKey = activeSidebarScrollKey;
-  activateSidebarScrollKey("global");
-  if (previousKey === "global") rememberSidebarScroll();
-  const focused = DOM.sidebarContent.contains(document.activeElement) ? document.activeElement.closest('.repo-list-item') : null;
-  var ordered = (repos || []).slice().sort(function(a, b) {
-    return (a.count || 0) - (b.count || 0) ||
-      String(a.name || "").localeCompare(String(b.name || ""), "zh-CN");
-  });
-  var html = "";
-  for (var i = 0; i < ordered.length; i++) {
-    var repo = ordered[i];
-    var short = repo.name.split("/").pop();
-    var label = escapeHTML(short);
-    html += '<button type="button" class="repo-list-item" aria-label="打开仓库：' + label + '" data-repo="' + escapeHTML(short) + '">';
-    html += '<svg class="repo-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/></svg>';
-    html += '<span class="repo-name">' + label + '</span>';
-    html += '<span class="repo-count">' + (repo.count || 0).toLocaleString() + '</span>';
-    html += '</button>';
-  }
-  DOM.sidebarContent.innerHTML = html;
-  DOM.sidebarContent.querySelectorAll('svg').forEach(node => node.setAttribute('aria-hidden', 'true'));
-  if (focused) (Array.from(DOM.sidebarContent.querySelectorAll('.repo-list-item'))
-    .find(node => node.dataset.repo === /** @type {HTMLElement} */ (focused).dataset.repo) || DOM.leftSidebar).focus({ preventScroll: true });
-  restoreSidebarScroll();
-  updateSidebarHeader();
-}
-
-async function renderRepoList(routeId) {
-  var repos = null;
-  if (repoList && repoList.length > 0) {
-    repos = repoList;
-  } else {
-    var initial = await loadSidebarInitial(null);
-    if (initial && Array.isArray(initial.repos) && initial.repos.length) {
-      if (routeId && routeId !== routeRenderId) return;
-      renderRepoListItems(initial.repos);
-      repos = initial.repos;
-    }
-    if (apiAvailable) {
-      var freshRepos = await fetchRepos();
-      if (freshRepos && Array.isArray(freshRepos) && freshRepos.length) repos = freshRepos;
-    }
-  }
-  if (routeId && routeId !== routeRenderId) return;
-  if (!repos || !Array.isArray(repos) || repos.length === 0) {
-    activateSidebarScrollKey("global");
-    DOM.sidebarContent.innerHTML = '<div class="sidebar-loading">暂无仓库</div>';
-    restoreSidebarScroll();
-    updateSidebarHeader();
-    return;
-  }
-  renderRepoListItems(repos);
-}
-
-function renderBrowserListItems(list, data, currentRepo, path) {
-  list.innerHTML = VoiceOfMLSearchSidebarRender.browserMarkup(data, currentRepo, path, "pages", {
+// Directory feature composition: bounded routing view and explicit site effects.
+let sidebarDirectory, sidebarDirectoryView;
+function getSidebarDirectoryView() {
+  return sidebarDirectoryView || (sidebarDirectoryView = VoiceOfMLSidebarDirectoryView.create({
+    content: DOM.sidebarContent, sidebar: DOM.leftSidebar, scroll: getSidebarScroll(),
+    surface: "pages", escape: escapeHTML, updateHeader: () => updateSidebarHeader(),
+    navigate: path => ROUTER.navigate("repo", STATE.repo, path),
+    setPath: path => { STATE.browserPath = path; syncStateToURL(); },
+    markup: {
     icon: key => sidebarIconMarkup(key),
     escape: value => escapeHTML(value),
     iconType: extension => getFileIconType(extension),
@@ -4708,57 +4553,28 @@ function renderBrowserListItems(list, data, currentRepo, path) {
     name: file => getBrowserFileName(file),
     link: (repo, folder, file) => getBrowserFileLink(repo, folder, file),
     reader: (file, repo, folder) => getBrowserReaderUrl(file, repo, folder),
-  });
-  restoreSidebarScroll();
+    },
+  }));
+}
+function getSidebarDirectory() {
+  return sidebarDirectory || (sidebarDirectory = VoiceOfMLSidebarDirectory.create({
+    readView: () => ({mode: STATE.mode, repo: STATE.repo, repoFull: STATE.repoFull,
+      browserPath: STATE.browserPath, routeId: routeRenderId, repos: repoList,
+      apiAvailable: apiAvailable, useLocalMode: STATE.useLocalMode, dataLoaded: STATE.dataLoaded, tree: STATE.folderTree}),
+    view: getSidebarDirectoryView(), scroll: getSidebarScroll(),
+    renderRepos: repos => renderRepoListItems(repos), updateHeader: () => updateSidebarHeader(),
+    initial: repo => loadSidebarInitial(repo), fetchRepos: () => fetchRepos(),
+    fetchContents: (repo, path) => fetchFolderContents(repo, path),
+    localContents: (repo, path) => getFolderContents(repo, path), ensureLocal: (force, silent) => ensureLocalDataLoaded(force, silent),
+    cache: folderContentsCache, publishRepos: repos => { repoList = repos; },
+    refreshAssets: refreshSidebarReaderAssets,
+  }));
 }
 
-function getBrowserReaderUrl(file, repo, path) {
-  const name = getBrowserFileName(file);
-  const link = getBrowserFileLink(repo, path || "", file);
-  const assetPath = path ? path + "/" + name : name;
-  let record = { File: file.name, Extension: file.ext, Link: link };
-  record = applyReaderAsset(record, repo, assetPath, link);
-  return VoiceOfMLReader.readerUrl(record, "/search/static/reader.html");
-}
-
-function createSidebarBreadcrumb(path) {
-  const breadcrumb = document.createElement("div");
-  breadcrumb.className = "sidebar-breadcrumb";
-  breadcrumb.setAttribute("aria-label", "当前路径");
-  const parts = path ? path.split("/") : [];
-  breadcrumb.innerHTML = '<button type="button" class="crumb-item' + (!path ? ' current' : '') + '" ' + (!path ? 'aria-current="location"' : '') + ' data-path="">根目录</button>';
-  for (let i = 0; i < parts.length; i++) {
-    const partPath = parts.slice(0, i + 1).join("/");
-    breadcrumb.innerHTML += '<span class="crumb-sep" aria-hidden="true">/</span>';
-    breadcrumb.innerHTML += '<button type="button" class="crumb-item' + (i === parts.length - 1 ? ' current' : '') + '" ' + (i === parts.length - 1 ? 'aria-current="location"' : '') + ' data-path="' + escapeHTML(partPath) + '">' + escapeHTML(parts[i]) + '</button>';
-  }
-  breadcrumb.querySelectorAll(".crumb-item").forEach(function(item) {
-    item.addEventListener("click", function() {
-      if (!item.classList.contains("current")) ROUTER.navigate("repo", STATE.repo, /** @type {HTMLElement} */ (item).dataset.path);
-    });
-  });
-  return breadcrumb;
-}
-
-async function renderBrowser(path, routeId) {
-  if (routeId && routeId !== routeRenderId) return;
-  activateSidebarScrollKey(sidebarScrollKeyFor(STATE.repoFull || STATE.repo, path));
-  const restoreFocus = DOM.sidebarContent.contains(document.activeElement);
-  STATE.browserPath = path;
-  syncStateToURL();
-  DOM.sidebarContent.innerHTML = "";
-  var currentRepo = STATE.repoFull;
-  DOM.sidebarContent.appendChild(createSidebarBreadcrumb(path));
-  if (restoreFocus) DOM.sidebarContent.querySelector('.crumb-item.current').focus({ preventScroll: true });
-  const list = document.createElement("div");
-  list.className = "browser-list";
-  list.innerHTML = '<div class="sidebar-loading">加载中...</div>';
-  DOM.sidebarContent.appendChild(list);
-  var data = null;
-  var initialData = null;
-  var displayedData = null;
+function refreshSidebarReaderAssets(list, currentRepo, path, routeId, readDisplayed) {
   var initialAssets = readerAssets;
   loadReaderAssetsAfterFirstPaint().then(function() {
+    const displayedData = readDisplayed();
     if (!list.isConnected || !displayedData || readerAssets === initialAssets ||
         (routeId && routeId !== routeRenderId) || STATE.mode !== "repo" ||
         STATE.repoFull !== currentRepo || STATE.browserPath !== path) return;
@@ -4772,73 +4588,39 @@ async function renderBrowser(path, routeId) {
       row.querySelector('.browser-name').setAttribute('aria-label', (readerUrl ? '打开阅读器：' : '下载文件：') + getBrowserFileName(file));
     });
   });
-  if (STATE.useLocalMode && STATE.dataLoaded) {
-    try {
-      data = await getFolderContents(currentRepo, path);
-      if (routeId && routeId !== routeRenderId) return;
-      if (STATE.mode !== "repo" || STATE.repoFull !== currentRepo || STATE.browserPath !== path) return;
-    } catch (e) {}
-  }
-  if (!path) {
-    var initial = data ? null : await loadSidebarInitial(STATE.repo);
-    if (initial && (!routeId || routeId === routeRenderId) && STATE.mode === "repo" && STATE.repo === currentRepo.split("/").pop() && STATE.browserPath === path) {
-      renderBrowserListItems(list, initial, currentRepo, path);
-      displayedData = initial;
-      initialData = initial;
-      data = initial;
-    }
-  }
-  if (!data && folderContentsCache.has(STATE.repoFull + "|" + (path || ""))) {
-    data = folderContentsCache.get(STATE.repoFull + "|" + (path || ""));
-  }
-  if (!data && path && STATE.useLocalMode && !STATE.dataLoaded) {
-    const local = ensureLocalDataLoaded(false, true)
-      .then(ok => ok ? getFolderContents(currentRepo, path) : null).catch(() => null);
-    const remote = apiAvailable ? fetchFolderContents(STATE.repo, path) : Promise.resolve(null);
-    const first = await Promise.race([
-      local.then(result => ({ source: "local", result })),
-      remote.then(result => ({ source: "api", result }))
-    ]);
-    data = first.result || await (first.source === "local" ? remote : local);
-    if (routeId && routeId !== routeRenderId) return;
-    if (STATE.mode !== "repo" || STATE.repoFull !== currentRepo || STATE.browserPath !== path) return;
-  }
-  if (!data && apiAvailable) {
-    try {
-      var repo = STATE.repo;
-      var freshData = await fetchFolderContents(repo, path);
-      if (routeId && routeId !== routeRenderId) return;
-      if (STATE.mode !== "repo" || STATE.repo !== repo || STATE.browserPath !== path) return;
-      if (freshData) data = freshData;
-    } catch (e) {}
-  }
-  if (!data && STATE.dataLoaded) {
-    try {
-      data = await getFolderContents(STATE.repoFull, path);
-      if (routeId && routeId !== routeRenderId) return;
-      if (STATE.mode !== "repo" || STATE.repoFull !== currentRepo || STATE.browserPath !== path) return;
-    } catch (e) {}
-  }
-  if (!data || (!data.folders && !data.files)) {
-    if (initialData) return;
-    if ((!routeId || routeId === routeRenderId) && STATE.mode === "repo" && STATE.browserPath === path) {
-      var retryKey = STATE.repo + "|" + (path || "");
-      var tries = sidebarRetryCounts.get(retryKey) || 0;
-      if (tries < 2) {
-        sidebarRetryCounts.set(retryKey, tries + 1);
-        list.innerHTML = '<div class="sidebar-loading">加载失败，正在重试...</div>';
-        setTimeout(function() {
-          if ((!routeId || routeId === routeRenderId) && STATE.mode === "repo" && STATE.browserPath === path) renderBrowser(path, routeId || routeRenderId);
-        }, 1200);
-      } else {
-        list.innerHTML = '<div class="sidebar-loading">加载失败</div>';
-      }
-    }
-    return;
-  }
-  sidebarRetryCounts.delete(STATE.repo + "|" + (path || ""));
-  renderBrowserListItems(list, data, currentRepo, path);
-  displayedData = data;
+}
+
+function renderSidebar(routeId) {
+  getSidebarDirectory().render(routeId);
+}
+
+function renderRepoListItems(repos) {
+  return getSidebarDirectoryView().repos(repos);
+}
+
+function renderRepoList(routeId) {
+  return getSidebarDirectory().repos(routeId);
+}
+
+function renderBrowserListItems(list, data, currentRepo, path) {
+  return getSidebarDirectoryView().items(list, data, currentRepo, path);
+}
+
+function getBrowserReaderUrl(file, repo, path) {
+  const name = getBrowserFileName(file);
+  const link = getBrowserFileLink(repo, path || "", file);
+  const assetPath = path ? path + "/" + name : name;
+  let record = { File: file.name, Extension: file.ext, Link: link };
+  record = applyReaderAsset(record, repo, assetPath, link);
+  return VoiceOfMLReader.readerUrl(record, "/search/static/reader.html");
+}
+
+function createSidebarBreadcrumb(path) {
+  return getSidebarDirectoryView().breadcrumb(path);
+}
+
+function renderBrowser(path, routeId) {
+  return getSidebarDirectory().browse(path, routeId);
 }
 
 // Filter feature composition: only filter state and effects cross this boundary.
@@ -5135,7 +4917,6 @@ function showToast(msg, dur) {
 }
 let scrollLoadTimer = null;
 let scrollRecoveryTimer = null;
-const sidebarRetryCounts = new Map();
 var selectedIndices = {};
 var lastSelectedIndex = -1;
 
@@ -5222,7 +5003,7 @@ function recoverSidebarState() {
   var stuck = DOM.sidebarContent.querySelector(".sidebar-loading");
   if (!stuck) return;
   browserApiPending.clear();
-  sidebarRetryCounts.clear();
+  getSidebarDirectory().resetRetries();
   renderSidebar(routeRenderId);
   if (STATE.rightSidebarOpen) renderFilters(routeRenderId);
 }
@@ -5706,12 +5487,7 @@ function setupResultDelegation() {
 async function init() {
   cacheDOM();
   renderDownloadBatch();
-  loadSidebarScrollPositions();
-  DOM.sidebarContent.addEventListener("scroll", handleSidebarScroll, { passive: true });
-  window.addEventListener("pagehide", flushSidebarScroll);
-  document.addEventListener("visibilitychange", () => {
-    if (document.visibilityState === "hidden") flushSidebarScroll();
-  });
+  getSidebarScroll().install();
   syncSearchInputState();
   setupSearchInput();
   // Session and position databases are independent; start both without

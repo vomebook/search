@@ -379,7 +379,7 @@ class SearchAccessibilityTests(unittest.TestCase):
 
     def test_sidebar_scroll_position_restores_after_rerender(self):
         result = self.page.evaluate("""async()=>{
-          sidebarScrollPositions.clear();
+          getSidebarScroll().positions.clear();
           activeSidebarScrollKey='';
           // The fixture may start on a narrow viewport where the sidebar is closed;
           // a hidden element ignores scrollTop, which made this test flaky.
@@ -395,7 +395,7 @@ class SearchAccessibilityTests(unittest.TestCase):
           renderRepoListItems=()=>{};
           renderItems(repos);
           await new Promise(resolve=>{
-            const wait=()=>sidebarScrollRestoring?requestAnimationFrame(wait):resolve();
+            const wait=()=>getSidebarScroll().restoring?requestAnimationFrame(wait):resolve();
             requestAnimationFrame(wait);
           });
           // Layout can still be pending in CI: wait (bounded) for a real scroll
@@ -417,13 +417,13 @@ class SearchAccessibilityTests(unittest.TestCase):
           await new Promise((resolve,reject)=>{
             let frames=0;
             const wait=()=>{
-              if (sidebarScrollPositions.get('global') === target) resolve();
+              if (getSidebarScroll().positions.get('global') === target) resolve();
               else if (++frames > 60) reject(new Error('sidebar scroll position was not recorded'));
               else requestAnimationFrame(wait);
             };
             requestAnimationFrame(wait);
           });
-          const saved=sidebarScrollPositions.get('global');
+          const saved=getSidebarScroll().positions.get('global');
           renderItems(repos);
           renderRepoListItems=renderItems;
           return {saved, target, restored:DOM.sidebarContent.scrollTop,
@@ -436,24 +436,24 @@ class SearchAccessibilityTests(unittest.TestCase):
 
     def test_sidebar_scroll_position_is_kept_per_repository_path(self):
         result = self.page.evaluate("""async()=>{
-          sidebarScrollPositions.clear();
+          getSidebarScroll().positions.clear();
           activeSidebarScrollKey='';
           const fill=(key,top)=>{
-            activateSidebarScrollKey(key);
+            getSidebarScroll().activate(key);
             DOM.sidebarContent.innerHTML='<div style="height:4000px"></div>';
             DOM.sidebarContent.scrollTop=top;
             DOM.sidebarContent.dispatchEvent(new Event('scroll'));
           };
-          const keyA=sidebarScrollKeyFor('VoiceOfML/A','docs');
-          const keyB=sidebarScrollKeyFor('VoiceOfML/B','');
+          const keyA=getSidebarScroll().keyFor('VoiceOfML/A','docs');
+          const keyB=getSidebarScroll().keyFor('VoiceOfML/B','');
           fill(keyA,500);
           await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
           fill(keyB,900);
           await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
-          activateSidebarScrollKey(keyA);
+          getSidebarScroll().activate(keyA);
           DOM.sidebarContent.innerHTML='<div style="height:4000px"></div>';
-          restoreSidebarScroll();
-          return {savedA:sidebarScrollPositions.get(keyA), savedB:sidebarScrollPositions.get(keyB),
+          getSidebarScroll().restore();
+          return {savedA:getSidebarScroll().positions.get(keyA), savedB:getSidebarScroll().positions.get(keyB),
             restoredA:DOM.sidebarContent.scrollTop};
         }""")
         self.assertEqual(result["savedA"], 500)
