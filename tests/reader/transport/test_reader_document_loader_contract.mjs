@@ -50,23 +50,28 @@ test("retry policy keeps bounded delay and never retries rate-limited or aborted
   assert.equal(calls, 0);
 });
 
-test("proxy fallback respects response ownership, cancellation and bucket routing", {timeout: 10000}, async () => {
+test("proxy-only fetching respects response ownership, cancellation and bucket routing", {timeout: 10000}, async () => {
   const h = fixture();
   const init = {headers: {Range: "bytes=0-3"}};
   assert.equal(await (await h.loader.fetchReaderUrl("/api/reader-bucket-resource?path=x", init)).text(), "content");
   assert.equal(h.requests.length, 1); assert.equal(h.requests[0].url, "/api/reader-bucket-resource?path=x");
   assert.equal(h.requests[0].init, init);
-  h.requests.length = 0;
   let cancelled = 0;
-  h.context.readerRequestManager.request = async (url, timeout, options) => {
-    h.requests.push({url, timeout, init: options});
-    if (h.requests.length === 1) return new Response(new ReadableStream({cancel() {cancelled++;}}), {status: 404});
-    return new Response("direct");
-  };
-  const response = await h.loader.fetchReaderUrl("https://books.test/raw", init);
-  assert.equal(await response.text(), "direct"); assert.equal(cancelled, 1);
-  assert.equal(h.requests.length, 2); assert.match(h.requests[0].url, /reader-content/);
-  assert.equal(h.requests[1].url, "https://books.test/raw"); assert.equal(h.requests[1].init, init);
+  for (const status of [403, 404]) {
+    h.requests.length = 0; cancelled = 0;
+    h.context.readerRequestManager.request = async (url, timeout, options) => {
+      h.requests.push({url, timeout, init: options});
+      if (url === "https://books.test/raw") return new Response("direct");
+      return new Response(new ReadableStream({cancel() {cancelled++;}}), {status});
+    };
+    await assert.rejects(h.loader.fetchReaderUrl("https://books.test/raw", init), {status, message: `HTTP ${status}`});
+    assert.equal(cancelled, 1);
+    assert.equal(h.requests.length, 1);
+    assert.equal(h.requests[0].url, h.context.readerContentUrl("https://books.test/raw"));
+    assert.equal(h.requests[0].init, init);
+    assert.equal(h.requests[0].timeout, h.context.READER_PROXY_TIMEOUT_MS);
+    assert.deepEqual(h.waits, []);
+  }
 
   h.requests.length = 0; cancelled = 0;
   h.context.readerRequestManager.request = async (url, timeout, options) => {

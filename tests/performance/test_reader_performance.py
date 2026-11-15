@@ -2302,7 +2302,7 @@ class ReaderPerformanceTest(unittest.TestCase):
                 self.assertEqual(direct_requests, [])
                 self.assertEqual(errors, [])
 
-    def test_fetch_formats_fall_back_when_proxy_request_rejects(self):
+    def test_fetch_formats_keep_proxy_failure_until_manual_retry(self):
         cases = [
             ("txt", "已加载", ".reader-text"),
             ("md", "已加载", ".reader-markdown"),
@@ -2312,10 +2312,15 @@ class ReaderPerformanceTest(unittest.TestCase):
                 context = self.browser.new_context(viewport={"width": 1440, "height": 900})
                 page = context.new_page()
                 page.route("**/static/reader/core/reader-store.js", lambda route: route.fulfill(status=200, content_type="text/javascript", body=STORE_SCRIPT))
-                page.route("**/static/vendor/marked.min.*.js", lambda route: route.fulfill(status=200, content_type="text/javascript", body=MARKED_SCRIPT))
-                page.route("**/static/vendor/purify.min.*.js", lambda route: route.fulfill(status=200, content_type="text/javascript", body=PURIFY_SCRIPT))
-                page.route("**/static/vendor/epub.min.06eae1574510.js", lambda route: route.fulfill(status=200, content_type="text/javascript", body=EPUB_SCRIPT))
-                page.route("https://voiceofml-search.hf.space/api/reader-content**", lambda route: route.fulfill(status=403, body="forbidden", headers={"Access-Control-Allow-Origin": "*"}))
+                route_local_vendor_fallback(page)
+                proxy_requests = []
+                available = False
+                def proxy(route):
+                    proxy_requests.append(route.request.url)
+                    route.fulfill(status=200 if available else 403,
+                                  body="Proxy readable" if available else "forbidden",
+                                  headers={"Access-Control-Allow-Origin": "*"})
+                page.route("https://voiceofml-search.hf.space/api/reader-content**", proxy)
                 source = f"https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/fallback.{extension}"
                 direct_requests = []
                 page.route(source, lambda route: (direct_requests.append(route.request.url), route.fulfill(status=200, content_type="application/octet-stream", body=b"Fallback readable")))
@@ -2323,12 +2328,21 @@ class ReaderPerformanceTest(unittest.TestCase):
                     f"{self.origin}/search/static/reader.html?url={urllib.parse.quote(source, safe='')}&ext={extension}&title=Fallback",
                     wait_until="domcontentloaded",
                 )
+                page.locator('html[data-reader-phase="failed"]').wait_for()
+                self.assertIn("HTTP 403", page.get_by_role("alert").text_content())
+                self.assertEqual(page.locator("#content").get_attribute("data-error-code"), "READER_NETWORK")
+                self.assertEqual(page.locator(selector).count(), 0)
+                self.assertEqual(len(proxy_requests), 1)
+                self.assertEqual(direct_requests, [])
+                available = True
+                page.reload(wait_until="domcontentloaded")
                 page.wait_for_function(
                     "expected => document.querySelector('#status').textContent === expected",
                     arg=ready_status,
                 )
-                page.locator(selector).wait_for(state="attached")
-                self.assertEqual(direct_requests, [source])
+                self.assertIn("Proxy readable", page.locator(selector).inner_text())
+                self.assertEqual(proxy_requests, [proxy_requests[0]] * 2)
+                self.assertEqual(direct_requests, [])
                 context.close()
 
     def scroll_document(self):

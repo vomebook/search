@@ -261,11 +261,39 @@ class ReaderReloadSearchDocumentCases:
 
     def test_failed_reader_reload_back_restores_search_document(self):
         search_url = self.page.url
+        cdp = self.context.new_cdp_session(self.page) if self.engine == 'chromium' else None
+
+        def navigation_history():
+            history = cdp.send('Page.getNavigationHistory')
+            return (history['currentIndex'],
+                    [(entry['id'], entry['url']) for entry in history['entries']])
+
+        # Chromium can report stale history.length in the overlay host, even
+        # with service workers blocked. Baseline the search entry first and use
+        # browser-owned entry IDs/URLs to reject additions or replacements.
+        search_history = navigation_history() if cdp else None
+        search_length = len(search_history[1]) if cdp else self.page.evaluate('history.length')
         target = PREFIX + '/static/reader.html?' + urlencode({
             'ext': 'txt', 'url': SOURCE, 'title': 'Failed history book'})
         self.assertTrue(self.page.evaluate('target => navigateToReader(target)', target))
         self.page.frame_locator('iframe.reader-overlay').locator('.reader-text').wait_for(state='visible')
-        length = self.page.evaluate('history.length')
+        reader_url = self.page.url
+        length = search_length + 1
+        if cdp:
+            reader_index, reader_entries = navigation_history()
+            self.assertEqual(search_history[0], search_length - 1)
+            self.assertEqual(search_history[1][-1][1], search_url)
+            self.assertEqual(reader_index, search_history[0] + 1)
+            self.assertEqual(len(reader_entries), length)
+            self.assertEqual(reader_entries[:-1], search_history[1])
+            self.assertEqual(reader_entries[-1][1], reader_url)
+        else:
+            self.assertEqual(self.page.evaluate('history.length'), length)
+
+        def assert_preserved_history(offset):
+            if cdp:
+                self.assertEqual(navigation_history(), (reader_index + offset, reader_entries))
+            self.assertEqual(self.page.evaluate('history.length'), length)
         # Fail the actual content transport on the user reload. Production
         # fail() cancels book work but leaves the Reader error document alive.
         for pattern in ('**/api/reader-content**', '**/api/reader-resource**', SOURCE):
@@ -276,6 +304,7 @@ class ReaderReloadSearchDocumentCases:
         self.page.locator('.reader-error').wait_for(state='visible')
         self.assertEqual(self.page.locator('iframe.reader-overlay').count(), 0)
         self.assertEqual(self.page.locator('.reader-text').count(), 0)
+        assert_preserved_history(0)
         self.page.go_back(wait_until='domcontentloaded')
         # No fixture reload or direct fail() call: the error screen must keep
         # its real popstate listener until the document/runtime is disposed.
@@ -283,9 +312,23 @@ class ReaderReloadSearchDocumentCases:
         self.wait_search('paging')
         self.assertEqual(self.page.url, search_url)
         self.assertEqual(self.page.locator('.reader-error').count(), 0)
-        self.assertEqual(self.page.evaluate('history.length'), length)
+        assert_preserved_history(-1)
         self.assertEqual(self.page.evaluate("JSON.parse(sessionStorage.getItem('test-reader-popstate'))"),
                          {'trusted': True, 'url': search_url})
+        # The failed Reader must remain the next entry, including its identity.
+        # Forward may reuse the standalone document or mount an error overlay.
+        self.page.go_forward(wait_until='domcontentloaded')
+        self.assertEqual(self.page.url, reader_url)
+        self.page.locator('.reader-error, iframe.reader-overlay').wait_for(state='visible')
+        document = (self.page.frame_locator('iframe.reader-overlay')
+                    if self.page.locator('iframe.reader-overlay').count() else self.page)
+        document.locator('.reader-error').wait_for(state='visible')
+        self.assertEqual(document.locator('.reader-text').count(), 0)
+        assert_preserved_history(0)
+        self.page.go_back(wait_until='domcontentloaded')
+        self.wait_search('paging')
+        self.assertEqual(self.page.url, search_url)
+        assert_preserved_history(-1)
 
     def test_return_response_does_not_steal_new_user_focus(self):
         self.page.locator('#search-input').focus()
