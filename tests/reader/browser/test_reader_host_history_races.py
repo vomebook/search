@@ -179,6 +179,162 @@ class ReaderHostHistoryRaceTests(unittest.TestCase):
         self.page.evaluate("DOM.searchInput.dispatchEvent(new CompositionEvent('compositionend', {data:'中'}))")
         self.page.wait_for_function("STATE.query === 'paging-中' && !STATE.isLoading")
 
+    def test_early_script_delay_preserves_latest_fill(self):
+        self.check_early_script_draft('edit')
+
+    def test_early_script_delay_distinguishes_untouched_and_cleared_empty(self):
+        for mode in ('untouched', 'clear'):
+            with self.subTest(mode=mode):
+                self.check_early_script_draft(mode)
+
+    def test_early_script_delay_preserves_spanning_and_completed_ime(self):
+        for mode in ('spanning', 'completed'):
+            with self.subTest(mode=mode):
+                self.check_early_script_draft(mode)
+
+    def test_early_script_navigation_rejects_old_edit_and_ime_tails(self):
+        for mode in ('edit', 'spanning', 'completed'):
+            with self.subTest(mode=mode):
+                self.check_early_script_draft(mode, navigate=True)
+
+    def test_early_script_navigation_accepts_fresh_edit_and_composition(self):
+        for mode in ('edit', 'spanning', 'completed'):
+            with self.subTest(mode=mode):
+                self.check_early_script_draft(mode, navigate=True, renew=True)
+
+    def test_early_script_bare_landing_draft_preempts_saved_session(self):
+        for mode in ('edit', 'clear', 'spanning', 'completed', 'untouched'):
+            with self.subTest(mode=mode):
+                self.check_early_script_draft(mode, bare=True)
+
+    def check_early_script_draft(self, mode, navigate=False, renew=False, bare=False):
+        held = []
+
+        def hold_app(route):
+            held.append(route)
+
+        pattern = '**/static/app.js*'
+        self.page.route(pattern, hold_app)
+        base = '/search/#/?q=' if '/search/' in self.page.url else '/?q='
+        suffix = '&local=0' if base.startswith('/search/') else ''
+        target = self.fixture.origin + base + 'paging-before-bind' + suffix
+        if bare:
+            saved_url = self.fixture.origin + base + 'paging-saved-session' + suffix
+            self.page.evaluate('''async url => {
+              history.replaceState(null, '', url);
+              await persistSearchSession();
+              const db = await openSearchSessionDB();
+              const saved = await new Promise((resolve, reject) => {
+                const request = db.transaction('session', 'readonly').objectStore('session').get('last-search');
+                request.onsuccess = () => resolve(request.result);
+                request.onerror = () => reject(request.error);
+              });
+              db.close();
+              if (saved?.url !== url) throw new Error('Saved session seed did not persist');
+            }''', saved_url)
+            target = self.fixture.origin + ('/search/' if base.startswith('/search/') else '/')
+        # A hash-only goto on Pages retains the already-bound document.
+        self.page.evaluate('url => history.replaceState(null, "", url)', target)
+        self.page.reload(wait_until='commit')
+        self.page.wait_for_function("!!document.querySelector('#search-input')?._earlySearchInput")
+        self.assertEqual(self.page.evaluate('typeof setupSearchInput'), 'undefined')
+        field = self.page.locator('#search-input')
+        self.assertTrue(field.is_enabled())
+        if navigate:
+            self.page.evaluate('''target => {
+              const original = location.href;
+              history.replaceState(null, '', target);
+              history.pushState(null, '', original);
+            }''', self.fixture.origin + base + 'paging-before-bind-B' + suffix)
+        if mode in ('edit', 'clear'):
+            field.fill('paging-old-fill')
+            field.fill('' if mode == 'clear' else 'paging-new-fill')
+        elif mode != 'untouched':
+            field.evaluate('''input => {
+              input.focus();
+              input.dispatchEvent(new CompositionEvent('compositionstart'));
+              input.value = 'paging-早期';
+              input.dispatchEvent(new InputEvent('input', {
+                bubbles:true, isComposing:true, inputType:'insertCompositionText'
+              }));
+            }''')
+        if navigate:
+            self.page.evaluate('''() => new Promise(resolve => {
+              window.addEventListener('popstate', resolve, {once:true});
+              history.back();
+            })''')
+            # Let the accompanying hashchange finish before a deliberate B edit.
+            self.page.wait_for_timeout(50)
+        if mode == 'completed' or (renew and mode == 'spanning'):
+            field.evaluate('''input => {
+              input.dispatchEvent(new CompositionEvent('compositionend'));
+              input.dispatchEvent(new InputEvent('input', {bubbles:true, inputType:'insertCompositionText'}));
+            }''')
+        if navigate:
+            self.assertTrue(field.evaluate('input => input._earlySearchInput.owner.cancelled'))
+        if renew:
+            if mode == 'edit':
+                field.fill('paging-fresh-B')
+            else:
+                field.evaluate('''(input, completed) => {
+                  input.dispatchEvent(new CompositionEvent('compositionstart'));
+                  input.value = 'paging-fresh-B';
+                  input.dispatchEvent(new InputEvent('input', {
+                    bubbles:true, isComposing:true, inputType:'insertCompositionText'
+                  }));
+                  if (completed) input.dispatchEvent(new CompositionEvent('compositionend'));
+                }''', mode == 'completed')
+            self.assertFalse(field.evaluate('input => input._earlySearchInput.owner.cancelled'))
+        draft = field.input_value()
+        field.evaluate('input => input.setSelectionRange(3, 7, "backward")')
+        selection = field.evaluate('input => [input.selectionStart, input.selectionEnd, input.selectionDirection]')
+        # Keep a reference solely to verify that disposal removes all early listeners.
+        field.evaluate('input => { window.earlyHandoff = input._earlySearchInput; }')
+        for _ in range(500):
+            if held:
+                break
+            self.page.wait_for_timeout(10)
+        self.assertEqual(len(held), 1)
+        route = held.pop()
+        route.fulfill(response=route.fetch())
+        self.page.unroute(pattern, hold_app)
+        self.page.wait_for_function('typeof searchInputReady !== "undefined" && searchInputReady')
+        self.assertFalse(field.evaluate('input => "_earlySearchInput" in input'))
+        self.assertEqual(self.page.evaluate('searchComposing'), mode == 'spanning')
+        current_query = 'paging-before-bind-B' if navigate else 'paging-before-bind'
+        if bare:
+            current_query = 'paging-saved-session' if mode == 'untouched' else ''
+            self.assertEqual(self.page.evaluate('STATE.sessionRestored'), mode == 'untouched')
+            if mode == 'untouched':
+                self.assertEqual(self.page.url, saved_url)
+            else:
+                self.assertNotIn('paging-saved-session', self.page.url)
+        rejected = navigate and not renew
+        if mode == 'spanning' or rejected or mode == 'untouched':
+            self.page.wait_for_timeout(180)
+            self.assertEqual(self.page.evaluate('STATE.query'), current_query)
+        if mode != 'untouched':
+            self.assertEqual(field.input_value(), draft)
+            self.assertEqual(field.evaluate('input => [input.selectionStart, input.selectionEnd, input.selectionDirection]'), selection)
+        else:
+            self.assertEqual(field.input_value(), current_query)
+        if mode == 'spanning':
+            field.evaluate('''input => {
+              input.dispatchEvent(new CompositionEvent('compositionend'));
+              input.dispatchEvent(new InputEvent('input', {bubbles:true, inputType:'insertCompositionText'}));
+            }''')
+        if rejected:
+            self.page.wait_for_timeout(180)
+            self.assertEqual(self.page.evaluate('STATE.query'), current_query)
+        elif mode != 'untouched':
+            self.page.wait_for_function('query => STATE.query === query && !STATE.isLoading', arg=draft)
+        # Normal input after adoption must work, without mutating the disposed state.
+        early = self.page.evaluate('JSON.stringify(earlyHandoff)')
+        field.fill('paging-after-bind')
+        self.page.wait_for_function("STATE.query === 'paging-after-bind' && !STATE.isLoading")
+        self.page.evaluate("window.dispatchEvent(new Event('pagehide'))")
+        self.assertEqual(self.page.evaluate('JSON.stringify(earlyHandoff)'), early)
+
     def test_initial_storage_wait_preserves_draft_and_composition(self):
         self.check_initial_storage_draft(False)
 
