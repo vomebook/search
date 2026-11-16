@@ -1,0 +1,50 @@
+function intersectCandidateLists(candidateLists, sorted = false) {
+  if (!candidateLists.length) return [];
+  if (sorted) {
+    if (candidateLists.length === 1) return Array.from(candidateLists[0]);
+    const lists = candidateLists.slice().sort((a, b) => a.length - b.length);
+    const matched = [];
+    if (lists[0].length >= 512) {
+      // Dense sorted postings are cheaper to intersect with monotonic cursors.
+      const cursors = new Array(lists.length).fill(0);
+      outer: for (const index of lists[0]) {
+        for (let i = 1; i < lists.length; i++) {
+          const list = lists[i];
+          let offset = cursors[i];
+          while (offset < list.length && list[offset] < index) offset++;
+          cursors[i] = offset;
+          if (offset === list.length) break outer;
+          if (list[offset] !== index) continue outer;
+        }
+        matched.push(index);
+      }
+      return matched;
+    }
+    for (const index of lists[0]) {
+      let found = true;
+      for (let i = 1; i < lists.length; i++) {
+        const list = lists[i];
+        let low = 0, high = list.length;
+        while (low < high) {
+          const middle = (low + high) >>> 1;
+          if (list[middle] < index) low = middle + 1;
+          else high = middle;
+        }
+        if (list[low] !== index) { found = false; break; }
+      }
+      if (found) matched.push(index);
+    }
+    return matched;
+  }
+  const ordered = candidateLists[0];
+  let probe = ordered;
+  for (const candidates of candidateLists) if (candidates.length < probe.length) probe = candidates;
+  const matched = new Set(probe);
+  for (const candidates of candidateLists) {
+    if (candidates === probe) continue;
+    const allowed = new Set(candidates);
+    for (const index of matched) if (!allowed.has(index)) matched.delete(index);
+    if (!matched.size) break;
+  }
+  return ordered.filter((index) => matched.has(index));
+}

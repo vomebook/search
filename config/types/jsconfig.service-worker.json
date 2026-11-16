@@ -18,6 +18,7 @@
     "../../static/sw.js",
     "../../static/search/index-worker.js",
     "../../static/search/worker/domain/text.js",
+    "../../static/search/worker/domain/intersection.js",
     "../../typings/service-worker.d.ts"
   ]
 }

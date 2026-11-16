@@ -310,7 +310,7 @@
       "search/sidebar/presentation/directory.js",
       "search/sidebar/application/directory.js",
       "style.css",
-      ...(project === "github" ? ["search/worker/domain/text.js", "search/index-worker.js"] : []),
+      ...(project === "github" ? ["search/worker/domain/text.js", "search/worker/domain/intersection.js", "search/index-worker.js"] : []),
       "app.js"
     ];
   }
