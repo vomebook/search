@@ -36,6 +36,12 @@ class ServiceWorkerIntegrationTest(unittest.TestCase):
         self.server_state.reset()
         self.context = self.browser.new_context(service_workers="allow")
         self.page = self.context.new_page()
+        # A loopback-only runner can report offline while our HTTP server is
+        # reachable. Model the scenario's signal; set_offline still blocks real
+        # browser traffic, and sessionStorage carries the signal across reloads.
+        self.page.add_init_script("""Object.defineProperty(navigator, 'onLine', {
+            configurable: true, get: () => sessionStorage.getItem('sw-test-offline') !== 'true'
+        });""")
         self.page.add_init_script("""window.findOwnedServiceWorkerCache = async () => {
             const prefix = 'vomebook-search-', metadata = prefix + 'metadata';
             if (!(await caches.has(metadata))) return null;
@@ -66,6 +72,23 @@ class ServiceWorkerIntegrationTest(unittest.TestCase):
 
     def tearDown(self):
         self.context.close()
+
+    def go_offline(self):
+        self.context.set_offline(True)
+        self.page.evaluate("""() => {
+            sessionStorage.setItem('sw-test-offline', 'true');
+            window.dispatchEvent(new Event('offline'));
+        }""")
+        self.assertFalse(self.page.evaluate('navigator.onLine'))
+        # Prove actual network isolation, independently of navigator.onLine and
+        # the SW's cached shell. This URL is outside the worker's scope.
+        path = '/sw-test-network-probe'
+        before = self.server_state.count(path)
+        self.assertTrue(self.page.evaluate("""async path => {
+            try { await fetch(path, {cache: 'no-store'}); return false; }
+            catch (error) { return error.name === 'TypeError'; }
+        }""", path))
+        self.assertEqual(self.server_state.count(path), before)
 
     def prime(self, wait_for_data=False):
         response = self.page.goto(self.origin + "/search/", wait_until="domcontentloaded")
@@ -235,7 +258,7 @@ class ServiceWorkerIntegrationTest(unittest.TestCase):
                 headers: {'Content-Type': 'application/json'}
             }));
         }""")
-        self.context.set_offline(True)
+        self.go_offline()
         result = self.page.evaluate("""async () => {
             async function outcome(path) {
                 try {
@@ -279,7 +302,7 @@ class ServiceWorkerIntegrationTest(unittest.TestCase):
             }
             return false;
         }"""))
-        self.context.set_offline(True)
+        self.go_offline()
         result = self.page.evaluate("fetch('/search/manifest.json?background-test=1', {cache: 'no-store'}).then(response => response.json())")
         self.assertIn("name", result)
 
@@ -350,7 +373,7 @@ class ServiceWorkerIntegrationTest(unittest.TestCase):
         }'''), 'Reader shell and validation dependency must be warmed')
         errors = []
         self.page.on('pageerror', lambda error: errors.append(str(error)))
-        self.context.set_offline(True)
+        self.go_offline()
         response = self.page.goto(self.origin + '/search/static/reader.html?ext=txt', wait_until='domcontentloaded')
         self.assertTrue(response.from_service_worker)
         self.assertEqual(response.status, 200)
@@ -413,7 +436,7 @@ class ServiceWorkerIntegrationTest(unittest.TestCase):
 
     def test_offline_shell_reload_executes_app_and_renders_initial_results(self):
         self.prime(wait_for_data=True)
-        self.context.set_offline(True)
+        self.go_offline()
         response = self.page.reload(wait_until="domcontentloaded")
         self.assertIsNotNone(response)
         self.assertEqual(response.status, 200)
@@ -428,23 +451,48 @@ class ServiceWorkerIntegrationTest(unittest.TestCase):
         self.assertGreater(self.page.evaluate("STATE.results.length"), 0)
         self.assertTrue(self.page.evaluate("STATE.useLocalMode"))
 
-    def test_fresh_offline_without_cached_corpus_keeps_initial_and_disables_local(self):
+    def test_fresh_offline_without_cached_corpus_keeps_initial_and_reports_unavailable_search(self):
+        corpus = '/search/data/search_data.json.gz'
         with self.server_state.lock:
-            self.server_state.failures["/search/data/search_data.json.gz"] = 503
+            self.server_state.failures[corpus] = 503
         self.prime(wait_for_data=False)
         self.page.wait_for_function("STATE._initialActive === true", timeout=10000)
-        self.page.wait_for_function("STATE.useLocalMode === false", timeout=30000)
-        self.assertGreater(self.page.locator("#results-list .result-item").count(), 0)
-        self.context.set_offline(True)
-        self.page.reload(wait_until="domcontentloaded")
+        # Background acquisition preserves the user's mode preference; only a
+        # foreground search owns backend fallback. Wait for real load failure.
+        self.page.wait_for_function("""getCorpusClient().inspect().restartCount === 1 &&
+            localDataPromise === null && !STATE.dataLoaded""", timeout=30000)
+        self.assertGreater(self.server_state.count(corpus), 0)
+        self.assertFalse(self.page.evaluate("""async path =>
+            !!await (await window.findOwnedServiceWorkerCache()).match(path)""", corpus))
+        initial = self.page.locator('#results-list .result-item').all_text_contents()
+        self.assertGreater(len(initial), 0)
+        self.assertTrue(self.page.evaluate('STATE.useLocalMode && DOM.localModeToggle.checked'))
+        self.go_offline()
+        response = self.page.reload(wait_until="domcontentloaded")
+        self.assertEqual(response.status, 200)
+        self.assertTrue(response.from_service_worker)
+        self.assertFalse(self.page.evaluate('navigator.onLine'))
         self.page.locator("#results-list .result-item").first.wait_for(timeout=15000)
-        self.page.wait_for_function("STATE.useLocalMode === false", timeout=30000)
-        self.assertFalse(self.page.evaluate("STATE.dataLoaded"))
-        self.assertGreater(self.page.locator("#results-list .result-item").count(), 0)
+        self.page.wait_for_function("""getCorpusClient().inspect().restartCount === 1 &&
+            localDataPromise === null && !STATE.dataLoaded""", timeout=30000)
+        self.assertTrue(self.page.evaluate('STATE._initialActive && STATE.useLocalMode && DOM.localModeToggle.checked'))
+        self.assertEqual(self.page.locator('#results-list .result-item').all_text_contents(), initial)
+        self.assertFalse(self.page.evaluate("""async path =>
+            !!await (await window.findOwnedServiceWorkerCache()).match(path)""", corpus))
+        # Cached initial rows must never masquerade as results for a new query
+        # when neither the corpus nor the network is available.
+        self.page.locator('#search-input').fill('sw-offline-no-corpus')
+        self.page.locator('#search-input').press('Enter')
+        self.page.wait_for_function("STATE.query === 'sw-offline-no-corpus' && !STATE.isLoading", timeout=30000)
+        self.page.locator('.search-backend-status[role="status"]').filter(has_text='搜索数据加载失败').wait_for()
+        self.assertFalse(self.page.evaluate('STATE.dataLoaded'))
+        self.assertEqual(self.page.evaluate('STATE.results.length'), 0)
+        self.assertEqual(self.page.locator('#results-list .result-item').count(), 0)
+        self.page.get_by_role('button', name='重试', exact=True).wait_for(state='visible')
 
     def test_offline_cached_gzip_initial_and_sidebar_fetches_succeed(self):
         self.prime(wait_for_data=True)
-        self.context.set_offline(True)
+        self.go_offline()
         fetched = self.page.evaluate(
             """async () => {
                 const gzip = await fetch('/search/data/search_data.json.gz');
