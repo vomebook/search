@@ -5,7 +5,7 @@ import {hasPassingTapContracts} from "../check_tap_contracts.mjs";
 // vectors; an unloaded file must not be accepted as an empty 100% report.
 const result = spawnSync(process.execPath, [
   "--test", "--test-reporter=tap", "--experimental-test-coverage",
-  "--test-coverage-include=**/static/search/size-format.js",
+  "--test-coverage-include=**/static/search/results/presentation/size-format.js",
   "--test-coverage-lines=100", "--test-coverage-branches=100", "--test-coverage-functions=100",
   "tests/search/size/test_search_size_format.js", "tests/search/size/test_search_size_render_contract.js"
 ], {encoding: "utf8"});

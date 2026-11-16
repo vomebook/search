@@ -148,7 +148,7 @@ const PRECACHE_URLS = [
   "/search/static/style.css",
   "/search/static/reader-resources.js",
   "/search/static/reader/core/reader-contract.js",
-  "/search/static/search/reader-navigation.js",
+  "/search/static/search/reader-host/application/navigation.js",
   "/search/static/search/reader-host/presentation/return-position.js",
   "/search/static/search/reader-host/application/host.js",
   "/search/static/search/positions/domain/policy.js",

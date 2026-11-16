@@ -35,7 +35,7 @@ export default [
     }
   },
   { files: ["static/**/*.js"], languageOptions: { sourceType: "script" } },
-  { files: ["static/search/result-identity.js"], languageOptions: { globals: { buildRecordRelativePath: "readonly" } } },
+  { files: ["static/search/results/domain/result-identity.js"], languageOptions: { globals: { buildRecordRelativePath: "readonly" } } },
   { files: ["static/search/catalog/application/client.js"], languageOptions: { globals: { BoundedResponseCache: "readonly", VoiceOfMLCatalogSidebarPayload: "readonly" } } },
   { files: ["static/search/requests/application/response-store.js"], languageOptions: { globals: { BoundedResponseCache: "readonly" } } },
   { files: ["static/app.js"], languageOptions: { globals: {

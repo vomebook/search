@@ -12,7 +12,7 @@ class SearchSessionBrowserTests(unittest.TestCase):
         self.page.route("**/search-session-fixture*", lambda route: route.fulfill(
             status=200, content_type="text/html", body="<!doctype html><title>Session</title>"))
         self.page.goto(self.origin + "/search-session-fixture?q=first")
-        self.page.add_script_tag(url=self.origin + support.PREFIX + "/static/search/search-session.js")
+        self.page.add_script_tag(url=self.origin + support.PREFIX + "/static/search/execution/application/session.js")
 
     def test_session_persist_and_restore_with_real_indexeddb(self):
         self.open_session_fixture()

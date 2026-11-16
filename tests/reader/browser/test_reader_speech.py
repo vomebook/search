@@ -155,10 +155,10 @@ class ReaderSpeechTest(unittest.TestCase):
             return context, page, posts, errors
         # A same-origin host page owning the Reader overlay through the shared navigation module.
         base = reader.split("reader.html")[0]
-        page.goto(base + "search/reader-navigation.js", wait_until="domcontentloaded")
+        page.goto(base + "search/reader-host/application/navigation.js", wait_until="domcontentloaded")
         # Inject as content: this host document has no charset, so a src= script would decode as Latin-1.
         page.add_style_tag(content=(ROOT / "static/style.css").read_text(encoding="utf-8"))
-        page.add_script_tag(content=(ROOT / "static/search/reader-navigation.js").read_text(encoding="utf-8"))
+        page.add_script_tag(content=(ROOT / "static/search/reader-host/application/navigation.js").read_text(encoding="utf-8"))
         page.evaluate("""url => {
           window.__nav = VoiceOfMLReaderNavigation.createNavigation(new URL(url).pathname, { resume: next => __nav.mount(new URL(next)) });
           window.__reader = __nav.mount(new URL(url));
@@ -416,9 +416,9 @@ class ReaderSpeechTest(unittest.TestCase):
             before = len(posts)
             reader = page.url
             base = reader.split("reader.html")[0]
-            page.goto(base + "search/reader-navigation.js", wait_until="domcontentloaded")  # leaving fires pagehide
+            page.goto(base + "search/reader-host/application/navigation.js", wait_until="domcontentloaded")  # leaving fires pagehide
             page.add_style_tag(content=(ROOT / "static/style.css").read_text(encoding="utf-8"))
-            page.add_script_tag(content=(ROOT / "static/search/reader-navigation.js").read_text(encoding="utf-8"))
+            page.add_script_tag(content=(ROOT / "static/search/reader-host/application/navigation.js").read_text(encoding="utf-8"))
             page.evaluate("url => { window.__nav = VoiceOfMLReaderNavigation.createNavigation(new URL(url).pathname, { resume: next => __nav.mount(new URL(next)) }); }", reader)
             bar = page.locator(".reader-speech-mini")
             bar.wait_for(timeout=5000)
@@ -436,7 +436,7 @@ class ReaderSpeechTest(unittest.TestCase):
             frame.locator("#speech-stop").click()
             page.goto(reader, wait_until="domcontentloaded")
             wait(page, "() => document.documentElement.dataset.readerPhase === 'ready'", 30000)
-            page.goto(base + "search/reader-navigation.js", wait_until="domcontentloaded")
+            page.goto(base + "search/reader-host/application/navigation.js", wait_until="domcontentloaded")
             self.assertEqual(page.evaluate("() => sessionStorage.getItem('reader-speech-handoff')"), None)
             self.assertFalse(errors, errors)
         finally:
@@ -453,9 +453,9 @@ class ReaderSpeechTest(unittest.TestCase):
             base = reader.split("reader.html")[0]
             page.goto(base + "empty", wait_until="domcontentloaded")  # pagehide writes the handoff
             page.evaluate("() => sessionStorage.removeItem('reader-speech-handoff')")
-            page.goto(base + "search/reader-navigation.js", wait_until="domcontentloaded")
+            page.goto(base + "search/reader-host/application/navigation.js", wait_until="domcontentloaded")
             page.add_style_tag(content=(ROOT / "static/style.css").read_text(encoding="utf-8"))
-            page.add_script_tag(content=(ROOT / "static/search/reader-navigation.js").read_text(encoding="utf-8"))
+            page.add_script_tag(content=(ROOT / "static/search/reader-host/application/navigation.js").read_text(encoding="utf-8"))
             page.evaluate("url => { window.__nav = VoiceOfMLReaderNavigation.createNavigation(new URL(url).pathname, { resume: next => __nav.mount(new URL(next)) }); }", reader)
             bar = page.locator(".reader-speech-mini")
             bar.wait_for(timeout=5000)

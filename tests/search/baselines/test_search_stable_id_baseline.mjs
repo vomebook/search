@@ -7,9 +7,9 @@ import vm from 'node:vm';
 
 const root = process.cwd();
 const context = vm.createContext({});
-const dependency = path.join(root, 'static/search/record-path.js');
+const dependency = path.join(root, 'static/search/catalog/domain/record-path.js');
 vm.runInContext(fs.readFileSync(dependency, 'utf8'), context, {filename: dependency});
-const identity = path.join(root, 'static/search/result-identity.js');
+const identity = path.join(root, 'static/search/results/domain/result-identity.js');
 vm.runInContext(fs.readFileSync(identity, 'utf8'), context, {filename: identity});
 const source = fs.readFileSync(path.join(root, 'static/app.js'), 'utf8');
 const match = source.match(/^function getResultStableId\([^]*?^}/m);

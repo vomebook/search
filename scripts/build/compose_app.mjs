@@ -5,7 +5,7 @@ import { pathToFileURL } from "node:url";
 // One ordered dependency list owns the production app and its shell scripts.
 // Keep classic-script globals for the host; each dependency owns its own scope.
 export const APP_DEPENDENCIES = Object.freeze([
-  "reader-resources.js", "reader/core/reader-contract.js", "search/reader-navigation.js",
+  "reader-resources.js", "reader/core/reader-contract.js", "search/reader-host/application/navigation.js",
   "search/reader-host/presentation/return-position.js", "search/reader-host/application/host.js",
   "search/positions/domain/policy.js", "search/positions/infrastructure/indexed-db.js", "search/positions/application/persistence.js", "search/positions/application/restoration.js",
   "search/results/presentation/row.js", "search/results/application/interactions.js",
@@ -21,14 +21,14 @@ export const APP_DEPENDENCIES = Object.freeze([
   "search/corpus/application/client.js",
   "search/results/snapshots/domain/copy-budget.js", "search/results/snapshots/application/store.js",
   "search/execution/domain/policy.js", "search/execution/application/controller.js",
-  "search/search-session.js", "search/download-controller.js", "search/downloads/application/batch.js", "search/downloads/presentation/queue.js", "search/size-format.js", "search/record-path.js",
-  "search/highlight.js", "search/response-cache.js", "search/file-types.js", "search/response-validation.js", "search/result-identity.js",
+  "search/execution/application/session.js", "search/downloads/application/controller.js", "search/downloads/application/batch.js", "search/downloads/presentation/queue.js", "search/results/presentation/size-format.js", "search/catalog/domain/record-path.js",
+  "search/results/presentation/highlight.js", "search/requests/infrastructure/response-cache.js", "search/catalog/domain/file-types.js", "search/requests/domain/response-validation.js", "search/results/domain/result-identity.js",
   "search/input/domain/ownership.js", "search/input/application/controller.js",
   "search/requests/infrastructure/shared-transport.js", "search/requests/application/prefetch-controller.js", "search/requests/application/response-store.js",
   "search/catalog/domain/sidebar-payload.js", "search/catalog/application/client.js",
   "search/results/window/application/page-loader.js", "search/results/window/presentation/status.js",
   "search/results/domain/paging-policy.js", "search/results/application/paging-controller.js", "search/results/presentation/paging-status.js",
-  "search/folder-selection.js", "search/domain/height-index.js", "search/domain/stable-stringify.js", "search/domain/search-view-key.js", "search/domain/search-recovery.js", "search/domain/search-window-page.js", "search/presentation/sidebar-render.js", "search/sidebar/presentation/filter-list.js", "search/sidebar/presentation/folder-tree.js", "search/sidebar/application/filters.js", "search/sidebar/infrastructure/scroll.js", "search/sidebar/presentation/directory.js", "search/sidebar/application/directory.js"
+  "search/sidebar/domain/folder-selection.js", "search/domain/height-index.js", "search/domain/stable-stringify.js", "search/domain/search-view-key.js", "search/domain/search-recovery.js", "search/domain/search-window-page.js", "search/presentation/sidebar-render.js", "search/sidebar/presentation/filter-list.js", "search/sidebar/presentation/folder-tree.js", "search/sidebar/application/filters.js", "search/sidebar/infrastructure/scroll.js", "search/sidebar/presentation/directory.js", "search/sidebar/application/directory.js"
 ]);
 
 export function stripBundledScripts(html) {

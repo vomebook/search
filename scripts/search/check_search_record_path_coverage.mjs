@@ -5,7 +5,7 @@ import {hasPassingTapContracts} from "../check_tap_contracts.mjs";
 // Require a real source row as well as passing tests and full coverage.
 const result = spawnSync(process.execPath, [
   "--test", "--test-reporter=tap", "--experimental-test-coverage",
-  "--test-coverage-include=**/static/search/record-path.js",
+  "--test-coverage-include=**/static/search/catalog/domain/record-path.js",
   "--test-coverage-lines=100", "--test-coverage-branches=100", "--test-coverage-functions=100",
   "tests/search/record-path/test_search_record_path.js"
 ], {encoding: "utf8"});

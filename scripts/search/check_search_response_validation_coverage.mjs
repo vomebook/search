@@ -4,7 +4,7 @@ import {hasPassingTapContracts} from "../check_tap_contracts.mjs";
 // Node 26/V8 scope: extracted response validator only, excluding the host.
 const result = spawnSync(process.execPath, [
   "--test", "--test-reporter=tap", "--experimental-test-coverage",
-  "--test-coverage-include=**/static/search/response-validation.js",
+  "--test-coverage-include=**/static/search/requests/domain/response-validation.js",
   "--test-coverage-lines=100", "--test-coverage-branches=100", "--test-coverage-functions=100",
   "tests/search/baselines/test_search_response_validation_baseline.mjs"
 ], {encoding: "utf8"});

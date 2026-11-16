@@ -25,7 +25,7 @@ test('positions modules are composed once and synchronized across shell, resourc
 function fixture(overrides = {}) {
   const context = vm.createContext({indexedDB, IDBKeyRange, setTimeout, clearTimeout,
     TextEncoder, AbortController, ...overrides});
-  for (const file of ['search-session.js', 'domain/search-window-page.js',
+  for (const file of ['execution/application/session.js', 'domain/search-window-page.js',
     'positions/domain/policy.js', 'positions/infrastructure/indexed-db.js', 'positions/application/persistence.js']) {
     vm.runInContext(readFileSync(new URL('../../../static/search/' + file, import.meta.url), 'utf8'), context);
   }

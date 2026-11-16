@@ -6,7 +6,7 @@ import {hasPassingTapContracts} from "../check_tap_contracts.mjs";
 // also require every named behavioral contract to actually run.
 const result = spawnSync(process.execPath, [
   "--test", "--test-reporter=tap", "--experimental-test-coverage",
-  "--test-coverage-include=**/static/search/file-types.js",
+  "--test-coverage-include=**/static/search/catalog/domain/file-types.js",
   "--test-coverage-lines=100", "--test-coverage-branches=100", "--test-coverage-functions=100",
   "tests/search/baselines/test_search_extension_inventory_baseline.mjs"
 ], {encoding: "utf8"});

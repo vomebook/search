@@ -20,7 +20,7 @@ function fixture(data, selected = []) {
     renderExtensionTree(_container, items, rest, selection, callback) {
       c.capture = {items: local(items), rest: local(rest), selected: local(selection), callback};
     }});
-  const filename = path.join(process.cwd(), 'static/search/file-types.js');
+  const filename = path.join(process.cwd(), 'static/search/catalog/domain/file-types.js');
   vm.runInContext(fs.readFileSync(filename, 'utf8'), c, {filename});
   const controllerFile = path.join(process.cwd(), 'static/search/sidebar/application/filters.js');
   vm.runInContext(fs.readFileSync(controllerFile, 'utf8'), c, {filename: controllerFile});

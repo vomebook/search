@@ -114,7 +114,7 @@ for (const [filename, content] of Object.entries({
   assert.notEqual(build({ [filename]: content }).version, baseline.version, filename + " changes must rotate the cache");
 }
 assert.deepEqual(build({
-  "index.html": `<script src="${base}static/search/record-path.js"></script><h1>Search</h1><script src="${base}static/app.js"></script>`,
+  "index.html": `<script src="${base}static/search/catalog/domain/record-path.js"></script><h1>Search</h1><script src="${base}static/app.js"></script>`,
 }), baseline, "hash the final HTML after bundled scripts are removed");
 for (const invalid of [worker.replace("CACHE_VERSION = 'development'", "OTHER_VERSION = 'development'"),
   worker.replace("'development'", "'stale'"), worker + "const CACHE_VERSION = 'development';"]) {

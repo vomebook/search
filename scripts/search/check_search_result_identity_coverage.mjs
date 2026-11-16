@@ -4,7 +4,7 @@ import {hasPassingTapContracts} from "../check_tap_contracts.mjs";
 // Node 26/V8 scope: extracted identity module only, excluding host and path helper.
 const result = spawnSync(process.execPath, [
   "--test", "--test-reporter=tap", "--experimental-test-coverage",
-  "--test-coverage-include=**/static/search/result-identity.js",
+  "--test-coverage-include=**/static/search/results/domain/result-identity.js",
   "--test-coverage-lines=100", "--test-coverage-branches=100", "--test-coverage-functions=100",
   "tests/search/baselines/test_search_stable_id_baseline.mjs"
 ], {encoding: "utf8"});

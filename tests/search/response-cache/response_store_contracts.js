@@ -18,7 +18,7 @@ function responseFixture() {
     clearTimeout(key) { timers.delete(key); },
     remember(data) { metadata.push(data); data.metadataSeen = true; },
   });
-  for (const file of ["static/search/response-cache.js", "static/search/requests/application/response-store.js"]) {
+  for (const file of ["static/search/requests/infrastructure/response-cache.js", "static/search/requests/application/response-store.js"]) {
     const filename = path.join(root, file);
     vm.runInContext(fs.readFileSync(filename, "utf8"), context, {filename});
   }

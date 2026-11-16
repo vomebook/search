@@ -4,10 +4,10 @@ const path = require('path');
 const vm = require('vm');
 
 // Exercise the DOM-facing selection projection against actual file membership.
-// The pure projection lives in static/search/folder-selection.js; the host keeps
+// The pure projection lives in static/search/sidebar/domain/folder-selection.js; the host keeps
 // the memo, branch splitting and normalization that call it through the namespace.
 const source = fs.readFileSync(path.join(__dirname, '../../../static/app.js'), 'utf8');
-const moduleSource = fs.readFileSync(path.join(__dirname, '../../../static/search/folder-selection.js'), 'utf8');
+const moduleSource = fs.readFileSync(path.join(__dirname, '../../../static/search/sidebar/domain/folder-selection.js'), 'utf8');
 const context = vm.createContext({Set, STATE: {folderTree: []}});
 vm.runInContext(moduleSource, context);
 assert.strictEqual(source.indexOf('function folderPathCovered('), -1);

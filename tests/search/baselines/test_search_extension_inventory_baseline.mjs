@@ -6,7 +6,7 @@ import test from 'node:test';
 import vm from 'node:vm';
 
 const context = vm.createContext({});
-const filename = path.join(process.cwd(), 'static/search/file-types.js');
+const filename = path.join(process.cwd(), 'static/search/catalog/domain/file-types.js');
 vm.runInContext(fs.readFileSync(filename, 'utf8'), context, {filename});
 const host = fs.readFileSync(path.join(process.cwd(), 'static/app.js'), 'utf8');
 for (const pattern of [/^const ORDERED_EXTENSIONS = [^\n]+/m, /^const FILE_ICON_MAP = [^\n]+/m,

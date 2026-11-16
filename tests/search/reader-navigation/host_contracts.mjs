@@ -15,8 +15,8 @@ test('reader host dependencies are composed, cached and loaded before the app', 
   const html = fs.readFileSync('static/index.html', 'utf8'), c = context();
   vm.runInContext(fs.readFileSync('static/reader-resources.js', 'utf8'), c);
   for (const path of paths) {
-    assert.ok(APP_DEPENDENCIES.indexOf(path) > APP_DEPENDENCIES.indexOf('search/reader-navigation.js'));
-    assert.ok(html.indexOf(path) > html.indexOf('search/reader-navigation.js'));
+    assert.ok(APP_DEPENDENCIES.indexOf(path) > APP_DEPENDENCIES.indexOf('search/reader-host/application/navigation.js'));
+    assert.ok(html.indexOf(path) > html.indexOf('search/reader-host/application/navigation.js'));
     assert.ok(html.indexOf(path) < html.indexOf('static/app.js'));
     assert.ok(!stripBundledScripts(html).includes(path));
     assert.ok(fs.readFileSync('static/sw.js', 'utf8').includes('/static/' + path));
