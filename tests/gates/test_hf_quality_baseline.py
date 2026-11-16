@@ -29,7 +29,7 @@ class ReaderWorkflowParallelTests(unittest.TestCase):
         self.assertNotIn('continue-on-error:', firefox)
         self.assertNotIn('if:', firefox)
         for job, browsers in ((github, 'chromium firefox'), (firefox, 'firefox')):
-            for command in ('python-version: "3.11.17"', 'playwright==1.63.0', 'pypdf==6.21.4',
+            for command in ('python-version: "3.15.2"', 'playwright==1.63.0', 'pypdf==6.21.4',
                             'npm ci --ignore-scripts --no-audit --no-fund', 'install -y qpdf',
                             f'playwright install-deps {browsers}', f'playwright install {browsers}',
                             'fetch_foliate_reader.mjs', 'copy_reader_vendor.mjs'):
@@ -244,7 +244,7 @@ class HfHistoryBridgeTests(unittest.TestCase):
 class DependencyLayoutCiTests(unittest.TestCase):
     def test_static_and_audit_dependencies_keep_distinct_pinned_install_paths(self):
         root = Path(__file__).resolve().parents[2]
-        self.assertEqual((root / "config/dependencies/static-check.txt").read_text().splitlines(), ["ruff==0.17.3"])
+        self.assertEqual((root / "config/dependencies/static-check.txt").read_text().splitlines(), ["ruff==0.17.5"])
         audit = (root / ".github/workflows/dependency-audit.yml").read_text()
         self.assertIn('"config/dependencies/**"', audit)
         self.assertIn('python -m pip install -r config/dependencies/audit.txt', audit)
