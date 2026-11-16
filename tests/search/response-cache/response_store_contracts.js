@@ -2,6 +2,8 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
 const vm = require("node:vm");
+const os = require("node:os");
+const {spawnSync} = require("node:child_process");
 const {test} = require("../../support/test_harness");
 const {searchTestProjects} = require("../../support/search_test_projects");
 
@@ -108,6 +110,86 @@ test(name + " deferred writes preserve acquisition age and cannot revive expired
   c.setCachedSearchResponse("expired", page("expired"), true);
   c.clock = 400; f.frame(); f.timer();
   assert.equal(f.store.cache.has("expired"), false);
+});
+
+test(name + " view changes preserve pending age, and immediate replacement wins over scheduled work", () => {
+  const f = responseFixture(), c = f.context;
+  c.setCachedSearchResponse("key", page("committed"));
+  c.clock = 10; c.setCachedSearchResponse("key", page("pending"), true);
+  c.view = "other"; c.clock = 109;
+  assert.equal(c.getCachedSearchResponse("key"), null);
+  assert.equal(f.store.pendingWrites.size, 1);
+  c.view = "query";
+  assert.equal(c.getCachedSearchResponse("key").results[0].File, "pending");
+  c.clock = 110;
+  assert.equal(c.getCachedSearchResponse("key"), null);
+  assert.equal(f.store.pendingWrites.size, 0);
+  c.setCachedSearchResponse("key", page("deferred"), true);
+  f.frame();
+  c.setCachedSearchResponse("key", page("immediate"));
+  f.timer();
+  assert.equal(c.getCachedSearchResponse("key").results[0].File, "immediate");
+  assert.equal(f.store.cache.get("key").time, 110);
+
+  c.setCachedSearchResponse("return", page("return"), true);
+  f.frame(); c.view = "other"; c.clock = 209;
+  assert.equal(c.getCachedSearchResponse("return"), null);
+  c.view = "query"; f.timer();
+  assert.equal(f.store.cache.get("return").time, 110);
+  assert.equal(c.getCachedSearchResponse("return").results[0].File, "return");
+  c.clock = 210; assert.equal(c.getCachedSearchResponse("return"), null);
+});
+
+test(name + " response store declarations enforce page and dependency contracts", () => {
+  const source = `
+    const deps: SearchResponseStoreDependencies = {
+      limit: 3, ttl: 100, getSearchViewKey: () => "view",
+      rememberSearchPageMetadata: page => { const total: number = page.total; void total; }
+    };
+    const store = VoiceOfMLSearchResponseStore.create(deps);
+    const page = {results: [], total: 1, page: 1, page_size: 1, marker: "literal" as const};
+    const marker: "literal" = store.cloneSearchData(page).marker;
+    const cached: VoiceOfMLSearchWindowPageData | null = store.getCachedSearchResponse("key");
+    void marker; void cached;
+    store.setCachedSearchResponse("key", page, true, 1);
+    // @ts-expect-error cache misses can be null
+    const mustExist: VoiceOfMLSearchWindowPageData = store.getCachedSearchResponse("key");
+    // @ts-expect-error a page cannot be null
+    store.setCachedSearchResponse("key", null);
+    // @ts-expect-error undefined is not a cacheable page
+    store.setCachedSearchResponse("key", undefined);
+    // @ts-expect-error incomplete page
+    store.setCachedSearchResponse("key", {results: []});
+    // @ts-expect-error cache keys must be strings
+    store.setCachedSearchResponse(7, page);
+    // @ts-expect-error clone input must be a page
+    store.cloneSearchData("not a page");
+    // @ts-expect-error view keys must be strings
+    VoiceOfMLSearchResponseStore.create({...deps, getSearchViewKey: () => null});
+    // @ts-expect-error TTL must be numeric
+    VoiceOfMLSearchResponseStore.create({...deps, ttl: "100"});
+    // @ts-expect-error metadata callback must accept a page
+    VoiceOfMLSearchResponseStore.create({...deps, rememberSearchPageMetadata: (data: string) => { void data; }});
+    // @ts-expect-error cache timestamps must be numbers
+    store.cache.set("key", {time: "now", data: page});
+    // @ts-expect-error pending entries require acquisition time
+    store.pendingWrites.set("key", {data: page, viewKey: "view"});
+    void mustExist;
+  `;
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "response-store-types-"));
+  try {
+    const filename = path.join(dir, "contract.ts");
+    fs.writeFileSync(filename, source);
+    const result = spawnSync(process.execPath, [path.join(root, "node_modules/typescript/bin/tsc"),
+      "--strict", "--exactOptionalPropertyTypes", "--noUncheckedIndexedAccess", "--noEmit",
+      "--target", "esnext", "--module", "esnext", "--moduleResolution", "bundler",
+      filename, path.join(root, "typings/reader-globals.d.ts"),
+      path.join(root, "typings/search-response-store.d.ts")], {encoding:"utf8"});
+    assert.equal(result.error, undefined);
+    assert.equal(result.status, 0, result.stdout + result.stderr);
+  } finally {
+    fs.rmSync(dir, {recursive:true, force:true});
+  }
 });
 
 test(name + " response store keeps acquisition TTL and underlying TTL with LRU promotion", () => {

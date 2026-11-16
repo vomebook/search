@@ -1335,7 +1335,7 @@ class BrowserBehaviorTest(unittest.TestCase):
         self.page.locator("#back").click()
         self.page.locator("#search-input").wait_for(state="visible")
         self.assertEqual(self.page.url, search_url)
-        self.page.wait_for_function("() => STATE.query === '目录' && STATE.filterExtensions.includes('txt') && STATE.rightSidebarOpen")
+        self.page.wait_for_function("() => typeof STATE !== 'undefined' && STATE.query === '目录' && STATE.filterExtensions.includes('txt') && STATE.rightSidebarOpen")
         self.assertEqual(self.page.evaluate("() => Object.keys(sessionStorage).filter(key => key.startsWith('reader-return:')).length"), 0)
         self.assertIsNone(self.page.evaluate("() => sessionStorage.getItem('reader-navigation-current')"))
         self.assertEqual(self.page_errors, [])

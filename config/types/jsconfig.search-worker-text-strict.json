@@ -1,0 +1,13 @@
+{
+  "compilerOptions": {
+    "allowJs": true,
+    "checkJs": true,
+    "noEmit": true,
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+    "target": "esnext",
+    "lib": ["esnext", "webworker"]
+  },
+  "files": ["../../static/search/worker/domain/text.js"]
+}

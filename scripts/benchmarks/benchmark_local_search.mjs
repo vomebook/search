@@ -197,6 +197,10 @@ function benchmark(options, corpus, source) {
   const context = {self: {addEventListener() {}, postMessage() {}},
     __benchmarkSearchCacheHits: 0, __benchmarkSearchCacheMisses: 0};
   vm.createContext(context);
+  context.importScripts = url => {
+    if (url !== "./worker/domain/text.js") throw new Error("Unexpected worker import: " + url);
+    vm.runInContext(readFileSync(path.join(root, "static/search/worker/domain/text.js"), "utf8"), context, {filename: url});
+  };
   vm.runInContext(instrumented, context, {filename: "static/search/index-worker.js"});
   context.payload = corpus.data;
   const install = measure(() => vm.runInContext("replaceCorpus(decodeSearchPayload(payload))", context));

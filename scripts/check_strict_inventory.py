@@ -69,7 +69,7 @@ def inventory_errors(root: Path, js_strict: set[str], js_basic: set[str],
 def compiler_output(root: Path, config: str, flag: str) -> str:
     if config not in ("config/types/jsconfig.check.json", "config/types/jsconfig.service-worker.json",
                       "config/types/jsconfig.service-worker-strict.json", "config/types/jsconfig.chapter-worker-strict.json",
-                      "config/types/jsconfig.strict.json"):
+                      "config/types/jsconfig.search-worker-text-strict.json", "config/types/jsconfig.strict.json"):
         raise ValueError("unknown TypeScript configuration")
     node = shutil.which("node")
     if node is None:
@@ -95,17 +95,24 @@ def compiler_files(root: Path, config: str) -> set[str]:
 
 def main() -> int:
     for config in ("jsconfig.strict.json", "jsconfig.service-worker-strict.json",
-                   "jsconfig.chapter-worker-strict.json"):
+                   "jsconfig.chapter-worker-strict.json", "jsconfig.search-worker-text-strict.json"):
         options = json.loads(compiler_output(ROOT, f"config/types/{config}", "--showConfig"))["compilerOptions"]
         # --showConfig resolves extends, but may omit strict's implied flags.
         if (not all(options.get(key) is True for key in ("strict", "allowJs", "checkJs", "noEmit"))
-                or any(options.get(key, True) is not True for key in ("strictNullChecks", "noImplicitAny"))):
+                or any(options.get(key, True) is not True for key in (
+                    "strictNullChecks", "noImplicitAny", "strictFunctionTypes", "strictBindCallApply",
+                    "strictPropertyInitialization", "noImplicitThis", "useUnknownInCatchVariables",
+                    "alwaysStrict", "strictBuiltinIteratorReturn"))):
             raise RuntimeError(f"{config}: strict JavaScript checking must remain enabled")
+        if config == "jsconfig.search-worker-text-strict.json" and not all(
+                options.get(key) is True for key in ("noUncheckedIndexedAccess", "exactOptionalPropertyTypes")):
+            raise RuntimeError(f"{config}: exact and unchecked-index checking must remain enabled")
     basic = (compiler_files(ROOT, "config/types/jsconfig.check.json")
              | compiler_files(ROOT, "config/types/jsconfig.service-worker.json"))
     strict = (compiler_files(ROOT, "config/types/jsconfig.strict.json")
               | compiler_files(ROOT, "config/types/jsconfig.service-worker-strict.json")
-              | compiler_files(ROOT, "config/types/jsconfig.chapter-worker-strict.json"))
+              | compiler_files(ROOT, "config/types/jsconfig.chapter-worker-strict.json")
+              | compiler_files(ROOT, "config/types/jsconfig.search-worker-text-strict.json"))
     py_config = json.loads((ROOT / "pyrightconfig.strict.json").read_text())
     if py_config.get("typeCheckingMode") != "strict":
         raise RuntimeError("backend strict type gate must use strict mode")
@@ -178,7 +185,8 @@ if __name__ == "__main__":
                     (root / DEBT_FILE).write_text(json.dumps({"browser_js": [], "backend_python": []}))
                     options = {"strict": True, "allowJs": True, "checkJs": True, "noEmit": True}
                     configs = ("jsconfig.strict.json", "jsconfig.service-worker-strict.json",
-                               "jsconfig.chapter-worker-strict.json")
+                               "jsconfig.chapter-worker-strict.json", "jsconfig.search-worker-text-strict.json")
+                    options.update({"noUncheckedIndexedAccess": True, "exactOptionalPropertyTypes": True})
                     all_configs = (*configs, "jsconfig.check.json", "jsconfig.service-worker.json")
                     for config in all_configs:
                         (root / "config/types" / config).write_text(json.dumps({
@@ -192,7 +200,9 @@ if __name__ == "__main__":
                     self.assertEqual(result.returncode, 0, result.stderr)
                     for config in configs:
                         path = root / "config/types" / config
-                        for option in ("strictNullChecks", "noImplicitAny"):
+                        for option in ("strictNullChecks", "noImplicitAny", "strictFunctionTypes", "strictBindCallApply",
+                                       "strictPropertyInitialization", "noImplicitThis", "useUnknownInCatchVariables",
+                                       "alwaysStrict", "strictBuiltinIteratorReturn"):
                             # Exercise inherited overrides as well as the real CLI entry point.
                             (root / "config/types/base.json").write_text(json.dumps({
                                 "compilerOptions": {**options, option: False}}))
@@ -201,6 +211,25 @@ if __name__ == "__main__":
                             self.assertNotEqual(result.returncode, 0, (config, option))
                             self.assertIn("strict JavaScript checking must remain enabled", result.stderr)
                         path.write_text(json.dumps({"compilerOptions": options, "files": ["../../static/main.js"]}))
+                    worker_config = root / "config/types/jsconfig.search-worker-text-strict.json"
+                    for option in ("noUncheckedIndexedAccess", "exactOptionalPropertyTypes"):
+                        worker_config.write_text(json.dumps({"compilerOptions": {**options, option: False},
+                                                             "files": ["../../static/main.js"]}))
+                        result = run()
+                        self.assertNotEqual(result.returncode, 0)
+                        self.assertIn("exact and unchecked-index checking must remain enabled", result.stderr)
+                    worker_config.write_text(json.dumps({"compilerOptions": options, "files": ["../../static/main.js"]}))
+                    (root / "static/worker.js").write_text("const worker = 1;\n")
+                    for config in ("jsconfig.check.json", "jsconfig.search-worker-text-strict.json"):
+                        (root / "config/types" / config).write_text(json.dumps({"compilerOptions": options,
+                            "files": ["../../static/main.js", "../../static/worker.js"]}))
+                    self.assertIn("static/worker.js", compiler_files(root, "config/types/jsconfig.search-worker-text-strict.json"))
+                    self.assertEqual(run().returncode, 0)
+                    worker_config.write_text(json.dumps({"compilerOptions": options, "files": ["../../static/main.js"]}))
+                    self.assertIn("new browser_js source is not in a strict gate: static/worker.js", run().stderr)
+                    (root / "static/worker.js").unlink()
+                    (root / "config/types/jsconfig.check.json").write_text(json.dumps({"compilerOptions": options,
+                        "files": ["../../static/main.js"]}))
                     for name in ("vendor", "foliate-reader"):
                         (root / "static" / name).mkdir()
                         (root / "static" / name / "ignored.js").write_text("const x = 1;\n")

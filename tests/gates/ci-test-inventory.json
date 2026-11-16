@@ -746,6 +746,10 @@
       "kind": "script",
       "source": "tests/search/worker/test_worker_contract.js"
     },
+    "tests/search/worker/test_worker_text.js": {
+      "kind": "direct",
+      "source": ".github/workflows/reader-refactor.yml"
+    },
     "tests/search/worker/test_worker_contract.js": {
       "kind": "direct",
       "source": ".github/workflows/reader-refactor.yml"
