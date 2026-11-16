@@ -29,7 +29,7 @@ const match = source.match(/^function validatePositionWindowPage\(data, page, pa
 assert.ok(match, 'host validator missing');
 const context = vm.createContext({});
 vm.runInContext(fixture + '\nthis.oldWindowValidator = validatePositionWindowPage;', context);
-vm.runInContext(fs.readFileSync(path.join(root, 'static/search/domain/search-window-page.js'), 'utf8'), context);
+vm.runInContext(fs.readFileSync(path.join(root, 'static/search/results/window/domain/page.js'), 'utf8'), context);
 vm.runInContext(match[0], context);
 /** @type {unknown} */
 const originalCandidate = context.oldWindowValidator;

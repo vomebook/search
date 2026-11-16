@@ -28,7 +28,7 @@ export const APP_DEPENDENCIES = Object.freeze([
   "search/catalog/domain/sidebar-payload.js", "search/catalog/application/client.js",
   "search/results/window/application/page-loader.js", "search/results/window/presentation/status.js",
   "search/results/domain/paging-policy.js", "search/results/application/paging-controller.js", "search/results/presentation/paging-status.js",
-  "search/sidebar/domain/folder-selection.js", "search/domain/height-index.js", "search/domain/stable-stringify.js", "search/domain/search-view-key.js", "search/domain/search-recovery.js", "search/domain/search-window-page.js", "search/presentation/sidebar-render.js", "search/sidebar/presentation/filter-list.js", "search/sidebar/presentation/folder-tree.js", "search/sidebar/application/filters.js", "search/sidebar/infrastructure/scroll.js", "search/sidebar/presentation/directory.js", "search/sidebar/application/directory.js"
+  "search/sidebar/domain/folder-selection.js", "search/results/virtual/domain/height-index.js", "search/shared/domain/stable-stringify.js", "search/positions/domain/view-key.js", "search/results/domain/recovery.js", "search/results/window/domain/page.js", "search/sidebar/presentation/markup.js", "search/sidebar/presentation/filter-list.js", "search/sidebar/presentation/folder-tree.js", "search/sidebar/application/filters.js", "search/sidebar/infrastructure/scroll.js", "search/sidebar/presentation/directory.js", "search/sidebar/application/directory.js"
 ]);
 
 export function stripBundledScripts(html) {

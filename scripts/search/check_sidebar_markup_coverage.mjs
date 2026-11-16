@@ -3,7 +3,7 @@ import {hasPassingTapContracts} from "../check_tap_contracts.mjs";
 
 const result = spawnSync(process.execPath, [
   "--test", "--test-reporter=tap", "--test-isolation=none", "--experimental-test-coverage",
-  "--test-coverage-include=**/static/search/presentation/sidebar-render.js",
+  "--test-coverage-include=**/static/search/sidebar/presentation/markup.js",
   "--test-coverage-lines=100", "--test-coverage-branches=100", "--test-coverage-functions=100",
   "tests/search/baselines/test_sidebar_markup_baseline.mjs",
   "tests/search/baselines/test_sidebar_markup_differential.mjs",
@@ -14,7 +14,7 @@ if (result.stderr) process.stderr.write(result.stderr);
 if (result.error) throw result.error;
 const text=result.stdout || "";
 const rows=text.split(/\r?\n/).filter(line =>
-  /^\s*#\s*sidebar-render\.js\s*\|\s*100(?:\.0+)?\s*\|\s*100(?:\.0+)?\s*\|\s*100(?:\.0+)?\s*\|/.test(line));
+  /^\s*#\s*markup\.js\s*\|\s*100(?:\.0+)?\s*\|\s*100(?:\.0+)?\s*\|\s*100(?:\.0+)?\s*\|/.test(line));
 const required=[
   "empty sidebar preserves original output and scroll restore timing",
   "folder and file markup preserve site-specific attributes, escaping and order",

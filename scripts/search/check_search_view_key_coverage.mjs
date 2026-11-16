@@ -4,7 +4,7 @@ import {hasPassingTapContracts} from "../check_tap_contracts.mjs";
 // Require both site host contracts and the exact shared domain rule.
 const result = spawnSync(process.execPath, [
   "--test", "--test-reporter=tap", "--test-isolation=none", "--experimental-test-coverage",
-  "--test-coverage-include=**/static/search/domain/search-view-key.js",
+  "--test-coverage-include=**/static/search/positions/domain/view-key.js",
   "--test-coverage-lines=100", "--test-coverage-branches=100", "--test-coverage-functions=100",
   "tests/search/baselines/test_search_view_key_baseline.mjs", "tests/search/baselines/test_search_view_key_module.mjs"
 ], {encoding: "utf8"});
@@ -13,7 +13,7 @@ if (result.stderr) process.stderr.write(result.stderr);
 if (result.error) throw result.error;
 const text = result.stdout || "";
 const rows = text.split(/\r?\n/).filter(line =>
-  /^\s*#\s*search-view-key\.js\s*\|\s*100(?:\.0+)?\s*\|\s*100(?:\.0+)?\s*\|\s*100(?:\.0+)?\s*\|/.test(line));
+  /^\s*#\s*view-key\.js\s*\|\s*100(?:\.0+)?\s*\|\s*100(?:\.0+)?\s*\|\s*100(?:\.0+)?\s*\|/.test(line));
 const required = [
   "site key projection preserves native sorting and site-specific fields",
   "memo stays identical for unchanged inputs and invalidates aliased edits",

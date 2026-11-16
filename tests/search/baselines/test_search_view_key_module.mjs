@@ -4,7 +4,7 @@ import path from 'node:path';
 import test from 'node:test';
 import vm from 'node:vm';
 
-const file = path.join(process.cwd(), 'static/search/domain/search-view-key.js');
+const file = path.join(process.cwd(), 'static/search/positions/domain/view-key.js');
 const context = vm.createContext({});
 vm.runInContext(fs.readFileSync(file, 'utf8'), context, {filename:file});
 const resolveLazy = context.VoiceOfMLSearchViewKey.resolve;

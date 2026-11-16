@@ -22,7 +22,7 @@ function fixture() {
   const c = vm.createContext({STATE:state, DOM:{sortSelect:{value:'relevance'}}, searchViewKeyMemo:null,
     encodes:0});
   c.stableSearchStringify = value => {c.encodes++; return JSON.stringify(value);};
-  const modulePath = path.join(root, 'static/search/domain/search-view-key.js');
+  const modulePath = path.join(root, 'static/search/positions/domain/view-key.js');
   vm.runInContext(fs.readFileSync(modulePath, 'utf8'), c, {filename: modulePath});
   for (const name of ['sameSearchFilterValues', 'getSearchViewKey']) vm.runInContext(extract(name), c);
   return c;

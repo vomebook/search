@@ -13,7 +13,7 @@
   },
   "files": [
     "../../typings/reader-globals.d.ts",
-    "../../static/search/domain/search-window-page.js",
+    "../../static/search/results/window/domain/page.js",
     "../../scripts/check_tap_contracts.mjs",
     "../../scripts/search/check_search_window_page_coverage.mjs",
     "../../tests/search/baselines/test_search_window_page_baseline.mjs",

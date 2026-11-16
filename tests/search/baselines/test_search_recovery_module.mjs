@@ -4,7 +4,7 @@ import test from 'node:test';
 
 // This classic source is deliberately not imported: VM execution exercises the
 // host wrapper while this test covers Node's instrumented production module.
-await import(path.join(process.cwd(), 'static/search/domain/search-recovery.js'));
+await import(path.join(process.cwd(), 'static/search/results/domain/recovery.js'));
 const recovery = globalThis.VoiceOfMLSearchRecovery.isRecoverable;
 
 test('shared recovery rule covers abort, HTTP status and transport messages', () => {

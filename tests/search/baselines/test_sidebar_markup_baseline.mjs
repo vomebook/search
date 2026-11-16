@@ -24,7 +24,7 @@ function fixture() {
     getBrowserFileReadUrl:(file,repo,folder)=>{calls.push(['reader',repo,folder,file.name]);return file.ext==='pdf'?`reader:${file.name}`:'';},
     restoreSidebarScroll:()=>calls.push(['restore']),
   });
-  const modulePath=path.join(root,'static/search/presentation/sidebar-render.js');
+  const modulePath=path.join(root,'static/search/sidebar/presentation/markup.js');
   vm.runInContext(fs.readFileSync(modulePath,'utf8'),c,{filename:modulePath});
   const directoryPath=path.join(root,'static/search/sidebar/presentation/directory.js');
   vm.runInContext(fs.readFileSync(directoryPath,'utf8'),c,{filename:directoryPath});

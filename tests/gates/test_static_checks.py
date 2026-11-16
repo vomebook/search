@@ -697,7 +697,7 @@ class StaticGateTests(unittest.TestCase):
             self.assert_check(self.run_check(*check), False, diagnostic)
 
     def test_search_window_page_coverage_gate_fails_closed(self):
-        paths = ["static/search/domain/search-window-page.js", "scripts/search/check_search_window_page_coverage.mjs",
+        paths = ["static/search/results/window/domain/page.js", "scripts/search/check_search_window_page_coverage.mjs",
                  "tests/search/baselines/test_search_window_page_baseline.mjs", "tests/search/baselines/test_search_window_page_module.mjs",
                  "tests/search/baselines/search-window-original.js.fixture", "static/app.js", "scripts/check_tap_contracts.mjs"]
         for path in paths:
@@ -705,7 +705,7 @@ class StaticGateTests(unittest.TestCase):
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(ROOT / path, target)
         check = ["node", paths[1]]
-        self.assert_check(self.run_check(*check), True, "search-window-page.js")
+        self.assert_check(self.run_check(*check), True, "page.js")
         test = self.root / paths[2]
         source = test.read_text()
         name = "page validation preserves getter, array and coercion evaluation order"
@@ -736,7 +736,7 @@ class StaticGateTests(unittest.TestCase):
         module.write_text(original)
         gate = self.root / paths[1]
         gate_source = gate.read_text()
-        include = "--test-coverage-include=**/static/search/domain/search-window-page.js"
+        include = "--test-coverage-include=**/static/search/results/window/domain/page.js"
         self.assertEqual(gate_source.count(include), 1)
         gate.write_text(gate_source.replace(include, "--test-coverage-include=**/missing-window.js"))
         self.assert_check(self.run_check(*check), False, "exactly one fully covered source row")
@@ -747,7 +747,7 @@ class StaticGateTests(unittest.TestCase):
         result = subprocess.run(["node", "scripts/build/compose_app.mjs"], cwd=self.root, text=True,
                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=os.environ.copy(), timeout=30)
         self.assertEqual(result.returncode, 0, result.stderr)
-        module = (self.root / "static/search/domain/search-window-page.js").read_text()
+        module = (self.root / "static/search/results/window/domain/page.js").read_text()
         host = (self.root / "static/app.js").read_text()
         self.assertGreater(len(module), 0)
         self.assertGreater(len(host), 0)
@@ -766,21 +766,21 @@ class StaticGateTests(unittest.TestCase):
         self.assert_check(self.run_check(*check), True, "record path source and bundled shell/SW contracts preserved")
         html = self.root / paths[0]
         original_html = html.read_text()
-        line = next(line for line in original_html.splitlines(keepends=True) if "search/domain/search-window-page.js" in line)
+        line = next(line for line in original_html.splitlines(keepends=True) if "search/results/window/domain/page.js" in line)
         self.assertEqual(original_html.count(line), 1)
         html.write_text(original_html.replace(line, ""))
         self.assert_check(self.run_check(*check), False, "window page source script must be present once")
         html.write_text(original_html)
         compose = self.root / paths[3]
         original_compose = compose.read_text()
-        dependency = '"search/domain/search-window-page.js", '
+        dependency = '"search/results/window/domain/page.js", '
         self.assertEqual(original_compose.count(dependency), 1)
         compose.write_text(original_compose.replace(dependency, ""))
         self.assert_check(self.run_check(*check), False, "bundled shell must contain only the application script")
         compose.write_text(original_compose)
         resources = self.root / paths[2]
         original_resources = resources.read_text()
-        resource = '      "search/domain/search-window-page.js",\n'
+        resource = '      "search/results/window/domain/page.js",\n'
         self.assertEqual(original_resources.count(resource), 1)
         resources.write_text(original_resources.replace(resource, ""))
         self.assert_check(self.run_check(*check), False, "window page must be a build dependency")
@@ -793,11 +793,11 @@ class StaticGateTests(unittest.TestCase):
         emit = '[...APP_DEPENDENCIES, "app.js"]'
         self.assertEqual(original_compose.count(emit), 1)
         compose.write_text(original_compose.replace(emit,
-            '[...APP_DEPENDENCIES.filter(file => file !== "search/domain/search-window-page.js"), "app.js"]'))
+            '[...APP_DEPENDENCIES.filter(file => file !== "search/results/window/domain/page.js"), "app.js"]'))
         with self.assertRaisesRegex(AssertionError, "window page must occur once in composer output"):
             self.assert_window_page_composition()
         compose.write_text(original_compose.replace(emit,
-            '[...APP_DEPENDENCIES, "app.js", "search/domain/search-window-page.js"]'))
+            '[...APP_DEPENDENCIES, "app.js", "search/results/window/domain/page.js"]'))
         with self.assertRaisesRegex(AssertionError, "window page must occur once in composer output"):
             self.assert_window_page_composition()
         compose.write_text(original_compose.replace(emit, '["app.js", ...APP_DEPENDENCIES]'))
@@ -811,7 +811,7 @@ class StaticGateTests(unittest.TestCase):
 
     def test_search_window_page_strict_type_contract(self):
         for name in ("jsconfig.strict.json", "jsconfig.search-exact.json", "jsconfig.check.json"):
-            self.assertIn("static/search/domain/search-window-page.js", load_type_config(name)["files"])
+            self.assertIn("static/search/results/window/domain/page.js", load_type_config(name)["files"])
         declaration = self.root / "reader-globals.d.ts"
         original = (ROOT / "typings/reader-globals.d.ts").read_text()
         declaration.write_text(original)
@@ -819,7 +819,7 @@ class StaticGateTests(unittest.TestCase):
         config.write_text(json.dumps({"compilerOptions": {"allowJs": True, "checkJs": True, "noEmit": True,
             "strict": True, "noUncheckedIndexedAccess": True, "exactOptionalPropertyTypes": True,
             "target": "esnext", "moduleDetection": "force"},
-            "files": [str(declaration), str(ROOT / "static/search/domain/search-window-page.js")]}))
+            "files": [str(declaration), str(ROOT / "static/search/results/window/domain/page.js")]}))
         check = ["node", ROOT / "node_modules/typescript/bin/tsc", "--project", config]
         self.assert_check(self.run_check(*check), True, "")
         before = "  validate(data: VoiceOfMLSearchWindowPageData | null | undefined, page: number, pageSize: number, expected?: VoiceOfMLSearchWindowExpected | null | undefined): void;"
@@ -853,7 +853,7 @@ class StaticGateTests(unittest.TestCase):
         self.assertEqual(options.get("moduleResolution"), "bundler")
         expected_files = {
             "typings/reader-globals.d.ts",
-            "static/search/domain/search-window-page.js",
+            "static/search/results/window/domain/page.js",
             "scripts/check_tap_contracts.mjs",
             "scripts/search/check_search_window_page_coverage.mjs",
             "tests/search/baselines/test_search_window_page_baseline.mjs",
@@ -881,7 +881,7 @@ class StaticGateTests(unittest.TestCase):
         module = "tests/search/baselines/test_search_window_page_module.mjs"
         gate = "scripts/search/check_search_window_page_coverage.mjs"
         tap = "scripts/check_tap_contracts.mjs"
-        production = "static/search/domain/search-window-page.js"
+        production = "static/search/results/window/domain/page.js"
         declaration = "typings/reader-globals.d.ts"
         probes = [
             (baseline, "\nfunction windowBaselineProbe(value) { return value; }\n", "TS7006"),
@@ -917,7 +917,7 @@ class StaticGateTests(unittest.TestCase):
         self.assert_check(self.run_check(*check), True, "")
 
     def test_search_recovery_coverage_gate_fails_closed(self):
-        paths = ["static/search/domain/search-recovery.js", "scripts/search/check_search_recovery_coverage.mjs",
+        paths = ["static/search/results/domain/recovery.js", "scripts/search/check_search_recovery_coverage.mjs",
                  "tests/search/baselines/test_search_recovery_baseline.mjs", "tests/search/baselines/test_search_recovery_module.mjs",
                  "tests/search/baselines/search-recovery-original.js.fixture", "static/app.js", "scripts/check_tap_contracts.mjs"]
         for path in paths:
@@ -925,7 +925,7 @@ class StaticGateTests(unittest.TestCase):
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(ROOT / path, target)
         check = ["node", paths[1]]
-        self.assert_check(self.run_check(*check), True, "search-recovery.js")
+        self.assert_check(self.run_check(*check), True, "recovery.js")
         test = self.root / paths[2]
         source = test.read_text()
         name = "recovery getter reads and error propagation remain observable"
@@ -947,14 +947,14 @@ class StaticGateTests(unittest.TestCase):
         module.write_text(original)
         gate = self.root / paths[1]
         gate_source = gate.read_text()
-        include = "--test-coverage-include=**/static/search/domain/search-recovery.js"
+        include = "--test-coverage-include=**/static/search/results/domain/recovery.js"
         self.assertEqual(gate_source.count(include), 1)
         gate.write_text(gate_source.replace(include, "--test-coverage-include=**/missing-recovery.js"))
         self.assert_check(self.run_check(*check), False, "exactly one fully covered source row")
 
     def test_search_recovery_strict_type_contract(self):
         for name in ("jsconfig.strict.json", "jsconfig.search-exact.json", "jsconfig.check.json"):
-            self.assertIn("static/search/domain/search-recovery.js", load_type_config(name)["files"])
+            self.assertIn("static/search/results/domain/recovery.js", load_type_config(name)["files"])
         declaration = self.root / "reader-globals.d.ts"
         original = (ROOT / "typings/reader-globals.d.ts").read_text()
         declaration.write_text(original)
@@ -962,7 +962,7 @@ class StaticGateTests(unittest.TestCase):
         config.write_text(json.dumps({"compilerOptions": {"allowJs": True, "checkJs": True, "noEmit": True,
             "strict": True, "noUncheckedIndexedAccess": True, "exactOptionalPropertyTypes": True,
             "target": "esnext", "moduleDetection": "force"},
-            "files": [str(declaration), str(ROOT / "static/search/domain/search-recovery.js")]}))
+            "files": [str(declaration), str(ROOT / "static/search/results/domain/recovery.js")]}))
         check = ["node", ROOT / "node_modules/typescript/bin/tsc", "--project", config]
         self.assert_check(self.run_check(*check), True, "")
         before = "  isRecoverable(error: {name?: string | undefined; status?: number | undefined; code?: string | undefined; message?: string | undefined} | null | undefined): boolean;"
@@ -977,7 +977,7 @@ class StaticGateTests(unittest.TestCase):
         self.assert_check(self.run_check(*check), False, "TS2322")
 
     def test_sidebar_markup_coverage_gate_fails_closed(self):
-        paths = ["static/search/presentation/sidebar-render.js", "scripts/search/check_sidebar_markup_coverage.mjs",
+        paths = ["static/search/sidebar/presentation/markup.js", "scripts/search/check_sidebar_markup_coverage.mjs",
                  "tests/search/baselines/test_sidebar_markup_baseline.mjs", "tests/search/baselines/test_sidebar_markup_differential.mjs",
                  "tests/search/baselines/test_sidebar_markup_module.mjs", "tests/search/baselines/sidebar-original-render.js.fixture",
                  "static/search/sidebar/presentation/directory.js",
@@ -989,7 +989,7 @@ class StaticGateTests(unittest.TestCase):
         if (ROOT / "pyrightconfig.json").exists():
             shutil.copyfile(ROOT / "pyrightconfig.json", self.root / "pyrightconfig.json")
         check = ["node", paths[1]]
-        self.assert_check(self.run_check(*check), True, "sidebar-render.js")
+        self.assert_check(self.run_check(*check), True, "markup.js")
         test = self.root / paths[3]
         source = test.read_text()
         name = "object-valued escaped labels preserve coercion and callback order"
@@ -1011,14 +1011,14 @@ class StaticGateTests(unittest.TestCase):
         module.write_text(original)
         gate = self.root / paths[1]
         gate_source = gate.read_text()
-        include = "--test-coverage-include=**/static/search/presentation/sidebar-render.js"
+        include = "--test-coverage-include=**/static/search/sidebar/presentation/markup.js"
         self.assertEqual(gate_source.count(include), 1)
         gate.write_text(gate_source.replace(include, "--test-coverage-include=**/missing-sidebar.js"))
         self.assert_check(self.run_check(*check), False, "exactly one fully covered source row")
 
     def test_sidebar_markup_strict_type_contract(self):
         for name in ("jsconfig.strict.json", "jsconfig.search-exact.json", "jsconfig.check.json"):
-            self.assertIn("static/search/presentation/sidebar-render.js", load_type_config(name)["files"])
+            self.assertIn("static/search/sidebar/presentation/markup.js", load_type_config(name)["files"])
         declaration = self.root / "reader-globals.d.ts"
         original = (ROOT / "typings/reader-globals.d.ts").read_text()
         declaration.write_text(original)
@@ -1026,7 +1026,7 @@ class StaticGateTests(unittest.TestCase):
         config.write_text(json.dumps({"compilerOptions": {"allowJs": True, "checkJs": True, "noEmit": True,
             "strict": True, "noUncheckedIndexedAccess": True, "exactOptionalPropertyTypes": True,
             "target": "esnext", "moduleDetection": "force"},
-            "files": [str(declaration), str(ROOT / "static/search/presentation/sidebar-render.js")]}))
+            "files": [str(declaration), str(ROOT / "static/search/sidebar/presentation/markup.js")]}))
         check = ["node", ROOT / "node_modules/typescript/bin/tsc", "--project", config]
         self.assert_check(self.run_check(*check), True, "")
         before = '  browserMarkup(data: VoiceOfMLSidebarEntries, repo: string, path: string, surface: "pages" | "space", ports: VoiceOfMLSidebarPorts): string;'
@@ -1041,7 +1041,7 @@ class StaticGateTests(unittest.TestCase):
         self.assert_check(self.run_check(*check), False, "TS2345")
 
     def test_search_view_key_coverage_gate_fails_closed(self):
-        paths = ["static/search/domain/search-view-key.js", "scripts/search/check_search_view_key_coverage.mjs",
+        paths = ["static/search/positions/domain/view-key.js", "scripts/search/check_search_view_key_coverage.mjs",
                  "tests/search/baselines/test_search_view_key_baseline.mjs", "tests/search/baselines/test_search_view_key_module.mjs",
                  "static/app.js", "scripts/check_tap_contracts.mjs"]
         for path in paths:
@@ -1052,7 +1052,7 @@ class StaticGateTests(unittest.TestCase):
         if (ROOT / "pyrightconfig.json").exists():
             shutil.copyfile(ROOT / "pyrightconfig.json", self.root / "pyrightconfig.json")
         check = ["node", paths[1]]
-        self.assert_check(self.run_check(*check), True, "search-view-key.js")
+        self.assert_check(self.run_check(*check), True, "view-key.js")
         test = self.root / paths[2]
         source = test.read_text()
         name = "a reentrant filter getter cannot make an old memo a hit"
@@ -1073,14 +1073,14 @@ class StaticGateTests(unittest.TestCase):
         module.write_text(original)
         gate = self.root / paths[1]
         gate_source = gate.read_text()
-        include = "--test-coverage-include=**/static/search/domain/search-view-key.js"
+        include = "--test-coverage-include=**/static/search/positions/domain/view-key.js"
         self.assertEqual(gate_source.count(include), 1)
         gate.write_text(gate_source.replace(include, "--test-coverage-include=**/missing-view-key.js"))
         self.assert_check(self.run_check(*check), False, "exactly one fully covered source row")
 
     def test_search_view_key_strict_type_contract(self):
         for name in ("jsconfig.strict.json", "jsconfig.search-exact.json", "jsconfig.check.json"):
-            self.assertIn("static/search/domain/search-view-key.js", load_type_config(name)["files"])
+            self.assertIn("static/search/positions/domain/view-key.js", load_type_config(name)["files"])
         declaration = self.root / "reader-globals.d.ts"
         original = (ROOT / "typings/reader-globals.d.ts").read_text()
         declaration.write_text(original)
@@ -1088,7 +1088,7 @@ class StaticGateTests(unittest.TestCase):
         config.write_text(json.dumps({"compilerOptions": {"allowJs": True, "checkJs": True, "noEmit": True,
             "strict": True, "noUncheckedIndexedAccess": True, "exactOptionalPropertyTypes": True,
             "target": "esnext", "moduleDetection": "force"},
-            "files": [str(declaration), str(ROOT / "static/search/domain/search-view-key.js")]}))
+            "files": [str(declaration), str(ROOT / "static/search/positions/domain/view-key.js")]}))
         check = ["node", ROOT / "node_modules/typescript/bin/tsc", "--project", config]
         self.assert_check(self.run_check(*check), True, "")
         before = "    getEncoder: () => (projection: VoiceOfMLSearchViewProjection) => string): VoiceOfMLSearchViewMemo;"
@@ -1103,7 +1103,7 @@ class StaticGateTests(unittest.TestCase):
         self.assert_check(self.run_check(*check), False, "TS2345")
 
     def test_search_stable_stringify_coverage_gate_fails_closed(self):
-        paths = ["static/search/domain/stable-stringify.js", "scripts/search/check_search_stable_stringify_coverage.mjs",
+        paths = ["static/search/shared/domain/stable-stringify.js", "scripts/search/check_search_stable_stringify_coverage.mjs",
                  "tests/search/baselines/test_search_stable_stringify_baseline.mjs", "static/app.js",
                  "scripts/check_tap_contracts.mjs"]
         for path in paths:
@@ -1132,14 +1132,14 @@ class StaticGateTests(unittest.TestCase):
         module.write_text(original)
         gate = self.root / paths[1]
         gate_source = gate.read_text()
-        include = "--test-coverage-include=**/static/search/domain/stable-stringify.js"
+        include = "--test-coverage-include=**/static/search/shared/domain/stable-stringify.js"
         self.assertEqual(gate_source.count(include), 1)
         gate.write_text(gate_source.replace(include, "--test-coverage-include=**/missing-canonical.js"))
         self.assert_check(self.run_check(*check), False, "exactly one fully covered source row")
 
     def test_search_stable_stringify_strict_type_contract(self):
         for name in ("jsconfig.strict.json", "jsconfig.search-exact.json", "jsconfig.check.json"):
-            self.assertIn("static/search/domain/stable-stringify.js", load_type_config(name)["files"])
+            self.assertIn("static/search/shared/domain/stable-stringify.js", load_type_config(name)["files"])
         declaration = self.root / "reader-globals.d.ts"
         original = (ROOT / "typings/reader-globals.d.ts").read_text()
         declaration.write_text(original)
@@ -1147,7 +1147,7 @@ class StaticGateTests(unittest.TestCase):
         config.write_text(json.dumps({"compilerOptions": {"allowJs": True, "checkJs": True, "noEmit": True,
             "strict": True, "noUncheckedIndexedAccess": True, "exactOptionalPropertyTypes": True,
             "target": "esnext", "moduleDetection": "force"},
-            "files": [str(declaration), str(ROOT / "static/search/domain/stable-stringify.js")]}))
+            "files": [str(declaration), str(ROOT / "static/search/shared/domain/stable-stringify.js")]}))
         check = ["node", ROOT / "node_modules/typescript/bin/tsc", "--project", config]
         self.assert_check(self.run_check(*check), True, "")
         before = "  stableStringify(value: unknown, getVisit: () => (value: unknown) => string | undefined): string | undefined;"
@@ -1164,7 +1164,7 @@ class StaticGateTests(unittest.TestCase):
         self.assert_check(self.run_check(*check), False, "TS2345")
 
     def test_search_height_index_coverage_gate_fails_closed(self):
-        paths = ["static/search/domain/height-index.js", "scripts/search/check_search_height_index_coverage.mjs",
+        paths = ["static/search/results/virtual/domain/height-index.js", "scripts/search/check_search_height_index_coverage.mjs",
                  "tests/search/baselines/test_search_height_index_baseline.mjs"]
         for path in [*paths, "scripts/check_tap_contracts.mjs"]:
             target = self.root / path
@@ -1195,7 +1195,7 @@ class StaticGateTests(unittest.TestCase):
         module.write_text(module_source)
         gate = self.root / paths[1]
         gate_source = gate.read_text()
-        include = "--test-coverage-include=**/static/search/domain/height-index.js"
+        include = "--test-coverage-include=**/static/search/results/virtual/domain/height-index.js"
         self.assertEqual(gate_source.count(include), 1)
         gate.write_text(gate_source.replace(include, "--test-coverage-include=**/missing-height-index.js"))
         self.assert_check(self.run_check(*check), False, "exactly one fully covered source row")
@@ -1206,11 +1206,11 @@ class StaticGateTests(unittest.TestCase):
         original = (ROOT / "typings/reader-globals.d.ts").read_text()
         declaration.write_text(original)
         for name in ("jsconfig.strict.json", "jsconfig.search-exact.json", "jsconfig.check.json"):
-            self.assertIn("static/search/domain/height-index.js", load_type_config(name)["files"])
+            self.assertIn("static/search/results/virtual/domain/height-index.js", load_type_config(name)["files"])
         config.write_text(json.dumps({"compilerOptions": {"allowJs": True, "checkJs": True, "noEmit": True,
             "strict": True, "noUncheckedIndexedAccess": True, "exactOptionalPropertyTypes": True,
             "target": "esnext", "moduleDetection": "force"},
-            "files": [str(declaration), str(ROOT / "static/search/domain/height-index.js")]}))
+            "files": [str(declaration), str(ROOT / "static/search/results/virtual/domain/height-index.js")]}))
         check = ["node", ROOT / "node_modules/typescript/bin/tsc", "--project", config]
         self.assert_check(self.run_check(*check), True, "")
         before = "  totalHeight(state: VoiceOfMLHeightIndexState): number;"
@@ -3007,7 +3007,7 @@ class StaticGateTests(unittest.TestCase):
         for flag in ("allowJs", "checkJs", "noEmit", "strict", "noUncheckedIndexedAccess", "exactOptionalPropertyTypes"):
             self.assertIs(options.get(flag), True, flag)
         required = {"static/search/execution/application/session.js", "static/search/reader-host/application/navigation.js", "static/search/downloads/application/controller.js", "static/search/results/domain/result-identity.js", "static/search/catalog/domain/record-path.js",
-                    "static/search/sidebar/domain/folder-selection.js", "static/search/domain/height-index.js", "static/search/domain/stable-stringify.js", "static/search/domain/search-view-key.js", "static/search/domain/search-recovery.js", "static/search/domain/search-window-page.js", "static/search/presentation/sidebar-render.js", "static/search/requests/domain/response-validation.js", "static/search/requests/infrastructure/response-cache.js", "static/search/catalog/domain/file-types.js",
+                    "static/search/sidebar/domain/folder-selection.js", "static/search/results/virtual/domain/height-index.js", "static/search/shared/domain/stable-stringify.js", "static/search/positions/domain/view-key.js", "static/search/results/domain/recovery.js", "static/search/results/window/domain/page.js", "static/search/sidebar/presentation/markup.js", "static/search/requests/domain/response-validation.js", "static/search/requests/infrastructure/response-cache.js", "static/search/catalog/domain/file-types.js",
                     "static/search/results/presentation/highlight.js", "static/search/results/presentation/size-format.js"}
         required.update({
             "static/search/input/domain/ownership.js",

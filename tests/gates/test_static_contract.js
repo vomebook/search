@@ -271,7 +271,7 @@ test("virtual results use bounded buffering", () => {
   assert.match(virtual, /const rowMeasureKey = getHeightMeasurementKey\(\)/);
   assert.match(css, /contain: paint/);
   assert.match(app, /function ensureHeightTree/);
-  const heightIndex = fs.readFileSync("static/search/domain/height-index.js", "utf8");
+  const heightIndex = fs.readFileSync("static/search/results/virtual/domain/height-index.js", "utf8");
   assert.match(heightIndex, /const parent = i \+ \(i & -i\)/);
   assert.match(virtual, /VoiceOfMLSearchHeightIndex\.extendTree\(VSCROLL, oldLen\)/);
   assert.match(virtual, /const canExtendTree = !VSCROLL\.heightsDirty/);

@@ -15,7 +15,7 @@ const match = host.match(/^function isRecoverableSearchError\(error\) \{\n[^]*?^
 assert.ok(match, 'host recovery classifier missing');
 const context = vm.createContext({});
 vm.runInContext(fixture + '\nthis.originalRecovery = isRecoverableSearchError;', context);
-vm.runInContext(fs.readFileSync(path.join(root, 'static/search/domain/search-recovery.js'), 'utf8'), context);
+vm.runInContext(fs.readFileSync(path.join(root, 'static/search/results/domain/recovery.js'), 'utf8'), context);
 vm.runInContext(match[0], context);
 const original = context.originalRecovery;
 const actual = context.isRecoverableSearchError;
