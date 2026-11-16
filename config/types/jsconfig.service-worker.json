@@ -12,11 +12,12 @@
     ],
     "module": "esnext",
     "moduleResolution": "bundler",
-    "moduleDetection": "force"
+    "moduleDetection": "legacy"
   },
   "files": [
     "../../static/sw.js",
     "../../static/search/index-worker.js",
+    "../../static/search/worker/domain/text.js",
     "../../typings/service-worker.d.ts"
   ]
 }

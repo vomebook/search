@@ -12,7 +12,7 @@
     /** @type {ReturnType<typeof setTimeout> | null} */
     let writeTimer = null;
 
-    /** @template T @param {T} data @returns {T} */
+    /** @template {VoiceOfMLSearchWindowPageData} T @param {T} data @returns {T} */
     function cloneSearchData(data) {
       const page = /** @type {T & {results?: unknown[], total?: unknown, page?: unknown, page_size?: unknown}} */ (data);
       if (!page || !Array.isArray(page.results)) return data;

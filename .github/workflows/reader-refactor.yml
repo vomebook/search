@@ -219,6 +219,7 @@ jobs:
         run: python3 -B -m unittest -v tests.search.browser.test_prefetch_pipeline tests.search.browser.test_search_positions
       - name: Check random reader pools and UI responsiveness
         run: |
+          node tests/search/worker/test_worker_text.js
           node tests/search/worker/test_worker_contract.js
           python3 -B -m unittest -v tests.reader.browser.test_converted_reader_responsiveness tests.search.browser.test_browser_smoke tests.search.browser.test_browser_sidebar_reorder tests.search.browser.test_browser_sidebar_reorder_discovery
       - name: Check initial payload routing in both browsers

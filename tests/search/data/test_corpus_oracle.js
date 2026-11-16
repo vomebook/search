@@ -41,6 +41,10 @@ async function realWorkerSearch(params, warmParams) {
     },
   };
   vm.createContext(context);
+  context.importScripts = url => {
+    assert.strictEqual(url, "./worker/domain/text.js");
+    vm.runInContext(fs.readFileSync("static/search/worker/domain/text.js", "utf8"), context, {filename: url});
+  };
   vm.runInContext(workerSource, context, { filename: "static/search/index-worker.js" });
   await listener({ data: { protocol: 1, type: "replace-corpus", id: "load", payload: { data: clone(compact) } } });
   if (warmParams) await listener({ data: { protocol: 1, type: "local-search", id: "warm", payload: warmParams } });

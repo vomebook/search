@@ -200,6 +200,7 @@ const PRECACHE_URLS = [
   "/search/static/search/downloads/presentation/queue.js",
   "/search/static/app.js",
   "/search/static/search/index-worker.js",
+  "/search/static/search/worker/domain/text.js",
   "/search/data/initial/manifest.json",
   "/search/data/sidebar/manifest.json",
   "/search/data/initial/global.json",

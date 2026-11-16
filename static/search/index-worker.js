@@ -1,3 +1,6 @@
+/* global compareCodepoints, tokenizeParts, tokenize, isChineseToken, fuzzyDistanceBudget, literalSearch */
+importScripts("./worker/domain/text.js");
+
 const WORKER_PROTOCOL_VERSION = 1;
 const MAX_PAGE_SIZE = 500;
 const MAX_CORPUS_COMPRESSED_BYTES = 32 * 1024 * 1024;
@@ -54,14 +57,6 @@ const FULLTEXT_FOLDER_CACHE_MAX = 64;
 const FULLTEXT_FOLDER_CACHE_UNITS = 65536;
 const directoryIndexes = new Map();
 const DIRECTORY_INDEX_MAX = 4;
-// Python compares lowercased Unicode code points; avoid UTF-16 surrogate ordering.
-function compareCodepoints(left, right) {
-  if (!/[\uD800-\uDFFF]/.test(left) && !/[\uD800-\uDFFF]/.test(right)) return left < right ? -1 : left > right ? 1 : 0;
-  const a = Array.from(left, char => char.codePointAt(0));
-  const b = Array.from(right, char => char.codePointAt(0));
-  for (let i = 0; i < Math.min(a.length, b.length); i++) if (a[i] !== b[i]) return a[i] - b[i];
-  return a.length - b.length;
-}
 // Native file extensions understood by the Reader. Converted-only formats
 // are supplied separately by the asset sidecar, not by this pool.
 const NATIVE_READER_EXTENSIONS = new Set([
@@ -73,25 +68,6 @@ const NATIVE_READER_EXTENSIONS = new Set([
 
 function emptyMetadata() {
   return { count: 0, repos: [], extensions: [], extensionsByRepo: {}, reader: { available: false, count: 0, byRepo: {} } };
-}
-
-function tokenizeParts(text) {
-  /** @type {string[]} */
-  const chinese = [];
-  const lower = String(text || "").toLowerCase();
-  /** @type {string[]} */
-  const alpha = lower.match(/[a-z0-9]+/g) || [];
-  const chineseRuns = lower.match(/[\u4e00-\u9fff\u3400-\u4dbf]+/g) || [];
-  for (const run of chineseRuns) {
-    for (const ch of run) chinese.push(ch);
-    for (let i = 0; i < run.length - 1; i++) chinese.push(run[i] + run[i + 1]);
-  }
-  return {alpha, chinese};
-}
-
-function tokenize(text) {
-  const parts = tokenizeParts(text);
-  return Array.from(new Set(parts.alpha.concat(parts.chinese)));
 }
 
 function getRecordSearchFields(record) {
@@ -142,16 +118,6 @@ function editDistance(s1, s2, maxDist) {
     prev = curr;
   }
   return prev[prev.length - 1];
-}
-
-function isChineseToken(token) {
-  return /^[\u4e00-\u9fff\u3400-\u4dbf]+$/.test(token);
-}
-
-function fuzzyDistanceBudget(token) {
-  // A two-edit radius makes every single character match every other one.
-  if (token.length <= 1) return 0;
-  return token.length <= 3 ? 1 : 2;
 }
 
 function couldBeFuzzy(token, word, maxDist) {
@@ -294,10 +260,6 @@ function compileWildcardMatcher(pattern) {
     }
     return false;
   }};
-}
-
-function literalSearch(query) {
-  return /[^a-z0-9\u4e00-\u9fff\u3400-\u4dbf\s]/i.test(String(query || ""));
 }
 
 function asciiSeparatorSearch(query, params) {
@@ -748,6 +710,7 @@ function applyFilters(indices, params) {
   });
 }
 
+/** @param {string} path */
 function cleanPath(path) {
   return String(path || "").replace(/^\/+|\/+$/g, "");
 }

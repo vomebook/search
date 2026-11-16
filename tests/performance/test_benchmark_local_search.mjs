@@ -33,6 +33,9 @@ function fixture({bypassCache = false} = {}) {
   const workerPath = path.join(workerDir, "index-worker.js");
   writeFileSync(scriptPath, script);
   writeFileSync(workerPath, worker);
+  const domainDir = path.join(workerDir, "worker/domain");
+  mkdirSync(domainDir, {recursive: true});
+  writeFileSync(path.join(domainDir, "text.js"), readFileSync(path.join(root, "static/search/worker/domain/text.js")));
   if (bypassCache) {
     const branch = "  let ordered = searchOrderCache.get(cacheKey);\n  if (ordered) {";
     assert.equal(worker.split(branch).length, 2, "injection point must be unique");

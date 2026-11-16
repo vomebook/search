@@ -34,6 +34,10 @@ async function makeWorker() {
     },
   };
   vm.createContext(context);
+  context.importScripts = function (url) {
+    if (url !== "./worker/domain/text.js") throw new Error("Unexpected worker import: " + url);
+    vm.runInContext(fs.readFileSync("static/search/worker/domain/text.js", "utf8"), context, { filename: url });
+  };
   vm.runInContext(source, context, { filename: "static/search/index-worker.js" });
 
   async function send(data) {
