@@ -26,6 +26,11 @@ function fixture(source, root) {
   installClassicSearchModules(root, c);
   c.resultSnapshots = c.VoiceOfMLResultSnapshots.create({cloneResult: record => c.cloneSearchResult(record),
     materialized() {}, applyHeights() {}, isCurrent: () => true, completed() {}});
+  // The two sites expose different host helpers; install the real ones when present.
+  for (const name of ["getSearchPageMetadata", "searchPageIterable"]) {
+    const helper = source.match(new RegExp("^function " + name + "\\([^]*?^}", "m"));
+    if (helper) vm.runInContext(helper[0], c);
+  }
   for (const name of ["cloneSearchResult", "cloneSearchPageCache", "trimSearchViewSnapshots",
     "getSearchSnapshotResultsBytes", "extendSearchSnapshotBudget",
     "saveSearchViewSnapshot", "appendSearchResults"]) {
