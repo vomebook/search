@@ -272,7 +272,8 @@ function measureHeights(start = VSCROLL.renderStart, end = VSCROLL.renderEnd, an
   }
   if (changed) {
     refreshVirtualAfterAppend(false);
-    const target = getVirtualOffset(anchorIndex) + Math.min(anchorOffset, /** @type {number} */ (VSCROLL.heights[anchorIndex]) - 1);
+    const height = VSCROLL.heights[anchorIndex] || VSCROLL.heightBase;
+    const target = getVirtualOffset(anchorIndex) + Math.min(anchorOffset, height - 1);
     if (Math.abs(getResultScrollTop() - target) > 0.5) setResultScrollTop(Math.max(0, target));
     VSCROLL.lastScrollTop = getResultScrollTop();
   }
