@@ -24,4 +24,11 @@ function searchTestProjects(env = process.env, repoRoot = path.resolve(__dirname
   return projects;
 }
 
-module.exports = { searchTestProjects };
+function responseCacheTestProjects(env = process.env, repoRoot = path.resolve(__dirname, "../..")) {
+  const selected = env.SEARCH_TEST_PROJECT === undefined && env.SEARCH_TEST_ROOT === undefined
+    ? {SEARCH_TEST_PROJECT: "github-Search", SEARCH_TEST_ROOT: repoRoot}
+    : env;
+  return searchTestProjects(selected, repoRoot);
+}
+
+module.exports = { searchTestProjects, responseCacheTestProjects };
