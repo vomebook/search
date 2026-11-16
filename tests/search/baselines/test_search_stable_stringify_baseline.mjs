@@ -10,7 +10,7 @@ const app = fs.readFileSync(path.join(root, 'static/app.js'), 'utf8');
 const match = app.match(/^function stableSearchStringify\([^]*?^}/m);
 assert.ok(match, 'original stableSearchStringify must remain available');
 const context = vm.createContext({});
-const modulePath = path.join(root, 'static/search/domain/stable-stringify.js');
+const modulePath = path.join(root, 'static/search/shared/domain/stable-stringify.js');
 vm.runInContext(fs.readFileSync(modulePath, 'utf8'), context, {filename: modulePath});
 vm.runInContext(match[0], context, {filename: 'stable-search-stringify-host.js'});
 const stringify = context.stableSearchStringify;

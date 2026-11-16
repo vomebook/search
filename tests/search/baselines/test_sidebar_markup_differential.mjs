@@ -9,7 +9,7 @@ import vm from 'node:vm';
 const root = process.cwd();
 const source = fs.readFileSync(path.join(root,'tests/search/baselines/sidebar-original-render.js.fixture'),'utf8');
 assert.match(source, /^function renderBrowserListItems\(/);
-const moduleFile = path.join(root,'static/search/presentation/sidebar-render.js');
+const moduleFile = path.join(root,'static/search/sidebar/presentation/markup.js');
 const moduleSource = fs.readFileSync(moduleFile,'utf8');
 const site = fs.existsSync(path.join(root,'pyrightconfig.json')) ? 'space' : 'pages';
 const expected = {pages:'c90eee4738d5b1613907a8cdde405ede412c179514b378322cf1233d62133ab3',

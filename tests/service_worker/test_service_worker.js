@@ -798,10 +798,19 @@ for (const [site, workerSource, prefix] of [
       assert.ok(!instance.stores.get(name).has(retired), 'failure must not poison later cleanup');
     });
   }
-  test(`${site} relocated classic module keeps its historical hashed URL for one previous generation`, async () => {
-    // This flat URL and digest were emitted by the prior release on both sites.
-    const oldPath = prefix + 'search/reader-navigation.6739fa74e2e7.js';
-    const newPath = prefix + 'search/reader-host/application/navigation.6739fa74e2e7.js';
+  for (const [historical, canonical] of [
+    ['reader-navigation.6739fa74e2e7.js', 'reader-host/application/navigation.6739fa74e2e7.js'],
+    ['domain/height-index.f6fa7ae33233.js', 'results/virtual/domain/height-index.f6fa7ae33233.js'],
+    ['domain/search-recovery.61e15beb50d5.js', 'results/domain/recovery.61e15beb50d5.js'],
+    ['domain/search-window-page.fa879ec0ebdb.js', 'results/window/domain/page.fa879ec0ebdb.js'],
+    ['domain/search-view-key.2edd3573b890.js', 'positions/domain/view-key.2edd3573b890.js'],
+    ['domain/stable-stringify.6ddaa7dbe262.js', 'shared/domain/stable-stringify.6ddaa7dbe262.js'],
+    ['presentation/sidebar-render.be37a947a2ef.js', 'sidebar/presentation/markup.be37a947a2ef.js'],
+  ]) {
+  test(`${site} relocated classic module ${historical} keeps its historical hashed URL for one previous generation`, async () => {
+    // These paths and digests were emitted by the prior release on both sites.
+    const oldPath = prefix + 'search/' + historical;
+    const newPath = prefix + 'search/' + canonical;
     const release = (version, asset) => workerSource.replace('"development"', JSON.stringify(version))
       .replace('const CURRENT_HASHED_ASSETS = []', 'const CURRENT_HASHED_ASSETS = ' + JSON.stringify([asset]));
     for (const offline of [false, true]) {
@@ -825,6 +834,7 @@ for (const [site, workerSource, prefix] of [
       else assert.strictEqual((await dispatchFetch(third, 'https://example.test' + oldPath)).status, 404);
     }
   });
+  }
   test(`${site} previous Ruffle cache retains retired assets and promotes current assets for one release`, async () => {
     const files = ['ruffle.js', 'core.ruffle.0123456789abcdefabcd.js', '0123456789abcdefabcd.wasm'];
     const paths = release => files.map(file => prefix + 'vendor/ruffle/release-' + release + '/' + file);

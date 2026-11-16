@@ -37,7 +37,7 @@ for(const {name:project,root} of searchTestProjects()) {
       DOM:{sortSelect:{value:'relevance'}},searchViewKeyMemo:null,encodes:0};
     c.stableSearchStringify=data=>{c.encodes++;return JSON.stringify(data)};
     vm.createContext(c);
-    vm.runInContext(fs.readFileSync(path.join(root,'static/search/domain/search-view-key.js'),'utf8'),c);
+    vm.runInContext(fs.readFileSync(path.join(root,'static/search/positions/domain/view-key.js'),'utf8'),c);
     install(source,c,['sameSearchFilterValues','getSearchViewKey']);return c;
   }
   test(project+' unchanged view keys encode once and detect aliased in-place edits',()=>{

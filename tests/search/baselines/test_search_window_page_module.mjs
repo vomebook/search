@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import path from 'node:path';
 import test from 'node:test';
 
-await import(path.join(process.cwd(), 'static/search/domain/search-window-page.js'));
+await import(path.join(process.cwd(), 'static/search/results/window/domain/page.js'));
 const validate = globalThis.VoiceOfMLSearchWindowPage.validate;
 /** @param {Partial<VoiceOfMLSearchWindowPageData>} [extra] @returns {VoiceOfMLSearchWindowPageData} */
 const page = (extra={}) => ({results:[{},{}],page:1,page_size:2,total:3,generation:'a',...extra});

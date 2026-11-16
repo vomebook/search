@@ -4,7 +4,7 @@ import {hasPassingTapContracts} from "../check_tap_contracts.mjs";
 // Require original host contracts and exact coverage of the extracted rule.
 const result = spawnSync(process.execPath, [
   "--test", "--test-reporter=tap", "--experimental-test-coverage",
-  "--test-coverage-include=**/static/search/domain/stable-stringify.js",
+  "--test-coverage-include=**/static/search/shared/domain/stable-stringify.js",
   "--test-coverage-lines=100", "--test-coverage-branches=100", "--test-coverage-functions=100",
   "tests/search/baselines/test_search_stable_stringify_baseline.mjs"
 ], {encoding: "utf8"});

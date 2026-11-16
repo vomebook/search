@@ -67,7 +67,7 @@ function fixture(count = 100) {
     rememberDisplayedSearchView: () => events.push(['remember']), cancelQuickScroll: () => events.push(['quick']),
     activateSearchView: () => events.push(['activate']),
   });
-  vm.runInContext(fs.readFileSync('static/search/domain/height-index.js', 'utf8'), c);
+  vm.runInContext(fs.readFileSync('static/search/results/virtual/domain/height-index.js', 'utf8'), c);
   for (const file of modules) vm.runInContext(fs.readFileSync('static/search/results/virtual/' + file, 'utf8'), c);
   if (process.env.VIRTUAL_BASELINE_SOURCE) {
     vm.runInContext(source.match(/const VSCROLL = \{[^]*?^};/m)[0].replace('const VSCROLL', 'var VSCROLL'), c);

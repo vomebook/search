@@ -3,7 +3,7 @@ import {hasPassingTapContracts} from "../check_tap_contracts.mjs";
 
 const result = spawnSync(process.execPath, [
   "--test", "--test-reporter=tap", "--test-isolation=none", "--experimental-test-coverage",
-  "--test-coverage-include=**/static/search/domain/search-recovery.js",
+  "--test-coverage-include=**/static/search/results/domain/recovery.js",
   "--test-coverage-lines=100", "--test-coverage-branches=100", "--test-coverage-functions=100",
   "tests/search/baselines/test_search_recovery_baseline.mjs", "tests/search/baselines/test_search_recovery_module.mjs"
 ], {encoding: "utf8"});
@@ -12,7 +12,7 @@ if (result.stderr) process.stderr.write(result.stderr);
 if (result.error) throw result.error;
 const text = result.stdout || "";
 const rows = text.split(/\r?\n/).filter(line =>
-  /^\s*#\s*search-recovery\.js\s*\|\s*100(?:\.0+)?\s*\|\s*100(?:\.0+)?\s*\|\s*100(?:\.0+)?\s*\|/.test(line));
+  /^\s*#\s*recovery\.js\s*\|\s*100(?:\.0+)?\s*\|\s*100(?:\.0+)?\s*\|\s*100(?:\.0+)?\s*\|/.test(line));
 const required = [
   "recovery status precedence and exact membership match the old host",
   "recovery messages and abort precedence match the old host",

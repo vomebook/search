@@ -4,7 +4,7 @@ import path from 'node:path';
 import test from 'node:test';
 import vm from 'node:vm';
 
-const filename=path.join(process.cwd(),'static/search/presentation/sidebar-render.js');
+const filename=path.join(process.cwd(),'static/search/sidebar/presentation/markup.js');
 const c=vm.createContext({});
 vm.runInContext(fs.readFileSync(filename,'utf8'),c,{filename});
 const {browserMarkup}=c.VoiceOfMLSearchSidebarRender;
