@@ -242,6 +242,10 @@
       "kind": "script",
       "source": "scripts/reader/check_reader_core_coverage.mjs"
     },
+    "tests/reader/core/test_reader_bindings_boundary.mjs": {
+      "kind": "direct",
+      "source": ".github/workflows/reader-refactor.yml"
+    },
     "tests/reader/core/test_reader_contract_pdf_document.js": {
       "kind": "script",
       "source": "scripts/reader/check_reader_core_coverage.mjs"
@@ -362,6 +366,10 @@
       "kind": "script",
       "source": "scripts/reader/check_pdf_network_coverage.mjs"
     },
+    "tests/reader/pdf-network/test_reader_pdf_engine_range_boundary.mjs": {
+      "kind": "direct",
+      "source": ".github/workflows/reader-refactor.yml"
+    },
     "tests/reader/pdf-network/test_reader_pdf_first_page_worker.mjs": {
       "kind": "direct",
       "source": ".github/workflows/reader-refactor.yml"
@@ -457,6 +465,10 @@
     "tests/reader/pdf-v3/test_dataset_primary_policy.mjs": {
       "kind": "direct",
       "source": ".github/workflows/static.yml"
+    },
+    "tests/reader/pdf-v3/test_page_window_strict_helpers.mjs": {
+      "kind": "direct",
+      "source": ".github/workflows/reader-refactor.yml"
     },
     "tests/reader/pdf-v3/test_reader_v3_browser.py": {
       "kind": "direct",
@@ -739,6 +751,10 @@
       "source": ".github/workflows/reader-refactor.yml"
     },
     "tests/search/ui/test_snapshot_clone_geometry.js": {
+      "kind": "direct",
+      "source": ".github/workflows/reader-refactor.yml"
+    },
+    "tests/search/worker/test_app_legacy_worker_boundary.mjs": {
       "kind": "direct",
       "source": ".github/workflows/reader-refactor.yml"
     },

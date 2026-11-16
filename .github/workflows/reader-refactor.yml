@@ -221,6 +221,7 @@ jobs:
         run: |
           node tests/search/worker/test_worker_text.js
           node tests/search/worker/test_worker_contract.js
+          node --test tests/search/worker/test_app_legacy_worker_boundary.mjs
           python3 -B -m unittest -v tests.reader.browser.test_converted_reader_responsiveness tests.search.browser.test_browser_smoke tests.search.browser.test_browser_sidebar_reorder tests.search.browser.test_browser_sidebar_reorder_discovery
       - name: Check initial payload routing in both browsers
         run: |
@@ -250,6 +251,7 @@ jobs:
       - name: Run chapter-bundle browser gate
         run: |
           node scripts/reader/check_reader_core_coverage.mjs
+          node --test tests/reader/core/test_reader_bindings_boundary.mjs tests/reader/pdf-network/test_reader_pdf_engine_range_boundary.mjs tests/reader/pdf-v3/test_page_window_strict_helpers.mjs
           python3 -B -m unittest -v tests.reader.browser.test_reader_scroll_anchor_browser
           python3 -B -m unittest -v tests.reader.browser.test_reader_optimizations
       - name: Run chapter-search browser gate
@@ -687,6 +689,7 @@ jobs:
         working-directory: huggingface-search
         run: |
           node --test tests/search/session/test_search_session_contract.js tests/search/reader-navigation/test_search_history_races.mjs
+          node --test tests/search/app/test_dom_contract.mjs tests/search/app/test_null_projection_rows.mjs tests/search/app/test_page_cache.mjs
           python3 -B -m unittest -v tests.reader.browser.test_reader_reload_search_document
           SEARCH_POSITION_BROWSER=chromium python3 -B -m unittest -v tests.reader.browser.test_reader_host_history_races
           SEARCH_POSITION_BROWSER=firefox python3 -B -m unittest -v tests.reader.browser.test_reader_host_history_races
@@ -704,6 +707,7 @@ jobs:
         working-directory: huggingface-search
         run: |
           node scripts/reader/check_reader_core_coverage.mjs
+          node --test tests/reader/core/test_reader_bindings_boundary.mjs tests/reader/pdf-network/test_reader_pdf_engine_range_boundary.mjs tests/reader/pdf-v3/test_page_window_strict_helpers.mjs
           python3 -B -m unittest -v tests.reader.browser.test_reader_scroll_anchor_browser
           python3 -B -m unittest -v tests.reader.browser.test_reader_optimizations
       - name: Run chapter-search browser gate

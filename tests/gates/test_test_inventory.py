@@ -31,6 +31,30 @@ class TestInventoryTests(unittest.TestCase):
     def check(self):
         validate(self.root, inventory=self.inventory, project='github')
 
+    def test_boundary_tests_are_in_executed_workflow_steps(self):
+        workflow = (Path(__file__).resolve().parents[2] / '.github/workflows/reader-refactor.yml').read_text()
+        pages, hf = workflow.split('  huggingface-search:\n', 1)
+        reader = ('node --test tests/reader/core/test_reader_bindings_boundary.mjs '
+                  'tests/reader/pdf-network/test_reader_pdf_engine_range_boundary.mjs '
+                  'tests/reader/pdf-v3/test_page_window_strict_helpers.mjs')
+        worker = 'node --test tests/search/worker/test_app_legacy_worker_boundary.mjs'
+        app = ('node --test tests/search/app/test_dom_contract.mjs '
+               'tests/search/app/test_null_projection_rows.mjs tests/search/app/test_page_cache.mjs')
+
+        def require_command(job, command, hf_job=False):
+            steps = job.split('      - name: ')
+            matching = [step for step in steps if f'\n          {command}\n' in step]
+            self.assertEqual(len(matching), 1)
+            self.assertIn('\n        run: |\n', matching[0])
+            if hf_job:
+                self.assertIn('\n        working-directory: huggingface-search\n', matching[0])
+
+        for job, command, hf_job in ((pages, reader, False), (pages, worker, False),
+                                      (hf, reader, True), (hf, app, True)):
+            require_command(job, command, hf_job)
+            with self.assertRaises(AssertionError):
+                require_command(job.replace(command, '# ' + command), command, hf_job)
+
     def test_exact_inventory_and_referenced_evidence_pass(self):
         self.check()
 
