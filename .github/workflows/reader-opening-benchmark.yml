@@ -36,7 +36,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
         with:
-          python-version: '3.11.17'
+          python-version: '3.15.2'
       - name: Get shared benchmark and install browser
         run: |
           git clone --depth=1 https://huggingface.co/spaces/VoiceOfML/Search huggingface-search

@@ -611,8 +611,8 @@ test("reader uses original files and lazy PDF canvas rendering", () => {
   assert.match(vendorScript, /392f4df89533b50f1dadff3f6dc0952350bd39c9f17def50a0374ef47d6147ef/);
   assert.match(vendorScript, /dompurify@3\.4\.18/);
   assert.match(vendorScript, /8053ee2a6a09f9d50f7fcd6fb7f07072f52c7f3fa9aa12147cab4feaf65ee970/);
-  assert.match(vendorScript, /@zip\.js\/zip\.js@2\.24\.0\/index\.min\.js/);
-  assert.match(vendorScript, /6c13caf4b90e08323f404f596c51549cdc6b01010bd43935a0bdc6a25bd61021/);
+  assert.match(vendorScript, /@zip\.js\/zip\.js@2\.25\.0\/index\.min\.js/);
+  assert.match(vendorScript, /715a4067bb71d750d4af8e60390e48894072f65501e0442e53f252cbfc45cfbc/);
   assert.doesNotMatch(vendorScript, /writeFileSync\(join\(output, target\)\)/);
   for (const path of ["pdf.min.mjs", "pdf.worker.min.mjs", "marked.min.js", "purify.min.js"]) assert.ok(!sw.includes("static/vendor/" + path));
   assert.match(sw, /url\.pathname === "\/search\/static\/reader\.html"/);
@@ -673,6 +673,7 @@ test("deployment workflow uses official checkout configure upload and deploy act
     "actions/setup-python@v7",
     "actions/checkout@v7",
     "actions/setup-node@v7",
+    "actions/setup-python@v7",
     "actions/cache@v5",
     "actions/cache@v5",
     "actions/configure-pages@v6",
@@ -699,7 +700,9 @@ test("deployment workflow builds and uploads minified static artifacts", () => {
   assert.match(deployJob, /fetch_reader_assets\.mjs _site\/data\/reader_assets\.json\.gz\s+SEARCH_TEST_DATA_DIR=_site\/data node tests\/search\/data\/test_data_integrity\.js\s+SEARCH_TEST_DATA_DIR=_site\/data node tests\/search\/data\/test_corpus_oracle\.js/);
   assert.ok(deployJob.indexOf("node tests/search/data/test_corpus_oracle.js") < deployJob.indexOf("uses: actions/upload-pages-artifact"));
   assert.match(workflow, /source-checks:[\s\S]*node tests\/reader\/pdf-v3\/test_dataset_primary_policy\.mjs/);
-  assert.match(workflow, /node-version: '26\.11\.1'/);
+  assert.match(workflow, /node-version: '26\.13\.1'/);
+  assert.match(deployJob, /uses: actions\/setup-python@v7\s*\n\s*with:\s*\n\s*python-version: '3\.15\.2'/);
+  assert.ok(deployJob.indexOf("uses: actions/setup-python@v7") < deployJob.indexOf("python3 scripts/build/seo.py"));
   assert.match(workflow, /name: Validate source JavaScript syntax[\s\S]*node --check static\/reader\/pdf\/reader-pdf-text\.js/);
   assert.match(workflow, /node scripts\/build\/compose_app\.mjs/);
   assert.match(workflow, /esbuild@0\.28\.2 "\$RUNNER_TEMP\/app-composed\.js" --minify --target=es2020/);

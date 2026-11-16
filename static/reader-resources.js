@@ -79,7 +79,7 @@
       sha256: "0a1df3a083d0c010560aa342e87959c8c1070e6fd54545741f083f22d0c8b551"
     },
     zipLicense: {
-      url: "https://cdn.jsdelivr.net/npm/@zip.js/zip.js@2.24.0/LICENSE",
+      url: "https://cdn.jsdelivr.net/npm/@zip.js/zip.js@2.25.0/LICENSE",
       file: "LICENSE_zipjs",
       sha256: "1b7ebc8d7889ed25491484ab2b102370742ca6c0b26650a0c62cc2269b579b84"
     },
@@ -89,9 +89,9 @@
       sha256: "b7ca4450b19559a1d50eb381adcee94b82449674be4cd17789d9beba7e6122a1"
     },
     zip: {
-      url: "https://cdn.jsdelivr.net/npm/@zip.js/zip.js@2.24.0/index.min.js",
+      url: "https://cdn.jsdelivr.net/npm/@zip.js/zip.js@2.25.0/index.min.js",
       file: "zip.js",
-      sha256: "6c13caf4b90e08323f404f596c51549cdc6b01010bd43935a0bdc6a25bd61021"
+      sha256: "715a4067bb71d750d4af8e60390e48894072f65501e0442e53f252cbfc45cfbc"
     },
     textLayer: {
       url: "https://cdn.jsdelivr.net/gh/mozilla/pdf.js@v6.5.438/web/text_layer_builder.css",
