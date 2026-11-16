@@ -11,7 +11,9 @@
       status.setAttribute("role", "status");
       status.innerHTML = '<span></span> <button type="button" class="text-btn-sm"></button>';
       /** @type {HTMLButtonElement} */ (status.querySelector("button")).onclick = options.retry;
-      options.getHost().appendChild(status);
+      const host = options.getHost();
+      if (!host) return;
+      host.appendChild(status);
     }
     if (status) {
       status.hidden = !window || (!window.invalid && !window.failures.size);

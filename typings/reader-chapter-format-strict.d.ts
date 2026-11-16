@@ -16,8 +16,8 @@ export interface ChapterFormatContext {
   chapterManifestObserver: IntersectionObserver | null;
   chapterManifestCleanup: (() => void) | null;
   chapterManifestLoader: ChapterLoader | null;
-  chapterSearchConfiguration: { chapters: Chapter[]; index: ChapterSearchIndex & {url: string} } | null;
-  readerRestorationEntry: ChapterPosition | null;
+  chapterSearchConfiguration: import('./reader-chapter-search-strict').Configuration | null;
+  readerRestorationEntry: import('./reader-progress-strict').ProgressState | null;
   navigationState: { tocEntries: unknown[] };
   foliateScrollAnchors: ReaderScrollAnchorManager;
   assertReaderActive(): void;

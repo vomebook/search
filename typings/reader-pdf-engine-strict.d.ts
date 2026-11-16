@@ -1,8 +1,7 @@
 export interface PdfRange { begin: number; end: number }
-export interface PdfDocument {
-  _pdfInfo?: { readerPageCountPending?: boolean };
-  _transport: { messageHandler: { on(name: string, callback: (range: PdfRange) => void): void } };
-}
+export type PdfDocument = import('./reader-page-window-strict').PdfPreviewDocument & {
+  _transport: NonNullable<import('./reader-page-window-strict').PdfPreviewDocument['_transport']> & { messageHandler: { on(name: string, callback: (range: PdfRange) => void): void } };
+};
 export interface PdfTask {
   promise: Promise<PdfDocument>;
   destroy(): Promise<void> | void;
@@ -25,8 +24,8 @@ export interface PdfOptions {
   cMapPacked: boolean; standardFontDataUrl: string; withCredentials: boolean;
 }
 export interface InitialRange {
-  complete: boolean; bytes: Uint8Array; total: number; rangeChunkSize: number;
-  etag?: string; cancelInitial?: (reason?: unknown) => void;
+  complete?: boolean; bytes: Uint8Array; total?: number; rangeChunkSize: number;
+  etag?: string | null; cancelInitial?: (reason?: unknown) => void;
 }
 export type Initial = Promise<InitialRange | null> | null;
 export interface Restoration { page?: number | string; pageOffset?: number | string; id?: string }

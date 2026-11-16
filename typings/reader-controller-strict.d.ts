@@ -32,7 +32,7 @@ export interface ReaderFormatControllerContext {
   loadChapterManifestDocument(): Promise<Response>; renderChapterManifest(prepared: Response): unknown;
   loadMediaDocument(): Promise<null>; renderMedia(mode: string): unknown;
   loadSwfDocument(): Promise<unknown>; renderSwf(prepared: unknown): unknown; renderFoliate(): Promise<unknown>;
-  releasePdfWorker?: () => void;
+  releasePdfWorker?: (() => void) | null;
   formatAdapters: { register(mode: string, adapter: Adapter): unknown; activate(mode: string): unknown; dispose(): unknown; readonly active: Adapter | null };
   restoreFormat(mode: string, entry: unknown, generation: number): unknown; disposeFormatResources(mode: string): void;
   readerId: string; sourceUrl: string; contentUrl: string; downloadUrl: string; chapterManifestUrl: string;
@@ -43,10 +43,10 @@ export interface ReaderFormatControllerContext {
   readerRuntime: { negotiate<T extends ReaderRuntimeCapability>(capability: T): Readonly<T & {features: object}>; update(key: string, value: object): unknown; currentGeneration(kind: string): number };
   pdfPrimarySource(): string; applyReaderMetadata(data: ReaderMetadata | null): void;
   setReaderStage(stage: string): void; preloadPdfEngine(): Promise<unknown>;
-  measurePdf<T>(promise: Promise<T>, stage: string): Promise<T>; resolveReaderSource(): Promise<void>; readerSourcePromise: Promise<unknown>;
+  measurePdf<T>(promise: Promise<T>, stage: string): Promise<T>; resolveReaderSource(): Promise<void>; readerSourcePromise: Promise<unknown> | null;
   syncCapabilityControls(): void; downloadButton: HTMLAnchorElement; documentState: { title: string };
   readerDownloadUrl(title: string, url: string): string; fail(message: string, code: string): void;
-  foliateContinuous: boolean; loadReaderRestoration(): Promise<unknown>; readerRestorationPromise: Promise<unknown>;
+  foliateContinuous: boolean; loadReaderRestoration(): Promise<unknown>; readerRestorationPromise: Promise<unknown> | null;
   awaitReader<T>(value: T | PromiseLike<T>): Promise<Awaited<T>>;
   applyInitialRestoration(entry: unknown, generation: number): Promise<unknown>; initialReaderTargetSection: unknown;
   setReaderPhase(phase: string): boolean; updateDocumentState(state: { restorationReady?: boolean; page?: number; pageCount?: number }): void;
@@ -61,7 +61,7 @@ export interface ReaderFormatControllerContext {
   readerDownloadApiUrl(path: string): string;
   fetchWithReaderTimeout(url: string, timeout: number, options?: RequestInit): Promise<Response>;
   fetchReaderUrl(url: string, options: RequestInit): Promise<Response>;
-  readPdfOcrJson(url: string, limit: number, sha: string, retry: number, priority: string): Promise<unknown>;
+  readPdfOcrJson(url: string, limit: number, sha: string, size: number, priority: RequestPriority): Promise<unknown>;
   trackReaderResource(cleanup: () => void): () => void;
   v3ResourceUrl(ref: {bytes: number; sha256: string}): string;
 }

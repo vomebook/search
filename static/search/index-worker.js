@@ -2,6 +2,20 @@
 importScripts("./worker/domain/text.js");
 importScripts("./worker/domain/intersection.js");
 
+/** Decoded values remain untrusted: compact corpora historically preserve unusual field values. @typedef {{Repo: unknown, File: unknown, Extension: unknown, Folder: unknown[], Size: unknown, HasTxt: boolean}} SearchRecord */
+/** Raw request values are deliberately not validated by the legacy protocol. @typedef {{q?: unknown, exact?: unknown, searchFolders?: unknown, repos?: unknown, extensions?: unknown, folders?: unknown, folderSelfs?: unknown, folderSubtrees?: unknown, folderMatchMode?: unknown, minSize?: unknown, maxSize?: unknown, page?: unknown, pageSize?: unknown, anchorId?: unknown, sort?: unknown, repo?: unknown, path?: unknown, txtOnly?: unknown, readerOnly?: unknown, randomValue?: unknown}} SearchParams */
+/** @typedef {{generation: number, cancelled: boolean}} SearchJob */
+/** @typedef {{name: string, count: number}} CountEntry */
+/** @typedef {{count: number, repos: CountEntry[], extensions: CountEntry[], extensionsByRepo: Record<string, CountEntry[]>, reader: {available: boolean, count: number, byRepo: Record<string, number>}}} SearchMetadata */
+/** @typedef {number[] | Uint32Array} Posting */
+/** @typedef {Record<string, Posting>} PostingIndex */
+/** @typedef {[string, number]} VocabularyEntry */
+/** @typedef {{index: PostingIndex, keys: string[], next: number, groups: Map<number, VocabularyEntry[]>, counts: number[] | null, group: number, item: number, output: VocabularyEntry[]}} VocabularyBuild */
+/** @typedef {{keys: string[], next: number}} PostingCompaction */
+/** @typedef {{next: number, all: PostingIndex, files: PostingIndex, folderTokens: Map<string, {parts: ReturnType<typeof tokenizeParts>, units: number}>, folderUnits: number, allVocab?: VocabularyBuild, filesVocab?: VocabularyBuild, allCompaction?: PostingCompaction, filesCompaction?: PostingCompaction}} FulltextBuild */
+/** @typedef {{name: string, path: string, children: DirectoryNode[], count: number, isRoot?: boolean, hasDirectFiles: boolean, hasChildren?: boolean, showSelfToggle?: boolean}} DirectoryNode */
+/** @typedef {{tree: DirectoryNode[], nodes: Record<string, DirectoryNode>, files: Record<string, number[]>}} DirectoryIndex */
+
 const WORKER_PROTOCOL_VERSION = 1;
 const MAX_PAGE_SIZE = 500;
 const MAX_CORPUS_COMPRESSED_BYTES = 32 * 1024 * 1024;
@@ -9,53 +23,79 @@ const MAX_CORPUS_EXPANDED_BYTES = 256 * 1024 * 1024;
 const SORT_PRECOMPUTE_DELAY_MS = 1000;
 // Bump when matching, filtering, collation or public record semantics change.
 const SEARCH_SEMANTICS_VERSION = "worker-search-v7";
+/** @type {string | null} */
 let snapshotGeneration = null;
 
+/** @type {SearchRecord[]} */
 let records = [];
+/** @type {string[]} */
 let recordIds = [];
+/** @type {WeakMap<Partial<SearchRecord>, {file: string, repo: string, folder: string}>} */
 let recordSearchFields = new WeakMap();
 let metadata = emptyMetadata();
 let generation = 0;
 const corpusInstance = Date.now().toString(36) + '-' + Math.random().toString(36).slice(2);
+/** @type {PostingIndex | null} */
 let wordIndex = null;
+/** @type {PostingIndex | null} */
 let wordIndexFilesOnly = null;
+/** @type {VocabularyEntry[]} */
 let vocabSorted = [];
+/** @type {VocabularyEntry[]} */
 let vocabSortedFilesOnly = [];
+/** @type {Map<string, number[]>} */
 const searchOrderCache = new Map();
 const SEARCH_ORDER_CACHE_MAX = 8;
 // Bound temporary membership allocation for dense-order reuse.
 const SORT_REUSE_MAX_INDICES = 65536;
 const EXACT_INDEX_MAX_INDICES = 65536;
+/** @type {WeakMap<number[], object>} */
 let searchAnchorOwners = new WeakMap();
+/** @type {Map<object, Map<string, number>>} */
 const searchAnchorCache = new Map();
 const SEARCH_ANCHOR_ORDER_MAX = 8;
 const SEARCH_ANCHOR_PER_ORDER_MAX = 8;
 const SEARCH_ANCHOR_KEY_MAX = 4096;
+/** @type {number[]} */
 let recordIndices = [];
+/** @type {Record<string, number[]>} */
 let repoRecordIndices = Object.create(null);
 // Unusual compact metadata retains its legacy field-coercion and error path;
 // only ordinary string fields can use the repository-only wildcard proof.
 let repoWildcardProofSafe = false;
 let extensionSearchProofSafe = false;
+/** @type {number[]} */
 let readerRecordIndices = [];
+/** @type {Record<string, number[]>} */
 let repoReaderRecordIndices = Object.create(null);
+/** @type {number[]} */
 let sortedByName = [];
+/** @type {number[]} */
 let sortedBySize = [];
+/** @type {Record<string, number[]>} */
 let repoSortedByName = Object.create(null);
+/** @type {Record<string, number[]>} */
 let repoSortedBySize = Object.create(null);
 let nameOrderReady = false;
 let sizeOrderReady = false;
+/** @type {number | null} */
 let sortBuildTimer = null;
+/** @type {number | null} */
 let fulltextBuildTimer = null;
+/** @type {FulltextBuild | null} */
 let fulltextBuild = null;
+/** @type {Map<unknown, SearchJob>} */
 const searchJobs = new Map();
+/** @type {MessageChannel | null} */
 let indexYieldChannel = null;
+/** @type {Array<() => void>} */
 const indexYieldQueue = [];
 const FULLTEXT_BATCH_RECORDS = 256;
 const FULLTEXT_BATCH_MS = 8;
 const FULLTEXT_COMPACT_BATCH_TOKENS = 4096;
 const FULLTEXT_FOLDER_CACHE_MAX = 64;
 const FULLTEXT_FOLDER_CACHE_UNITS = 65536;
+/** @type {Map<string, DirectoryIndex>} */
 const directoryIndexes = new Map();
 const DIRECTORY_INDEX_MAX = 4;
 // Native file extensions understood by the Reader. Converted-only formats
@@ -67,10 +107,12 @@ const NATIVE_READER_EXTENSIONS = new Set([
   "wma", "ape", "amr", "swf"
 ]);
 
+/** @returns {SearchMetadata} */
 function emptyMetadata() {
   return { count: 0, repos: [], extensions: [], extensionsByRepo: {}, reader: { available: false, count: 0, byRepo: {} } };
 }
 
+/** @param {Partial<SearchRecord>} record */
 function getRecordSearchFields(record) {
   let fields = recordSearchFields.get(record);
   if (fields) return fields;
@@ -83,6 +125,7 @@ function getRecordSearchFields(record) {
   return fields;
 }
 
+/** @param {FulltextBuild} build @param {string} text */
 function folderTokenParts(build, text) {
   const cached = build.folderTokens.get(text);
   if (cached) {
@@ -94,8 +137,8 @@ function folderTokenParts(build, text) {
   const units = text.length + parts.alpha.concat(parts.chinese).reduce((sum, token) => sum + token.length, 0);
   if (units <= FULLTEXT_FOLDER_CACHE_UNITS) {
     while (build.folderTokens.size >= FULLTEXT_FOLDER_CACHE_MAX || build.folderUnits + units > FULLTEXT_FOLDER_CACHE_UNITS) {
-      const key = build.folderTokens.keys().next().value;
-      build.folderUnits -= build.folderTokens.get(key).units;
+      const key = /** @type {string} */ (build.folderTokens.keys().next().value);
+      build.folderUnits -= /** @type {{units: number}} */ (build.folderTokens.get(key)).units;
       build.folderTokens.delete(key);
     }
     build.folderTokens.set(text, {parts, units});
@@ -104,44 +147,49 @@ function folderTokenParts(build, text) {
   return parts;
 }
 
+/** @param {string} s1 @param {string} s2 @param {number} maxDist */
 function editDistance(s1, s2, maxDist) {
   if (Math.abs(s1.length - s2.length) > maxDist) return 999;
   let prev = Array.from({ length: s2.length + 1 }, (_, i) => i);
   for (let i = 0; i < s1.length; i++) {
     const curr = [i + 1];
-    let rowMin = curr[0];
+    let rowMin = i + 1;
+    // Both rows contain the columns already visited; prev has s2.length + 1.
     for (let j = 0; j < s2.length; j++) {
-      const value = Math.min(prev[j + 1] + 1, curr[j] + 1, prev[j] + (s1[i] === s2[j] ? 0 : 1));
+      const value = Math.min(/** @type {number} */ (prev[j + 1]) + 1, /** @type {number} */ (curr[j]) + 1, /** @type {number} */ (prev[j]) + (s1[i] === s2[j] ? 0 : 1));
       curr.push(value);
       rowMin = Math.min(rowMin, value);
     }
     if (rowMin > maxDist) return 999;
     prev = curr;
   }
-  return prev[prev.length - 1];
+  return /** @type {number} */ (prev[prev.length - 1]);
 }
 
+/** @param {string} token @param {string} word @param {number} maxDist */
 function couldBeFuzzy(token, word, maxDist) {
   if (isChineseToken(token) && token.length > 1 && token.length !== word.length) return false;
   if (Math.abs(token.length - word.length) > maxDist) return false;
   if (token.length < 4) return true;
+  /** @type {Record<string, number>} */
   const counts = Object.create(null);
   for (const ch of token) counts[ch] = (counts[ch] || 0) + 1;
   let diff = 0;
   for (const ch of word) {
-    if (counts[ch] > 0) counts[ch] -= 1;
+    if (/** @type {number} */ (counts[ch]) > 0) counts[ch] = /** @type {number} */ (counts[ch]) - 1;
     else {
       diff += 1;
       if (diff > 2 * maxDist) return false;
     }
   }
   for (const ch of Object.keys(counts)) {
-    diff += counts[ch];
+    diff += /** @type {number} */ (counts[ch]);
     if (diff > 2 * maxDist) return false;
   }
   return true;
 }
 
+/** @param {string} pattern @returns {{test(text: string): boolean}} */
 function compileWildcardMatcher(pattern) {
   const normalized = String(pattern || "");
   // Python's Unicode case-insensitive matcher equates Kelvin sign and long s
@@ -214,8 +262,8 @@ function compileWildcardMatcher(pattern) {
   // One star separating a boundary run of questions from fixed literals is
   // equivalent to fixed-width dots in an unanchored search.
   const parts = core.split(/\*+/);
-  if (parts.length === 2 && ((/^\?+$/.test(parts[0]) && !parts[1].includes("?"))
-      || (/^\?+$/.test(parts[1]) && !parts[0].includes("?")))) {
+  if (parts.length === 2 && ((/^\?+$/.test(/** @type {string} */ (parts[0])) && !/** @type {string} */ (parts[1]).includes("?"))
+      || (/^\?+$/.test(/** @type {string} */ (parts[1])) && !/** @type {string} */ (parts[0]).includes("?")))) {
     const fixed = parts.join("").split("").map(char => char === "?" ? "." : char.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("");
     return new RegExp(fixed, "i");
   }
@@ -224,7 +272,9 @@ function compileWildcardMatcher(pattern) {
     : new RegExp("^" + char.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "$", "i"));
   const required = Array.from(new Set(tokens.filter(char => char !== "*" && char !== "?")))
     .map(char => new RegExp(char.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i"));
+  /** @type {Map<string, (boolean | null)[]>} */
   const masks = new Map();
+  /** @param {string} char */
   function literalMask(char) {
     let mask = masks.get(char);
     if (!mask) {
@@ -245,15 +295,15 @@ function compileWildcardMatcher(pattern) {
     for (let j = 0; j < tokens.length && tokens[j] === "*"; j++) previous[j + 1] = 1;
     if (previous[tokens.length]) return true;
     for (let i = 0; i < text.length; i++) {
-      const char = text[i];
+      const char = /** @type {string} */ (text[i]);
       const dot = char !== "\n" && char !== "\r" && char !== "\u2028" && char !== "\u2029";
       const mask = literalMask(char);
       current[0] = 1;
       for (let j = 0; j < tokens.length; j++) {
         if (tokens[j] === "*") {
-          current[j + 1] = current[j] || (dot && previous[j + 1]);
+          current[j + 1] = Number(current[j] || (dot && previous[j + 1]));
         } else {
-          current[j + 1] = previous[j] && (tokens[j] === "?" ? dot : mask[j]);
+          current[j + 1] = Number(previous[j] && (tokens[j] === "?" ? dot : mask[j]));
         }
       }
       if (current[tokens.length]) return true;
@@ -263,32 +313,44 @@ function compileWildcardMatcher(pattern) {
   }};
 }
 
+/** @param {string} query @param {SearchParams} params */
 function asciiSeparatorSearch(query, params) {
   // Only one ASCII term joined by common separators is eligible. Explicit
   // exact and wildcard queries retain their literal behavior.
   return !params.exact && /^[a-z0-9]+(?:[._-][a-z0-9]+)+$/i.test(query);
 }
 
-function decodeSearchPayload(data) {
-  if (!data || typeof data !== "object") throw protocolError("INVALID_CORPUS", "Search corpus must be an object");
+/** @param {unknown} input @returns {SearchRecord[]} */
+function decodeSearchPayload(input) {
+  if (!input || typeof input !== "object") throw protocolError("INVALID_CORPUS", "Search corpus must be an object");
+  const data = /** @type {{v?: unknown, rp?: unknown, fd?: unknown, rc?: unknown}} */ (input);
   if (data.v !== 2 || !Array.isArray(data.rp) || !Array.isArray(data.fd) || !Array.isArray(data.rc)) {
     throw protocolError("UNSUPPORTED_CORPUS", "Expected compact-v2 search corpus");
   }
-  return data.rc.map((item) => {
+  /** @type {unknown[]} */
+  const repos = data.rp;
+  /** @type {unknown[]} */
+  const folders = data.fd;
+  /** @type {unknown[]} */
+  const rows = data.rc;
+  return rows.map((item) => {
     if (!Array.isArray(item) || item.length < 6) {
       return { Repo: "", File: "", Extension: "", Folder: [], Size: "", HasTxt: false };
     }
+    /** @type {unknown[]} */
+    const values = item;
     return {
-      Repo: Number.isInteger(item[0]) && data.rp[item[0]] !== undefined ? data.rp[item[0]] : "",
-      File: item[1] || "",
-      Extension: item[2] || "",
-      Folder: Number.isInteger(item[3]) && Array.isArray(data.fd[item[3]]) ? data.fd[item[3]] : [],
-      Size: item[4] === undefined ? "" : item[4],
-      HasTxt: !!item[5],
+      Repo: Number.isInteger(values[0]) && repos[/** @type {number} */ (values[0])] !== undefined ? repos[/** @type {number} */ (values[0])] : "",
+      File: values[1] || "",
+      Extension: values[2] || "",
+      Folder: Number.isInteger(values[3]) && Array.isArray(folders[/** @type {number} */ (values[3])]) ? /** @type {unknown[]} */ (folders[/** @type {number} */ (values[3])]) : [],
+      Size: values[4] === undefined ? "" : values[4],
+      HasTxt: !!values[5],
     };
   });
 }
 
+/** @param {ReadableStream<Uint8Array>} stream @param {number} limit */
 async function readBoundedBytes(stream, limit) {
   const reader = stream.getReader(), chunks = [];
   let size = 0;
@@ -312,6 +374,7 @@ async function readBoundedBytes(stream, limit) {
   return output;
 }
 
+/** @param {string} url */
 async function fetchGzipJSON(url) {
   const response = await fetch(url);
   if (!response.ok) throw protocolError("CORPUS_FETCH_FAILED", "HTTP " + response.status);
@@ -324,11 +387,12 @@ async function fetchGzipJSON(url) {
     throw protocolError("CORPUS_TOO_LARGE", "Search corpus exceeds its compressed size limit");
   }
   const compressed = await readBoundedBytes(response.body, MAX_CORPUS_COMPRESSED_BYTES);
-  const stream = new Response(compressed).body.pipeThrough(new DecompressionStream("gzip"));
-  const expanded = await readBoundedBytes(stream, MAX_CORPUS_EXPANDED_BYTES);
+  const stream = /** @type {ReadableStream<BufferSource>} */ (new Response(compressed).body).pipeThrough(new DecompressionStream("gzip"));
+  const expanded = await readBoundedBytes(/** @type {ReadableStream<Uint8Array>} */ (stream), MAX_CORPUS_EXPANDED_BYTES);
   return new TextDecoder("utf-8", {fatal:true}).decode(expanded);
 }
 
+/** @param {string} source */
 async function corpusFingerprint(source) {
   if (typeof crypto === "undefined" || !crypto.subtle || typeof TextEncoder === "undefined") return null;
   const bytes = new TextEncoder().encode(source || "");
@@ -336,10 +400,12 @@ async function corpusFingerprint(source) {
   // Keep snapshots isolated across runtime and Unicode-version changes.
   const runtime = typeof navigator !== "undefined" ? navigator.userAgent : "";
   const versionHash = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(SEARCH_SEMANTICS_VERSION + runtime));
+  /** @param {ArrayBuffer} buffer */
   const hex = buffer => Array.from(new Uint8Array(buffer), byte => byte.toString(16).padStart(2, "0")).join("");
   return "worker:" + hex(versionHash) + ":" + hex(hash);
 }
 
+/** @param {unknown} data @param {string | null} [fingerprint] */
 async function installCorpus(data, fingerprint) {
   if (fingerprint == null) fingerprint = await corpusFingerprint(JSON.stringify(data));
   const result = replaceCorpus(decodeSearchPayload(data));
@@ -348,25 +414,31 @@ async function installCorpus(data, fingerprint) {
   return result;
 }
 
+/** @param {string | null} source */
 async function installCorpusFromSource(source) {
-  const fingerprint = await corpusFingerprint(source);
-  const data = JSON.parse(source);
+  const fingerprint = await corpusFingerprint(/** @type {string} */ (source));
+  /** @type {unknown} */
+  const data = JSON.parse(/** @type {string} */ (source));
   source = null;
   const result = await installCorpus(data, fingerprint);
   return result;
 }
 
+/** @param {SearchRecord} record @param {number} occurrence */
 function stableRecordId(record, occurrence) {
   const path = (record.Folder || []).concat([record.File || "", record.Extension || ""]).join("/");
   return [record.Repo || "", path, String(occurrence)].join("\u001f");
 }
 
+/** @param {number} a @param {number} b */
 function compareRecordName(a, b) {
-  return compareCodepoints(String(records[a].File || "").toLowerCase(), String(records[b].File || "").toLowerCase());
+  // Sort inputs are indices from the current corpus snapshot.
+  return compareCodepoints(String(/** @type {SearchRecord} */ (records[a]).File || "").toLowerCase(), String(/** @type {SearchRecord} */ (records[b]).File || "").toLowerCase());
 }
 
+/** @param {number} a @param {number} b */
 function compareRecordSize(a, b) {
-  return (Number(records[b].Size) || 0) - (Number(records[a].Size) || 0) || compareRecordName(a, b);
+  return (Number(/** @type {SearchRecord} */ (records[b]).Size) || 0) - (Number(/** @type {SearchRecord} */ (records[a]).Size) || 0) || compareRecordName(a, b);
 }
 
 function buildNameOrders() {
@@ -377,7 +449,7 @@ function buildNameOrders() {
     const keys = records.map(record => String(record.File || "").toLowerCase());
     const hasSurrogate = keys.map(key => /[\uD800-\uDFFF]/.test(key));
     sortedByName = recordIndices.slice().sort((a, b) => {
-      const left = keys[a], right = keys[b];
+      const left = /** @type {string} */ (keys[a]), right = /** @type {string} */ (keys[b]);
       return hasSurrogate[a] || hasSurrogate[b] ? compareCodepoints(left, right)
         : left < right ? -1 : left > right ? 1 : 0;
     });
@@ -386,7 +458,8 @@ function buildNameOrders() {
   }
   repoSortedByName = Object.create(null);
   for (const repo of Object.keys(repoRecordIndices)) repoSortedByName[repo] = [];
-  for (const index of sortedByName) repoSortedByName[records[index].Repo].push(index);
+  // Repository buckets were initialized from the same snapshot.
+  for (const index of sortedByName) /** @type {number[]} */ (repoSortedByName[/** @type {string} */ (/** @type {SearchRecord} */ (records[index]).Repo)]).push(index);
   nameOrderReady = true;
 }
 
@@ -395,10 +468,11 @@ function buildSizeOrders() {
   sortedBySize = recordIndices.slice().sort(compareRecordSize);
   repoSortedBySize = Object.create(null);
   for (const repo of Object.keys(repoRecordIndices)) repoSortedBySize[repo] = [];
-  for (const index of sortedBySize) repoSortedBySize[records[index].Repo].push(index);
+  for (const index of sortedBySize) /** @type {number[]} */ (repoSortedBySize[/** @type {string} */ (/** @type {SearchRecord} */ (records[index]).Repo)]).push(index);
   sizeOrderReady = true;
 }
 
+/** @param {number} expectedGeneration */
 function scheduleSortOrders(expectedGeneration) {
   if (typeof setTimeout !== "function") return;
   sortBuildTimer = setTimeout(() => {
@@ -411,28 +485,41 @@ function scheduleSortOrders(expectedGeneration) {
   }, SORT_PRECOMPUTE_DELAY_MS);
 }
 
+/** @param {SearchRecord[]} nextRecords */
 function replaceCorpus(nextRecords) {
   // Build all fallible metadata off to the side. A rejected corpus must never
   // expose its records under the previous generation or damage old indexes.
+  /** @type {Record<string, number>} */
   const repoCounts = Object.create(null);
+  /** @type {Record<string, number>} */
   const extensionCounts = Object.create(null);
+  /** @type {Record<string, Record<string, number>>} */
   const extensionsByRepo = Object.create(null);
+  /** @type {Record<string, number>} */
   const readerByRepo = Object.create(null);
+  /** @type {Record<string, number>} */
   const idOccurrences = Object.create(null);
+  /** @type {string[]} */
   const nextRecordIds = new Array(nextRecords.length);
+  /** @type {number[]} */
   const nextRecordIndices = new Array(nextRecords.length);
+  /** @type {Record<string, number[]>} */
   const nextRepoRecordIndices = Object.create(null);
   let nextRepoWildcardProofSafe = true;
   let nextExtensionSearchProofSafe = true;
+  /** @type {number[]} */
   const nextReaderRecordIndices = [];
+  /** @type {Record<string, number[]>} */
   const nextRepoReaderRecordIndices = Object.create(null);
   for (let i = 0; i < nextRecords.length; i++) {
-    const record = nextRecords[i];
+    // Decoding constructs one record for each populated compact row.
+    const record = /** @type {SearchRecord} */ (nextRecords[i]);
     if (typeof record.Repo !== "string" || typeof record.File !== "string"
         || !Array.isArray(record.Folder) || Array.prototype.some.call(record.Folder, part => typeof part !== "string")) {
       nextRepoWildcardProofSafe = false;
     }
-    const repo = record.Repo || "";
+    // Bracket access performs the legacy property-key coercion, including errors.
+    const repo = /** @type {string} */ (record.Repo || "");
     nextRecordIndices[i] = i;
     if (!nextRepoRecordIndices[repo]) nextRepoRecordIndices[repo] = [];
     nextRepoRecordIndices[repo].push(i);
@@ -442,7 +529,7 @@ function replaceCorpus(nextRecords) {
     if (extension) {
       extensionCounts[extension] = (extensionCounts[extension] || 0) + 1;
       if (!extensionsByRepo[repo]) extensionsByRepo[repo] = Object.create(null);
-      extensionsByRepo[repo][extension] = (extensionsByRepo[repo][extension] || 0) + 1;
+      /** @type {Record<string, number>} */ (extensionsByRepo[repo])[extension] = (/** @type {Record<string, number>} */ (extensionsByRepo[repo])[extension] || 0) + 1;
     }
     if (NATIVE_READER_EXTENSIONS.has(extension)) {
       nextReaderRecordIndices.push(i);
@@ -455,15 +542,17 @@ function replaceCorpus(nextRecords) {
     idOccurrences[base] = occurrence + 1;
     nextRecordIds[i] = stableRecordId(record, occurrence);
   }
+  /** @type {SearchMetadata} */
   const nextMetadata = {
     count: nextRecords.length,
-    repos: Object.keys(repoCounts).map((name) => ({ name, count: repoCounts[name] })).sort((a, b) => a.name.localeCompare(b.name)),
-    extensions: Object.keys(extensionCounts).sort().map((name) => ({ name, count: extensionCounts[name] })),
+    repos: Object.keys(repoCounts).map((name) => ({ name, count: /** @type {number} */ (repoCounts[name]) })).sort((a, b) => a.name.localeCompare(b.name)),
+    extensions: Object.keys(extensionCounts).sort().map((name) => ({ name, count: /** @type {number} */ (extensionCounts[name]) })),
     extensionsByRepo: Object.create(null),
     reader: { available: nextReaderRecordIndices.length > 0, count: nextReaderRecordIndices.length, byRepo: readerByRepo },
   };
   for (const repo of Object.keys(extensionsByRepo)) {
-    nextMetadata.extensionsByRepo[repo] = Object.keys(extensionsByRepo[repo]).sort().map((name) => ({ name, count: extensionsByRepo[repo][name] }));
+    const counts = /** @type {Record<string, number>} */ (extensionsByRepo[repo]);
+    nextMetadata.extensionsByRepo[repo] = Object.keys(counts).sort().map((name) => ({ name, count: /** @type {number} */ (counts[name]) }));
   }
   // Publication is synchronous: existing searches see either complete snapshot.
   if (sortBuildTimer !== null && typeof clearTimeout === "function") clearTimeout(sortBuildTimer);
@@ -502,13 +591,14 @@ function replaceCorpus(nextRecords) {
   return Object.assign({ state: "corpus-ready", generation }, metadata);
 }
 
+/** @param {number} limit @param {number} deadline */
 function advanceFulltext(limit, deadline) {
   if (!fulltextBuild) fulltextBuild = { next: 0, all: Object.create(null), files: Object.create(null), folderTokens: new Map(), folderUnits: 0 };
   const build = fulltextBuild;
   const end = Math.min(records.length, build.next + limit);
   while (build.next < end) {
     const i = build.next++;
-    const record = records[i];
+    const record = /** @type {SearchRecord} */ (records[i]);
     const folders = Array.isArray(record.Folder) ? record.Folder : [];
     const fileParts = tokenizeParts(record.File || "");
     const folderParts = folderTokenParts(build, folders.join(" "));
@@ -516,11 +606,11 @@ function advanceFulltext(limit, deadline) {
     const allTokens = new Set(fileParts.alpha.concat(folderParts.alpha, fileParts.chinese, folderParts.chinese));
     for (const token of allTokens) {
       if (!build.all[token]) build.all[token] = [];
-      build.all[token].push(i);
+      /** @type {number[]} */ (build.all[token]).push(i);
     }
     for (const token of new Set(fileParts.alpha.concat(fileParts.chinese))) {
       if (!build.files[token]) build.files[token] = [];
-      build.files[token].push(i);
+      /** @type {number[]} */ (build.files[token]).push(i);
     }
     if (Date.now() >= deadline) break;
   }
@@ -544,27 +634,30 @@ function advanceFulltext(limit, deadline) {
   fulltextBuild = null;
 }
 
+/** @param {PostingIndex} index @returns {VocabularyBuild} */
 function createVocabularyBuild(index) {
   return { index, keys: Object.keys(index), next: 0, groups: new Map(), counts: null,
     group: 0, item: 0, output: [] };
 }
 
+/** @param {VocabularyBuild} build @param {number} deadline */
 function advanceVocabulary(build, deadline) {
   let remaining = deadline === Infinity ? Infinity : 4096;
   while (build.next < build.keys.length) {
     if (remaining-- <= 0 || Date.now() >= deadline) return false;
-    const token = build.keys[build.next++];
-    const count = build.index[token].length;
+    // keys are captured from this index, and next is bounded above.
+    const token = /** @type {string} */ (build.keys[build.next++]);
+    const count = /** @type {Posting} */ (build.index[token]).length;
     let group = build.groups.get(count);
     if (!group) { group = []; build.groups.set(count, group); }
     group.push([token, count]);
   }
   if (!build.counts) build.counts = Array.from(build.groups.keys()).sort((a, b) => b - a);
   while (build.group < build.counts.length) {
-    const group = build.groups.get(build.counts[build.group]);
+    const group = /** @type {VocabularyEntry[]} */ (build.groups.get(/** @type {number} */ (build.counts[build.group])));
     while (build.item < group.length) {
       if (remaining-- <= 0 || Date.now() >= deadline) return false;
-      build.output.push(group[build.item++]);
+      build.output.push(/** @type {VocabularyEntry} */ (group[build.item++]));
     }
     build.group++;
     build.item = 0;
@@ -572,12 +665,13 @@ function advanceVocabulary(build, deadline) {
   return true;
 }
 
+/** @param {PostingIndex} index @param {PostingCompaction} build @param {number} deadline @param {PostingIndex | null} sharedIndex */
 function advancePostingCompaction(index, build, deadline, sharedIndex = null) {
   let remaining = deadline === Infinity ? Infinity : FULLTEXT_COMPACT_BATCH_TOKENS;
   while (build.next < build.keys.length) {
     if (remaining-- <= 0 || Date.now() >= deadline) return false;
-    const token = build.keys[build.next];
-    const posting = index[token];
+    const token = /** @type {string} */ (build.keys[build.next]);
+    const posting = /** @type {Posting} */ (index[token]);
     const shared = sharedIndex && sharedIndex[token];
     // File postings are an ordered subset of all-field postings. Equal lengths
     // prove equal IDs, so immutable arrays can be shared without a second scan.
@@ -587,10 +681,11 @@ function advancePostingCompaction(index, build, deadline, sharedIndex = null) {
   return true;
 }
 
+/** @param {number} expectedGeneration @param {number} delay */
 function scheduleFulltext(expectedGeneration, delay) {
   if (typeof setTimeout !== "function" || wordIndex) return;
   // Keep lazy construction on devices that explicitly report little memory.
-  if (typeof navigator !== "undefined" && navigator.deviceMemory <= 2) return;
+  if (typeof navigator !== "undefined" && /** @type {WorkerNavigator & {deviceMemory: number}} */ (navigator).deviceMemory <= 2) return;
   fulltextBuildTimer = setTimeout(() => {
     if (generation !== expectedGeneration) return;
     fulltextBuildTimer = null;
@@ -621,15 +716,17 @@ function yieldSearchIndex() {
     indexYieldChannel.port1.onmessage = () => indexYieldQueue.shift()?.();
   }
   // A message task permits cancellation without the nested-timer 4 ms clamp.
-  return new Promise(resolve => { indexYieldQueue.push(resolve); indexYieldChannel.port2.postMessage(null); });
+  return new Promise(/** @param {(value: void) => void} resolve */ resolve => { indexYieldQueue.push(resolve); /** @type {MessageChannel} */ (indexYieldChannel).port2.postMessage(null); });
 }
 
+/** @param {string} query @param {SearchParams} params */
 function singleCharacterSearch(query, params) {
   // One code point has no fuzzy expansion: the complete literal scan also
   // includes filename, extension, repository and optional folder hits.
   return !params.exact && Array.from(query).length === 1 && !/[\s*?]/u.test(query);
 }
 
+/** @param {SearchParams} params @param {SearchJob} job */
 async function prepareSearchIndex(params, job) {
   const query = String(params.q || "").trim();
   if (wordIndex || !query || params.exact || singleCharacterSearch(query, params)
@@ -650,10 +747,12 @@ async function prepareSearchIndex(params, job) {
   }
 }
 
+/** @param {SearchParams} params */
 function buildFilterSets(params) {
-  const repos = params.repos || null;
-  const extensions = params.extensions || null;
-  const folders = params.folders && params.folders.length ? new Set(params.folders.map(cleanPath)) : null;
+  const repos = /** @type {string[] | null} */ (params.repos || null);
+  const extensions = /** @type {unknown[] | null} */ (params.extensions || null);
+  const rawFolders = /** @type {unknown[] | null} */ (params.folders);
+  const folders = rawFolders && rawFolders.length ? new Set(rawFolders.map(cleanPath)) : null;
   const singleFolder = folders?.size === 1 ? folders.values().next().value : "";
   return {
     repoSet: repos && repos.length ? new Set(repos) : null,
@@ -662,11 +761,12 @@ function buildFilterSets(params) {
       : null,
     folders,
     folderPrefix: singleFolder ? singleFolder + "/" : null,
-    selfFolders: new Set((params.folderSelfs || []).map(cleanPath).filter((path) => typeof path === "string")),
-    subtreeFolders: new Set((params.folderSubtrees || []).map(cleanPath).filter((path) => typeof path === "string")),
+    selfFolders: new Set((/** @type {unknown[]} */ (params.folderSelfs || [])).map(cleanPath).filter((path) => typeof path === "string")),
+    subtreeFolders: new Set((/** @type {unknown[]} */ (params.folderSubtrees || [])).map(cleanPath).filter((path) => typeof path === "string")),
   };
 }
 
+/** @param {unknown[]} recordFolders @param {string} folderPath @param {SearchParams} params @param {ReturnType<typeof buildFilterSets>} filters */
 function matchesFolderFilters(recordFolders, folderPath, params, filters) {
   if (params.folderMatchMode === "mixed") {
     let matched = filters.selfFolders.has(folderPath);
@@ -689,14 +789,16 @@ function matchesFolderFilters(recordFolders, folderPath, params, filters) {
   return false;
 }
 
+/** @param {number[]} indices @param {SearchParams} params */
 function applyFilters(indices, params) {
   const filters = buildFilterSets(params);
   const hasFolderFilters = params.folderMatchMode === "mixed"
     ? filters.selfFolders.size || filters.subtreeFolders.size
     : !!filters.folders;
   return indices.filter((index) => {
+    /** @type {Partial<SearchRecord>} */
     const record = records[index] || {};
-    if (filters.repoSet && !filters.repoSet.has(record.Repo)) return false;
+    if (filters.repoSet && !filters.repoSet.has(/** @type {string} */ (record.Repo))) return false;
     if (filters.extensionSet && !filters.extensionSet.has(String(record.Extension || "").toLowerCase())) return false;
     if (hasFolderFilters) {
       const recordFolders = Array.isArray(record.Folder) ? record.Folder : [];
@@ -704,33 +806,36 @@ function applyFilters(indices, params) {
       if (!matchesFolderFilters(recordFolders, folderPath, params, filters)) return false;
     }
     if (typeof record.Size === "number" && record.Size > 0) {
-      if (params.minSize !== null && record.Size < params.minSize) return false;
-      if (params.maxSize !== null && record.Size > params.maxSize) return false;
+      if (params.minSize !== null && record.Size < /** @type {number} */ (params.minSize)) return false;
+      if (params.maxSize !== null && record.Size > /** @type {number} */ (params.maxSize)) return false;
     }
     return true;
   });
 }
 
-/** @param {string} path */
+/** @param {unknown} path */
 function cleanPath(path) {
   return String(path || "").replace(/^\/+|\/+$/g, "");
 }
 
-function exactSearchScope(repos) {
+/** @param {unknown} input */
+function exactSearchScope(input) {
+  const repos = /** @type {string[] | undefined | null} */ (input);
   if (!repos?.length) return recordIndices;
   const unique = Array.from(new Set(repos));
-  if (unique.length === 1) return repoRecordIndices[unique[0]] || [];
+  if (unique.length === 1) return repoRecordIndices[/** @type {string} */ (unique[0])] || [];
   const indices = [];
   for (const repo of unique) for (const index of repoRecordIndices[repo] || []) indices.push(index);
   return indices.sort((a, b) => a - b);
 }
 
+/** @param {string} term @param {SearchParams} params @param {number} scopeSize */
 function indexedExactCandidates(term, params, scopeSize) {
   if (!wordIndex || !repoWildcardProofSafe || !extensionSearchProofSafe || !scopeSize) return null;
-  const repos = params.repos;
+  const repos = /** @type {unknown[] | null | undefined} */ (params.repos);
   if (repos?.length && (!Array.isArray(repos) || repos.some(repo => typeof repo !== "string"))) return null;
   const selected = repos?.length ? new Set(repos) : null;
-  const index = params.searchFolders === false ? wordIndexFilesOnly : wordIndex;
+  const index = /** @type {PostingIndex} */ (params.searchFolders === false ? wordIndexFilesOnly : wordIndex);
   let best = null;
   let bestSize = Math.min(EXACT_INDEX_MAX_INDICES, Math.floor(scopeSize / 2));
   const runs = term.match(/[\u3400-\u4dbf\u4e00-\u9fff]{2,}/g) || [];
@@ -745,18 +850,20 @@ function indexedExactCandidates(term, params, scopeSize) {
   }
   if (best === null) return null;
   const candidates = new Set();
-  for (const id of best.posting) if (!selected || selected.has(records[id].Repo)) candidates.add(id);
-  for (const repo of best.repoMatches) for (const id of repoRecordIndices[repo.name]) candidates.add(id);
+  // Postings and metadata are published from the same corpus generation.
+  for (const id of best.posting) if (!selected || selected.has(/** @type {string} */ (/** @type {SearchRecord} */ (records[id]).Repo))) candidates.add(id);
+  for (const repo of best.repoMatches) for (const id of /** @type {number[]} */ (repoRecordIndices[repo.name])) candidates.add(id);
   return Array.from(candidates).sort((a, b) => a - b);
 }
 
+/** @param {SearchParams} params */
 function emptySearchOrder(params) {
-  const repos = params.repos || [];
+  const repos = /** @type {string[]} */ (params.repos || []);
   if (repos.length > 1) return null;
-  if ((params.extensions && params.extensions.length)
-      || (params.folders && params.folders.length)
-      || (params.folderSelfs && params.folderSelfs.length)
-      || (params.folderSubtrees && params.folderSubtrees.length)
+  if ((params.extensions && /** @type {unknown[]} */ (params.extensions).length)
+      || (params.folders && /** @type {unknown[]} */ (params.folders).length)
+      || (params.folderSelfs && /** @type {unknown[]} */ (params.folderSelfs).length)
+      || (params.folderSubtrees && /** @type {unknown[]} */ (params.folderSubtrees).length)
       || params.minSize != null
       || params.maxSize != null) return null;
   const repo = repos.length === 1 ? repos[0] : null;
@@ -772,11 +879,12 @@ function emptySearchOrder(params) {
   return recordIndices;
 }
 
+/** @param {number[]} indices @param {string} anchorId */
 function findSearchAnchor(indices, anchorId) {
   const owner = searchAnchorOwners.get(indices) || {};
   const cached = searchAnchorCache.get(owner);
   if (cached?.has(anchorId)) {
-    const index = cached.get(anchorId);
+    const index = /** @type {number} */ (cached.get(anchorId));
     cached.delete(anchorId); cached.set(anchorId, index);
     searchAnchorCache.delete(owner); searchAnchorCache.set(owner, cached);
     return index;
@@ -784,7 +892,7 @@ function findSearchAnchor(indices, anchorId) {
   const separator = anchorId.indexOf("\0");
   const anchorRepo = anchorId.slice(0, separator), anchorPath = anchorId.slice(separator + 1);
   const index = separator < 0 ? -1 : indices.findIndex(index => {
-    const record = records[index];
+    const record = /** @type {SearchRecord} */ (records[index]);
     const repo = String(record.Repo || "");
     if (repo !== anchorRepo && (!repo.includes("\0") || !anchorId.startsWith(`${repo}\0`))) return false;
     const filename = (record.File || "") + (record.Extension ? "." + record.Extension : "");
@@ -798,18 +906,21 @@ function findSearchAnchor(indices, anchorId) {
     // Owner tokens do not retain an evicted complete result order.
     searchAnchorOwners.set(indices, owner);
     searchAnchorCache.delete(owner); searchAnchorCache.set(owner, lookups);
-    while (searchAnchorCache.size > SEARCH_ANCHOR_ORDER_MAX) searchAnchorCache.delete(searchAnchorCache.keys().next().value);
+    while (searchAnchorCache.size > SEARCH_ANCHOR_ORDER_MAX) searchAnchorCache.delete(/** @type {object} */ (searchAnchorCache.keys().next().value));
   }
   return index;
 }
 
+/** @param {number[]} indices @param {SearchParams} params */
 function pageResult(indices, params) {
   const page = Math.max(1, Number(params.page) || 1);
   const pageSize = Math.max(1, Math.min(MAX_PAGE_SIZE, Number(params.pageSize) || 100));
   const pageItems = indices.slice((page - 1) * pageSize, page * pageSize);
+  /** @type {{records: SearchRecord[], ids: string[], total: number, page: number, pageSize: number, generation: number, snapshot_generation: string, anchor_index?: number}} */
   const result = {
-    records: pageItems.map((index) => records[index]),
-    ids: pageItems.map((index) => recordIds[index]),
+    // Search orders and IDs refer to the same published corpus.
+    records: pageItems.map((index) => /** @type {SearchRecord} */ (records[index])),
+    ids: pageItems.map((index) => /** @type {string} */ (recordIds[index])),
     total: indices.length,
     page,
     pageSize,
@@ -822,6 +933,7 @@ function pageResult(indices, params) {
   return result;
 }
 
+/** @param {SearchParams} params */
 function searchOrderKey(params) {
   const cacheParams = Object.assign({}, params);
   delete cacheParams.page;
@@ -830,6 +942,7 @@ function searchOrderKey(params) {
   return JSON.stringify(cacheParams);
 }
 
+/** @param {SearchParams} params @param {number[] | null} preparedExact */
 function searchLocal(params, preparedExact = null) {
   const query = String(params.q || "").trim();
   const searchFolders = params.searchFolders !== false;
@@ -857,7 +970,7 @@ function searchLocal(params, preparedExact = null) {
     const terms = query.split(/\s+/).filter(Boolean);
     matched = preparedExact === null ? exactSearchScope(params.repos).slice() : preparedExact;
     for (let termIndex = 0; preparedExact === null && termIndex < terms.length; termIndex++) {
-      const term = terms[termIndex];
+      const term = /** @type {string} */ (terms[termIndex]);
       const wildcard = term.includes("*") || term.includes("?");
       const lower = term.toLowerCase();
       if (wildcard && term.replace(/\*/g, "") === "") continue;
@@ -877,6 +990,7 @@ function searchLocal(params, preparedExact = null) {
           && /^[*?]+$/.test(term)
           && Object.keys(repoRecordIndices).every(repo => pattern.test(repo.toLowerCase()))) continue;
       matched = matched.filter(index => {
+        /** @type {Partial<SearchRecord>} */
         const record = records[index] || {};
         const fields = getRecordSearchFields(record);
         return pattern
@@ -887,7 +1001,7 @@ function searchLocal(params, preparedExact = null) {
     }
   } else {
     buildFulltext();
-    const activeIndex = searchFolders ? wordIndex : wordIndexFilesOnly;
+    const activeIndex = /** @type {PostingIndex} */ (searchFolders ? wordIndex : wordIndexFilesOnly);
     const activeVocab = searchFolders ? vocabSorted : vocabSortedFilesOnly;
     const scope = exactSearchScope(params.repos);
     const terms = query.toLowerCase().split(/\s+/).filter(Boolean);
@@ -900,7 +1014,7 @@ function searchLocal(params, preparedExact = null) {
       const literalScope = indexedExactCandidates(term, params, scope.length) ?? scope;
       const seen = new Set();
       for (const index of literalScope) {
-        const fields = getRecordSearchFields(records[index]);
+        const fields = getRecordSearchFields(/** @type {SearchRecord} */ (records[index]));
         if (fields.file.includes(term) || fields.repo.includes(term)
             || (searchFolders && fields.folder.includes(term))) seen.add(index);
       }
@@ -936,10 +1050,10 @@ function searchLocal(params, preparedExact = null) {
   }
   const filtered = applyFilters(matched, params);
   if (params.sort === "name" || params.sort === "size") {
-    const repos = params.repos || [];
+    const repos = /** @type {string[]} */ (params.repos || []);
     const ready = params.sort === "name" ? nameOrderReady : sizeOrderReady;
     const byRepo = params.sort === "name" ? repoSortedByName : repoSortedBySize;
-    const order = repos.length === 1 ? (byRepo[repos[0]] || []) : null;
+    const order = repos.length === 1 ? (byRepo[/** @type {string} */ (repos[0])] || []) : null;
     // Exact single-repo matches retain source order, so stable name ties match
     // the prepared repository order. Fuzzy, unusual and cold paths still sort.
     const exactSingleRepoName = query && params.sort === "name"
@@ -959,6 +1073,7 @@ function searchLocal(params, preparedExact = null) {
   } else {
     const tokens = tokenize(query);
     const scored = filtered.map((index) => {
+      /** @type {Partial<SearchRecord>} */
       const record = records[index] || {};
       const fields = getRecordSearchFields(record);
       let score = 0;
@@ -973,10 +1088,11 @@ function searchLocal(params, preparedExact = null) {
     ordered = scored.map((item) => item.index);
   }
   searchOrderCache.set(cacheKey, ordered);
-  while (searchOrderCache.size > SEARCH_ORDER_CACHE_MAX) searchOrderCache.delete(searchOrderCache.keys().next().value);
+  while (searchOrderCache.size > SEARCH_ORDER_CACHE_MAX) searchOrderCache.delete(/** @type {string} */ (searchOrderCache.keys().next().value));
   return pageResult(ordered, params);
 }
 
+/** @param {SearchParams} params @param {SearchJob} job */
 async function prepareSingleCharacter(params, job) {
   const query = String(params.q || "").trim();
   if (!singleCharacterSearch(query, params)) return null;
@@ -986,7 +1102,7 @@ async function prepareSingleCharacter(params, job) {
     if (job.generation !== generation) throw protocolError("CORPUS_REPLACED", "Search corpus changed");
     const end = Math.min(scope.length, start + FULLTEXT_BATCH_RECORDS);
     for (let offset = start; offset < end; offset++) {
-      const index = scope[offset], fields = getRecordSearchFields(records[index]);
+      const index = /** @type {number} */ (scope[offset]), fields = getRecordSearchFields(/** @type {SearchRecord} */ (records[index]));
       if (fields.file.includes(lower) || fields.repo.includes(lower)
           || (params.searchFolders !== false && fields.folder.includes(lower))) matched.push(index);
     }
@@ -997,6 +1113,7 @@ async function prepareSingleCharacter(params, job) {
   return matched;
 }
 
+/** @param {SearchParams} params @param {SearchJob} job */
 async function prepareLongWildcard(params, job) {
   const query = String(params.q || "").trim();
   // Ordinary searches keep their fast synchronous path. Expensive wildcard
@@ -1017,7 +1134,7 @@ async function prepareLongWildcard(params, job) {
     if (job.generation !== generation) throw protocolError("CORPUS_REPLACED", "Search corpus changed");
     const end = Math.min(scope.length, start + FULLTEXT_BATCH_RECORDS);
     for (let offset = start; offset < end; offset++) {
-      const index = scope[offset], fields = getRecordSearchFields(records[index]);
+      const index = /** @type {number} */ (scope[offset]), fields = getRecordSearchFields(/** @type {SearchRecord} */ (records[index]));
       if (terms.every(({lower, matcher}) => matcher
         ? matcher.test(fields.file) || matcher.test(fields.repo) || (params.searchFolders !== false && matcher.test(fields.folder))
         : fields.file.includes(lower) || fields.repo.includes(lower) || (params.searchFolders !== false && fields.folder.includes(lower)))) matched.push(index);
@@ -1029,38 +1146,43 @@ async function prepareLongWildcard(params, job) {
   return matched;
 }
 
+/** @param {SearchParams} params */
 function randomRecord(params) {
   if (params.txtOnly) throw protocolError("LEGACY_TXT_RETIRED", "Legacy OCR TXT selection is retired");
-  const repo = params.repo || "";
+  const repo = /** @type {string} */ (params.repo || "");
   const readerOnly = !!params.readerOnly;
   let candidates;
   if (readerOnly) candidates = repo ? (repoReaderRecordIndices[repo] || []) : readerRecordIndices;
   else if (repo) candidates = repoRecordIndices[repo] || [];
   else candidates = recordIndices;
   if (!candidates.length) return { record: null, id: null, generation };
-  const randomValue = typeof params.randomValue === "number" ? params.randomValue : Math.random();
-  const index = candidates[Math.min(candidates.length - 1, Math.floor(Math.max(0, randomValue) * candidates.length))];
+  // NaN previously indexed the array with the string "NaN", returning missing
+  // record/id fields. Treat it like an absent randomValue instead.
+  const randomValue = typeof params.randomValue === "number" && !Number.isNaN(params.randomValue) ? params.randomValue : Math.random();
+  const index = /** @type {number} */ (candidates[Math.min(candidates.length - 1, Math.floor(Math.max(0, randomValue) * candidates.length))]);
   return { record: records[index], id: recordIds[index], generation };
 }
 
+/** @param {SearchParams} params */
 function folderContents(params) {
-  const repo = params.repo || "";
+  const repo = /** @type {string} */ (params.repo || "");
   const path = cleanPath(params.path);
   const directory = getDirectoryIndex(repo);
   const node = directory.nodes[path];
   const files = (directory.files[path] || []).map(index => {
-    const record = records[index];
+    const record = /** @type {SearchRecord} */ (records[index]);
     return { name: record.File || "", ext: record.Extension || "", hasTxt: !!record.HasTxt, size: record.Size || "" };
   });
   return {
     folders: (node ? node.children.slice() : []).sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0)
       .map(child => ({ name: child.name, path: child.path, count: child.count })),
-    files: files.sort((a, b) => a.name.localeCompare(b.name)),
+    files: files.sort((a, b) => /** @type {{localeCompare(value: unknown): number}} */ (a.name).localeCompare(b.name)),
     current_path: path,
     generation,
   };
 }
 
+/** @param {string} repo */
 function getDirectoryIndex(repo) {
   const cached = directoryIndexes.get(repo);
   if (cached) {
@@ -1068,30 +1190,36 @@ function getDirectoryIndex(repo) {
     directoryIndexes.set(repo, cached);
     return cached;
   }
-  const root = { name: repo.split("/").pop(), path: "", children: [], count: 0, isRoot: true, hasDirectFiles: false };
+  /** @type {DirectoryNode} */
+  const root = { name: /** @type {string} */ (repo.split("/").pop()), path: "", children: [], count: 0, isRoot: true, hasDirectFiles: false };
+  /** @type {Record<string, DirectoryNode>} */
   const nodes = Object.create(null);
+  /** @type {Record<string, number[]>} */
   const directFiles = Object.create(null);
   nodes[""] = root;
   for (const index of repoRecordIndices[repo] || []) {
-    const record = records[index];
+    const record = /** @type {SearchRecord} */ (records[index]);
     root.count++;
     const folders = record.Folder || [];
     let path = "";
-    for (const name of folders) {
-      const parent = nodes[path];
+    for (const part of folders) {
+      // Preserve the original value; concatenation and property access coerce it.
+      const name = /** @type {string} */ (part);
+      // Every traversed parent was created on the preceding iteration.
+      const parent = /** @type {DirectoryNode} */ (nodes[path]);
       path = path ? path + "/" + name : name;
       if (!nodes[path]) {
         nodes[path] = { name, path, children: [], count: 0, hasDirectFiles: false };
-        parent.children.push(nodes[path]);
+        parent.children.push(/** @type {DirectoryNode} */ (nodes[path]));
       }
-      nodes[path].count++;
+      /** @type {DirectoryNode} */ (nodes[path]).count++;
     }
-    nodes[path].hasDirectFiles = true;
+    /** @type {DirectoryNode} */ (nodes[path]).hasDirectFiles = true;
     if (!directFiles[path]) directFiles[path] = [];
-    directFiles[path].push(index);
+    /** @type {number[]} */ (directFiles[path]).push(index);
   }
   for (const path of Object.keys(nodes)) {
-    const node = nodes[path];
+    const node = /** @type {DirectoryNode} */ (nodes[path]);
     node.children.sort((a, b) => a.name.localeCompare(b.name));
     node.hasChildren = node.children.length > 0;
     node.showSelfToggle = !!(node.path && node.hasDirectFiles && node.hasChildren);
@@ -1101,20 +1229,26 @@ function getDirectoryIndex(repo) {
   // disjoint across repositories and therefore bounded by the loaded corpus.
   if (root.count) {
     directoryIndexes.set(repo, directory);
-    while (directoryIndexes.size > DIRECTORY_INDEX_MAX) directoryIndexes.delete(directoryIndexes.keys().next().value);
+    while (directoryIndexes.size > DIRECTORY_INDEX_MAX) directoryIndexes.delete(/** @type {string} */ (directoryIndexes.keys().next().value));
   }
   return directory;
 }
 
+/** @param {SearchParams} params */
 function folderTree(params) {
-  return { tree: getDirectoryIndex(params.repo || "").tree, generation };
+  return { tree: getDirectoryIndex(/** @type {string} */ (params.repo || "")).tree, generation };
 }
 
+/** @param {string} code @param {string} message */
 function protocolError(code, message) {
   return Object.assign(new Error(message), {code});
 }
 
-async function dispatch(type, payload, job) {
+/** @param {unknown} type @param {unknown} input @param {SearchJob} job */
+async function dispatch(type, input, job) {
+  // Property access on primitives is intentional; replacing it with validation
+  // would change legacy errors and the order in which they are reported.
+  const payload = /** @type {Record<string, unknown>} */ (input);
   if (type === "handshake") return { protocol: WORKER_PROTOCOL_VERSION };
   if (type === "cancel-search") {
     const pending = searchJobs.get(payload.requestId);
@@ -1122,35 +1256,38 @@ async function dispatch(type, payload, job) {
     return {cancelled: !!pending};
   }
   if (type === "load-corpus") {
-    return installCorpusFromSource(await fetchGzipJSON(payload.url));
+    return installCorpusFromSource(await fetchGzipJSON(/** @type {string} */ (payload.url)));
   }
   if (type === "replace-corpus") return installCorpus(payload.data);
   if (!records.length) throw protocolError("CORPUS_NOT_READY", "Search corpus is not ready");
   if (type === "metadata") return Object.assign({ generation }, metadata);
   if (type === "local-search") {
-    if (Array.from(String(payload.q || "")).length > 256)
+    // The protocol historically forwards raw options, including unusual values.
+    // Keep that behavior, with the assertion isolated to this operation.
+    const params = /** @type {SearchParams} */ (payload);
+    if (Array.from(String(params.q || "")).length > 256)
       throw protocolError("QUERY_TOO_LONG", "Search query exceeds 256 characters");
     // A complete cached order already includes filtering and sorting. Serve it
     // before a cooperative single-character scan can revisit the whole corpus.
-    if (searchOrderCache.has(searchOrderKey(payload))) {
+    if (searchOrderCache.has(searchOrderKey(params))) {
       if (job.cancelled) throw protocolError("SEARCH_CANCELLED", "Search cancelled");
       if (job.generation !== generation) throw protocolError("CORPUS_REPLACED", "Search corpus changed");
-      return searchLocal(payload);
+      return searchLocal(params);
     }
-    await prepareSearchIndex(payload || {}, job);
-    const prepared = await prepareSingleCharacter(payload || {}, job) ?? await prepareLongWildcard(payload || {}, job);
+    await prepareSearchIndex(params || {}, job);
+    const prepared = await prepareSingleCharacter(params || {}, job) ?? await prepareLongWildcard(params || {}, job);
     if (job.cancelled) throw protocolError("SEARCH_CANCELLED", "Search cancelled");
     if (job.generation !== generation) throw protocolError("CORPUS_REPLACED", "Search corpus changed");
-    return searchLocal(payload || {}, prepared);
+    return searchLocal(params || {}, prepared);
   }
-  if (type === "random-record") return randomRecord(payload || {});
-  if (type === "folder-contents") return folderContents(payload || {});
-  if (type === "folder-tree") return folderTree(payload || {});
-  throw protocolError("UNKNOWN_REQUEST", "Unknown Worker request: " + type);
+  if (type === "random-record") return randomRecord(/** @type {SearchParams} */ (payload) || {});
+  if (type === "folder-contents") return folderContents(/** @type {SearchParams} */ (payload) || {});
+  if (type === "folder-tree") return folderTree(/** @type {SearchParams} */ (payload) || {});
+  throw protocolError("UNKNOWN_REQUEST", "Unknown Worker request: " + /** @type {string} */ (type));
 }
 
 self.addEventListener("message", async function(event) {
-  const message = /** @type {MessageEvent} */ (event).data || {};
+  const message = /** @type {Record<string, unknown>} */ (/** @type {MessageEvent<unknown>} */ (event).data || {});
   const id = message.id;
   if (message.protocol !== WORKER_PROTOCOL_VERSION) {
     self.postMessage({ protocol: WORKER_PROTOCOL_VERSION, type: "response", id, ok: false, error: { code: "PROTOCOL_MISMATCH", message: "Refresh required: app/Worker protocol mismatch" } });
@@ -1165,7 +1302,8 @@ self.addEventListener("message", async function(event) {
     }
     const result = await dispatch(message.type, message.payload || {}, job);
     self.postMessage({ protocol: WORKER_PROTOCOL_VERSION, type: "response", id, ok: true, result });
-  } catch (error) {
+  } catch (caught) {
+    const error = /** @type {{code?: string, message?: string} | null} */ (caught);
     self.postMessage({
       protocol: WORKER_PROTOCOL_VERSION,
       type: "response",

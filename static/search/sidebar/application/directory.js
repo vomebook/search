@@ -44,7 +44,7 @@ async function renderRepoList(routeId) {
 async function renderBrowser(path, routeId) {
   if (routeId && routeId !== deps.readView().routeId) return;
   deps.scroll.activate(deps.scroll.keyFor(deps.readView().repoFull || deps.readView().repo, path));
-  const {list, currentRepo} = deps.view.begin(path, () => deps.readView().repoFull);
+  const {list, currentRepo} = deps.view.begin(path, () => deps.readView().repoFull || "");
   var data = null;
   var initialData = null;
   /** @type {VoiceOfMLSidebarEntries | null} */

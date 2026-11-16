@@ -1,10 +1,14 @@
+/// <reference path="../typings/search-app.d.ts" />
+
 const DATA_URL = "data/search_data.json.gz";
 const API_BASE = "https://voiceofml-search.hf.space";
 const MIRROR_HOST = "hf-mirror.com";
 
+/** @param {string} key */
 function readSearchPreference(key) {
   try { return localStorage.getItem(key); } catch (_) { return null; }
 }
+/** @param {string} key @param {string} value */
 function writeSearchPreference(key, value) {
   try { localStorage.setItem(key, value); } catch (_) { /* Preferences are optional. */ }
 }
@@ -40,6 +44,7 @@ const ICONS = {
   database: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" width="18" height="18"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg>',
 };
 
+/** @type {HTMLStyleElement | null} */
 let sidebarIconStyleSheet = null;
 
 function ensureSidebarIconStyles() {
@@ -58,23 +63,31 @@ function ensureSidebarIconStyles() {
   sidebarIconStyleSheet = style;
 }
 
+/** @param {string} key */
 function sidebarIconMarkup(key) {
   ensureSidebarIconStyles();
   return `<span class="browser-file-icon icon-${key}" aria-hidden="true"></span>`;
 }
 
+/** @type {Record<string, number>} */
 let extensionCounts = {};
+/** @type {Record<string, VoiceOfMLFilterCount[]>} */
 let repoExtensionCounts = {};
+/** @type {VoiceOfMLFilterCount[]} */
 let repoList = [];
+/** @type {string[]} */
 let extensionList = [];
+/** @type {{available: boolean, count: number, byRepo: Record<string, number>}} */
 let readerMetadata = { available: false, count: 0, byRepo: {} };
 
 
+/** @type {Promise<Response | null> | null} */
 let keepalivePending = null;
 let lastKeepaliveAt = 0;
 const KEEPALIVE_INTERVAL_MS = 45 * 1000;
 const KEEPALIVE_MIN_GAP_MS = 30 * 1000;
 
+/** @param {boolean} visible @param {boolean} animate */
 function setExactSearchSectionVisible(visible, animate) {
   if (!DOM.exactSearchSection) return;
   if (!animate) DOM.exactSearchSection.style.transition = "none";
@@ -91,11 +104,13 @@ function setExactSearchSectionVisible(visible, animate) {
   }
 }
 
+/** @param {VoiceOfMLResultRecord} rec */
 function buildRecordLink(rec) {
   const repo = rec.Repo || "";
   return HF_DATASET_BASE + "/" + repo + "/resolve/main/" + encodeRecordPath(buildRecordRelativePath(rec));
 }
 
+/** @param {VoiceOfMLResultRecord} rec */
 function buildRecordPath(rec) {
   const repo = rec.Repo || "";
   return HF_DATASET_BASE + "/" + repo + "/blob/main/" + encodeRecordPath(buildRecordRelativePath(rec));
@@ -110,19 +125,24 @@ const readerAssetController = VoiceOfMLReaderAssets.create({
   isFirstViewReady: targetKey => STATE._loadedPage >= 1 && !STATE.isLoading && displayedSearchView?.key === targetKey
 });
 
+/** @param {boolean} [deferDecode] */
 function loadReaderAssets(deferDecode) { return readerAssetController.loadReaderAssets(deferDecode); }
 function loadReaderAssetsAfterFirstPaint() {
   return loadReaderAssets(readerAssetController.scheduling.state.delayUntilPaint);
 }
+/** @template {VoiceOfMLResultRecord} T @param {T} record @param {string} repo @param {string} relativePath @param {string} originalLink */
 function applyReaderAsset(record, repo, relativePath, originalLink) {
   return readerAssetController.applyReaderAsset(record, repo, relativePath, originalLink);
 }
+/** @param {string} [repo] */
 function getConvertedReaderRecords(repo) { return readerAssetController.getConvertedReaderRecords(repo); }
 
+/** @param {PagesSearchRecord} rec */
 function getRecordLink(rec) {
   return rec.Link || buildRecordLink(rec);
 }
 
+/** @param {VoiceOfMLResultRecord} rec */
 function getReaderFolderUrl(rec) {
   var repo = String(rec.Repo || "").split("/").pop();
   if (!repo) return "";
@@ -140,9 +160,11 @@ function getReaderFolderUrl(rec) {
 // Session handoff metadata is expendable; keep recent books within a fixed budget.
 const readerSessionEntries = new Map();
 let readerSessionInitialized = false;
+/** @param {string} id @param {unknown} data @param {boolean} [source] */
 function cacheReaderMetadata(id, data, source = false) {
   if (!id) return;
   const keys = [`reader-source:${id}`, `reader-resolve:${id}`];
+  /** @param {string} bookId */
   const remove = (bookId) => {
     sessionStorage.removeItem(`reader-source:${bookId}`);
     sessionStorage.removeItem(`reader-resolve:${bookId}`);
@@ -152,8 +174,8 @@ function cacheReaderMetadata(id, data, source = false) {
     if (!readerSessionInitialized) {
       for (let i = 0; i < sessionStorage.length; i++) {
         const key = sessionStorage.key(i);
-        const match = /^reader-(?:source|resolve):(.+)$/.exec(key);
-        if (match) readerSessionEntries.set(match[1], (readerSessionEntries.get(match[1]) || 0) +
+        const match = key === null ? null : /^reader-(?:source|resolve):(.+)$/.exec(key);
+        if (match && key !== null) readerSessionEntries.set(match[1], (readerSessionEntries.get(match[1]) || 0) +
           2 * (key.length + (sessionStorage.getItem(key) || "").length));
       }
       readerSessionInitialized = true;
@@ -185,6 +207,7 @@ function cacheReaderMetadata(id, data, source = false) {
   } catch (_) { /* Storage can be disabled; Reader can still resolve through the API. */ }
 }
 
+/** @param {PagesSearchRecord} rec @param {string} [returnUrl] @param {boolean} [cacheMetadata] */
 function getReaderLink(rec, returnUrl, cacheMetadata = true) {
   returnUrl = returnUrl || location.href;
   const readerRecord = Object.assign({}, rec, { Link: getRecordLink(rec), ReturnUrl: returnUrl, FolderUrl: getReaderFolderUrl(rec) });
@@ -247,18 +270,21 @@ Object.defineProperties(window, {
   readerUiState: { get: () => readerHost.uiState },
   readerReturnSnapshot: { get: () => readerHost.returnSnapshot }
 });
+/** @param {string} rawUrl */
 function syncReaderFolderFilter(rawUrl) {
   return readerHost.syncReaderFolderFilter(rawUrl);
 }
 function currentReaderSearchParams() {
   return readerHost.currentReaderSearchParams();
 }
+/** @param {string} rawUrl */
 function normalizeReaderReturnUrl(rawUrl) {
   return readerHost.normalizeReaderReturnUrl(rawUrl);
 }
 function captureReaderReturnScroll() {
   return readerReturnPosition.capture();
 }
+/** @param {ReaderReturnPosition} saved */
 function readerSearchHandoffReady(saved) {
   return readerReturnPosition.ready(saved);
 }
@@ -271,18 +297,22 @@ function restoreReaderReturnScroll(windowRendered = false, restoreTop = false) {
 function closeReaderOverlay(restoreFocus = true, restoreScroll = true) {
   return readerHost.closeReaderOverlay(restoreFocus, restoreScroll);
 }
+/** @param {URL} url @param {boolean} [addHistory] */
 function openReaderOverlay(url, addHistory = true) {
   readerHost.openReaderOverlay(url, addHistory);
 }
 function reconcileSearchDestination() {
   readerHost.reconcileSearchDestination();
 }
+/** @param {{voiceReaderOverlay?: boolean, readerUrl?: string} | null} state */
 function restoreReaderOverlay(state) {
   readerHost.restoreReaderOverlay(state);
 }
+/** @param {ReaderHostMessage} event */
 function handleReaderMessage(event) {
   readerHost.handleReaderMessage(event);
 }
+/** @param {string} rawUrl @param {string} [returnUrl] */
 function navigateToReader(rawUrl, returnUrl) {
   return readerHost.navigateToReader(rawUrl, returnUrl);
 }
@@ -292,6 +322,7 @@ function restoreReaderFromSession() {
 
 var warmedReaderAssets = new Set();
 const readerAssetWarmups = new Map();
+/** @param {string} href @param {RequestMode} mode */
 function warmReaderEngineBytes(href, mode) {
   const controller = new AbortController();
   const cancel = () => {
@@ -337,16 +368,20 @@ function warmReaderEngineBytes(href, mode) {
     }
   })();
 }
+/** @type {Map<string, {expiresAt: number, metadataStored: boolean}>} */
 var warmedReaderSources = new Map();
 // Match reader-resolve's metadata freshness without imposing a lifetime quota.
 const READER_WARMUP_TTL = 5 * 60 * 1000;
 const READER_WARMUP_MAX = 8;
 var readerWarmupInFlight = 0;
+/** @type {{key: string, cancel(superseded?: boolean): void} | null} */
 let readerWarmupPending = null;
+/** @type {Map<string, number>} */
 const readerWarmupRetryAt = new Map();
 function cancelReaderWarmup() {
   if (readerWarmupPending) readerWarmupPending.cancel();
 }
+/** @param {string} base @param {string} readerId @param {string} sourceUrl @param {boolean} [urgent] */
 function startReaderSourceWarmup(base, readerId, sourceUrl, urgent = false) {
   const key = readerId ? "id:" + readerId : sourceUrl;
   if (!key) return;
@@ -380,6 +415,7 @@ function startReaderSourceWarmup(base, readerId, sourceUrl, urgent = false) {
   if (now < (readerWarmupRetryAt.get(key) || 0)) return;
   const controller = new AbortController();
   const task = { key, cancel(superseded = false) { finish(false, superseded); } };
+  /** @param {boolean} success @param {boolean} [superseded] */
   const finish = (success, superseded = false) => {
     if (readerWarmupPending !== task) return;
     clearTimeout(timer);
@@ -393,7 +429,9 @@ function startReaderSourceWarmup(base, readerId, sourceUrl, urgent = false) {
       warmedReaderSources.delete(key);
       warmedReaderSources.set(key, { expiresAt: Date.now() + READER_WARMUP_TTL, metadataStored });
       while (warmedReaderSources.size > READER_WARMUP_MAX) {
-        warmedReaderSources.delete(warmedReaderSources.keys().next().value);
+        const oldest = warmedReaderSources.keys().next();
+        if (oldest.done) break;
+        warmedReaderSources.delete(oldest.value);
       }
       readerWarmupRetryAt.delete(key);
     } else {
@@ -401,7 +439,10 @@ function startReaderSourceWarmup(base, readerId, sourceUrl, urgent = false) {
       if (!superseded) {
         readerWarmupRetryAt.delete(key);
         readerWarmupRetryAt.set(key, Date.now() + 5000);
-        if (readerWarmupRetryAt.size > 64) readerWarmupRetryAt.delete(readerWarmupRetryAt.keys().next().value);
+        if (readerWarmupRetryAt.size > 64) {
+          const oldest = readerWarmupRetryAt.keys().next();
+          if (!oldest.done) readerWarmupRetryAt.delete(oldest.value);
+        }
       }
     }
   };
@@ -423,6 +464,7 @@ function startReaderSourceWarmup(base, readerId, sourceUrl, urgent = false) {
     } catch (_) { finish(false); }
   })();
 }
+/** @param {string} rawUrl @param {boolean} [urgent] */
 function warmReaderIntent(rawUrl, urgent = false) {
   if (!rawUrl || document.hidden || !navigator.onLine) return;
   var extension = "", sourceUrl = "", readerId = "";
@@ -435,6 +477,7 @@ function warmReaderIntent(rawUrl, urgent = false) {
   var shellAssets = VoiceOfMLReaderResources.shellAssets("/search/static/");
   var engineAssets = VoiceOfMLReaderResources.engineAssets(extension, "/search/static/", "?reader-v1");
   var controlled = !!(navigator.serviceWorker && navigator.serviceWorker.controller);
+  /** @param {string} href */
   var preload = function(href) {
     var link = document.createElement("link");
     // Foliate files are all ES modules; a classic preload would not be reused.
@@ -480,10 +523,12 @@ function setupReaderIntentWarming() {
   window.addEventListener("pagehide", cancelReaderWarmup);
   window.addEventListener("offline", cancelReaderWarmup);
   document.addEventListener("visibilitychange", () => { if (document.hidden) cancelReaderWarmup(); });
+  /** @param {Event} event */
   var warm = function(event) {
+    if (!(event.target instanceof Element)) return;
     if (event.target.closest('[data-action="download"], [data-download]')) return;
     var target = event.target.closest("[data-reader-url], [data-read-url]");
-    if (target) warmReaderIntent(target.dataset.readerUrl || target.dataset.readUrl,
+    if (target instanceof HTMLElement) warmReaderIntent(target.dataset.readerUrl || target.dataset.readUrl || "",
       event.type === "pointerdown" || event.type === "focusin");
   };
   ["pointerover", "pointerdown", "focusin"].forEach(function(type) { document.addEventListener(type, warm, { passive: true }); });
@@ -496,23 +541,28 @@ function setupReaderIntentWarming() {
   document.addEventListener("visibilitychange", () => { if (!document.hidden) warmShell(); });
 }
 
+/** @param {PagesSearchRecord} rec */
 function isReadableRecord(rec) {
   if (String(rec && (rec.ReaderExtension || rec.Extension) || "").toLowerCase() === "docx" && !rec.ReaderLink) return false;
   return VoiceOfMLReader.capability(rec && (rec.ReaderExtension || rec.Extension)).article;
 }
 
+/** @param {PagesSearchRecord} rec */
 function isDefaultReadableRecord(rec) {
   return VoiceOfMLReader.capability(rec && rec.Extension).article;
 }
 
+/** @param {PagesSearchRecord} rec */
 function getRecordPath(rec) {
   return rec.Path || buildRecordPath(rec);
 }
 
+/** @param {string} filename @param {string} link */
 function buildDownloadUrl(filename, link) {
   return API_BASE + "/api/download?file=" + encodeURIComponent(filename || "file") + "&link=" + encodeURIComponent(link || "");
 }
 
+/** @param {string} url */
 function triggerDownload(url) {
   const iframe = document.createElement("iframe");
   iframe.src = url;
@@ -567,19 +617,22 @@ function getSelectedFiles() {
   return files;
 }
 
+/** @param {SearchDownloadItem[]} items @param {boolean} [retry] */
 function startDownloadBatch(items, retry = false) { downloadBatches.start(items, retry); }
 
 function setupDownloadIntentWarming() {
+  /** @param {Event} event */
   const warm = event => {
-    if (document.hidden) return;
+    if (document.hidden || !(event.target instanceof Element)) return;
     const target = event.target.closest('[data-action="download"], [data-download]');
     if (!target) return;
     const owner = target.closest('[data-link]');
-    if (owner && owner.dataset.link) checkDownload(owner.dataset.link, true);
+    if (owner instanceof HTMLElement && owner.dataset.link) checkDownload(owner.dataset.link, true);
   };
   ["pointerover", "pointerdown", "focusin"].forEach(type => document.addEventListener(type, warm, { passive: true }));
 }
 
+/** @param {VoiceOfMLSidebarFile} file */
 function getBrowserFileName(file) {
   var name = file && file.name ? String(file.name) : "file";
   var ext = file && file.ext ? String(file.ext) : "";
@@ -589,6 +642,7 @@ function getBrowserFileName(file) {
   return name + "." + ext;
 }
 
+/** @param {string} repo @param {string} folderPath @param {PagesSidebarFile} file */
 function getBrowserFileLink(repo, folderPath, file) {
   if (file && file.link) return file.link;
   if (!repo) return "";
@@ -597,6 +651,7 @@ function getBrowserFileLink(repo, folderPath, file) {
   return HF_DATASET_BASE + "/" + repo + "/resolve/main/" + relativePath.split("/").map(encodeURIComponent).join("/");
 }
 
+/** @param {string} url */
 function openExternalWindow(url) {
   const popup = window.open(url, "_blank", "noopener,noreferrer");
   if (popup) popup.opener = null;
@@ -605,6 +660,7 @@ function openExternalWindow(url) {
 
 var EXT_FILTER_STORAGE_KEY = "voml_ext_filter:global";
 const searchHistoryStore = VoiceOfMLSearchHistoryStore.create(() => sessionStorage);
+/** @type {ReturnType<typeof VoiceOfMLSearchHistory.create> | undefined} */
 let searchHistory;
 function getSearchHistoryController() {
   return searchHistory || (searchHistory = VoiceOfMLSearchHistory.create({
@@ -617,8 +673,10 @@ function getSearchHistoryController() {
   }));
 }
 function getHistory() { return searchHistoryStore.get(); }
+/** @param {string[]} list */
 function saveHistory(list) { searchHistoryStore.save(list); }
 
+/** @param {string[]} selfs @param {string[]} subtrees */
 function mergeFolderFilters(selfs, subtrees) {
   const selfSet = new Set(selfs || []);
   return (selfs || []).concat((subtrees || []).filter(function(path) {
@@ -646,10 +704,12 @@ function saveStoredExtensionFilters() {
   } catch (e) {}
 }
 
+/** @param {string} q */
 function addHistoryItem(q) { getSearchHistoryController().addHistoryItem(q); }
 function renderDropdown() { getSearchHistoryController().renderDropdown(); }
 function hideSearchHistory(restoreFocus = false) { getSearchHistoryController().hideSearchHistory(restoreFocus); }
 function setupSearchHistory() { getSearchHistoryController().setupSearchHistory(); }
+/** @param {string} q */
 function removeHistoryItem(q) { getSearchHistoryController().removeHistoryItem(q); }
 
 function updateSelectionUI() {
@@ -674,10 +734,11 @@ function updateSelectionUI() {
 }
 
 function updateVisibleSelection() {
-  var cbs = DOM.resultsList.querySelectorAll(".result-checkbox");
+  var cbs = DOM.resultsList.querySelectorAll(/** @type {string} */ (".result-checkbox"));
   for (var ci = 0; ci < cbs.length; ci++) {
-    var idx = parseInt(cbs[ci].dataset.index);
-    cbs[ci].checked = !!selectedIndices[idx];
+    var checkbox = /** @type {HTMLInputElement} */ (cbs[ci]);
+    var idx = parseInt(/** @type {string} */ (checkbox.dataset.index));
+    checkbox.checked = !!selectedIndices[idx];
     var item = cbs[ci].closest(".result-item");
     if (item) item.classList.toggle("selected", !!selectedIndices[idx]);
   }
@@ -686,21 +747,24 @@ function updateVisibleSelection() {
 async function loadData() {
   const intent = searchIntentId, key = getSearchViewKey();
   try {
-    const metadata = await corpusWorkerRequest("load-corpus", { url: new URL(DATA_URL, document.baseURI).href }, WORKER_LOAD_TIMEOUT);
+    const rawMetadata = await corpusWorkerRequest("load-corpus", { url: new URL(DATA_URL, document.baseURI).href }, WORKER_LOAD_TIMEOUT);
+    // Legacy Worker protocol assumes this metadata shape without validating it.
+    const metadata = /** @type {PagesCorpusMetadata} */ (rawMetadata);
     repoList = Array.isArray(metadata.repos) ? metadata.repos : [];
     extensionCounts = {};
     for (const item of metadata.extensions || []) extensionCounts[item.name] = item.count || 0;
     repoExtensionCounts = metadata.extensionsByRepo || {};
-    extensionList = (metadata.extensions || []).map(function(item) { return item.name; });
+    extensionList = (metadata.extensions || []).map(function(/** @type {VoiceOfMLFilterCount} */ item) { return item.name; });
     readerMetadata = metadata.reader || { available: false, count: 0, byRepo: {} };
     return true;
   } catch (e) {
     console.error("Data load failed:", e);
-    if (e && e.code === "PROTOCOL_MISMATCH" && intent === searchIntentId && key === getSearchViewKey()) showToast("本地搜索版本不匹配，请刷新页面");
+    if (e && typeof e === "object" && "code" in e && e.code === "PROTOCOL_MISMATCH" && intent === searchIntentId && key === getSearchViewKey()) showToast("本地搜索版本不匹配，请刷新页面");
     return false;
   }
 }
 
+/** @type {VoiceOfMLCorpusClient | undefined} */
 var corpusClient;
 function getCorpusClient() {
   return corpusClient ||= VoiceOfMLCorpusClient.create({
@@ -712,10 +776,12 @@ function getCorpusClient() {
   });
 }
 
+/** @param {string} type @param {Record<string, unknown>} [payload] @param {number} [timeoutMs] @param {AbortSignal | null} [signal] */
 function corpusWorkerRequest(type, payload, timeoutMs, signal) {
   return getCorpusClient().request(type, payload, timeoutMs, signal);
 }
 
+/** @param {string} url */
 function toMirrorURL(url) {
   if (!url) return url;
   try {
@@ -727,18 +793,23 @@ function toMirrorURL(url) {
   }
 }
 
+/** @param {string} link */
 function getCopyableLink(link) {
   return STATE.useMirrorLinks ? toMirrorURL(link) : link;
 }
 
+/** @param {string} path */
 function getPreviewLink(path) {
   return STATE.useMirrorLinks ? toMirrorURL(path) : path;
 }
 
+/** @param {PagesSearchParams} params */
 async function doSearchLocal(params) {
   const workerParams = Object.assign({}, params);
   delete workerParams.signal;
-  const data = await corpusWorkerRequest("local-search", workerParams, WORKER_REQUEST_TIMEOUT, params.signal);
+  const rawData = await corpusWorkerRequest("local-search", workerParams, WORKER_REQUEST_TIMEOUT, params.signal);
+  // Legacy Worker protocol assumes page fields but permits arbitrary record values.
+  const data = /** @type {PagesCorpusPage} */ (rawData);
   return cloneSearchData({
     results: data.records || [],
     total: data.total || 0,
@@ -749,10 +820,12 @@ async function doSearchLocal(params) {
   });
 }
 
+/** @param {unknown} data @param {number} expectedPage @param {number} expectedPageSize */
 function isValidSearchResponse(data, expectedPage, expectedPageSize) {
   return VoiceOfMLSearchValidation.isValidSearchResponse(data, expectedPage, expectedPageSize);
 }
 
+/** @type {VoiceOfMLSearchTransport | undefined} */
 var searchTransport;
 function getSearchTransport() {
   return searchTransport ||= VoiceOfMLSearchTransport.create({
@@ -761,12 +834,15 @@ function getSearchTransport() {
   });
 }
 
+/** @param {string} cacheKey @param {string} url @param {VoiceOfMLSearchRequestBody} body @param {number} timeoutMs */
 function createSearchPageRequest(cacheKey, url, body, timeoutMs) {
   return getSearchTransport().createRequest(cacheKey, url, body, timeoutMs);
 }
 
+/** @param {string} cacheKey @param {string} url @param {VoiceOfMLSearchRequestBody} body @param {AbortSignal | null | undefined} signal @param {number} timeoutMs */
 function fetchSearchPage(cacheKey, url, body, signal, timeoutMs) {
-  return getSearchTransport().fetchPage(cacheKey, url, body, signal, timeoutMs);
+  // The transport performs the existing page check; this assertion also assumes its legacy field contract.
+  return /** @type {Promise<VoiceOfMLSearchWindowPageData>} */ (getSearchTransport().fetchPage(cacheKey, url, body, signal, timeoutMs));
 }
 
 function expireSearchRequests() {
@@ -774,12 +850,15 @@ function expireSearchRequests() {
   getCorpusClient().expireRequests();
 }
 
+/** @param {unknown} error */
 function noteSearchApiFailure(error) {
-  if (error.name === "AbortError" || error.apiFailureNoted) return;
-  error.apiFailureNoted = true;
+  if (!error || (typeof error !== "object" && typeof error !== "function")) return;
+  if ("name" in error && error.name === "AbortError" || "apiFailureNoted" in error && error.apiFailureNoted) return;
+  Object.assign(error, {apiFailureNoted: true});
   noteApiFailure();
 }
 
+/** @param {PagesSearchParams} params @param {boolean | undefined} append @param {number} requestId */
 async function doSearchAPI(params, append, requestId) {
   if (requestId !== searchRequestId) return false;
   if (append && STATE._pageCache[params.page]) {
@@ -805,8 +884,9 @@ async function doSearchAPI(params, append, requestId) {
   return applySearchPage(data, append);
 }
 
+/** @param {number} page @param {(VoiceOfMLResultRecord | null | undefined)[]} [results] */
 function appendSearchResults(page, results = STATE._pageCache[page]) {
-  const metadata = searchPageMetadata.get(results?.[0]);
+  const metadata = getSearchPageMetadata(results?.[0]);
   if (!checkSearchPageAppend({ ...metadata, results, total: metadata?.total ?? STATE.total })) return false;
   if (!STATE._resultBackend) STATE._resultBackend = "api";
   for (const record of results) STATE.results.push(record);
@@ -826,13 +906,15 @@ function deferSearchAppend() {
 }
 
 // Network, cached and Worker pages share the same state transition.
+/** @param {{results: unknown[], total: number, generation?: string}} data */
 function checkSearchPageAppend(data) {
-  const expected = searchPageMetadata.get(STATE.results[0]);
-  const generation = data.generation ?? searchPageMetadata.get(data.results?.[0])?.generation;
+  const expected = getSearchPageMetadata(STATE.results[0]);
+  const generation = data.generation ?? getSearchPageMetadata(data.results?.[0])?.generation;
   // Static initial pages may have no comparable generation. Reacquire the
   // anchor's window before appending; an unchanged total cannot prove identity.
   if (!expected?.unverifiedInitial && data.total === STATE.total && (!expected?.generation || generation === expected.generation)) return true;
   const key = getSearchViewKey(), scroll = captureReaderReturnScroll();
+  if (!scroll) return false;
   const record = STATE.results[scroll.index] || STATE.results[0];
   const position = { version: 1, key, index: scroll.index, offset: scroll.offset,
     anchorId: getResultStableId(record), loadedPage: STATE._loadedPage, savedAt: Date.now() };
@@ -848,16 +930,19 @@ function checkSearchPageAppend(data) {
   return false;
 }
 
+/** @param {{results: unknown[], total: number, page: number, page_size?: number, generation?: string}} data @param {boolean | undefined} append */
 function applySearchPage(data, append) {
   if (append && !checkSearchPageAppend(data)) return false;
   rememberSearchPageMetadata(data);
   STATE.total = data.total;
+  // Legacy renderer consumes these records without field validation; preserve the array and values.
+  const records = /** @type {(PagesSearchRecord | null | undefined)[]} */ (data.results);
   if (append) {
-    STATE._pageCache[data.page] = data.results;
+    STATE._pageCache[data.page] = records;
     if (deferSearchAppend()) return false;
     appendSearchResults(data.page);
   } else {
-    STATE.results = data.results;
+    STATE.results = records;
     STATE._loadedPage = 1;
     STATE._pageCache = {};
     STATE.hasMore = STATE.results.length < STATE.total;
@@ -898,14 +983,17 @@ function cancelActiveSearch() {
   return id === searchId;
 }
 
+/** @type {ReturnType<typeof VoiceOfMLSearchPrefetch.create> | undefined} */
 var searchPagePrefetch;
+/** @param {string} base @param {VoiceOfMLSearchRequestBody} template */
 function prefetchSearchPages(base, template) {
   const prefetch = searchPagePrefetch ||= VoiceOfMLSearchPrefetch.create({
     readView: () => ({ key: getSearchViewKey(), loadedPage: STATE._loadedPage,
       total: STATE.total, pageSize: STATE.pageSize,
-      generation: searchPageMetadata.get(STATE.results[0])?.generation,
+      generation: getSearchPageMetadata(STATE.results[0])?.generation,
       inactive: document.hidden || !navigator.onLine }),
-    getGroup: () => searchPrefetchAbortController,
+    // API and local groups share the cancellation slot but carry different promise results.
+    getGroup: () => /** @type {VoiceOfMLSearchPrefetchGroup | null} */ (searchPrefetchAbortController),
     setGroup: controller => { searchPrefetchAbortController = controller; },
     hasPage: page => !!STATE._pageCache[page],
     stringify: body => stableSearchStringify(body),
@@ -917,7 +1005,8 @@ function prefetchSearchPages(base, template) {
     acceptPage: (page, data) => {
       noteApiSuccess();
       rememberSearchPageMetadata(data);
-      if (page > STATE._loadedPage) STATE._pageCache[page] = data.results;
+      // The legacy page cache preserves raw result values and array identity.
+      if (page > STATE._loadedPage) STATE._pageCache[page] = /** @type {(PagesSearchRecord | null | undefined)[]} */ (data.results);
     },
     scheduleReady: page => scheduleBottomLoad(0, page),
     writeCached: (key, data) => setCachedSearchResponse(key, data, true),
@@ -951,7 +1040,7 @@ function prefetchLocalSearchPage() {
   let controller = searchPrefetchAbortController;
   if (!controller || controller.signal.aborted || controller.groupKey !== groupKey) {
     controller?.abort();
-    controller = new AbortController();
+    controller = /** @type {PagesPrefetchGroup} */ (new AbortController());
     controller.groupKey = groupKey;
     controller.active = new Map();
     controller.attempted = new Set();
@@ -967,14 +1056,15 @@ function prefetchLocalSearchPage() {
   const task = (async () => {
     const data = await doSearchLocal({ ...buildLocalSearchParams(page), signal: controller.signal });
     if (!current()) throw new DOMException("Cancelled", "AbortError");
-    const metadata = searchPageMetadata.get(STATE.results[0]);
+    const metadata = getSearchPageMetadata(STATE.results[0]);
     const expected = metadata?.generation ? { generation: metadata.generation, total: STATE.total,
       query: { pageSize: STATE.pageSize } } : null;
     validatePositionWindowPage(data, page, STATE.pageSize, null);
     if (expected && (data.generation !== expected.generation || data.total !== expected.total)) return data;
     rememberSearchPageMetadata(data);
     if (page > STATE._loadedPage) {
-      STATE._pageCache[page] = data.results;
+      // Worker page validation does not validate the legacy record fields.
+      STATE._pageCache[page] = /** @type {(PagesSearchRecord | null | undefined)[]} */ (data.results);
       scheduleBottomLoad(0, page);
     }
     return data;
@@ -988,10 +1078,12 @@ function prefetchLocalSearchPage() {
   return task;
 }
 
+/** @type {number | null} */
 let localDataLoadTimer = null;
+/** @type {number | null} */
 let localDataIdleCallback = null;
 function scheduleBackgroundLocalDataLoad() {
-  clearTimeout(localDataLoadTimer);
+  if (localDataLoadTimer !== null) clearTimeout(localDataLoadTimer);
   if (localDataIdleCallback !== null) window.cancelIdleCallback(localDataIdleCallback);
   localDataIdleCallback = null;
   if (STATE.dataLoaded) return;
@@ -1016,15 +1108,22 @@ const catalog = VoiceOfMLCatalogClient.create({
   apiBase: API_BASE, apiAvailable: () => apiAvailable,
   fetchJSON: (url, timeout, requireOK) => fetchJsonWithTimeout(url, timeout, requireOK),
   noteApiSuccess: () => noteApiSuccess(), noteApiFailure: () => noteApiFailure(),
-  localWorker: (repo, path) => corpusWorkerRequest("folder-contents", { repo, path }, WORKER_REQUEST_TIMEOUT),
+  // Worker output is passed through as before; this is not runtime shape validation.
+  localWorker: (repo, path) => /** @type {Promise<VoiceOfMLSidebarEntries>} */ (corpusWorkerRequest("folder-contents", { repo, path }, WORKER_REQUEST_TIMEOUT)),
 });
 const { folderTreeCache, folderContentsCache, browserApiPending } = catalog;
 function fetchRepos() { return catalog.fetchRepos(); }
+/** @param {string | null} repo */
 function fetchExtensions(repo) { return catalog.fetchExtensions(repo); }
+/** @param {string | null} repo @param {string | null} [cacheKey] */
 function fetchFolderTree(repo, cacheKey) { return catalog.fetchFolderTree(repo, cacheKey); }
+/** @param {string | null} repo @param {string} path */
 function fetchFolderContents(repo, path) { return catalog.fetchFolderContents(repo, path); }
+/** @param {string | null} repo */
 function loadSidebarInitial(repo) { return catalog.loadSidebarInitial(repo); }
+/** @param {string | null} repo @param {string} path */
 function getFolderContents(repo, path) { return catalog.getFolderContents(repo, path); }
+/** @type {VoiceOfMLSidebarScrollController | undefined} */
 let sidebarScroll;
 function getSidebarScroll() {
   return sidebarScroll || (sidebarScroll = VoiceOfMLSidebarScroll.create({
@@ -1032,6 +1131,7 @@ function getSidebarScroll() {
   }));
 }
 
+/** @param {string} url @param {number} timeoutMs @param {boolean} [requireOK] */
 async function fetchJsonWithTimeout(url, timeoutMs, requireOK = false) {
   var controller = new AbortController();
   var timeoutId = setTimeout(function() { controller.abort(); }, timeoutMs);
@@ -1047,6 +1147,7 @@ async function fetchJsonWithTimeout(url, timeoutMs, requireOK = false) {
   }
 }
 
+/** @param {string} url @param {number} timeoutMs */
 async function fetchWithTimeout(url, timeoutMs) {
   var controller = new AbortController();
   var timeoutId = setTimeout(function() { controller.abort(); }, timeoutMs);
@@ -1057,6 +1158,7 @@ async function fetchWithTimeout(url, timeoutMs) {
   }
 }
 
+/** @param {boolean} [force] */
 function warmConnection(force) {
   if (force === undefined) force = false;
   if (document.hidden || !navigator.onLine || keepalivePending) return keepalivePending;
@@ -1072,6 +1174,7 @@ function warmConnection(force) {
 
 function getCurrentExtensionCounts() {
   if (STATE.mode === "repo" && STATE.repoFull) {
+    /** @type {Record<string, number>} */
     const counts = {};
     for (const item of repoExtensionCounts[STATE.repoFull] || []) counts[item.name] = item.count || 0;
     return counts;
@@ -1079,6 +1182,7 @@ function getCurrentExtensionCounts() {
   return extensionCounts;
 }
 
+/** @type {PagesSearchState} */
 const STATE = {
   mode: "global",
   repo: null,
@@ -1140,9 +1244,17 @@ const {
 const VSCROLL = VoiceOfMLVirtualHeights.createState();
 let pendingResultEntrance = false;
 
-const $ = (sel) => document.querySelector(sel);
+/**
+ * The page shell supplies these elements before cacheDOM runs. Two legacy
+ * controls are optional and declared nullable in PagesSearchDOM.
+ * @template {Element} T
+ * @param {string} sel
+ * @returns {T}
+ */
+const $ = (sel) => /** @type {T} */ (document.querySelector(sel));
 
-const DOM = {};
+/** @type {PagesSearchDOM} */
+const DOM = /** @type {PagesSearchDOM} */ (/** @type {unknown} */ ({}));
 
 function cacheDOM() {
   document.querySelectorAll('#header svg, .empty-state svg, #footer svg').forEach(node => {
@@ -1235,12 +1347,14 @@ function syncSearchInputState() {
   DOM.searchBox?.classList.toggle("has-query", hasQuery);
 }
 
+/** @param {string} value */
 function setSearchInputValue(value) {
   if (!DOM.searchInput) return;
   DOM.searchInput.value = value || "";
   syncSearchInputState();
 }
 
+/** @param {string | undefined} ext */
 function getFileIconType(ext) {
   return FILE_ICON_MAP[(ext || "").toLowerCase()] || "file";
 }
@@ -1287,6 +1401,7 @@ function closeRightSidebar() { getShell().closeRightSidebar(); }
 
 const ROUTER = {
   parse: () => VoiceOfMLRoute.parse(window.location.hash),
+  /** @param {string} mode @param {string | null} [repo] @param {string} [folder] */
   navigate: (mode, repo, folder) => getRouteNavigation().navigate(mode, repo, folder),
   apply: function(preserveSameView = false) {
     appliedRouteHash = window.location.hash;
@@ -1368,7 +1483,7 @@ const ROUTER = {
     STATE.rightSidebarOpen = projected.rightSidebarOpen;
     const sameSearchView = previousSearchKey === getSearchViewKey();
     if (!sameSearchView) {
-      if (routeInitialized) searchInputController.invalidateVisit();
+      if (routeInitialized) searchInputController?.invalidateVisit();
       cancelPendingSearchControls();
       readerReturnPosition.invalidate();
       if (!cancelActiveSearch()) return;
@@ -1450,6 +1565,7 @@ function readRouteState() {
     wide: DOM.leftSidebar.classList.contains("expanded-wide"),
   };
 }
+/** @type {ReturnType<typeof VoiceOfMLRouter.create> | undefined} */
 let routeNavigation;
 function getRouteNavigation() {
   return routeNavigation || (routeNavigation = VoiceOfMLRouter.create({
@@ -1465,6 +1581,7 @@ function getRouteNavigation() {
 }
 function syncStateToURL() { getRouteNavigation().sync(); }
 
+/** @param {number} routeId */
 function renderSidebarAndFiltersDeferred(routeId) {
   if (!routeId || routeId === routeRenderId) renderSidebar(routeId);
   requestAnimationFrame(function() {
@@ -1473,19 +1590,25 @@ function renderSidebarAndFiltersDeferred(routeId) {
   });
 }
 // Readable host compatibility bridge; only the input controller writes these.
+/** @type {number | null} */
 let searchTimer = null;
 let searchComposing = false;
 let searchInputReady = false;
 let initialSearchDraft = false;
 /** @type {VoiceOfMLInputController} */
+/** @type {VoiceOfMLInputController | undefined} */
 let searchInputController;
 let searchId = 0;
 // Distinguish repeated searches/restorations of the same view, independently of paging.
 let searchIntentId = 0;
+/** @type {AbortController | null} */
 let searchAbortController = null;
+/** @type {PagesPrefetchGroup | null} */
 let searchPrefetchAbortController = null;
 let searchRequestId = 0;
+/** @type {number | null} */
 let filterSearchTimer = null;
+/** @type {number | null} */
 let sizeFilterTimer = null;
 const FILTER_SEARCH_DEBOUNCE_MS = 200;
 let routeRenderId = 0;
@@ -1493,10 +1616,12 @@ let routeRenderId = 0;
 // orphan an unfinished filter render or its batched folder-tree tasks.
 let apiAvailable = true;
 let apiFailureCount = 0;
+/** @type {number | null} */
 let apiProbeTimer = null;
 let apiProbeInFlight = false;
 const API_FAILURE_THRESHOLD = 3;
 const API_RECOVERY_DELAY = 30000;
+/** @type {Promise<boolean> | null} */
 let localDataPromise = null;
 const SEARCH_CACHE_TTL = 8 * 60 * 1000;
 const SEARCH_CACHE_MAX = 60;
@@ -1553,6 +1678,7 @@ async function updateRandomTxtVisibility() {
   return getRandomDiscovery().updateRandomTxtVisibility();
 }
 
+/** @param {unknown} value */
 function stableSearchStringify(value) {
   return VoiceOfMLSearchCanonical.stableStringify(value, () => stableSearchStringify);
 }
@@ -1575,10 +1701,15 @@ const positionPersistence = VoiceOfMLSearchPositions.create({
   storage: positionStorage, cloneResult: record => cloneSearchResult(record),
   metadata: record => searchPageMetadata.get(/** @type {object} */ (record))
 });
+/** @type {PagesDisplayedSearchView | null} */
 let displayedSearchView = null;
+/** @type {SearchPositionRestoreTask | null} */
 let positionRestore = null;
+/** @type {PagesResultWindow | null} */
 let resultWindow = null;
+/** @type {SearchPosition | null} */
 let returnPositionTarget = null;
+/** @type {{key: string, last: number, distance: number, until: number} | null} */
 let positionControlScroll = null;
 let positionEntryId = 0;
 
@@ -1586,6 +1717,7 @@ function getReturnPositionTarget(key = getSearchViewKey()) {
   return returnPositionTarget?.key === key ? returnPositionTarget : null;
 }
 
+/** @param {SearchPosition | null} [position] */
 function setReturnPositionTarget(position = null) {
   // Pin a copy so ordinary position saves cannot move the offered destination.
   returnPositionTarget = position ? { ...position } : null;
@@ -1595,6 +1727,7 @@ function resetPositionControlScroll() {
   positionControlScroll = { key: getSearchViewKey(), last: getResultScrollTop(), distance: 0, until: 0 };
 }
 
+/** @param {string} key @param {boolean} [updateControls] */
 function prepareReturnPosition(key, updateControls = true) {
   resetPositionControlScroll();
   const saved = positionPersistence.getPosition(key);
@@ -1611,13 +1744,14 @@ function updateSearchPositionControls() {
 }
 
 function cancelPendingSearchControls() {
-  searchInputController.cancelTimer();
-  clearTimeout(filterSearchTimer);
-  clearTimeout(sizeFilterTimer);
+  searchInputController?.cancelTimer();
+  if (filterSearchTimer !== null) clearTimeout(filterSearchTimer);
+  if (sizeFilterTimer !== null) clearTimeout(sizeFilterTimer);
   filterSearchTimer = null;
   sizeFilterTimer = null;
 }
 
+/** @param {{fromStart: boolean, restorePosition: boolean}} options */
 function prepareSearchPositionNavigation({ fromStart, restorePosition }) {
   cancelPendingSearchControls();
   // The URL is the handoff contract for Reader navigation and session restore.
@@ -1648,12 +1782,13 @@ function backToSearchTop() {
   return doSearch(false, true);
 }
 
+/** @param {Event} event */
 function notePositionScrollIntent(event) {
-  if (event.type === "keydown" && (event.isComposing || event.defaultPrevented ||
+  if (event.type === "keydown" && event instanceof KeyboardEvent && (event.isComposing || event.defaultPrevented ||
       !["ArrowDown", "ArrowUp", "PageDown", "PageUp", "Home", "End", " "].includes(event.key) ||
-      event.target.closest("input, textarea, select, button, a, [contenteditable]"))) return;
+      (event.target instanceof Element && event.target.closest("input, textarea, select, button, a, [contenteditable]")))) return;
   if (!positionControlScroll || positionControlScroll.key !== getSearchViewKey()) resetPositionControlScroll();
-  positionControlScroll.until = Date.now() + 1500;
+  if (positionControlScroll) positionControlScroll.until = Date.now() + 1500;
 }
 
 function updateReturnPositionOnScroll() {
@@ -1668,6 +1803,7 @@ function updateReturnPositionOnScroll() {
   }
 }
 
+/** @param {string} value */
 function jumpToSearchResult(value) {
   if (!/^\d+$/.test(value)) { updateCurrentResultPosition(); return; }
   const requested = Number(value);
@@ -1698,16 +1834,19 @@ function setupSearchPositionControls() {
   DOM.retryPositionBtn.addEventListener("click", () => tryRestoreSearchPosition(getSearchViewKey()));
   DOM.cancelPositionBtn?.addEventListener("click", backToSearchTop);
 
+  /** @type {{key: string, value: string} | null} */
   let edit = null;
   const editButton = document.getElementById('edit-result-position');
+  if (!editButton) return;
   editButton.addEventListener('click', () => {
     DOM.currentResultPosition.hidden = false;
     editButton.hidden = true;
     DOM.currentResultPosition.focus({ preventScroll: true });
   });
   DOM.currentResultPosition?.addEventListener("focus", event => {
-    edit = { key: getSearchViewKey(), value: event.target.value };
-    event.target.select();
+    const target = /** @type {HTMLInputElement} */ (event.target);
+    edit = { key: getSearchViewKey(), value: target.value };
+    target.select();
   });
   DOM.currentResultPosition?.addEventListener("keydown", event => {
     if (event.isComposing || event.keyCode === 229) return;
@@ -1715,34 +1854,43 @@ function setupSearchPositionControls() {
       event.preventDefault();
       event.stopPropagation();
       if (event.key === "Escape") edit = null;
-      event.target.blur();
+      /** @type {HTMLInputElement} */ (event.target).blur();
       editButton.focus({ preventScroll: true });
     }
   });
   DOM.currentResultPosition?.addEventListener("blur", event => {
     const previous = edit;
     edit = null;
-    event.target.hidden = true;
+    const target = /** @type {HTMLInputElement} */ (event.target);
+    target.hidden = true;
     editButton.hidden = false;
-    if (previous && previous.key === getSearchViewKey() && previous.value !== event.target.value)
-      jumpToSearchResult(event.target.value.trim());
+    if (previous && previous.key === getSearchViewKey() && previous.value !== target.value)
+      jumpToSearchResult(target.value.trim());
     else updateCurrentResultPosition();
   });
 }
 let displayedViewRevision = 0;
 let measuredHeightRevision = 0;
 const resultRowRecords = new WeakMap();
+/** @type {WeakMap<object, {generation?: string, total: number, page: number, page_size?: number, unverifiedInitial?: boolean}>} */
 const searchPageMetadata = new WeakMap();
+/** @param {unknown} record */
+function getSearchPageMetadata(record) {
+  return record !== null && (typeof record === "object" || typeof record === "function") ? searchPageMetadata.get(record) : undefined;
+}
 
+/** @param {{results: unknown[], total: number, page: number, page_size?: number, generation?: string}} data */
 function rememberSearchPageMetadata(data) {
-  if (data?.results?.[0] && typeof data.generation === "string" && data.generation) searchPageMetadata.set(data.results[0], {
+  if (data?.results?.[0] && typeof data.generation === "string" && data.generation) searchPageMetadata.set(/** @type {object} */ (data.results[0]), {
     generation: data.generation, total: data.total, page: data.page, page_size: data.page_size });
 }
 
+/** @param {string} key @param {number} page @param {VoiceOfMLSearchWindowExpected & {query: {pageSize: number}}} expected @param {number} [timeoutMs] @param {AbortSignal | null} [signal] */
 async function readRecentSearchPage(key, page, expected, timeoutMs = 150, signal = null) {
   return positionPersistence.readRecentPage(key, page, expected, timeoutMs, signal);
 }
 
+/** @param {PagesResultWindow} window @param {number} page */
 async function loadCachedPreviewPage(window, page) {
   if (!window.generation || window.pages.has(page) || window.pending.has(page) || window.pending.size >= 3 || window.missingPages?.has(page)) return;
   const request = readRecentSearchPage(window.key, page, window);
@@ -1757,7 +1905,8 @@ async function loadCachedPreviewPage(window, page) {
     entry.results.forEach((record, offset) => {
       const index = start + offset;
       if (STATE.results[index]) return;
-      STATE.results[index] = record; window.count++; VSCROLL.templateCache.delete(index);
+      // Persisted page validation does not narrow every legacy record field.
+      STATE.results[index] = /** @type {PagesSearchRecord} */ (record); window.count++; VSCROLL.templateCache.delete(index);
     });
     window.pages.add(page);
     (positionRestore.cachedPages ||= new Map()).set(page, entry);
@@ -1769,6 +1918,7 @@ async function loadCachedPreviewPage(window, page) {
   }
 }
 
+/** @param {SearchPosition} position @param {SearchPositionView} view */
 function saveSearchViewport(position, view) {
   positionPersistence.saveViewport(position, view, {
     visibleEnd: findVirtualIndex(getResultScrollTop() + DOM.resultsContainer.clientHeight),
@@ -1777,14 +1927,17 @@ function saveSearchViewport(position, view) {
   });
 }
 
+/** @param {string} key */
 async function readSearchViewport(key) {
   return positionPersistence.readViewport(key);
 }
 
+/** @param {unknown} viewport @param {SearchPosition | null | undefined} position @returns {viewport is SearchPositionViewport} */
 function validSearchViewport(viewport, position) {
   return VoiceOfMLPositionPolicy.validViewport(viewport, position, getResultStableId);
 }
 
+/** @param {SearchPositionViewport | null} viewport @param {SearchPosition} position @param {SearchPositionRestoreTask} task */
 function showSavedSearchViewport(viewport, position, task) {
   if (!validSearchViewport(viewport, position)) return;
   const size = JSON.parse(position.key).pageSize;
@@ -1802,6 +1955,7 @@ function showSavedSearchViewport(viewport, position, task) {
   showPositionRestoreStatus("已恢复上次画面，正在核对结果…");
 }
 
+/** @param {unknown} value @returns {value is SearchPosition} */
 function validSearchPosition(value) {
   return VoiceOfMLPositionPolicy.validPosition(value);
 }
@@ -1859,6 +2013,7 @@ function setupSearchPositionSaving() {
   window.addEventListener("pagehide", saveSearchPosition);
 }
 
+/** @param {string} message @param {boolean} [retry] */
 function showPositionRestoreStatus(message, retry = false) {
   DOM.retryPositionBtn.hidden = !retry;
   DOM.positionRestoreStatus.title = retry ? message : "";
@@ -1891,6 +2046,7 @@ const positionRestoration = VoiceOfMLPositionRestoration.create({
   capturePreviewAnchor: () => {
     if (readerHost.overlay) return null;
     const anchor = captureReaderReturnScroll();
+    if (!anchor) return null;
     return { index: anchor.index, offset: anchor.offset, anchorId: getResultStableId(STATE.results[anchor.index]) };
   },
   stableId: record => getResultStableId(record),
@@ -1904,6 +2060,7 @@ const positionRestoration = VoiceOfMLPositionRestoration.create({
   notify: message => showToast(message)
 });
 
+/** @param {string} key @param {{position?: SearchPosition | null, backend?: string, viewport?: SearchPositionViewport | null}} [options] */
 function tryRestoreSearchPosition(key, options = {}) {
   const previous = positionRestore?.key === key && positionRestore.failed && !options.position ? positionRestore : null;
   const position = options.position || previous?.position || positionPersistence.getPosition(key);
@@ -1925,22 +2082,30 @@ function tryRestoreSearchPosition(key, options = {}) {
   return true;
 }
 
+/** @param {SearchResultSnapshot} snapshot */
 function applyValidatedSearchViewport(snapshot) {
   const anchor = captureReaderReturnScroll();
+  if (!anchor || !snapshot.window) return;
   const previous = STATE.results;
   // Preview selections belong to records, not to slots replaced by validation.
+  /** @param {number} index */
   const sameIdentity = index => previous[index] && snapshot.results[index] &&
     getResultStableId(previous[index]) === getResultStableId(snapshot.results[index]);
-  for (const index of Object.keys(selectedIndices)) if (!sameIdentity(index)) delete selectedIndices[index];
+  for (const key of Object.keys(selectedIndices)) {
+    const index = Number(key);
+    if (!sameIdentity(index)) delete selectedIndices[index];
+  }
   if (!sameIdentity(lastSelectedIndex)) lastSelectedIndex = -1;
   for (const key of Object.keys(snapshot.results)) {
-    if (previous[key] && JSON.stringify(previous[key]) === JSON.stringify(snapshot.results[key])) snapshot.results[key] = previous[key];
-    else { VSCROLL.templateCache.delete(Number(key)); VSCROLL.measuredRowKeys[key] = null; }
+    const index = Number(key);
+    if (previous[index] && JSON.stringify(previous[index]) === JSON.stringify(snapshot.results[index])) snapshot.results[index] = previous[index];
+    else { VSCROLL.templateCache.delete(index); VSCROLL.measuredRowKeys[index] = null; }
   }
   resultWindow?.controller.abort();
   resultWindow = { ...snapshot.window, key: snapshot.key, total: snapshot.total, query: {...JSON.parse(snapshot.key), resultBackend: snapshot.resultBackend},
     pages: new Set(snapshot.window.pages), pending: new Map(), failures: new Map(), controller: new AbortController() };
-  STATE.results = snapshot.results; STATE.total = snapshot.total;
+  // Snapshot owns the sparse array; keep its identity and legacy record values.
+  STATE.results = /** @type {(PagesSearchRecord | null | undefined)[]} */ (snapshot.results); STATE.total = snapshot.total;
   STATE.page = STATE._loadedPage = snapshot.loadedPage;
   STATE.hasMore = snapshot.hasMore; STATE.isLoading = false;
   if (VSCROLL.heights.length > STATE.results.length) { VSCROLL.heights.length = STATE.results.length; VSCROLL.heightsDirty = true; }
@@ -1953,10 +2118,12 @@ function applyValidatedSearchViewport(snapshot) {
   positionPersistence.scheduleSave(saveSearchPosition);
 }
 
+/** @param {VoiceOfMLSearchWindowPageData | null | undefined} data @param {number} page @param {number} pageSize @param {VoiceOfMLSearchWindowExpected | null} [expected] */
 function validatePositionWindowPage(data, page, pageSize, expected) {
   VoiceOfMLSearchWindowPage.validate(data, page, pageSize, expected);
 }
 
+/** @param {VoiceOfMLResultWindow | PagesResultWindow} window */
 function resultWindowCurrent(window) {
   return resultWindow === window && window.key === getSearchViewKey() && !window.controller.signal.aborted;
 }
@@ -1982,14 +2149,18 @@ function updateResultWindowStatus() {
   });
 }
 
+/** @param {unknown} error */
 function isRecoverableSearchError(error) {
-  return VoiceOfMLSearchRecovery.isRecoverable(error);
+  // The policy checks for null before property access and accepts thrown values.
+  return VoiceOfMLSearchRecovery.isRecoverable(/** @type {{name?: string, status?: number, code?: string, message?: string} | null | undefined} */ (error));
 }
 
+/** @param {AbortSignal} signal @param {number} delay @param {boolean | number | undefined} local */
 function waitForSearchRecovery(signal, delay, local) {
   return VoiceOfMLResultWindowLoader.waitForRecovery(signal, delay, local);
 }
 
+/** @param {PagesWindowQuery} query @param {number} page @param {AbortSignal} signal @param {string | undefined} anchorId @param {() => boolean} [demanded] */
 async function fetchPositionPageWithRecovery(query, page, signal, anchorId, demanded = () => true) {
   return VoiceOfMLResultWindowLoader.fetchWithRecovery({
     fetchPage: (query, page, signal, anchorId) => fetchPositionPage(query, page, signal, anchorId),
@@ -2018,6 +2189,7 @@ function resumeResultRecovery() {
   scheduleVirtualRender();
 }
 
+/** @param {PagesResultWindow} window @param {number} page @param {boolean} [prefetch] */
 function requestResultWindowPage(window, page, prefetch = false) {
   return VoiceOfMLResultWindowLoader.requestPage({
     readRecent: (key, page, expected, delay, signal) => readRecentSearchPage(key, page, expected, delay, signal),
@@ -2028,6 +2200,7 @@ function requestResultWindowPage(window, page, prefetch = false) {
   }, window, page, prefetch);
 }
 
+/** @param {number} page @param {boolean} [prefetch] */
 async function loadResultWindowPage(page, prefetch = false) {
   const window = resultWindow;
   if (!window || positionRestore || !resultWindowCurrent(window) || window.pages.has(page) || page < 1 || page > Math.ceil(window.total / window.query.pageSize)) return false;
@@ -2037,14 +2210,19 @@ async function loadResultWindowPage(page, prefetch = false) {
     if (prefetch || VSCROLL.isDraggingThumb) {
       if (!window.prefetched) window.prefetched = new Map();
       window.prefetched.set(page, data);
-      while (window.prefetched.size > 3) window.prefetched.delete(window.prefetched.keys().next().value);
+      while (window.prefetched.size > 3) {
+        const oldest = window.prefetched.keys().next();
+        if (oldest.done) break;
+        window.prefetched.delete(oldest.value);
+      }
       return true;
     }
     const results = STATE.results;
     resultSnapshots.budget.invalidate(results);
     data.results.forEach((record, offset) => {
       const index = (page - 1) * window.query.pageSize + offset;
-      results[index] = record; VSCROLL.templateCache.delete(index); VSCROLL.measuredRowKeys[index] = null;
+      // Page validation checks geometry, not the complete legacy record shape.
+      results[index] = /** @type {PagesSearchRecord} */ (record); VSCROLL.templateCache.delete(index); VSCROLL.measuredRowKeys[index] = null;
     });
     STATE.results = results;
     window.pages.add(page); window.prefetched?.delete(page);
@@ -2063,14 +2241,17 @@ async function loadResultWindowPage(page, prefetch = false) {
     return true;
   } catch (error) {
     if (!resultWindowCurrent(window)) return false;
-    if (prefetch && error.message !== "RESTORE_PAGE_CHANGED") {
+    if (prefetch && /** @type {{message?: string}} */ (error).message !== "RESTORE_PAGE_CHANGED") {
       if (!window.prefetchFailures) window.prefetchFailures = new Set();
       window.prefetchFailures.add(page);
-      if (window.prefetchFailures.size > 64) window.prefetchFailures.delete(window.prefetchFailures.values().next().value);
+      if (window.prefetchFailures.size > 64) {
+        const oldest = window.prefetchFailures.values().next();
+        if (!oldest.done) window.prefetchFailures.delete(oldest.value);
+      }
       return false;
     }
     window.failures.set(page, error);
-    if (error.message === "RESTORE_PAGE_CHANGED") window.invalid = true;
+    if (/** @type {{message?: string}} */ (error).message === "RESTORE_PAGE_CHANGED") window.invalid = true;
     updateResultWindowStatus();
     DOM.resultsList.querySelectorAll(".result-window-placeholder").forEach(row => row.remove());
     VSCROLL.renderStart = -1; VSCROLL.renderEnd = -1;
@@ -2079,6 +2260,7 @@ async function loadResultWindowPage(page, prefetch = false) {
   }
 }
 
+/** @param {number} start @param {number} end */
 function ensureResultWindowPages(start, end) {
   if (resultSnapshots.cloneTask) {
     materializeSnapshotRange(resultSnapshots.cloneTask, start, end);
@@ -2099,8 +2281,9 @@ function ensureResultWindowPages(start, end) {
   const first = Math.floor(start / size) + 1;
   const last = Math.ceil(end / size);
   const pages = new Set();
+  /** @param {number} page */
   const add = page => {
-    if (page >= 1 && page <= Math.ceil(resultWindow.total / size)) pages.add(page);
+    if (resultWindow && page >= 1 && page <= Math.ceil(resultWindow.total / size)) pages.add(page);
   };
   // Demand the page under the viewport before the surrounding overscan. A
   // large fling must never spend all three request slots on pages already
@@ -2115,6 +2298,7 @@ function ensureResultWindowPages(start, end) {
   prefetchNextPage();
 }
 
+/** @param {number} index */
 function createResultWindowPlaceholder(index) {
   const page = Math.floor(index / STATE.pageSize) + 1;
   return VoiceOfMLResultWindowStatus.createPlaceholder({
@@ -2124,6 +2308,7 @@ function createResultWindowPlaceholder(index) {
   });
 }
 
+/** @param {PagesWindowQuery} query @param {number} page @param {AbortSignal} signal @param {string | undefined} anchorId */
 async function fetchPositionPage(query, page, signal, anchorId) {
   const mixed = query.folders.self.length || query.folders.subtree.length;
   const params = { q: query.query, repos: query.mode === "repo" ? [query.repo] : query.repos,
@@ -2143,7 +2328,7 @@ async function fetchPositionPage(query, page, signal, anchorId) {
     sort: params.sort, search_folders: params.searchFolders, exact: params.exact,
     page, page_size: params.pageSize,
     ...(anchorId === undefined ? {} : { anchor_id: anchorId }) };
-  const url = query.mode === "repo" ? API_BASE + "/api/search/" + encodeURIComponent(query.repo.split("/").pop()) : API_BASE + "/api/search";
+  const url = query.mode === "repo" ? API_BASE + "/api/search/" + encodeURIComponent(query.repo.split("/").pop() || "") : API_BASE + "/api/search";
   try {
     const data = await fetchSearchPage(url + "|" + stableSearchStringify(body), url, body, signal, WORKER_REQUEST_TIMEOUT);
     noteApiSuccess();
@@ -2157,8 +2342,10 @@ async function fetchPositionPage(query, page, signal, anchorId) {
 function trimSearchViewSnapshots() {
   resultSnapshots.trim();
 }
+/** @type {VoiceOfMLSearchViewMemo | null} */
 let searchViewKeyMemo = null;
 
+/** @param {readonly (string | number | boolean | null | undefined)[]} current @param {readonly (string | number | boolean | null | undefined)[] | null | undefined} saved */
 function sameSearchFilterValues(current, saved) {
   // Retained aliases can mutate arrays without going through a filter handler.
   if (!saved || current.length !== saved.length) return false;
@@ -2168,34 +2355,45 @@ function sameSearchFilterValues(current, saved) {
 
 function getSearchViewKey() {
   searchViewKeyMemo = VoiceOfMLSearchViewKey.resolve(() => ({state: STATE, surface: "pages", getSort: () => STATE.sort || "relevance"}),
-    () => searchViewKeyMemo, () => sameSearchFilterValues, () => stableSearchStringify);
+    () => searchViewKeyMemo, () => sameSearchFilterValues, () => projection => {
+      const key = stableSearchStringify(projection);
+      if (key === undefined) throw new Error("INVALID_SEARCH_VIEW_KEY");
+      return key;
+    });
   return searchViewKeyMemo.key;
 }
 function getHeightMeasurementKey() {
   return (DOM.resultsContainer?.clientWidth || 0) + ":" + (STATE.isMobile ? "mobile" : "desktop") + ":" + (STATE.isDark ? "dark" : "light");
 }
+/** @param {unknown} result */
 function getResultStableId(result) {
   return VoiceOfMLSearchIdentity.getResultStableId(result);
 }
+/** @param {unknown} result */
 function cloneSearchResult(result) {
   const copy = VoiceOfMLSnapshotPolicy.cloneResult(result);
-  if (copy && searchPageMetadata.has(result)) searchPageMetadata.set(/** @type {object} */ (copy), searchPageMetadata.get(result));
+  const metadata = getSearchPageMetadata(result);
+  if (metadata && copy && (typeof copy === "object" || typeof copy === "function")) searchPageMetadata.set(copy, metadata);
   return copy;
 }
+/** @param {Record<string, unknown>} cache */
 function cloneSearchPageCache(cache) {
-  return resultSnapshots.copyPageCache(cache);
+  return /** @type {PagesSearchState['_pageCache']} */ (resultSnapshots.copyPageCache(cache));
 }
 
+/** @param {unknown[]} results @param {boolean} [sparse] */
 function getSearchSnapshotResultsBytes(results, sparse = false) {
   return resultSnapshots.budget.measure(results, sparse);
 }
 
+/** @param {unknown[]} results @param {unknown[]} page */
 function extendSearchSnapshotBudget(results, page) {
   resultSnapshots.budget.extend(results, page);
 }
 
 function saveSearchViewSnapshot(key = displayedSearchView?.key) {
   const view = displayedSearchView;
+  if (key === undefined) return null;
   if ((view && view.key === key && view.window?.invalid) || resultSnapshots.snapshots.get(key)?.window?.invalid) {
     // Keep the saved position for validation; stale rows must not replace it.
     resultSnapshots.remove(key);
@@ -2220,10 +2418,12 @@ function cancelSnapshotClone() {
   resultSnapshots.cancelClone();
 }
 
+/** @param {SearchSnapshotCloneTask} task @param {number} start @param {number} end @param {boolean} [deferHeights] */
 function materializeSnapshotRange(task, start, end, deferHeights = false) {
   resultSnapshots.materializeRange(task, start, end, deferHeights);
 }
 
+/** @param {SearchSnapshotCloneTask} task @param {number} index @param {string} measurementKey */
 function materializedSnapshotRow(task, index, measurementKey) {
   if (STATE.results !== task.results) return;
   VSCROLL.templateCache.delete(index); VSCROLL.measuredRowKeys[index] = null;
@@ -2244,6 +2444,7 @@ function materializedSnapshotRow(task, index, measurementKey) {
   }
 }
 
+/** @param {SearchSnapshotCloneTask} task */
 function applySnapshotCloneHeights(task) {
   const anchor = task.heightAnchor;
   task.heightAnchor = null;
@@ -2256,6 +2457,7 @@ function applySnapshotCloneHeights(task) {
   VSCROLL.lastScrollTop = getResultScrollTop();
 }
 
+/** @param {string} key @param {boolean} [restoreScroll] @param {boolean} [preserveRestore] */
 function restoreSearchViewSnapshot(key, restoreScroll = true, preserveRestore = false) {
   const snapshot = resultSnapshots.snapshots.get(key);
   if (snapshot?.window?.invalid) {
@@ -2269,7 +2471,8 @@ function restoreSearchViewSnapshot(key, restoreScroll = true, preserveRestore = 
   if (!preserveRestore) cancelPositionRestore();
   if (owner !== searchId) return false;
   cancelPendingSearchControls();
-  STATE.results = resultSnapshots.restoreResults(snapshot, key, STATE.pageSize, restoreScroll, preserveRestore);
+  // Cloning preserves sparse slots and existing records without validating their fields.
+  STATE.results = /** @type {(PagesSearchRecord | null | undefined)[]} */ (resultSnapshots.restoreResults(snapshot, key, STATE.pageSize, restoreScroll, preserveRestore));
   STATE.total = snapshot.total;
   STATE.page = snapshot.page;
   STATE._loadedPage = snapshot.loadedPage;
@@ -2302,17 +2505,29 @@ function restoreSearchViewSnapshot(key, restoreScroll = true, preserveRestore = 
   return true;
 }
 
-function cloneSearchData(data) { return searchResponseStore.cloneSearchData(data); }
+/**
+ * The store returns the input unchanged or a shallow page clone. Bootstrap also
+ * passes partial legacy payloads; the assertion is not field validation.
+ * @template T
+ * @param {T} data
+ * @returns {T}
+ */
+function cloneSearchData(data) {
+  return /** @type {T} */ (searchResponseStore.cloneSearchData(/** @type {VoiceOfMLSearchWindowPageData} */ (data)));
+}
 
+/** @param {string} key */
 function getCachedSearchResponse(key) { return searchResponseStore.getCachedSearchResponse(key); }
 
 function cancelPendingSearchCacheWrites() { searchResponseStore.cancelPendingSearchCacheWrites(); }
 
+/** @param {string} key @param {VoiceOfMLSearchWindowPageData} data @param {boolean} [defer] @param {number} [acquiredAt] @param {boolean} [fromInitial] */
 function setCachedSearchResponse(key, data, defer = false, acquiredAt = Date.now(), fromInitial = false) {
   if (!fromInitial && canUseInitialSearchPayload() && key === getCurrentSearchCacheKey(1)) initialPayloadCache.delete(getInitialPayloadUrl());
   searchResponseStore.setCachedSearchResponse(key, data, defer, acquiredAt);
 }
 
+/** @param {number} page */
 function buildCurrentSearchBody(page) {
   return buildSearchApiBody({
     q: STATE.query, page: page || STATE.page || 1, pageSize: STATE.pageSize,
@@ -2323,6 +2538,7 @@ function buildCurrentSearchBody(page) {
   });
 }
 
+/** @param {number} page */
 function getCurrentSearchCacheKey(page) {
   return getSearchApiBase() + "|" + stableSearchStringify(buildCurrentSearchBody(page));
 }
@@ -2333,7 +2549,9 @@ function getSearchApiBase() {
 
 // Ordinary API requests use the existing prefix-folder contract. Mixed folder
 // selection remains on the Worker path, with its separate camelCase protocol.
+/** @param {PagesSearchParams} params */
 function buildSearchApiBody(params) {
+  /** @type {VoiceOfMLSearchRequestBody} */
   const body = { page: params.page || 1, page_size: params.pageSize || STATE.pageSize };
   if (params.q) body.q = params.q;
   if (!STATE.repoFull && params.repos?.length) body.repos = params.repos;
@@ -2359,7 +2577,9 @@ function readInitialSearchView() {
   };
 }
 
+/** @type {ReturnType<typeof VoiceOfMLSearchBootstrap.create> | undefined} */
 var searchBootstrap;
+/** @returns {ReturnType<typeof VoiceOfMLSearchBootstrap.create>} */
 function getSearchBootstrap() {
   return searchBootstrap ||= VoiceOfMLSearchBootstrap.create({
     view: () => readInitialSearchView(), intent: () => searchIntentId,
@@ -2371,7 +2591,7 @@ function getSearchBootstrap() {
     cachedResponse: () => getCachedSearchResponse(getCurrentSearchCacheKey(1)),
     cloneData: data => cloneSearchData(data), identity: data => searchResponseStore.identities.get(data),
     cancelSearch: () => cancelActiveSearch(), commitPage: data => commitInitialSearchPage(data),
-    cacheResponse: (page, acquiredAt) => setCachedSearchResponse(getCurrentSearchCacheKey(1), page, false, acquiredAt, true),
+    cacheResponse: (page, acquiredAt) => setCachedSearchResponse(getCurrentSearchCacheKey(1), /** @type {VoiceOfMLSearchWindowPageData} */ (page), false, acquiredAt, true),
     markUnverified: (record, page) => searchPageMetadata.set(/** @type {object} */ (record), { unverifiedInitial: true,
       total: page.total, page: 1, page_size: page.page_size }),
     renderPage: () => renderInitialSearchPage(),
@@ -2393,14 +2613,17 @@ function getInitialPayloadUrl() {
   return VoiceOfMLInitialPayload.url(readInitialSearchView(), INITIAL_BASE_URL);
 }
 
+/** @param {SearchInitialPayload | null} data @param {number} [intent] @param {number | null} [acquiredAt] @returns {boolean} */
 function applyInitialSearchPayload(data, intent = searchIntentId, acquiredAt = Date.now()) {
   return getSearchBootstrap().apply(data, intent, acquiredAt);
 }
 
+/** @param {SearchInitialPayload} data */
 function commitInitialSearchPage(data) {
   STATE.total = data.total || 0;
   STATE.page = 1;
-  STATE.results = data.results.slice();
+  // Initial payload acceptance only checks the results array, not record fields.
+  STATE.results = /** @type {(PagesSearchRecord | null | undefined)[]} */ (data.results.slice());
   STATE._initialActive = true;
   STATE._resultBackend = null;
   STATE._loadedPage = 1;
@@ -2429,6 +2652,7 @@ function renderInitialSearchPage() {
   updateLoadInfo();
 }
 
+/** @param {string} searchMode @param {string | null} searchRepo @param {number} [intent] @returns {Promise<boolean>} */
 async function tryInitialSearchPayload(searchMode, searchRepo, intent = ++searchIntentId) {
   return getSearchBootstrap().tryPayload(searchMode, searchRepo, intent);
 }
@@ -2458,6 +2682,7 @@ function searchWithInitialFallbackFresh(intent = ++searchIntentId) {
   return getSearchBootstrap().fresh(intent);
 }
 
+/** @param {boolean} triggerSearchAfterLoad @param {boolean} background */
 function ensureLocalDataLoaded(triggerSearchAfterLoad, background) {
   if (STATE.dataLoaded) return Promise.resolve(true);
   const owner = searchId, intent = searchIntentId, key = getSearchViewKey();
@@ -2536,6 +2761,7 @@ function clearUnavailableSearchResults() {
   DOM.emptyState.style.display = "none";
 }
 
+/** @param {boolean} waiting */
 function renderSearchBackendUnavailable(waiting) {
   const status = document.createElement("div");
   status.setAttribute("role", "status");
@@ -2554,6 +2780,7 @@ function renderSearchBackendUnavailable(waiting) {
   updateLoadInfo();
 }
 
+/** @param {string} query @param {{restore?: boolean, record?: boolean, refreshHistory?: boolean, clearResults?: boolean, blur?: boolean, updateInput?: boolean}} [options] */
 function submitSearchQuery(query, { restore = false, record = false, refreshHistory = false, clearResults = false, blur = false, updateInput = restore } = {}) {
   if (Array.from(query).length > 256) {
     showToast("搜索内容不能超过 256 个字符");
@@ -2578,11 +2805,12 @@ function submitSearchQuery(query, { restore = false, record = false, refreshHist
 }
 
 function initialSearchDraftIsCurrent() {
-  return searchInputController.draftIsCurrent();
+  return searchInputController?.draftIsCurrent() ?? false;
 }
 
+/** @param {boolean} current */
 function finishInitialSearchInput(current) {
-  searchInputController.finishStartup(current);
+  searchInputController?.finishStartup(current);
 }
 
 function setupSearchInput() {
@@ -2604,6 +2832,7 @@ function setupSearchInput() {
   searchInputController.mount();
 }
 
+/** @param {number} [count] */
 function renderResultsSkeleton(count) {
   count = count || 8;
   var html = "";
@@ -2629,7 +2858,9 @@ function clearResultsSkeleton() {
   DOM.resultsList.querySelectorAll(".result-skeleton-item").forEach((row) => row.remove());
 }
 
+/** @param {number} page @returns {PagesSearchParams} */
 function buildLocalSearchParams(page) {
+  /** @type {string[]} */
   var activeFolderFilters = [];
   var folderMatchMode = null;
   if (STATE.filterFolderSelfs.length > 0 || STATE.filterFolderSubtrees.length > 0) {
@@ -2658,6 +2889,7 @@ function buildLocalSearchParams(page) {
   };
 }
 
+/** @param {boolean} [append] @param {boolean} [fromStart] @param {boolean} [restorePosition] */
 function doSearch(append, fromStart = false, restorePosition = false) {
   if (append && resultWindow) { loadResultWindowPage(STATE._loadedPage + 1); return; }
   if (append && !STATE._loadedPage) append = false;
@@ -2669,7 +2901,7 @@ function doSearch(append, fromStart = false, restorePosition = false) {
   if (append && STATE.isLoading) return;
   if (append && !STATE._loadedPage) append = false;
   if (!append) STATE.page = 1;
-  clearTimeout(filterSearchTimer);
+  if (filterSearchTimer !== null) clearTimeout(filterSearchTimer);
   filterSearchTimer = null;
   const id = ++searchId;
   const intent = searchIntentId;
@@ -2708,18 +2940,20 @@ function doSearch(append, fromStart = false, restorePosition = false) {
 
 // Only execution fields and bounded effects cross this boundary. The host
 // retains synchronous cancellation, route/position preparation and rendering.
+/** @type {ReturnType<typeof VoiceOfMLSearchExecution.create> | undefined} */
 var searchExecution;
 function getSearchExecution() {
   return searchExecution ||= VoiceOfMLSearchExecution.create({
     readView: () => ({ searchId, intent: searchIntentId, requestId: searchRequestId,
       page: STATE.page, _loadedPage: STATE._loadedPage, _pendingPage: STATE._pendingPage,
-      _resultBackend: STATE._resultBackend, _initialActive: STATE._initialActive,
+      _resultBackend: /** @type {'api' | 'local' | null} */ (STATE._resultBackend), _initialActive: STATE._initialActive,
       _deferredAppendWhileDragging: STATE._deferredAppendWhileDragging,
       dataLoaded: STATE.dataLoaded, useLocalMode: STATE.useLocalMode,
       resultCount: STATE.results.length, apiAvailable }),
     update: patch => { Object.assign(STATE, patch); },
     signal: create => {
       if (create && !searchAbortController) searchAbortController = new AbortController();
+      if (!searchAbortController) throw new Error("SEARCH_ABORT_CONTROLLER_MISSING");
       return searchAbortController.signal;
     },
     setLocalMode: enabled => {
@@ -2730,7 +2964,7 @@ function getSearchExecution() {
     pendingLocal: (page, append) => {
       const controller = searchPrefetchAbortController;
       return append && controller?.groupKey === "local|" + getSearchViewKey()
-        && !controller.signal.aborted && controller.active.get(page);
+        && !controller.signal.aborted && /** @type {Promise<VoiceOfMLSearchWindowPageData> | undefined} */ (controller.active.get(page));
     },
     loadLocal: () => ensureLocalDataLoaded(false, true),
     searchLocal: params => doSearchLocal(params),
@@ -2745,6 +2979,7 @@ function getSearchExecution() {
   });
 }
 
+/** @param {boolean} [append] */
 function renderSearchPage(append) {
   DOM.resultsList.querySelectorAll(".search-backend-status").forEach(element => element.remove());
   if (append) {
@@ -2796,7 +3031,8 @@ function renderResults(animate = false) {
 
 function animateVisibleResultRows() {
   let order = 0;
-  DOM.resultsList.querySelectorAll(".result-item[data-index]").forEach(function(row) {
+  DOM.resultsList.querySelectorAll(".result-item[data-index]").forEach(function(element) {
+    const row = /** @type {HTMLElement} */ (element);
     if (Number(row.dataset.index) >= 30) return;
     row.style.setProperty("--result-enter-delay", (order * 3) + "ms");
     row.classList.add("result-enter");
@@ -2808,6 +3044,7 @@ function animateVisibleResultRows() {
   });
 }
 
+/** @type {ReturnType<typeof VoiceOfMLResultRows.create> | null} */
 let resultRows = null;
 function getResultRows() {
   if (!resultRows) resultRows = VoiceOfMLResultRows.create({
@@ -2819,9 +3056,10 @@ function getResultRows() {
     readerAction(rec, recordLink) {
       const readerRecord = applyReaderAsset(rec, rec.Repo || "", buildRecordRelativePath(rec), recordLink);
       const record = isReadableRecord(readerRecord) ? readerRecord : (isDefaultReadableRecord(rec) ? rec : null);
+      const readerMode = record ? VoiceOfMLReader.capability(record.ReaderExtension || record.Extension).mode : null;
       return {
         url: record ? getReaderLink(record, undefined, false) : "",
-        label: record && ["audio", "video", "swf"].includes(VoiceOfMLReader.capability(record.ReaderExtension || record.Extension).mode) ? "在线播放" : "在线阅读",
+        label: record && readerMode && ["audio", "video", "swf"].includes(readerMode) ? "在线播放" : "在线阅读",
       };
     },
     templates: VSCROLL.templateCache,
@@ -2831,9 +3069,12 @@ function getResultRows() {
   });
   return resultRows;
 }
+/** @param {VoiceOfMLResultRecord} rec @param {number} idx */
 function buildResultHTML(rec, idx) { return getResultRows().buildHTML(rec, idx); }
 
+/** @type {ReaderAssetMap | null} */
 let refreshedReaderAssets = null;
+/** @param {PagesSearchRecord} record @param {ReaderAssetMap | null} [assets] */
 function readerActionForRefresh(record, assets = readerAssetController.state.assets) {
   const fields = assets !== readerAssetController.state.assets && VoiceOfMLReader.assetFields(
     assets && assets[(record.Repo || "") + "\0" + buildRecordRelativePath(record)],
@@ -2842,8 +3083,8 @@ function readerActionForRefresh(record, assets = readerAssetController.state.ass
     ? applyReaderAsset(record, record.Repo || "", buildRecordRelativePath(record), getRecordLink(record))
     : (fields ? Object.assign({}, record, fields, { DownloadLink: getRecordLink(record) }) : record);
   const actionRecord = isReadableRecord(readerRecord) ? readerRecord : (isDefaultReadableRecord(record) ? record : null);
-  const label = actionRecord ? (["audio", "video", "swf"].includes(
-    VoiceOfMLReader.capability(actionRecord.ReaderExtension || actionRecord.Extension).mode) ? "在线播放" : "在线阅读") : "";
+  const readerMode = actionRecord ? VoiceOfMLReader.capability(actionRecord.ReaderExtension || actionRecord.Extension).mode : null;
+  const label = actionRecord ? (readerMode && ["audio", "video", "swf"].includes(readerMode) ? "在线播放" : "在线阅读") : "";
   return { record: actionRecord, label };
 }
 
@@ -2855,6 +3096,7 @@ function refreshResultReaderActions() {
   const rows = new Map(VSCROLL.templateCache);
   for (const [index, row] of visible) rows.set(index, row);
   let layoutChanged = false, heightsInvalidated = false;
+  /** @param {number} index @param {PagesSearchRecord} record */
   const invalidateHeight = (index, record) => {
     VSCROLL.measuredRowKeys[index] = null;
     VSCROLL.heightCache.delete(getResultStableId(record));
@@ -2878,7 +3120,7 @@ function refreshResultReaderActions() {
     }
     if (!button) {
       button = document.createElement("button"); button.className = "result-action-btn"; button.dataset.action = "read";
-      row.querySelector(".result-actions").appendChild(button);
+      row.querySelector(".result-actions")?.appendChild(button);
     }
     const url = getReaderLink(action.record, undefined, false);
     if (button.dataset.readerUrl !== url) button.dataset.readerUrl = url;
@@ -2937,10 +3179,12 @@ function ensureResultTemplateCache() {
   if (VSCROLL.templateCacheKey !== key) clearResultTemplateCache(key);
 }
 
+/** @param {VoiceOfMLResultRecord | null | undefined} rec @param {number} idx */
 function createResultRow(rec, idx) { return getResultRows().createRow(rec, idx); }
 
 // The controller owns virtual rendering; paging/snapshots/thumb retain the shared state reference.
 const RESULT_SCROLL_SEGMENT_HEIGHT = VoiceOfMLVirtualResults.segmentHeight;
+/** @type {SearchVirtualController | undefined} */
 let virtualResults;
 function getVirtualResults() {
   return virtualResults ||= VoiceOfMLVirtualResults.create(VSCROLL, {
@@ -2950,7 +3194,7 @@ function getVirtualResults() {
       get multiSelectToggle() { return DOM.multiSelectToggle; }
     },
     results: () => STATE.results, total: () => STATE.total,
-    hasWindow: () => !!resultWindow, windowTotal: () => resultWindow.total,
+    hasWindow: () => !!resultWindow, windowTotal: () => resultWindow?.total ?? 0,
     cloning: () => !!resultSnapshots.cloneTask, restoring: () => !!positionRestore,
     loadedPage: () => STATE._loadedPage, pendingEntrance: () => pendingResultEntrance,
     consumeEntrance: () => { pendingResultEntrance = false; },
@@ -2968,17 +3212,22 @@ function getVirtualResults() {
   });
 }
 function getResultScrollTop() { return getVirtualResults().getResultScrollTop(); }
+/** @param {number} value @param {boolean} [restoreWindow] */
 function setResultScrollTop(value, restoreWindow = false) { return getVirtualResults().setResultScrollTop(value, restoreWindow); }
 function scheduleVirtualRender(scrollIntent = false) { return getVirtualResults().scheduleVirtualRender(scrollIntent); }
 function renderVisible() { return getVirtualResults().renderVisible(); }
 function ensureHeightTree() { return getVirtualResults().ensureHeightTree(); }
 function getVirtualTotalHeight() { return getVirtualResults().getVirtualTotalHeight(); }
+/** @param {number} index */
 function getVirtualOffset(index) { return getVirtualResults().getVirtualOffset(index); }
+/** @param {number} offset */
 function findVirtualIndex(offset) { return getVirtualResults().findVirtualIndex(offset); }
 function resetVirtualScrollState() { return getVirtualResults().resetVirtualScrollState(); }
+/** @param {number} len */
 function ensureVirtualHeights(len) { return getVirtualResults().ensureVirtualHeights(len); }
 function refreshVirtualAfterAppend(updateView = true) { return getVirtualResults().refreshVirtualAfterAppend(updateView); }
 function ensureVirtualViewportCovered() { return getVirtualResults().ensureVirtualViewportCovered(); }
+/** @param {number} [start] @param {number} [end] @param {{index: number, offset: number} | null} [anchor] */
 function measureHeights(start = VSCROLL.renderStart, end = VSCROLL.renderEnd, anchor = null) { return getVirtualResults().measureHeights(start, end, anchor); }
 
 function prepareRouteTransitionResults() {
@@ -2987,6 +3236,7 @@ function prepareRouteTransitionResults() {
 }
 
 let searchAnnouncementTimer = 0;
+/** @param {string} message @param {string} [resultKey] */
 function announceSearchStatus(message, resultKey = '') {
   if (!DOM.announcement) return;
   clearTimeout(searchAnnouncementTimer);
@@ -3026,11 +3276,13 @@ function updateFilterCancelButtons() {
   DOM.extFilterCancel.hidden = STATE.filterExtensions.length === 0;
 }
 
+/** @param {boolean} loading */
 function setSearchVisualLoading(loading) {
-  document.getElementById("search-box").classList.toggle("is-searching", loading);
+  DOM.searchBox.classList.toggle("is-searching", loading);
   updateStatusBar();
 }
 
+/** @param {boolean} clearResults */
 function prepareFilterChange(clearResults) {
   // Merge completed query drafts too; a filter click must not discard typing.
   const query = searchTimer !== null && !searchComposing ? DOM.searchInput.value.trim() : null;
@@ -3047,16 +3299,17 @@ function doFilterSearch(clearResults = false) {
   return doSearch(false, false, true);
 }
 
+/** @param {HTMLInputElement} input @param {HTMLSelectElement} unitSelect */
 function sizeInputToBytes(input, unitSelect) {
   const value = parseFloat(input.value);
   if (isNaN(value) || value < 0) return null;
-  const factor = { B: 1, KB: 1024, MB: 1048576, GB: 1073741824 }[unitSelect.value] || 1;
+  const factor = /** @type {Record<string, number>} */ ({ B: 1, KB: 1024, MB: 1048576, GB: 1073741824 })[unitSelect.value] || 1;
   return Math.round(value * factor);
 }
 
 function applyPendingSizeFilters() {
   if (sizeFilterTimer === null) return;
-  clearTimeout(sizeFilterTimer);
+  if (sizeFilterTimer !== null) clearTimeout(sizeFilterTimer);
   sizeFilterTimer = null;
   STATE.filterMinSize = sizeInputToBytes(DOM.filterMinSize, DOM.filterMinUnit);
   STATE.filterMaxSize = sizeInputToBytes(DOM.filterMaxSize, DOM.filterMaxUnit);
@@ -3064,7 +3317,7 @@ function applyPendingSizeFilters() {
 
 function setupSizeFilterControls() {
   const schedule = () => {
-    clearTimeout(sizeFilterTimer);
+    if (sizeFilterTimer !== null) clearTimeout(sizeFilterTimer);
     sizeFilterTimer = setTimeout(() => {
       applyPendingSizeFilters();
       doFilterSearch(true);
@@ -3112,13 +3365,16 @@ function updateLoadInfo() {
   }
   DOM.loadInfo.style.display = "";
   DOM.totalCount.textContent = STATE.total.toLocaleString();
-  DOM.currentResultPosition.parentElement.style.setProperty("--position-width", String(Math.max(1, STATE.total).toLocaleString()).length + "ch");
+  DOM.currentResultPosition.parentElement?.style.setProperty("--position-width", String(Math.max(1, STATE.total).toLocaleString()).length + "ch");
   updateCurrentResultPosition();
   requestAnimationFrame(updateScrollTrack);
 }
 
 // Directory feature composition: bounded routing view and explicit site effects.
-let sidebarDirectory, sidebarDirectoryView;
+/** @type {VoiceOfMLSidebarDirectoryController | undefined} */
+let sidebarDirectory;
+/** @type {VoiceOfMLSidebarDirectoryPresentation | undefined} */
+let sidebarDirectoryView;
 function getSidebarDirectoryView() {
   return sidebarDirectoryView || (sidebarDirectoryView = VoiceOfMLSidebarDirectoryView.create({
     content: DOM.sidebarContent, sidebar: DOM.leftSidebar, scroll: getSidebarScroll(),
@@ -3126,7 +3382,7 @@ function getSidebarDirectoryView() {
     navigate: path => ROUTER.navigate("repo", STATE.repo, path),
     setPath: path => { STATE.browserPath = path; syncStateToURL(); },
     markup: {
-    icon: key => sidebarIconMarkup(key),
+    icon: key => sidebarIconMarkup(/** @type {string} */ (key)),
     escape: value => escapeHTML(value),
     iconType: extension => getFileIconType(extension),
     formatSize: size => formatSize(size),
@@ -3146,11 +3402,12 @@ function getSidebarDirectory() {
     initial: repo => loadSidebarInitial(repo), fetchRepos: () => fetchRepos(),
     fetchContents: (repo, path) => fetchFolderContents(repo, path),
     localContents: (repo, path) => getFolderContents(repo, path), ensureLocal: (force, silent) => ensureLocalDataLoaded(force, silent),
-    cache: folderContentsCache, publishRepos: repos => { repoList = repos; },
+    cache: folderContentsCache, publishRepos: repos => { if (repos) repoList = repos; },
     refreshAssets: refreshSidebarReaderAssets,
   }));
 }
 
+/** @param {HTMLElement} list @param {string} currentRepo @param {string} path @param {number | undefined} routeId @param {() => VoiceOfMLSidebarEntries | null} readDisplayed */
 function refreshSidebarReaderAssets(list, currentRepo, path, routeId, readDisplayed) {
   var initialAssets = readerAssetController.state.assets;
   loadReaderAssetsAfterFirstPaint().then(function() {
@@ -3165,27 +3422,32 @@ function refreshSidebarReaderAssets(list, currentRepo, path, routeId, readDispla
       const fileRow = /** @type {HTMLElement} */ (row);
       if (readerUrl) fileRow.dataset.readerUrl = readerUrl;
       else delete fileRow.dataset.readerUrl;
-      row.querySelector('.browser-name').setAttribute('aria-label', (readerUrl ? '打开阅读器：' : '下载文件：') + getBrowserFileName(file));
+      row.querySelector('.browser-name')?.setAttribute('aria-label', (readerUrl ? '打开阅读器：' : '下载文件：') + getBrowserFileName(file));
     });
   });
 }
 
+/** @param {number} [routeId] */
 function renderSidebar(routeId) {
   getSidebarDirectory().render(routeId);
 }
 
+/** @param {VoiceOfMLFilterCount[]} repos */
 function renderRepoListItems(repos) {
   return getSidebarDirectoryView().repos(repos);
 }
 
+/** @param {number} [routeId] */
 function renderRepoList(routeId) {
   return getSidebarDirectory().repos(routeId);
 }
 
+/** @param {HTMLElement} list @param {VoiceOfMLSidebarEntries} data @param {string} currentRepo @param {string} path */
 function renderBrowserListItems(list, data, currentRepo, path) {
   return getSidebarDirectoryView().items(list, data, currentRepo, path);
 }
 
+/** @param {PagesSidebarFile} file @param {string} repo @param {string} path */
 function getBrowserReaderUrl(file, repo, path) {
   const name = getBrowserFileName(file);
   const link = getBrowserFileLink(repo, path || "", file);
@@ -3195,16 +3457,23 @@ function getBrowserReaderUrl(file, repo, path) {
   return VoiceOfMLReader.readerUrl(record, "/search/static/reader.html");
 }
 
+/** @param {string} path */
 function createSidebarBreadcrumb(path) {
   return getSidebarDirectoryView().breadcrumb(path);
 }
 
+/** @param {string} path @param {number} [routeId] */
 function renderBrowser(path, routeId) {
   return getSidebarDirectory().browse(path, routeId);
 }
 
 // Filter feature composition: only filter state and effects cross this boundary.
-let sidebarFilters, sidebarFolderTree, sidebarFilterLists;
+/** @type {VoiceOfMLFilterController | undefined} */
+let sidebarFilters;
+/** @type {VoiceOfMLFolderTree | undefined} */
+let sidebarFolderTree;
+/** @type {VoiceOfMLFilterList | undefined} */
+let sidebarFilterLists;
 function getSidebarFilters() {
   if (sidebarFilters) return sidebarFilters;
   sidebarFilterLists = VoiceOfMLSidebarFilterList.create({
@@ -3235,7 +3504,8 @@ function getSidebarFilters() {
     cache: folderTreeCache,
     initial: repo => loadSidebarInitial(repo), fetchRepos: () => fetchRepos(),
     fetchExtensions: repo => fetchExtensions(repo), fetchFolders: (repo, full) => fetchFolderTree(repo, full),
-    localFolders: repo => corpusWorkerRequest("folder-tree", {repo}, WORKER_REQUEST_TIMEOUT),
+    // The existing Worker transport does not validate returned legacy nodes.
+    localFolders: repo => /** @type {Promise<{tree?: VoiceOfMLFilterFolder[]} | null>} */ (corpusWorkerRequest("folder-tree", {repo}, WORKER_REQUEST_TIMEOUT)),
     hasExtensionCounts: () => !!(extensionList && extensionList.length),
     extensionCounts: repo => repo ? Object.fromEntries((repoExtensionCounts[repo] || []).map(item => [item.name, item.count || 0])) : extensionCounts,
     publishRepos: repos => { repoList = repos; },
@@ -3252,21 +3522,29 @@ function getSidebarFilters() {
   });
   return sidebarFilters;
 }
+/** @param {number} [routeId] */
 function renderFilters(routeId) { return getSidebarFilters().render(routeId); }
+/** @param {number} routeId */
 function retainFilterRenderingForRoute(routeId) { return getSidebarFilters().retain(routeId); }
+/** @param {number} [routeId] */
 function renderRepoFilter(routeId) { return getSidebarFilters().renderRepos(routeId); }
+/** @param {number} [routeId] */
 function renderExtensionFilter(routeId) { return getSidebarFilters().renderExtensions(routeId); }
-function renderFilterFolderTree() { getSidebarFilters(); sidebarFolderTree.render(); }
-function refreshFilterFolderSelectionState() { getSidebarFilters(); sidebarFolderTree.refresh(); }
-function setAllFoldersCollapsed(collapsed) { getSidebarFilters(); sidebarFolderTree.setAllCollapsed(collapsed); }
-function persistFolderSelection(subtrees, selfs) { getSidebarFilters(); sidebarFolderTree.persistSelection(subtrees, selfs); }
+function renderFilterFolderTree() { getSidebarFilters(); sidebarFolderTree?.render(); }
+function refreshFilterFolderSelectionState() { getSidebarFilters(); sidebarFolderTree?.refresh(); }
+/** @param {boolean} collapsed */
+function setAllFoldersCollapsed(collapsed) { getSidebarFilters(); sidebarFolderTree?.setAllCollapsed(collapsed); }
+/** @param {Set<string>} subtrees @param {Set<string>} selfs */
+function persistFolderSelection(subtrees, selfs) { getSidebarFilters(); sidebarFolderTree?.persistSelection(subtrees, selfs); }
 
 const quotation = VoiceOfMLQuotation.create({ element: () => DOM.hitokoto });
 function setupHitokoto() { quotation.setup(); }
 
 // Discovery owns random selection; asset loading and Reader/download lifecycles stay shared.
+/** @type {ReturnType<typeof VoiceOfMLRandomDiscovery.create> | undefined} */
 let randomDiscovery;
 var randomReaderRequestId = 0;
+/** @returns {ReturnType<typeof VoiceOfMLRandomDiscovery.create>} */
 function getRandomDiscovery() {
   return randomDiscovery || (randomDiscovery = VoiceOfMLRandomDiscovery.create({
     readView: () => ({ dataLoaded: STATE.dataLoaded, repoFull: STATE.repoFull, repo: STATE.repo, mode: STATE.mode }),
@@ -3277,7 +3555,8 @@ function getRandomDiscovery() {
     assetsLoaded: () => !!readerAssetController.state.assets,
     loadReaderAssets: () => loadReaderAssets(),
     getConvertedReaderRecords: repo => getConvertedReaderRecords(repo),
-    localRecord: (repo, readerOnly) => corpusWorkerRequest("random-record", { repo, readerOnly }, WORKER_REQUEST_TIMEOUT),
+    // Preserve the unvalidated Worker record and its identity for discovery.
+    localRecord: (repo, readerOnly) => /** @type {Promise<{record?: VoiceOfMLDiscoveryRecord | null} | null>} */ (corpusWorkerRequest("random-record", { repo, readerOnly }, WORKER_REQUEST_TIMEOUT)),
     ensureLocalDataLoaded: () => ensureLocalDataLoaded(false, true),
     fetchStatus: (url, timeout) => fetchJsonWithTimeout(url, timeout),
     getRecordLink: rec => getRecordLink(rec),
@@ -3290,23 +3569,28 @@ function getRandomDiscovery() {
     openReaderRecord: (rec, returnUrl) => openReaderRecord(rec, returnUrl)
   }));
 }
+/** @param {boolean} readerOnly @returns {Promise<VoiceOfMLDiscoveryRecord | null>} */
 async function getRandomLocal(readerOnly) {
   return getRandomDiscovery().getRandomLocal(readerOnly);
 }
 async function randomBook() {
   return getRandomDiscovery().randomBook();
 }
+/** @param {string} url @param {number} requestId @param {string} returnUrl @returns {Promise<VoiceOfMLDiscoveryRecord | null | undefined>} */
 async function fetchRandomReaderRecord(url, requestId, returnUrl) {
   return getRandomDiscovery().fetchRandomReaderRecord(url, requestId, returnUrl);
 }
+/** @param {VoiceOfMLDiscoveryRecord | null | undefined} rec @param {string} [returnUrl] @returns {boolean} */
 function openReaderRecord(rec, returnUrl) {
   return getRandomDiscovery().openReaderRecord(rec, returnUrl);
 }
 async function randomTxt() {
   return getRandomDiscovery().randomTxt();
 }
+/** @type {number | undefined} */
 let toastTimer;
 
+/** @param {string} msg @param {number} [dur] */
 function showToast(msg, dur) {
   announceSearchStatus(msg);
   dur = dur || 2000;
@@ -3320,8 +3604,11 @@ function showToast(msg, dur) {
     DOM.toast.style.display = "none";
   }, dur);
 }
+/** @type {number | null} */
 let scrollLoadTimer = null;
+/** @type {number | null} */
 let scrollRecoveryTimer = null;
+/** @type {Record<number, boolean>} */
 var selectedIndices = {};
 var lastSelectedIndex = -1;
 
@@ -3364,8 +3651,10 @@ function resetPagingRecovery() {
 function scheduleBottomLoad(delay = 0, readyPage = 0) {
   pagingController.schedule(delay, readyPage);
 }
+/** @param {boolean} success @param {unknown} [error] */
 function finishPagingAttempt(success, error) {
-  pagingController.finish(success, !!error && error.status >= 400 && error.status < 500 && !isRecoverableSearchError(error));
+  const status = error && typeof error === "object" && "status" in error ? error.status : undefined;
+  pagingController.finish(success, typeof status === "number" && status >= 400 && status < 500 && !isRecoverableSearchError(error));
 }
 function retryBottomPage() {
   pagingController.retryBottom();
@@ -3413,14 +3702,16 @@ function recoverSidebarState() {
   if (STATE.rightSidebarOpen) renderFilters(routeRenderId);
 }
 
+/** @param {number} [delay] */
 function scheduleScrollRecovery(delay) {
   if (delay === undefined) delay = 0;
   if (scrollRecoveryTimer) clearTimeout(scrollRecoveryTimer);
   scrollRecoveryTimer = setTimeout(recoverScrollState, delay);
 }
 
+/** @param {number} [delay] */
 function scheduleScrollLoad(delay) {
-  if (VSCROLL.isDraggingThumb && delay > 0) return;
+  if (VSCROLL.isDraggingThumb && delay !== undefined && delay > 0) return;
   if (scrollLoadTimer) clearTimeout(scrollLoadTimer);
   scrollLoadTimer = setTimeout(function() {
     scrollLoadTimer = null;
@@ -3468,9 +3759,12 @@ function updateScrollThumb() {
 
 let cancelQuickScroll = () => {};
 function setupQuickScroll() {
-  let startY, startST, dragRange, maxScrollTop;
+  /** @type {number} */ let startY;
+  /** @type {number} */ let startST;
+  /** @type {number} */ let dragRange;
+  /** @type {number} */ let maxScrollTop;
   let dragFrame = 0;
-  let pendingScrollTop = null;
+  /** @type {number | null} */ let pendingScrollTop = null;
   function applyPendingScrollTop() {
     dragFrame = 0;
     if (pendingScrollTop === null || !VSCROLL.isDraggingThumb) return;
@@ -3479,10 +3773,12 @@ function setupQuickScroll() {
     renderVisible();
     updateScrollThumb();
   }
+  /** @param {number} value */
   function queueResultScrollTop(value) {
     pendingScrollTop = Math.max(0, Math.min(value, maxScrollTop));
     if (!dragFrame) dragFrame = requestAnimationFrame(applyPendingScrollTop);
   }
+  /** @param {number} clientY */
   function beginDrag(clientY) {
     cancelQuickScroll();
     updateScrollTrack();
@@ -3509,10 +3805,12 @@ function setupQuickScroll() {
     DOM.resultsList.style.minHeight = "";
     updateScrollTrack();
   }
+  /** @param {MouseEvent} e */
   function onMouseMove(e) {
     if (!VSCROLL.isDraggingThumb) return;
     moveDrag(e.clientY);
   }
+  /** @param {number} clientY */
   function moveDrag(clientY) {
     queueResultScrollTop(startST + (clientY - startY) / dragRange * maxScrollTop);
   }
@@ -3530,6 +3828,7 @@ function setupQuickScroll() {
     document.addEventListener("mousemove", onMouseMove);
     document.addEventListener("mouseup", onMouseUp);
   });
+  /** @param {TouchEvent} e */
   function onTouchMove(e) {
     if (!VSCROLL.isDraggingThumb) return;
     e.preventDefault();
@@ -3570,6 +3869,7 @@ function setupQuickScroll() {
   document.addEventListener("visibilitychange", () => { if (document.hidden) cancelQuickScroll(); });
 }
 
+/** @type {ReturnType<typeof VoiceOfMLShell.create> | null} */
 let shell = null;
 function getShell() {
   return shell || (shell = VoiceOfMLShell.create({
@@ -3597,12 +3897,16 @@ function applyTheme() { getShell().applyTheme(); }
 function toggleMobile() { getShell().toggleMobile(); }
 function applyMobileMode() { getShell().applyMobileMode(); }
 function autoDetectMobile() { return window.innerWidth <= 768; }
+/** @param {HTMLElement} sidebar */
 function focusSearchSidebar(sidebar) { VoiceOfMLShellView.focusSearchSidebar(sidebar); }
+/** @param {VoiceOfMLShellEvent} [event] */
 function toggleLeftSidebar(event) { getShell().toggleLeftSidebar(event); }
+/** @param {VoiceOfMLShellEvent} [event] */
 function toggleRightSidebar(event) { getShell().toggleRightSidebar(event); }
 function updateSidebarVisibility() { getShell().updateSidebarVisibility(); }
 let keyboardResultIndex = -1;
 
+/** @param {number} index */
 function focusKeyboardResult(index) {
   keyboardResultIndex = Math.max(0, Math.min(index, STATE.results.length - 1));
   const top = getVirtualOffset(keyboardResultIndex);
@@ -3617,11 +3921,11 @@ function focusKeyboardResult(index) {
   renderVisible();
   DOM.resultsList.querySelectorAll(".result-item.keyboard-focus").forEach(function(item) { item.classList.remove("keyboard-focus"); });
   var el = DOM.resultsList.querySelector('.result-item[data-index="' + keyboardResultIndex + '"]');
-  if (el) { el.classList.add("keyboard-focus"); el.focus({ preventScroll: true }); }
+  if (el) { el.classList.add("keyboard-focus"); /** @type {HTMLElement} */ (el).focus({ preventScroll: true }); }
 }
 
 function setupKeyboard() {
-  document.querySelector('.skip-link').addEventListener('click', event => {
+  document.querySelector('.skip-link')?.addEventListener('click', event => {
     event.preventDefault(); hideSearchHistory();
     if (STATE.isMobile && (STATE.leftSidebarOpen || STATE.rightSidebarOpen)) {
       STATE.leftSidebarOpen = false; STATE.rightSidebarOpen = false;
@@ -3632,15 +3936,15 @@ function setupKeyboard() {
   document.addEventListener("keydown", function(e) {
     if (e.defaultPrevented || e.isComposing || searchComposing || e.keyCode === 229 || readerHost.overlay) return;
     const target = e.target instanceof Element ? e.target : document.activeElement;
-    if (e.key === 'Escape' && target.closest('.sidebar')) {
+    if (e.key === 'Escape' && target?.closest('.sidebar')) {
       e.preventDefault();
       if (target.closest('#right-sidebar')) closeRightSidebar();
       else closeLeftSidebar();
       return;
     }
-    const isInput = (target instanceof HTMLElement && target.isContentEditable) || !!target.closest("input, textarea, select");
+    const isInput = (target instanceof HTMLElement && target.isContentEditable) || !!target?.closest("input, textarea, select");
     if (isInput && !(target === DOM.searchInput && e.key === "Escape")) return;
-    if (["Enter", "ArrowDown", "ArrowUp"].includes(e.key) && target.closest("button, a, [role='button']")) return;
+    if (["Enter", "ArrowDown", "ArrowUp"].includes(e.key) && target?.closest("button, a, [role='button']")) return;
     if (e.key === "/" && !isInput) {
       e.preventDefault();
       DOM.searchInput.focus();
@@ -3662,7 +3966,7 @@ function setupKeyboard() {
       toggleLeftSidebar(e);
       return;
     }
-    if (target.closest('.sidebar')) return;
+    if (target?.closest('.sidebar')) return;
     if (e.key === "ArrowDown" || e.key === "ArrowUp") {
       if (e.ctrlKey || e.metaKey || e.altKey) return;
       if (STATE.results.length === 0) return;
@@ -3707,6 +4011,7 @@ function clearAllFilters() {
   syncStateToURL();
 }
 
+/** @type {ReturnType<typeof VoiceOfMLResultInteractions.create> | null} */
 let resultInteractions = null;
 function getResultInteractions() {
   if (!resultInteractions) resultInteractions = VoiceOfMLResultInteractions.create({
@@ -3732,11 +4037,11 @@ function getResultInteractions() {
       else { resultWindow.failures.delete(page); loadResultWindowPage(page); }
       return true;
     },
-    recordForRow: row => resultRowRecords.get(row),
+    recordForRow: row => row ? resultRowRecords.get(row) : undefined,
     freshReaderLink: record => getReaderLink(applyReaderAsset(
       record, record.Repo || "", buildRecordRelativePath(record), getRecordLink(record))),
     downloadFile: (filename, link, options) => downloadFile(filename, link, options),
-    navigateToReader: url => navigateToReader(url),
+    navigateToReader: url => { if (url) navigateToReader(url); },
     navigateRepo: (repo, ...path) => ROUTER.navigate("repo", repo, ...path),
     currentRepo: () => STATE.repo,
     buildSearchURLParams: options => buildSearchURLParams(options),
@@ -3859,8 +4164,8 @@ async function init() {
   });
   if (DOM.folderToggleAll) DOM.folderToggleAll.addEventListener("click", () =>
     setAllFoldersCollapsed(DOM.folderToggleAll.getAttribute("aria-expanded") === "true"));
-  DOM.folderSelectAll.addEventListener("click", () => { getSidebarFilters(); sidebarFolderTree.selectAll(); });
-  DOM.folderDeselectAll.addEventListener("click", () => { getSidebarFilters(); sidebarFolderTree.invertSelection(); });
+  DOM.folderSelectAll.addEventListener("click", () => { getSidebarFilters(); sidebarFolderTree?.selectAll(); });
+  DOM.folderDeselectAll.addEventListener("click", () => { getSidebarFilters(); sidebarFolderTree?.invertSelection(); });
   setupVirtualScroll();
   setupQuickScroll();
   setupKeyboard();

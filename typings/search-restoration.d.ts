@@ -16,7 +16,7 @@ interface SearchPositionRestoreInput {
 interface SearchPositionRestorationHost {
   isCurrent(task: SearchPositionRestoreTask): boolean;
   readViewport(key: string): Promise<SearchPositionViewport | null>;
-  fetchPage(query: {pageSize: number; resultBackend?: string}, page: number, signal: AbortSignal, anchorId?: string): Promise<SearchPositionRestorePage>;
+  fetchPage(query: VoiceOfMLSearchViewProjection & {resultBackend?: string}, page: number, signal: AbortSignal, anchorId?: string): Promise<SearchPositionRestorePage>;
   validatePage: typeof VoiceOfMLSearchWindowPage.validate;
   showPreview(viewport: SearchPositionViewport | null, position: SearchPosition, task: SearchPositionRestoreTask): void;
   isDragging(): boolean;

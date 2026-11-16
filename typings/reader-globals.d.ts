@@ -37,7 +37,7 @@ interface VoiceOfMLSearchPrefetchDependencies {
   readView(): {key: string; loadedPage: number; total: number; pageSize: number; generation: string | undefined; inactive: boolean};
   getGroup(): VoiceOfMLSearchPrefetchGroup | null;
   setGroup(group: VoiceOfMLSearchPrefetchGroup): void;
-  hasPage(page: number): boolean; stringify(body: VoiceOfMLSearchRequestBody): string;
+  hasPage(page: number): boolean; stringify(body: VoiceOfMLSearchRequestBody): string | undefined;
   getCached(key: string): VoiceOfMLSearchWindowPageData | null;
   evictCached(key: string): void;
   readRecent(key: string, page: number, expected: VoiceOfMLSearchPrefetchExpected, wait: number, signal: AbortSignal): Promise<VoiceOfMLSearchWindowPageData | null>;
@@ -52,8 +52,8 @@ interface VoiceOfMLWindowRequest extends Promise<VoiceOfMLSearchWindowPageData |
   demanded: boolean; diskWait: AbortController;
 }
 interface VoiceOfMLResultWindow {
-  key: string; query: VoiceOfMLSearchViewProjection; total: number; generation: string;
-  controller: AbortController; pending: Map<number, VoiceOfMLWindowRequest>; failures: Map<number, unknown>;
+  key: string; query: VoiceOfMLSearchViewProjection; total: number; generation?: string | undefined;
+  controller: AbortController; pending: Map<number, VoiceOfMLWindowRequest | Promise<VoiceOfMLSearchWindowPageData | null>>; failures: Map<number, unknown>;
   invalid?: boolean | undefined; prefetched?: Map<number, VoiceOfMLSearchWindowPageData> | undefined;
   prefetchFailures?: Set<number> | undefined;
 }
@@ -72,11 +72,11 @@ interface VoiceOfMLWindowRequestDependencies {
 declare var VoiceOfMLResultWindowLoader: {
   waitForRecovery(signal: AbortSignal, delay: number, local: boolean | number | undefined): Promise<void>;
   fetchWithRecovery(deps: VoiceOfMLWindowRecoveryDependencies, query: VoiceOfMLSearchViewProjection, page: number, signal: AbortSignal, anchorId: string | undefined, demanded?: () => boolean): Promise<VoiceOfMLSearchWindowPageData>;
-  requestPage(deps: VoiceOfMLWindowRequestDependencies, window: VoiceOfMLResultWindow, page: number, prefetch?: boolean): Promise<VoiceOfMLSearchWindowPageData | null | undefined>;
+  requestPage(deps: VoiceOfMLWindowRequestDependencies, window: VoiceOfMLResultWindow, page: number, prefetch?: boolean): Promise<VoiceOfMLSearchWindowPageData | null | undefined> | undefined;
 };
 interface VoiceOfMLWindowStatusOptions {
   window: {invalid?: boolean | undefined; failures: ReadonlyMap<number, unknown>} | null;
-  getHost(): HTMLElement; retry(): void;
+  getHost(): HTMLElement | null; retry(): void;
 }
 interface VoiceOfMLWindowPlaceholderOptions {
   index: number; page: number; contentVersion: number; height: number;
@@ -107,11 +107,11 @@ declare var VoiceOfMLSearchFolderSelection: {
     selfSet: ReadonlySet<string>, lookup?: Map<VoiceOfMLFolderSelectionNode, VoiceOfMLFolderSelectionState> | null): void;
 };
 interface VoiceOfMLSidebarFolder {name: string; path?: string; count?: number}
-interface VoiceOfMLSidebarFile {name: string; ext?: string; size?: number | null}
+interface VoiceOfMLSidebarFile {name: string; ext?: string; size?: number | string | null}
 interface VoiceOfMLSidebarEntries {folders?: VoiceOfMLSidebarFolder[] | null; files?: VoiceOfMLSidebarFile[] | null}
 interface VoiceOfMLSidebarPorts {
   escape(value: unknown): string | undefined;
-  formatSize(value: number | null | undefined): string | object | undefined;
+  formatSize(value: number | string | null | undefined): string | object | undefined;
   iconType(extension: string | undefined): string | object;
   name(entry: VoiceOfMLSidebarFile): string;
   link(repo: string, path: string, entry: VoiceOfMLSidebarFile): string;
@@ -122,7 +122,7 @@ declare var VoiceOfMLSearchSidebarRender: {
   browserMarkup(data: VoiceOfMLSidebarEntries, repo: string, path: string, surface: "pages" | "space", ports: VoiceOfMLSidebarPorts): string;
 };
 interface VoiceOfMLSearchViewState {
-  mode: string; repoFull: string; query: string; filterMinSize: number | null; filterMaxSize: number | null;
+  mode: string; repoFull: string | null; query: string; filterMinSize: number | null; filterMaxSize: number | null;
   searchFolders: boolean; exact: boolean; useLocalMode?: boolean; pageSize: number;
   filterRepos: string[]; filterExtensions: string[]; filterFolderSelfs: string[]; filterFolderSubtrees: string[]; filterFolders: string[];
 }
@@ -149,7 +149,7 @@ declare var VoiceOfMLSearchRecovery: {
 interface VoiceOfMLPagingView {
   generation: number; loadedPage: number; page: number; resultCount: number;
   hasMore: boolean; loading: boolean; suspended: boolean; inactive: boolean; dragging: boolean;
-  scrollTop: number; loadedHeight: number; viewportHeight: number; appendScrollTop?: number | undefined;
+  scrollTop: number; loadedHeight: number; viewportHeight: number; appendScrollTop?: number | null | undefined;
 }
 interface VoiceOfMLPagingRecovery { failures: number; retryAt: number }
 interface VoiceOfMLPagingDependencies {
@@ -265,7 +265,7 @@ interface ReaderResourcesApi {
 interface ReaderContractApi {
   readonly ReaderMode: Readonly<Record<string, number>>;
   readonly articleExtensions: readonly string[];
-  capability(extension: string): ReaderContractCapability;
+  capability(extension: string | null | undefined): ReaderContractCapability;
   readonly features: Readonly<Record<string, object>>;
   clampNumber(value: number, min: number, max: number, fallback: number): number;
   assetFields(asset: any, base: string, extension: string): any;
@@ -310,7 +310,7 @@ interface ReaderRuntimeState {
   document: {title: string; zoom: number; page: number; pageCount: number; restoredEntry: unknown; restorationReady: boolean};
   navigation: {tocEntries: unknown[]; currentChapterIndex: number};
   search: {query: string; results: unknown[]; index: number};
-  panel: {open: boolean; selected: string; showingAllBookmarks: boolean; editingBookmark: unknown};
+  panel: {open: boolean; selected: string; showingAllBookmarks: boolean; editingBookmark: import('./reader-store-strict').BookmarkEntry | null};
   formats: {active: unknown; pdf: Record<string, unknown>; foliate: Record<string, unknown>; html: Record<string, unknown>; media: Record<string, unknown>; [key: string]: unknown};
   capability: ReaderRuntimeCapability | null;
 }
@@ -352,6 +352,7 @@ interface ReaderRuntime {
   cancel(handle: ReturnType<typeof setTimeout>): void;
   frame(callback: () => void): number;
   cancelFrame(handle: number): void;
+  negotiate(capability: ReturnType<import('./reader-contract-strict').ReaderContract['capability']>): Readonly<ReturnType<import('./reader-contract-strict').ReaderContract['capability']>>;
   negotiate<T extends ReaderRuntimeCapability>(capability: T): Readonly<T & {features: object}>;
   negotiate(capability: null | undefined): Readonly<{features: object}>;
   dispose(): void;

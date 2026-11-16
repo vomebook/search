@@ -16,7 +16,7 @@ export interface FoliateBook {
   toc?: FoliateTocItem[];
   resolveHref(href: string): Promise<FoliateTarget | null>;
 }
-export interface FoliateView extends HTMLElement { book: FoliateBook; open(file: File): Promise<void>; goTo(href: string): Promise<unknown> }
+export interface FoliateView extends HTMLElement, ReaderSearchBackends.Rendition { book: FoliateBook; open(file: File): Promise<void>; goTo(href: string): Promise<unknown>; close(): void }
 export interface FoliateTocEntry {
   label: string; href: string; depth: number; group: boolean; activate(): Promise<unknown>;
   sectionIndex?: number; fragment?: string; anchor?: FoliateAnchor | null; target?: Element | null;
@@ -36,7 +36,7 @@ export interface FoliateFormatContext {
   foliateSectionVirtualizer: ReturnType<ReaderVirtualApi['createSectionVirtualizer']> | null;
   foliateSectionLoader: FoliateLoader | null;
   foliateSectionSettler: (() => Promise<unknown>) | null;
-  foliateChapterRepository: ReturnType<ReaderChaptersApi['createChapterRepository']>;
+  foliateChapterRepository: ReturnType<ReaderChaptersApi['createChapterRepository']> | null;
   FOLIATE_PREFETCH_MARGIN: number; FOLIATE_LOADED_SECTION_LIMIT: number;
   initialReaderTargetSection: number | null;
   readerRestorationEntry: {foliateSection?: number | null} | null;

@@ -14,13 +14,13 @@ declare namespace ReaderPdfSearch {
   interface Page<T = Result> { total: number; offset: number; pageSize: number; results: T[] }
   interface Progress extends Page<Hit> { scanned: number; pages: number }
   interface Client {
-    failed: boolean; dispose(): void; prefetch(): Promise<unknown>;
+    failed: boolean; dispose(): void; cancel(): void; prefetch(): Promise<unknown>;
     search(query: string, progress: (page: Progress) => void): Promise<Page<Hit>>;
     page(offset: number): Promise<Page<Hit>>;
   }
   interface Configuration { url: string; sha256: string; bytes: number; pageCount: number; sourceSha: string; generation?: string; partitions?: { start: number; end: number; url: string; bytes: number; sha256: string }[] }
   interface Module { createPdfBookSearch(options: Configuration): Client }
-  interface Store { dispose(): void; get(page: number): Promise<string | null>; put(page: number, text: string): Promise<unknown> }
+  interface Store { readonly stats: {hits: number; misses: number; writes: number; skipped: number}; dispose(): void; get(page: number): Promise<string | null>; put(page: number, text: string): Promise<unknown> }
   interface StoreModule {
     pdfTextStoreKey(identity: { source: string; version: string; pageCount: number; engine: string }): Promise<string | null>;
     createPdfTextStore(key: string, options: { signal: AbortSignal }): Store;
@@ -31,10 +31,10 @@ declare namespace ReaderPdfSearch {
   interface Context {
     pdfTextLayerRepository: Repository | null; createPdfV3Repository(source: string, pages: number): Repository;
     v3ResourceUrl(resource: Resource): string; pdfBookSearchModulePromise: Promise<Module> | null;
-    assertReaderActive(): void; pdfBookSearchClient: Client | null; pdfOcrSource(): { assetUrl(path: string): string };
+    assertReaderActive(): void; pdfBookSearchClient: Client | null; pdfOcrSource(): { assetUrl(path: string): string } | null;
     documentState: { pageCount: number }; readerAbortController: AbortController; pdfBookSearchPrefetchPromise: Promise<void> | null;
     ocrManifestUrl: string | null; capability: { mode?: string | null | undefined }; PDF_BOOK_SEARCH_PREFETCH_MAX_BYTES: number;
-    loadPdfOcrManifest(): Promise<Manifest>; ensurePdfBookSearchClient(manifest: Manifest): Promise<Client>;
+    loadPdfOcrManifest(): Promise<Manifest | null>; ensurePdfBookSearchClient(manifest: Manifest): Promise<Client>;
     pdfBookSearchPrefetchTimer: ReturnType<typeof setTimeout> | 0; PDF_BOOK_SEARCH_PREFETCH_DELAY: number; prefetchPdfBookSearch(): Promise<void>;
     goToPage(page: number, generation: number): Promise<boolean>; isReaderGenerationCurrent(kind: "search" | "navigation", generation: number): boolean;
     content: HTMLElement; pdfV3Manifest: Manifest | null; renderPdfOcrText(shell: Element): Promise<unknown>;
@@ -46,7 +46,7 @@ declare namespace ReaderPdfSearch {
     fullSearchPageOffset(total: number, offset: number, size: number): number; loadPdfSearchText(pdf: PdfDocument, page: number, generation: number): Promise<string>;
     waitForReader(delay?: number, force?: boolean): Promise<unknown>; fullSearchSnippet(text: string, start: number, length: number): Snippet;
     makePdfSearchPageLoader(groups: Group[], total: number, pattern: RegExp, firstPage: Result[]): (offset: number, generation?: number) => Promise<Page>;
-    pdfFetchPolicy: { identity?: string } | null; pdfPersistentTextVersion: string | null; pdfPersistentTextStore: Store | null; pdfPersistentTextOpening: Promise<Store | null> | null;
+    pdfFetchPolicy: { identity?: string | null } | null; pdfPersistentTextVersion: string | null; pdfPersistentTextStore: Store | null; pdfPersistentTextOpening: Promise<Store | null> | null;
     awaitReader<T>(promise: Promise<T>): Promise<T>; sourceUrl: string; PDF_SEARCH_TEXT_CACHE_BYTES: number; pdfSearchTextCache: Map<number, string>; pdfSearchTextCacheBytes: number;
     getPdfPersistentTextStore(pdf: PdfDocument): Promise<Store | null>; readerAbortError(): Error; cachePdfSearchText(page: number, text: string): void;
     loadPdfTextContent(page: number, pdfPage: PdfPage, generation: number): Promise<{ items: unknown[] }>;

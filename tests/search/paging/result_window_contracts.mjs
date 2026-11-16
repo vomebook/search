@@ -80,6 +80,26 @@ test('promotion during an in-flight fetch enables recovery and abort during wait
   await assert.rejects(pending, {name: 'AbortError'}); assert.equal(calls, 1);
 });
 
+test('a plain preview disk promise is reused and marked demanded', async () => {
+  let resolve;
+  const disk = new Promise(done => { resolve = done; });
+  const owner = new AbortController();
+  const window = {key: 'query', query: {pageSize: 100}, pending: new Map([[2, disk]]), failures: new Map(), controller: owner};
+  const c = fixture(['requestResultWindowPage'], {
+    readRecentSearchPage: async () => null, resultWindowCurrent: () => true,
+    fetchPositionPageWithRecovery() { throw new Error('must reuse preview'); },
+    validatePositionWindowPage() {}, scheduleVirtualRender() {},
+  });
+  const returned = c.requestResultWindowPage(window, 2, false);
+  assert.strictEqual(returned, disk);
+  assert.equal(disk.demanded, true);
+  assert.equal(owner.signal.aborted, false);
+  const payload = {results: [], page: 2};
+  resolve(payload);
+  assert.strictEqual(await returned, payload);
+  assert.strictEqual(window.pending.get(2), disk);
+});
+
 test('request gates, validation failures and stale completion preserve pending cleanup', async () => {
   const owner = new AbortController(), data = {results: [], page: 2};
   let current = true, reads = 0, renders = 0, rejectValidation = false;

@@ -13,7 +13,7 @@ export interface PdfShell extends HTMLElement {
 export interface PrefetchRecord { image: HTMLImageElement; url: string; timeout: number }
 export interface RenderWaiter { shell: PdfShell | null; priority: number; resolve(): void; reject(error: unknown): void }
 export interface PreviewWaiter { shell: PdfShell | null; priority: number; resolve(): void }
-export interface TextRequest { demanded: boolean; generation: number; page: number }
+export interface TextRequest { demanded: boolean; generation: number | null; page: number }
 export interface TextWaiter { priority: boolean; request: TextRequest | null; resolve(background: boolean): void; reject(error: unknown): void }
 export interface SchedulerContext {
   documentState: { restorationReady: boolean; page: number; pageCount: number; zoom: number };
@@ -32,7 +32,7 @@ export interface SchedulerContext {
   cancelPdfManifestPrefetch(record: PrefetchRecord): void; stopPdfManifestPrefetch(): void;
   trimPdfManifestPrefetches(): void; pdfRetainedPixels(): number; pdfPixelBudget(): number;
   pdfSurfacePixels(surface: HTMLCanvasElement | HTMLImageElement): number;
-  pageAtMarker(): PdfShell | null; isPdfPageVisible(shell: PdfShell | null): boolean; pdfSelectionIntersects(shell: PdfShell | null): boolean;
+  pageAtMarker(): PdfShell | null; isPdfPageVisible(shell: PdfShell | null): boolean; pdfSelectionIntersects(shell: PdfShell): boolean;
   setPdfPageLoadingState(state: Element, page: string | undefined): void;
   domSearch: { pruneMarks(): void };
   canPrefetchPdfImages(): boolean; pdfManifestPrefetchConcurrency(): number; pdfManifestPrefetchMaxPages(): number;

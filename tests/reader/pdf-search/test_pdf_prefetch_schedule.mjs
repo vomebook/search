@@ -6,6 +6,19 @@ import * as bookSearch from '../../../static/reader/search/reader-pdf-book-searc
 
 const flush = async () => { for (let i = 0; i < 20; i++) await Promise.resolve(); };
 
+test('missing OCR manifest reports no concentrated text', async () => {
+  const api = createReaderPdfSearch({loadPdfOcrManifest: async () => null});
+  await assert.rejects(api.searchConcentratedPdf('query', 1), /本书集中全文尚未生成/);
+});
+
+test('missing OCR source rejects before constructing a search client', async () => {
+  const ctx = {pdfBookSearchModulePromise: Promise.resolve(bookSearch),
+    pdfOcrSource: () => null, assertReaderActive() {}, documentState: {pageCount: 1}};
+  const api = createReaderPdfSearch(ctx);
+  await assert.rejects(api.ensurePdfBookSearchClient({source_sha256: 'a', book_text: {path: 'book', bytes: 1, sha256: 'b'}}), /PDF_OCR_SOURCE_INVALID/);
+  assert.equal(ctx.pdfBookSearchClient, undefined);
+});
+
 test('scheduled idle prefetch must not cancel a pending foreground PDF search', async () => {
   const saved = new Map(['Worker', 'window', 'navigator', 'setTimeout', 'clearTimeout'].map(k => [k, Object.getOwnPropertyDescriptor(globalThis, k)]));
   const workers = [], timers = new Map(), idle = [];

@@ -19,7 +19,7 @@
  * @property {number} foliateScrollFrame
  * @property {number} foliateWindowFrame
  * @property {number} epubSeekFrame
- * @property {{mode?: string} | null | undefined} capability
+ * @property {{mode: string | null} | null | undefined} capability
  * @property {HTMLElement} loadingIndicator
  * @property {HTMLElement} loadingStatus
  * @property {{preserve<T>(change: () => T): T}} foliateScrollAnchors
@@ -123,7 +123,7 @@ export function createReaderLifecycle(readerContext) {
   }
 
   function markReaderContentReady() {
-    if ((/** @type {(string | undefined)[]} */ (["foliate", "epub-chapters"])).includes(readerContext.capability?.mode) && readerContext.loadingIndicator.isConnected)
+    if ((readerContext.capability?.mode === "foliate" || readerContext.capability?.mode === "epub-chapters") && readerContext.loadingIndicator.isConnected)
       readerContext.foliateScrollAnchors.preserve(() => readerContext.loadingIndicator.remove());
     else readerContext.loadingIndicator.remove();
     readerContext.loadingStatus.hidden = true;

@@ -11,6 +11,26 @@ globalThis.window = {devicePixelRatio: 1};
 Object.defineProperty(globalThis, 'navigator', {configurable: true, value: {connection: {saveData: true}}});
 globalThis.matchMedia = () => ({matches: false});
 
+// An anonymous preview holder cannot be inspected or preempted as a page shell.
+{
+  const abort = new AbortController();
+  let cancelled = 0;
+  const low = {_renderCancel() { cancelled++; }};
+  const demanded = {};
+  const reader = {readerAbortController: abort, normalizePdfPriority: Number,
+    readerAbortError: () => new DOMException('closed', 'AbortError'),
+    isPdfPageVisible: () => false,
+    pdfSelectionIntersects: shell => { assert.ok(shell); return false; },
+    pdfPagePriority: shell => shell ? 1 : 0};
+  const scheduler = createReaderPdfScheduler(reader);
+  await scheduler.acquirePdfPreviewSlot(0, null);
+  await scheduler.acquirePdfPreviewSlot(0, low);
+  const pending = scheduler.acquirePdfPreviewSlot(2, demanded);
+  assert.equal(cancelled, 1);
+  abort.abort();
+  await assert.rejects(pending, {name: 'AbortError'});
+}
+
 // The sharper high-density mobile canvas is bounded, while low-memory,
 // desktop, and already-large pages retain the previous baseline.
 {

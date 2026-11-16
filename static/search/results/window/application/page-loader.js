@@ -43,8 +43,11 @@
   function requestPage(deps, window, page, prefetch = false) {
     if (window.prefetched?.has(page)) return Promise.resolve(window.prefetched.get(page));
     if (window.pending.has(page)) {
-      const request = /** @type {VoiceOfMLWindowRequest} */ (window.pending.get(page));
-      if (!prefetch && !request.demanded) { request.demanded = true; request.diskWait?.abort(); }
+      const request = window.pending.get(page);
+      if (!prefetch && request && !("demanded" in request && request.demanded)) {
+        Object.assign(request, {demanded: true});
+        if ("diskWait" in request) request.diskWait?.abort();
+      }
       return request;
     }
     if (prefetch && window.prefetchFailures?.has(page)) return Promise.resolve(null);

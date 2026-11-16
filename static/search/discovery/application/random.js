@@ -59,7 +59,7 @@
         return;
       }
       const view = deps.readView();
-      const url = view.repoFull ? deps.apiBase + "/api/random?repo=" + encodeURIComponent(view.repo) : deps.apiBase + "/api/random";
+      const url = view.repoFull ? deps.apiBase + "/api/random?repo=" + encodeURIComponent(String(view.repo)) : deps.apiBase + "/api/random";
       fetch(url).then(function(resp) {
         if (!resp.ok) throw new Error("HTTP " + resp.status);
         return resp.json();
@@ -141,7 +141,7 @@
         return;
       }
       const view = deps.readView();
-      const url = view.repoFull ? deps.apiBase + "/api/random-reader?repo=" + encodeURIComponent(view.repo) : deps.apiBase + "/api/random-reader";
+      const url = view.repoFull ? deps.apiBase + "/api/random-reader?repo=" + encodeURIComponent(String(view.repo)) : deps.apiBase + "/api/random-reader";
       return deps.fetchRandomReaderRecord(url, requestId, returnUrl).then(function(rec) {
         if (!current(requestId, returnUrl)) return;
         if (!deps.openReaderRecord(rec, returnUrl)) throw new Error("NO_READER");

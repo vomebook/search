@@ -27,7 +27,7 @@ interface VoiceOfMLResultInteractionDependencies {
   };
   selection: VoiceOfMLResultSelection;
   hasRecord(index: number): boolean;
-  selectionRecords(): (VoiceOfMLResultRecord | null | undefined)[]; resultCount(): number;
+  selectionRecords(): unknown[]; resultCount(): number;
   updateSelectionUI(): void;
   getSelectedFiles(): {filename: string; link: string}[];
   getCopyableLink(link: string): string;
@@ -38,8 +38,8 @@ interface VoiceOfMLResultInteractionDependencies {
   freshReaderLink(record: VoiceOfMLResultRecord): string;
   downloadFile(filename: string, link: string, options?: {button: HTMLElement}): Promise<boolean>;
   navigateToReader(url: string | undefined): void;
-  navigateRepo(repo: string | undefined, path?: string | undefined): void;
-  currentRepo(): string;
+  navigateRepo(repo: string | null | undefined, path?: string | undefined): void;
+  currentRepo(): string | null;
   buildSearchURLParams(options?: {displaySizes: boolean}): URLSearchParams;
   renderBrowser(folder: string): void;
 }

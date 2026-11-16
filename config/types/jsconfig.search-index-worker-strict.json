@@ -1,0 +1,17 @@
+{
+  "compilerOptions": {
+    "allowJs": true,
+    "checkJs": true,
+    "noEmit": true,
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+    "target": "esnext",
+    "lib": ["esnext", "webworker"]
+  },
+  "files": [
+    "../../static/search/index-worker.js",
+    "../../static/search/worker/domain/text.js",
+    "../../static/search/worker/domain/intersection.js"
+  ]
+}

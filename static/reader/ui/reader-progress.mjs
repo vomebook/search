@@ -285,7 +285,7 @@ export function createReaderProgress(readerContext) {
    * @param {number} generation */
   async function restoreInitialPosition(entry, generation) {
     if (!entry || !readerContext.isReaderGenerationCurrent("navigation", generation)) return;
-    const restored = await readerContext.formatAdapters.active.restore(entry, generation);
+    const restored = await readerContext.formatAdapters.active?.restore(entry, generation);
     if (!restored && readerContext.isReaderGenerationCurrent("navigation", generation))
       throw Object.assign(new Error("阅读位置恢复失败，原进度已保留，请重试加载。"), {
         code: "READER_RESTORE"
@@ -323,7 +323,7 @@ export function createReaderProgress(readerContext) {
     if (readerContext.progressPercent.textContent !== label) readerContext.progressPercent.textContent = label;
     if (readerContext.progressRange.getAttribute("aria-valuetext") !== label)
       readerContext.progressRange.setAttribute("aria-valuetext", label);
-    const hasChapters = readerContext.navigationState.tocEntries.some((entry) => !entry.group),
+    const hasChapters = readerContext.navigationState.tocEntries.some((entry) => !!entry && typeof entry === "object" && !("group" in entry && entry.group)),
       hasPreviousChapter = readerContext.adjacentTocIndex(-1) >= 0,
       hasNextChapter = readerContext.adjacentTocIndex(1) >= 0;
     if (readerContext.chapterPrev.hidden !== !hasChapters) readerContext.chapterPrev.hidden = !hasChapters;
@@ -480,7 +480,8 @@ export function createReaderProgress(readerContext) {
   function adjacentTocIndex(direction) {
     for (let index = readerContext.navigationState.currentChapterIndex + direction;
       index >= 0 && index < readerContext.navigationState.tocEntries.length; index += direction) {
-      if (!(/** @type {{group?: boolean}} */ (readerContext.navigationState.tocEntries[index])).group) return index;
+      const entry = readerContext.navigationState.tocEntries[index];
+      if (entry && typeof entry === "object" && !("group" in entry && entry.group)) return index;
     }
     return -1;
   }

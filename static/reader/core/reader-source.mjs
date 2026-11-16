@@ -4,7 +4,7 @@
  * @typedef {object} ReaderSourceContext
  * @property {ReaderMetadata | null} resolvedReaderData
  * @property {string} downloadUrl
- * @property {Promise<unknown>} readerSourcePromise
+ * @property {Promise<unknown> | null} readerSourcePromise
  * @property {{title: string}} documentState
  * @property {{disposed: boolean}} readerLifecycle
  * @property {(message: string, duration?: number) => void} showDownloadFeedback
@@ -18,7 +18,7 @@
  * @property {number} READER_PROXY_TIMEOUT_MS
  * @property {string} ocrManifestUrl
  * @property {URLSearchParams} params
- * @property {{update: (key: string, value: {metadata: ReaderMetadata | null}) => void}} readerRuntime
+ * @property {{update: (key: 'source', value: {metadata: ReaderMetadata | null}) => void}} readerRuntime
  * @property {string} sourceName
  * @property {string} extension
  * @property {(state: {title: string}) => void} updateDocumentState
@@ -89,11 +89,11 @@ export function createReaderSource(readerContext) {
     return readerContext.readerDownloadApiUrl(`/api/download?file=${encodeURIComponent(readerOriginalFilename(filename || "file"))}&link=${encodeURIComponent(link || "")}`);
   }
 
-  /** @param {Event & {currentTarget: HTMLButtonElement}} event */
+  /** @param {Event} event */
   async function startReaderDownload(event) {
     event.preventDefault();
     const button = event.currentTarget;
-    if (button.hasAttribute("aria-busy")) return;
+    if (!(button instanceof Element) || button.hasAttribute("aria-busy")) return;
     readerContext.showDownloadFeedback("正在准备下载…", 0);
     const controller = new AbortController();
     let timer;

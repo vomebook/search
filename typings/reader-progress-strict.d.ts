@@ -31,7 +31,7 @@ export interface ProgressContext {
   captureChapterPosition(): ChapterPosition | null; extension: string;
   showDownloadFeedback(message: string, duration: number): void;
   lastSavedProgress: string; progressSaveChain: Promise<void>;
-  loadingStatus: HTMLElement; navigationState: { tocEntries: { group?: boolean }[]; currentChapterIndex: number };
+  loadingStatus: HTMLElement; navigationState: { tocEntries: unknown[]; currentChapterIndex: number };
   progressTools: HTMLElement; capability: { mode?: string | null | undefined }; chapterManifestUrl: string | null;
   params: URLSearchParams; restorationFailed: boolean;
   readerRestorationPromise: Promise<ProgressState | null> | null; readerRestorationLoaded: boolean;
@@ -48,7 +48,7 @@ export interface ProgressContext {
   restoreFoliateBookmarkPosition(entry: ProgressState, generation: number): Promise<boolean>;
   goToPage(page: number, generation: number): Promise<boolean>;
   consumeBookmarkHandoff(entry: ProgressState): void; reportNavigationError(error: unknown, generation: number): void;
-  formatAdapters: { active: { restore(entry: ProgressState, generation: number): unknown } };
+  formatAdapters: { active: { restore(entry: ProgressState, generation: number): unknown } | null };
   zoomChangedByUser: boolean; setZoom(zoom: number, persist: boolean): void;
   restoreInitialPosition(entry: ProgressState | null, generation: number): Promise<void>;
   readingProgressSummary: HTMLElement; readerProgressPercent(): number; progressSeeking: boolean;

@@ -14,6 +14,7 @@ import { paintTextHit, hitBoxes } from "/search/static/reader/search/reader-book
 import { createPdfFetchPolicy, openPdfRangeTask, preparePdfInitialRange, isFirstPageCandidate } from "./reader/pdf/reader-pdf-network.mjs";
 import { createV3Repository, validateResource, validateReadingManifest, validatePageMap, datasetPrimaryUrl } from "./reader/pdf/reader-v3.mjs";
 import { populateIndependentTextLayer, independentTextCaret } from "./reader/pdf/reader-pdf-text.js";
+/** @type {ReturnType<typeof createPdfFetchPolicy> | null} */
 let pdfFetchPolicy = null;
 import { populatePdfTextLayer, populateOcrTextLayer, pdfTextContent, pdfSearchText, normalizePdfSearchText, pdfSourceOffset } from "/search/static/reader/pdf/reader-pdf-text.js";
 import {
@@ -691,6 +692,7 @@ let {
 // Native reading (shared player in reader.html); installed once runtime exists.
 const { installReaderSpeech } = createReaderSpeech(readerContext);
 
+/** @type {Array<{at: number, stage: string, page: number, outcome: string, ms: number}>} */
 const pdfPageTimings = [];
 
 // Engines and Reader lifecycle.
@@ -726,24 +728,30 @@ installReaderSpeech();
 
 const params = new URLSearchParams(location.search);
 const readerId = params.get("id") || "";
+/** @type {Record<string, unknown> | null} */
 let localReaderData = null;
-readerBindings.readSelectedSourceSession();
+const selectedSourceData = readerBindings.readSelectedSourceSession();
 let sourceUrl = normalizeSourceUrl(
-  params.get("url") || (!readerId && localReaderData && localReaderData.url) || ""
+  params.get("url") || (!readerId && typeof selectedSourceData?.url === "string" ? selectedSourceData.url : "")
 );
 let contentUrl = readerContentUrl(sourceUrl);
 let downloadUrl =
-  params.get("download") || (localReaderData && localReaderData.download) || sourceUrl;
+  params.get("download") || (typeof selectedSourceData?.download === "string" ? selectedSourceData.download : "") || sourceUrl;
 let extension = (params.get("ext") || "").toLowerCase();
 let chapterManifestUrl = params.get("chapter_manifest") || "";
 let capability = readerRuntime.negotiate(VoiceOfMLReader.capability(extension));
 readerBindings.normalizeConvertedPdfMode();
 let resolvedReaderData = localReaderData;
+/** @type {Record<string, unknown> | null} */
 let cachedReaderData = null;
+/** @type {HTMLImageElement | null} */
 let pdfFirstPagePreload = null;
 let pdfFirstPagePreloadPage = 1;
+/** @type {Promise<import('../typings/reader-pdf-engine-strict').PdfModule> | null} */
 let pdfEnginePreload = null;
+/** @type {import('../typings/reader-pdf-engine-strict').PdfWorker | null} */
 let pdfWorker = null;
+/** @type {(() => void) | null} */
 let releasePdfWorker = null;
 readerBindings.applySourceSessionAndCachedMetadata();
 const readerLifecycle = readerRuntime.state.lifecycle;
@@ -757,8 +765,11 @@ const loadingStatus = /** @type {HTMLDivElement} */ (document.querySelector("#lo
 
 const downloadButton = /** @type {HTMLAnchorElement} */ (document.querySelector("#download"));
 const downloadFeedback = /** @type {HTMLElement} */ (document.querySelector("#download-feedback"));
+/** @type {Promise<void> | null} */
 let readerSourcePromise = null;
+/** @type {Promise<import('../typings/reader-progress-strict').ProgressState | null> | null} */
 let readerRestorationPromise = null;
+/** @type {import('../typings/reader-progress-strict').ProgressState | null} */
 let readerRestorationEntry = null;
 let readerRestorationLoaded = false;
 let downloadFeedbackTimer = 0;
@@ -774,7 +785,9 @@ const sourceName = (() => {
     return "在线阅读";
   }
 })();
+/** @type {IntersectionObserver | null} */
 let chapterManifestObserver = null;
+/** @type {MutationObserver | null} */
 let contentSanitizerObserver = null;
 const documentState = readerRuntime.state.document,
   navigationState = readerRuntime.state.navigation,
@@ -796,20 +809,37 @@ let canReturnWithHistory = false;
 readerBindings.validateReturnHistory();
 let saveTimer = 0;
 let saveDeadline = 0;
+/** @type {(((index: number) => Promise<ReaderSearchBackends.ChapterArticle | null>) & {count: number}) | null} */
 let chapterManifestLoader = null;
+/** @type {ReaderSearchBackends.ChapterConfiguration | null} */
 let chapterSearchConfiguration = null;
+/** @type {Promise<ReaderSearchBackends.ChapterModule> | null} */
 let chapterSearchModulePromise = null;
+/** @type {ReaderSearchBackends.ChapterClient | null} */
 let chapterSearchClient = null;
 
 readerBindings.ownChapterSearchClient();
+/** @type {URL | null} */
 let folderNavigationTarget = null;
+/** @type {HTMLElement | null} */
 let bookmarkInvoker = null;
 const bookmarkInertSiblings = new Map();
+/** @type {import('../typings/reader-page-window-strict').PdfPreviewDocument | import('../typings/reader-page-window-strict').DirectDjvuDocument | null} */
 let pdfDocument = null;
+/** @type {import('../typings/reader-page-window-strict').PageWindowManifest | null} */
 let pdfPageManifest = null;
+/** @type {import('../typings/reader-pdf-text-runtime-strict').OcrManifest | null} */
 let pdfOcrManifest = null;
+/** @type {Promise<import('../typings/reader-pdf-text-runtime-strict').OcrManifest> | null} */
 let pdfOcrManifestPromise = null;
-let pdfV3Manifest = null, pdfV3Map = null, pdfV3Repository = null, pdfTextLayerRepository = null;
+/** @type {import('../typings/reader-v3-strict').ReadingManifest | null} */
+let pdfV3Manifest = null;
+/** @type {import('../typings/reader-v3-strict').PageMap | null} */
+let pdfV3Map = null;
+/** @type {ReturnType<typeof createV3Repository> | null} */
+let pdfV3Repository = null;
+/** @type {ReturnType<typeof createV3Repository> | null} */
+let pdfTextLayerRepository = null;
 readerBindings.ownIndependentPdfResources();
 const pdfOcrPagePromises = new Map();
 const pdfTextContentCache = new Map();
@@ -820,9 +850,12 @@ const pdfOcrPageCache = new Map();
 const PDF_OCR_PAGE_CACHE_BYTES = 4 * 1024 * 1024;
 let pdfOcrPageCacheBytes = 0;
 
+/** @type {Promise<ReaderPdfSearch.Module> | null} */
 let pdfBookSearchModulePromise = null;
+/** @type {ReaderPdfSearch.Client | null} */
 let pdfBookSearchClient = null;
 let pdfBookSearchPrefetchTimer = 0;
+/** @type {Promise<void> | null} */
 let pdfBookSearchPrefetchPromise = null;
 // Do not silently download large full-book indexes just because a reader opened.
 const PDF_BOOK_SEARCH_PREFETCH_MAX_BYTES = 8 * 1024 * 1024;
@@ -830,15 +863,19 @@ const PDF_BOOK_SEARCH_PREFETCH_DELAY = 6000;
 readerBindings.ownPdfBookSearchClient();
 let pdfActiveRenders = 0;
 let pdfShellsReady = Promise.resolve();
+/** @type {import('../typings/reader-page-window-strict').PageWindowHandle | null} */
 let pdfShellWindow = null;
+/** @type {import('../typings/reader-pdf-scheduler-strict').RenderWaiter[]} */
 const pdfRenderWaiters = [];
 let pdfActiveTextLoads = 0;
 let pdfActiveSearchTextLoads = 0;
+/** @type {import('../typings/reader-pdf-scheduler-strict').TextWaiter[]} */
 const pdfTextWaiters = [];
 let pdfUserHasScrolled = false;
 let pdfScrollDirection = 1;
 let pdfLastScrollTop = 0;
 const pdfManifestPrefetches = new Map();
+/** @type {import('../typings/reader-page-window-strict').WindowShell[]} */
 const pdfManifestShells = [];
 const PDF_MANIFEST_PREFETCH_LIMIT = 12;
 const PDF_MANIFEST_PREFETCH_CONCURRENCY = 3;
@@ -854,17 +891,25 @@ let pdfManifestPrefetchCount = 0;
 let pdfManifestPrefetchWrapped = false;
 
 readerBindings.ownPdfPrefetchAndQueues();
+/** @type {import('../typings/reader-foliate-format-strict').FoliateView | null} */
 let epubRendition = null;
+/** @type {import('../typings/reader-foliate-format-strict').FoliateBook | null} */
 let epubBook = null;
-let foliateContinuous = false,
-  foliateChapterRepository = null,
-  foliateSectionVirtualizer = null,
-  foliateSectionLoader = null,
-  foliateSectionSettler = null,
-  foliateSectionObserver = null,
-  foliateScrollFrame = 0,
-  foliateWindowFrame = 0;
+let foliateContinuous = false;
+/** @type {ReturnType<ReaderChaptersApi['createChapterRepository']> | null} */
+let foliateChapterRepository = null;
+/** @type {ReturnType<ReaderVirtualApi['createSectionVirtualizer']> | null} */
+let foliateSectionVirtualizer = null;
+/** @type {import('../typings/reader-foliate-format-strict').FoliateLoader | null} */
+let foliateSectionLoader = null;
+/** @type {(() => Promise<unknown>) | null} */
+let foliateSectionSettler = null;
+/** @type {IntersectionObserver | null} */
+let foliateSectionObserver = null;
+let foliateScrollFrame = 0, foliateWindowFrame = 0;
+/** @type {number | null} */
 let initialReaderTargetSection = null;
+/** @type {(() => void) | null} */
 let chapterManifestCleanup = null;
 const FOLIATE_PREFETCH_SECTIONS = 6;
 const FOLIATE_PREFETCH_MARGIN = 4000;
@@ -872,7 +917,9 @@ const FOLIATE_LOADED_SECTION_LIMIT = 12;
 const PDF_PREFETCH_MARGIN = 2400;
 const TOC_VIRTUALIZATION_THRESHOLD = 500;
 const TOC_VIRTUAL_ROW_HEIGHT = 40;
+/** @type {import('../typings/reader-toc-strict').TocVirtualState | null} */
 let tocVirtualState = null;
+/** @type {HTMLIFrameElement | null} */
 let htmlFrame = null;
 let lastSavedProgress = "";
 let progressSaveChain = Promise.resolve();
@@ -880,8 +927,11 @@ let historySuppressed = false;
 let restorationFailed = false;
 let markerFrame = 0;
 let pageNavigationLockUntil = 0;
+/** @type {import('../typings/reader-bookmarks-strict').BookmarkSnapshot | null} */
 let pendingBookmarkSnapshot = null;
+/** @type {(HTMLMediaElement & {_readerSourceRetry?: boolean}) | null} */
 let mediaElement = null;
+/** @type {HTMLElement | null} */
 let swfPlayer = null;
 
 readerBindings.initializeGenerations();
@@ -897,6 +947,7 @@ readerBindings.labelToolbarControls();
 // A demanded TOC/search destination lands on the viewport's top edge. Measuring the
 // element keeps that landing exact (scrollIntoView can also move ancestor scrollers),
 // and it can be re-asserted once for a late layout shift.
+/** @param {Element | null} target @param {number} [offset] */
 const alignReaderDestination = (target, offset = 0) => {
   if (!target?.isConnected) return null;
   const delta = target.getBoundingClientRect().top - viewport.getBoundingClientRect().top - offset;
@@ -904,6 +955,7 @@ const alignReaderDestination = (target, offset = 0) => {
   return { target, offset, scrollTop: viewport.scrollTop };
 };
 const READER_REASSERT_SCROLL_LIMIT = 200;
+/** @param {{ target: Element, offset: number, scrollTop: number } | null} landing */
 const reassertReaderDestination = (landing) => {
   if (!landing?.target?.isConnected) return;
   if (Math.abs(viewport.scrollTop - landing.scrollTop) > READER_REASSERT_SCROLL_LIMIT) return;
@@ -924,8 +976,10 @@ const READER_HOLD_BUDGET_MS = 15000;
 // Images and inserted chapters arrive in bursts seconds apart, so wait out a long gap
 // before deciding the layout is final. Reader input still releases immediately.
 const READER_HOLD_QUIET_MS = 2000;
+/** @type {(() => void) | null} */
 let activeReaderDestinationHold = null;
 const cancelReaderDestinationHold = () => activeReaderDestinationHold?.();
+/** @param {Element | null} target @param {number} [offset] */
 const holdReaderDestination = (target, offset = 0) => {
   // A newer navigation owns the viewport. Never let an older landing loop
   // pull the new destination back while it is still loading or settling.
@@ -939,8 +993,11 @@ const holdReaderDestination = (target, offset = 0) => {
   const scopeTop = () => (viewport || scope).getBoundingClientRect().top;
   let frame = 0, released = false, lastChange = performance.now(), deadline = lastChange + READER_HOLD_BUDGET_MS;
   let lastScrollTop = scope.scrollTop;
+  /** @type {Array<[string, EventListener]>} */
   const listeners = [];
+  /** @type {Array<ResizeObserver | MutationObserver>} */
   const observers = [];
+  /** @type {Array<() => void>} */
   const cleanupImages = [];
   const detach = () => {
     readerAbortController.signal.removeEventListener("abort", release);
@@ -974,6 +1031,7 @@ const holdReaderDestination = (target, offset = 0) => {
     const sizes = new ResizeObserver(bump);
     // Watch the scrolling content (the box that actually grows), not the viewport.
     const observed = new Set();
+    /** @param {Element | null} node */
     const watch = (node) => {
       if (!node || observed.has(node) || observed.size >= 24) return;
       observed.add(node);
@@ -1001,7 +1059,6 @@ const holdReaderDestination = (target, offset = 0) => {
       image.removeEventListener("error", handler);
     });
   }
-  if (cleanupImages.length) listeners.push([], []);
   const loop = () => {
     frame = 0;
     if (released) return;
@@ -1038,8 +1095,8 @@ const bookmarkLabelInput = document.createElement("input"),
 readerBindings.initializeBookmarkEditor();
 const bookmarksAllButton = document.createElement("button");
 readerBindings.initializeBookmarkSearchControls();
-const bookmarksHeader = document.querySelector("#bookmarks-panel .panel-view-header"),
-  bookmarksSearchButton = bookmarksHeader.querySelector(".panel-search-toggle"),
+const bookmarksHeader = /** @type {Element} */ (document.querySelector("#bookmarks-panel .panel-view-header")),
+  bookmarksSearchButton = /** @type {Element} */ (bookmarksHeader.querySelector(".panel-search-toggle")),
   bookmarksHeaderActions = document.createElement("span");
 readerBindings.mountBookmarkHeaderActions();
 const mediaTab = document.createElement("button"),
@@ -1060,8 +1117,9 @@ let themeAnimationTimer = 0;
 readerBindings.restoreReaderThemeAndBindReturn();
 let zoomChangedByUser = false;
 
+/** @param {unknown} error @param {number} generation */
 const handlePageNavigationFailure = (error, generation) => {
-  if (isReaderGenerationCurrent("navigation", generation) && error?.name !== "AbortError")
+  if (isReaderGenerationCurrent("navigation", generation) && !(error && typeof error === "object" && "name" in error && error.name === "AbortError"))
     fail("原文件加载失败，请检查网络后重试，或下载原文件。", "READER_NAVIGATION");
 };
 readerBindings.bindZoomAndPageControls();
@@ -1071,8 +1129,10 @@ let readerPanelInteractionSerial = 0;
 let readerUiHistoryState = "base";
 readerBindings.bindReaderUiHistory();
 
+/** @type {import('../typings/reader-toc-strict').HeadingLocationCache | null} */
 let headingLocationCache = null;
 readerBindings.bindPanelBookmarkAndLifecycleControls();
+/** @type {import('../typings/reader-bindings-strict').SelectionPointer | null} */
 let pdfSelectionPointer = null;
 
 readerBindings.bindPdfPointerSelection();
@@ -1097,11 +1157,14 @@ const progressRange = /** @type {HTMLInputElement} */ (progressTools.querySelect
   progressUndo = /** @type {HTMLButtonElement} */ (progressTools.querySelector(".reader-progress-undo")),
   chapterPrev = /** @type {HTMLButtonElement} */ (progressTools.querySelector(".reader-chapter-prev")),
   chapterNext = /** @type {HTMLButtonElement} */ (progressTools.querySelector(".reader-chapter-next"));
-let previousProgressState = null,
+/** @type {import('../typings/reader-progress-strict').ProgressState | null} */
+let previousProgressState = null;
+let
   progressSeeking = false,
-  epubSeekFrame = 0,
-  epubSeekTarget = null,
-  epubSeekPromise = Promise.resolve();
+  epubSeekFrame = 0;
+/** @type {{percent: number, generation: number} | null} */
+let epubSeekTarget = null;
+let epubSeekPromise = Promise.resolve();
 
 readerBindings.bindProgressActions();
 const domSearch = createReaderDomSearch({
@@ -1135,7 +1198,7 @@ const fullSearchController = createReaderSearchController({
     chapterClient: () => chapterSearchClient,
     pdfClient: () => pdfBookSearchClient,
     chapterResult: result => ({ ...result,
-      activate: generation => navigateChapterSearchResult(result, generation) }),
+      activate: (generation = readerRuntime.currentGeneration("navigation")) => navigateChapterSearchResult(result, generation) }),
     activate: (result, generation) => "activate" in result
       ? result.activate(generation) : navigateFoliateSearchResult(result, generation)
   },
@@ -1145,7 +1208,7 @@ const fullSearchController = createReaderSearchController({
     reportError: reportNavigationError
   },
   panel: {
-    isOpen: () => document.querySelector("#history-panel").classList.contains("is-open"),
+    isOpen: () => !!document.querySelector("#history-panel")?.classList.contains("is-open"),
     serial: () => readerPanelInteractionSerial,
     show: () => { setReaderPanelOpen(true); selectPanel("full-search"); },
     hide: () => selectPanel(mediaElement ? "media" : "toc"),
@@ -1166,7 +1229,12 @@ const {
 // Format-specific search backends publish through the shared controller.
 
 const pdfSearchTextCache = new Map();
-let pdfPersistentTextStore = null, pdfPersistentTextOpening = null, pdfPersistentTextVersion = null;
+/** @type {ReaderPdfSearch.Store | null} */
+let pdfPersistentTextStore = null;
+/** @type {Promise<ReaderPdfSearch.Store | null> | null} */
+let pdfPersistentTextOpening = null;
+/** @type {string | null} */
+let pdfPersistentTextVersion = null;
 
 const PDF_SEARCH_TEXT_CACHE_BYTES = 8 * 1024 * 1024;
 let pdfSearchTextCacheBytes = 0;

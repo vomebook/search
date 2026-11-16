@@ -26,7 +26,7 @@ interface VoiceOfMLRouterDependencies {
 }
 declare var VoiceOfMLRoute: {
   parse(hash: string): { mode: string; repo: string | null; params: VoiceOfMLRouteParams };
-  buildParams(state: VoiceOfMLRouteState, formatSize: (value: number) => string, options?: VoiceOfMLRouteOptions): URLSearchParams;
+  buildParams(state: VoiceOfMLRouteState, formatSize: (value: number) => string | null, options?: VoiceOfMLRouteOptions): URLSearchParams;
   url(mode: string, repo: string | null | undefined, params: URLSearchParams): string;
   project(params: VoiceOfMLRouteParams, mode: string, initialized: boolean): VoiceOfMLRouteProjection;
 };

@@ -548,7 +548,8 @@ test('load waiters reuse replacement bootstrap metadata without a duplicate inst
   replacement.respond(replacement.request('handshake'), { protocol: 1 });
   await h.flush();
   replacement.respond(replacement.request('load-corpus'), {
-    repos: ['R'], extensions: [{ name: 'txt', count: 4 }], count: 4,
+    repos: [{name: 'R', count: 4}], extensions: [{ name: 'txt', count: 4 }], count: 4,
+    extensionsByRepo: {}, reader: {available: false, count: 0, byRepo: {}},
   });
   assert.deepEqual(await Promise.all([first, second, third]), [true, true, true]);
   assert.deepEqual(replacement.sent.map(m => m.type), ['handshake', 'load-corpus']);
@@ -595,7 +596,8 @@ test('failed replacement bootstrap releases ownership for shared explicit local-
   await h.flush();
   const loads = replacement.sent.filter(m => m.type === 'load-corpus');
   assert.equal(loads.length, 2);
-  replacement.respond(loads[1], { repos: ['Recovered'], extensions: [{ name: 'txt', count: 7 }] });
+  replacement.respond(loads[1], { repos: [{name: 'Recovered', count: 7}], extensions: [{ name: 'txt', count: 7 }],
+    extensionsByRepo: {}, reader: {available: false, count: 0, byRepo: {}} });
   assert.deepEqual(await Promise.all([retry, retryJoined]), [true, true]);
   assert.equal(h.run('STATE.dataLoaded'), true);
   assert.equal(h.run('extensionCounts.txt'), 7);

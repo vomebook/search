@@ -1,13 +1,4 @@
 {
-  "browser_js": [
-    "static/app.js",
-    "static/reader.js",
-    "static/reader/core/reader-bindings.mjs",
-    "static/reader/pdf/reader-pdf-network.mjs",
-    "static/reader/pdf/reader-pdf-page-window.mjs",
-    "static/reader/reader-components.mjs",
-    "static/search/index-worker.js",
-    "static/tts-client.js"
-  ],
+  "browser_js": [],
   "backend_python": []
 }
