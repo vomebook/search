@@ -3,7 +3,7 @@ const fs = require("fs");
 const os = require("os");
 const path = require("path");
 const { test, run } = require("./test_harness");
-const { searchTestProjects } = require("./search_test_projects");
+const { searchTestProjects, responseCacheTestProjects } = require("./search_test_projects");
 const {spawnSync} = require("child_process");
 
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), "search-test-projects-"));
@@ -28,16 +28,21 @@ test("default mode requires and selects both sibling sites", () => {
   }
 });
 
-test("response-cache entry runs its own checkout without project environment", () => {
+test("response-cache entry selects its own checkout without another site's compiler", () => {
   const env = {...process.env};
   delete env.SEARCH_TEST_PROJECT;
   delete env.SEARCH_TEST_ROOT;
-  const script = path.resolve(__dirname, "../search/response-cache/test_response_cache.js");
-  const result = spawnSync(process.execPath, [script], {cwd: dir, env, encoding: "utf8", timeout: 30000});
+  const helper = path.resolve(__dirname, "search_test_projects.js");
+  const source = `const {responseCacheTestProjects}=require(process.argv[1]);
+    console.log(JSON.stringify(responseCacheTestProjects()));`;
+  const result = spawnSync(process.execPath, ["-e", source, helper], {cwd: dir, env, encoding: "utf8", timeout: 30000});
   assert.strictEqual(result.error, undefined);
   assert.strictEqual(result.status, 0, result.stdout + result.stderr);
-  assert.match(result.stdout, /github-Search response store declarations enforce page and dependency contracts/);
-  assert.doesNotMatch(result.stdout, /huggingface-Search/);
+  assert.deepStrictEqual(JSON.parse(result.stdout), [{name: "github-Search", root: path.resolve(__dirname, "../..")}]);
+  assert.deepStrictEqual(responseCacheTestProjects({SEARCH_TEST_PROJECT: "huggingface-Search", SEARCH_TEST_ROOT: hf}),
+    [{name: "huggingface-Search", root: hf}]);
+  for (const selection of [{SEARCH_TEST_PROJECT: "github-Search"}, {SEARCH_TEST_ROOT: github}])
+    assert.throws(() => responseCacheTestProjects(selection));
 });
 
 test("explicit mode selects exactly the named root independent of cwd", () => {
