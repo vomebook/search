@@ -16,7 +16,9 @@ function fixture(simd = true) {
   const removeEventListener = (name, listener) => listeners.get(name)?.delete(listener);
   const resourceContext = {WebAssembly:{validate:()=>simd}};
   vm.runInNewContext(fs.readFileSync('static/reader-resources.js','utf8'),resourceContext);
-  const context = {URL, Map, Set, Promise, AbortController, AbortSignal, DOMException, encodeURIComponent,
+  class Element {}
+  class HTMLElement extends Element {}
+  const context = {URL, Map, Set, Promise, AbortController, AbortSignal, DOMException, encodeURIComponent, Element, HTMLElement,
     VoiceOfMLReaderResources: resourceContext.VoiceOfMLReaderResources,
     Date: {now: () => now}, API_BASE: 'https://api.test', location:{origin:'https://site.test'},
     navigator:{onLine:true}, document:{hidden:false,createElement:()=>({addEventListener(){},remove(){}}),head:{appendChild:link=>links.push(link)},
@@ -139,12 +141,15 @@ function fixture(simd = true) {
   // Exercise the actual delegated events, not only the helper. Hover is
   // speculative; pointer and keyboard intent may replace a different hover.
   const emitIntent = (fixture, type, id, download = false) => {
-    const target = {dataset:{readerUrl:'/reader?id='+id+'&ext=pdf'}};
-    fixture.events[type]({type, target:{closest:selector =>
-      selector.includes('data-download') ? (download ? target : null) : target}});
+    const target = Object.assign(new fixture.context.HTMLElement(), {dataset:{readerUrl:'/reader?id='+id+'&ext=pdf'}});
+    const eventTarget = Object.assign(new fixture.context.Element(), {closest:selector =>
+      selector.includes('data-download') ? (download ? target : null) : target});
+    fixture.events[type]({type, target:eventTarget});
   };
   const resolverCalls = fixture => fixture.calls.filter(call=>call.url.includes('/api/reader-resolve'));
   const priority=fixture();
+  priority.events.pointerover({type:'pointerover', target:{closest(){throw new Error('non-element target');}}});
+  assert.strictEqual(resolverCalls(priority).length,0,'non-element events must not warm');
   emitIntent(priority,'pointerover','old');
   const old=resolverCalls(priority)[0];
   emitIntent(priority,'pointerover','other');
@@ -299,7 +304,7 @@ function fixture(simd = true) {
 
   const consumed=fixture();
   await warmBook(consumed,'consumed');
-  consumed.run(fs.readFileSync('static/reader/core/reader-bindings.mjs','utf8').replace(/^export /,''));
+  consumed.run(fs.readFileSync('static/reader/core/reader-bindings.mjs','utf8').replace(/^export /m,''));
   const metadata=consumed.run(`(() => {
     const context={readerId:'consumed'};
     createReaderBindings(context).applySourceSessionAndCachedMetadata();

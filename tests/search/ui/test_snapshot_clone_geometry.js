@@ -32,6 +32,8 @@ function fixture(source, root) {
     results:()=>c.STATE.results, hasWindow:()=>false, cloning:()=>!!c.resultSnapshots.cloneTask,
     getHeightMeasurementKey:c.getHeightMeasurementKey, getResultStableId:c.getResultStableId
   }));
+  const metadataHelper=source.match(/^function getSearchPageMetadata\([^]*?^}/m);
+  if(metadataHelper) vm.runInContext(metadataHelper[0],c);
   for(const name of ['cloneSearchResult','materializeSnapshotRange','materializedSnapshotRow','applySnapshotCloneHeights','getSelectedFiles']) {
     const match=source.match(new RegExp('^function '+name+'\\([^]*?^}', 'm'));
     assert(match,name);vm.runInContext(match[0],c);

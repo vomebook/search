@@ -120,7 +120,7 @@ test("reader intent prefetches the shell and format engines", () => {
     'if (now < (readerWarmupRetryAt.get(key) || 0)) return',
     'if (readerWarmupPending !== task) return',
     'warmedReaderSources.set(key, { expiresAt: Date.now() + READER_WARMUP_TTL, metadataStored })',
-    'while (warmedReaderSources.size > READER_WARMUP_MAX) { warmedReaderSources.delete(warmedReaderSources.keys().next().value); }',
+    'while (warmedReaderSources.size > READER_WARMUP_MAX) { const oldest = warmedReaderSources.keys().next(); if (oldest.done) break; warmedReaderSources.delete(oldest.value); }',
     'if (readerWarmupPending !== task || controller.signal.aborted) return',
     'if (readerId) cacheReaderMetadata(readerId, data); finish(true)',
   ]) assertCode(warmup, snippet);
@@ -298,7 +298,7 @@ test("Reader return and search snapshot state is preserved", () => {
   assert.match(snapshots, /snapshots\.size > policy\.MAX/);
   assert.match(snapshots, /bytes \+ snapshot\.bytes > policy\.BYTES_MAX/);
   assert.match(app, /return resultSnapshots\.save\(view, position,/);
-  assert.match(app, /STATE\.results = resultSnapshots\.restoreResults\(/);
+  assertCode(app, 'STATE.results = /** @type {(PagesSearchRecord | null | undefined)[]} */ (resultSnapshots.restoreResults(snapshot, key, STATE.pageSize, restoreScroll, preserveRestore));');
   const host = fs.readFileSync("static/search/reader-host/application/host.js", "utf8");
   const position = fs.readFileSync("static/search/reader-host/presentation/return-position.js", "utf8");
   assertCode(host, "navigation.remember(url, /** @type {object} */ (position.scroll))");
@@ -306,6 +306,15 @@ test("Reader return and search snapshot state is preserved", () => {
   assert.ok(position.includes("if (scroll && !active) { generation++; scroll = null; }"));
   assert.match(app, /searchWithInitialFallback\(\);/);
   assert.doesNotMatch(app, /if \(!restoreSearchViewSnapshot\(getSearchViewKey\(\)\)\) searchWithInitialFallback\(\);/);
+});
+
+test("warmup eviction and snapshot restoration source proofs reject regressions", () => {
+  const eviction = 'while (warmedReaderSources.size > READER_WARMUP_MAX) { const oldest = warmedReaderSources.keys().next(); if (oldest.done) break; warmedReaderSources.delete(oldest.value); }';
+  assert.throws(() => assertCode(eviction.replace('if (oldest.done) break;', ''), eviction));
+  assert.throws(() => assertCode(eviction.replace('delete(oldest.value)', 'delete(key)'), eviction));
+  const restore = 'STATE.results = /** @type {(PagesSearchRecord | null | undefined)[]} */ (resultSnapshots.restoreResults(snapshot, key, STATE.pageSize, restoreScroll, preserveRestore));';
+  assert.throws(() => assertCode(restore.replace('STATE.results =', 'other.results ='), restore));
+  assert.throws(() => assertCode(restore.replace('restoreScroll, preserveRestore', 'false, preserveRestore'), restore));
 });
 
 test("Worker retains tokenizer and fuzzy edit distance", () => {
