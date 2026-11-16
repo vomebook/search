@@ -6,7 +6,7 @@
 // the realm (frame document / shadow tree) that owns the range.
 const SKIP = new Set(["SCRIPT", "STYLE", "NOSCRIPT", "TEMPLATE"]);
 // A standalone Reader left while reading aloud (← or browser back) records
-// where it was; search/reader-navigation.js resumes it in a background Reader
+// where it was; search/reader-host/application/navigation.js resumes it in a background Reader
 // and passes the position through the frame name. Keep both keys in sync.
 const HANDOFF_KEY = "reader-speech-handoff";
 const RESUME_PREFIX = "reader-speech-resume:";

@@ -22,7 +22,7 @@ function fixture(baseline = false) {
       return new Promise(resolve => workers.push({type, payload, timeout, resolve}));
     },
   });
-  vm.runInContext(fs.readFileSync('static/search/response-cache.js', 'utf8'), c);
+  vm.runInContext(fs.readFileSync('static/search/requests/infrastructure/response-cache.js', 'utf8'), c);
   vm.runInContext('Date.now = () => clock', c);
   const old = baseline && fs.readFileSync(process.env.CATALOG_BASELINE_ROOT + '/static/app.js', 'utf8');
   const source = old || app;

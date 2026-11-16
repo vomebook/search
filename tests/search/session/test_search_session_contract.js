@@ -5,7 +5,7 @@ const test = require('node:test');
 const vm = require('node:vm');
 const {IDBFactory} = require('fake-indexeddb');
 
-const filename = path.join(__dirname, '../../../static/search/search-session.js');
+const filename = path.join(__dirname, '../../../static/search/execution/application/session.js');
 const source = fs.readFileSync(filename, 'utf8');
 const turn = () => new Promise(resolve => setImmediate(resolve));
 async function until(predicate) {

@@ -798,6 +798,33 @@ for (const [site, workerSource, prefix] of [
       assert.ok(!instance.stores.get(name).has(retired), 'failure must not poison later cleanup');
     });
   }
+  test(`${site} relocated classic module keeps its historical hashed URL for one previous generation`, async () => {
+    // This flat URL and digest were emitted by the prior release on both sites.
+    const oldPath = prefix + 'search/reader-navigation.6739fa74e2e7.js';
+    const newPath = prefix + 'search/reader-host/application/navigation.6739fa74e2e7.js';
+    const release = (version, asset) => workerSource.replace('"development"', JSON.stringify(version))
+      .replace('const CURRENT_HASHED_ASSETS = []', 'const CURRENT_HASHED_ASSETS = ' + JSON.stringify([asset]));
+    for (const offline of [false, true]) {
+      const oldSource = release('flat-module', oldPath);
+      const first = harness({source: oldSource});
+      await lifecycle(first.listeners.install);
+      await lifecycle(first.listeners.activate);
+      first.stores.get(cacheName(oldSource)).set('https://example.test' + oldPath, response('original module bytes'));
+      const network = () => offline ? Promise.reject(new Error('offline')) : Promise.resolve(response('gone', {ok: false, status: 404}));
+      const nextSource = release('feature-module', newPath);
+      const next = harness({source: nextSource, stores: first.stores, fetch: network});
+      await lifecycle(next.listeners.install);
+      await lifecycle(next.listeners.activate);
+      assert.strictEqual((await dispatchFetch(next, 'https://example.test' + oldPath)).body, 'original module bytes');
+      assert.ok(!next.stores.get(cacheName(nextSource)).has('https://example.test' + oldPath));
+      const third = harness({source: release('following-release', newPath), stores: first.stores, fetch: network});
+      await lifecycle(third.listeners.install);
+      await lifecycle(third.listeners.activate);
+      assert.ok(!third.stores.has(cacheName(oldSource)));
+      if (offline) await assert.rejects(dispatchFetch(third, 'https://example.test' + oldPath), /offline/);
+      else assert.strictEqual((await dispatchFetch(third, 'https://example.test' + oldPath)).status, 404);
+    }
+  });
   test(`${site} previous Ruffle cache retains retired assets and promotes current assets for one release`, async () => {
     const files = ['ruffle.js', 'core.ruffle.0123456789abcdefabcd.js', '0123456789abcdefabcd.wasm'];
     const paths = release => files.map(file => prefix + 'vendor/ruffle/release-' + release + '/' + file);

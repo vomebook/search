@@ -5,7 +5,7 @@ import {hasPassingTapContracts} from "../check_tap_contracts.mjs";
 // A missing source row or a failed test must never pass as empty coverage.
 const result = spawnSync(process.execPath, [
   "--test", "--test-reporter=tap", "--experimental-test-coverage",
-  "--test-coverage-include=**/static/search/response-cache.js",
+  "--test-coverage-include=**/static/search/requests/infrastructure/response-cache.js",
   "--test-coverage-lines=100", "--test-coverage-branches=100", "--test-coverage-functions=100",
   "tests/search/response-cache/test_search_response_cache_contract.js"
 ], {encoding: "utf8"});

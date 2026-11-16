@@ -4,7 +4,7 @@ import {hasPassingTapContracts} from "../check_tap_contracts.mjs";
 // Node 26/V8 scope: extracted folder selection module only, excluding the host app.
 const result = spawnSync(process.execPath, [
   "--test", "--test-reporter=tap", "--experimental-test-coverage",
-  "--test-coverage-include=**/static/search/folder-selection.js",
+  "--test-coverage-include=**/static/search/sidebar/domain/folder-selection.js",
   "--test-coverage-lines=100", "--test-coverage-branches=100", "--test-coverage-functions=100",
   "tests/search/baselines/test_search_folder_selection_baseline.mjs"
 ], {encoding: "utf8"});

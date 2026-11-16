@@ -6,7 +6,7 @@ import {hasPassingTapContracts} from "../check_tap_contracts.mjs";
 const minimum = [100, 88.89, 100];
 const result = spawnSync(process.execPath, [
   "--test", "--test-reporter=tap", "--experimental-test-coverage",
-  "--test-coverage-include=**/static/search/download-controller.js",
+  "--test-coverage-include=**/static/search/downloads/application/controller.js",
   ...minimum.map((value, index) => `--test-coverage-${["lines", "branches", "functions"][index]}=${value}`),
   "tests/search/download/test_download_controller_contract.js"
 ], {encoding: "utf8"});
@@ -15,7 +15,7 @@ if (result.stderr) process.stderr.write(result.stderr);
 if (result.error) throw result.error;
 const text = result.stdout || "";
 const rows = text.split(/\r?\n/).flatMap(line => {
-  const match = /^\s*#\s*download-controller\.js\s*\|\s*(\d+(?:\.\d+)?)\s*\|\s*(\d+(?:\.\d+)?)\s*\|\s*(\d+(?:\.\d+)?)\s*\|/.exec(line);
+  const match = /^\s*#\s*controller\.js\s*\|\s*(\d+(?:\.\d+)?)\s*\|\s*(\d+(?:\.\d+)?)\s*\|\s*(\d+(?:\.\d+)?)\s*\|/.exec(line);
   return match ? [match.slice(1).map(Number)] : [];
 });
 const required = [

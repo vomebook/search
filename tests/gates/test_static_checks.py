@@ -293,7 +293,7 @@ class StaticGateTests(unittest.TestCase):
         self.assert_check(self.run_check(*check), False, "coverage")
 
     def test_download_controller_coverage_gate_fails_closed(self):
-        paths = ["static/search/download-controller.js", "scripts/search/check_download_controller_coverage.mjs",
+        paths = ["static/search/downloads/application/controller.js", "scripts/search/check_download_controller_coverage.mjs",
                  "scripts/check_tap_contracts.mjs", "tests/search/download/test_download_controller_contract.js", "static/app.js",
                  "static/search/downloads/application/batch.js", "static/search/downloads/presentation/queue.js"]
         for relative in paths:
@@ -301,7 +301,7 @@ class StaticGateTests(unittest.TestCase):
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(ROOT / relative, target)
         check = ["node", paths[1]]
-        self.assert_check(self.run_check(*check), True, "download-controller.js")
+        self.assert_check(self.run_check(*check), True, "controller.js")
         contract = self.root / paths[3]
         original = contract.read_text()
         all_names = re.findall(r'^test\("([^"\n]+)"', original, re.M)
@@ -372,11 +372,11 @@ class StaticGateTests(unittest.TestCase):
         original = (ROOT / "typings/reader-globals.d.ts").read_text()
         declaration.write_text(original)
         for name in ("jsconfig.strict.json", "jsconfig.search-exact.json"):
-            self.assertIn("static/search/download-controller.js", load_type_config(name)["files"])
+            self.assertIn("static/search/downloads/application/controller.js", load_type_config(name)["files"])
         config.write_text(json.dumps({"compilerOptions": {"allowJs": True, "checkJs": True, "noEmit": True,
             "strict": True, "noUncheckedIndexedAccess": True, "exactOptionalPropertyTypes": True,
             "target": "esnext", "module": "esnext", "moduleDetection": "force"},
-            "files": [str(declaration), str(ROOT / "static/search/download-controller.js")]}))
+            "files": [str(declaration), str(ROOT / "static/search/downloads/application/controller.js")]}))
         check = ["node", ROOT / "node_modules/typescript/bin/tsc", "--project", config]
         self.assert_check(self.run_check(*check), True, "")
         before = "checkDownload(link: string, speculative?: boolean, signal?: AbortSignal): Promise<unknown>;"
@@ -458,7 +458,7 @@ class StaticGateTests(unittest.TestCase):
 
 
     def test_search_response_cache_coverage_gate_fails_closed(self):
-        paths = ["static/search/response-cache.js", "scripts/search/check_search_response_cache_coverage.mjs",
+        paths = ["static/search/requests/infrastructure/response-cache.js", "scripts/search/check_search_response_cache_coverage.mjs",
                  "tests/search/response-cache/test_search_response_cache_contract.js"]
         for path in [*paths, "scripts/check_tap_contracts.mjs"]:
             target = self.root / path
@@ -499,14 +499,14 @@ class StaticGateTests(unittest.TestCase):
                 test.write_text(original + "\n" + extra + "\n")
                 result = self.run_check(*check)
                 self.assert_check(result, False, "exactly one fully covered source row")
-                self.assertIn("#   response-cache.js | 100.00", result.stdout)
+                self.assertIn("#     response-cache.js | 100.00", result.stdout)
                 self.assertEqual(result.stdout.count("response-cache.js |"), 2)
         test.write_text('require("node:test")("empty", () => {});\n')
         self.assert_check(self.run_check(*check), False, "exactly one fully covered source row")
         test.write_text('throw new Error("failed response cache test");\n')
         self.assert_check(self.run_check(*check), False, "failed response cache test")
         test.write_text('const vm = require("vm"), fs = require("fs");\n'
-                        'const filename = process.cwd() + "/static/search/response-cache.js";\n'
+                        'const filename = process.cwd() + "/static/search/requests/infrastructure/response-cache.js";\n'
                         'vm.runInNewContext(fs.readFileSync(filename, "utf8"), {}, {filename});\n')
         self.assert_check(self.run_check(*check), False, "coverage")
 
@@ -515,10 +515,10 @@ class StaticGateTests(unittest.TestCase):
         declaration = self.root / "reader-globals.d.ts"
         original = (ROOT / "typings/reader-globals.d.ts").read_text()
         declaration.write_text(original)
-        self.assertIn("static/search/response-cache.js", load_type_config("jsconfig.strict.json")["files"])
+        self.assertIn("static/search/requests/infrastructure/response-cache.js", load_type_config("jsconfig.strict.json")["files"])
         config.write_text(json.dumps({"compilerOptions": {"allowJs": True, "checkJs": True, "noEmit": True,
             "strict": True, "target": "esnext", "moduleDetection": "force"},
-            "files": [str(declaration), str(ROOT / "static/search/response-cache.js")]}))
+            "files": [str(declaration), str(ROOT / "static/search/requests/infrastructure/response-cache.js")]}))
         check = ["node", ROOT / "node_modules/typescript/bin/tsc", "--project", config]
         self.assert_check(self.run_check(*check), True, "")
         before = "  constructor(limit: number, ttl: number, budget?: number);"
@@ -542,7 +542,7 @@ class StaticGateTests(unittest.TestCase):
         self.assert_check(self.run_check(*check), False, "TS2322")
 
     def test_search_result_identity_coverage_gate_fails_closed(self):
-        paths = ["static/search/result-identity.js", "static/search/record-path.js",
+        paths = ["static/search/results/domain/result-identity.js", "static/search/catalog/domain/record-path.js",
                  "scripts/search/check_search_result_identity_coverage.mjs", "tests/search/baselines/test_search_stable_id_baseline.mjs", "static/app.js"]
         for path in [*paths, "scripts/check_tap_contracts.mjs"]:
             target = self.root / path
@@ -570,7 +570,7 @@ class StaticGateTests(unittest.TestCase):
         test.write_text(source)
         gate = self.root / paths[2]
         gate_source = gate.read_text()
-        include = "--test-coverage-include=**/static/search/result-identity.js"
+        include = "--test-coverage-include=**/static/search/results/domain/result-identity.js"
         self.assertEqual(gate_source.count(include), 1)
         gate.write_text(gate_source.replace(include, "--test-coverage-include=**/missing-identity.js"))
         self.assert_check(self.run_check(*check), False, "exactly one fully covered source row")
@@ -580,10 +580,10 @@ class StaticGateTests(unittest.TestCase):
         declaration = self.root / "reader-globals.d.ts"
         original = (ROOT / "typings/reader-globals.d.ts").read_text()
         declaration.write_text(original)
-        self.assertIn("static/search/result-identity.js", load_type_config("jsconfig.strict.json")["files"])
+        self.assertIn("static/search/results/domain/result-identity.js", load_type_config("jsconfig.strict.json")["files"])
         config.write_text(json.dumps({"compilerOptions": {"allowJs": True, "checkJs": True, "noEmit": True,
             "strict": True, "target": "esnext", "moduleDetection": "force"},
-            "files": [str(declaration), str(ROOT / "static/search/result-identity.js")]}))
+            "files": [str(declaration), str(ROOT / "static/search/results/domain/result-identity.js")]}))
         check = ["node", ROOT / "node_modules/typescript/bin/tsc", "--project", config]
         self.assert_check(self.run_check(*check), True, "")
         before = "declare var VoiceOfMLSearchIdentity: {getResultStableId(result: unknown): string};"
@@ -605,7 +605,7 @@ class StaticGateTests(unittest.TestCase):
         self.assert_check(self.run_check(*check), False, "TS2322")
 
     def test_search_folder_selection_coverage_gate_fails_closed(self):
-        paths = ["static/search/folder-selection.js", "scripts/search/check_search_folder_selection_coverage.mjs",
+        paths = ["static/search/sidebar/domain/folder-selection.js", "scripts/search/check_search_folder_selection_coverage.mjs",
                  "tests/search/baselines/test_search_folder_selection_baseline.mjs"]
         for path in [*paths, "scripts/check_tap_contracts.mjs"]:
             target = self.root / path
@@ -641,7 +641,7 @@ class StaticGateTests(unittest.TestCase):
         module.write_text(module_source)
         gate = self.root / paths[1]
         gate_source = gate.read_text()
-        include = "--test-coverage-include=**/static/search/folder-selection.js"
+        include = "--test-coverage-include=**/static/search/sidebar/domain/folder-selection.js"
         self.assertEqual(gate_source.count(include), 1)
         gate.write_text(gate_source.replace(include, "--test-coverage-include=**/missing-folder-selection.js"))
         self.assert_check(self.run_check(*check), False, "exactly one fully covered source row")
@@ -652,11 +652,11 @@ class StaticGateTests(unittest.TestCase):
         original = (ROOT / "typings/reader-globals.d.ts").read_text()
         declaration.write_text(original)
         for name in ("jsconfig.strict.json", "jsconfig.search-exact.json", "jsconfig.check.json"):
-            self.assertIn("static/search/folder-selection.js", load_type_config(name)["files"])
+            self.assertIn("static/search/sidebar/domain/folder-selection.js", load_type_config(name)["files"])
         config.write_text(json.dumps({"compilerOptions": {"allowJs": True, "checkJs": True, "noEmit": True,
             "strict": True, "noUncheckedIndexedAccess": True, "exactOptionalPropertyTypes": True,
             "target": "esnext", "moduleDetection": "force"},
-            "files": [str(declaration), str(ROOT / "static/search/folder-selection.js")]}))
+            "files": [str(declaration), str(ROOT / "static/search/sidebar/domain/folder-selection.js")]}))
         check = ["node", ROOT / "node_modules/typescript/bin/tsc", "--project", config]
         self.assert_check(self.run_check(*check), True, "")
         before = "  folderPathCovered(path: string, subtreeSet: ReadonlySet<string>): boolean;"
@@ -1247,7 +1247,7 @@ class StaticGateTests(unittest.TestCase):
             self.assert_check(self.run_check(*check), False, diagnostic)
 
     def test_search_response_validation_coverage_gate_fails_closed(self):
-        paths = ["static/search/response-validation.js", "scripts/search/check_search_response_validation_coverage.mjs",
+        paths = ["static/search/requests/domain/response-validation.js", "scripts/search/check_search_response_validation_coverage.mjs",
                  "tests/search/baselines/test_search_response_validation_baseline.mjs", "static/app.js"]
         for path in [*paths, "scripts/check_tap_contracts.mjs"]:
             target = self.root / path
@@ -1276,7 +1276,7 @@ class StaticGateTests(unittest.TestCase):
         test.write_text(source)
         gate = self.root / paths[1]
         gate_source = gate.read_text()
-        include = "--test-coverage-include=**/static/search/response-validation.js"
+        include = "--test-coverage-include=**/static/search/requests/domain/response-validation.js"
         self.assertEqual(gate_source.count(include), 1)
         gate.write_text(gate_source.replace(include, "--test-coverage-include=**/missing-validator.js"))
         self.assert_check(self.run_check(*check), False, "exactly one fully covered source row")
@@ -1286,10 +1286,10 @@ class StaticGateTests(unittest.TestCase):
         declaration = self.root / "reader-globals.d.ts"
         original = (ROOT / "typings/reader-globals.d.ts").read_text()
         declaration.write_text(original)
-        self.assertIn("static/search/response-validation.js", load_type_config("jsconfig.strict.json")["files"])
+        self.assertIn("static/search/requests/domain/response-validation.js", load_type_config("jsconfig.strict.json")["files"])
         config.write_text(json.dumps({"compilerOptions": {"allowJs": True, "checkJs": True, "noEmit": True,
             "strict": True, "target": "esnext", "moduleDetection": "force"},
-            "files": [str(declaration), str(ROOT / "static/search/response-validation.js")]}))
+            "files": [str(declaration), str(ROOT / "static/search/requests/domain/response-validation.js")]}))
         check = ["node", ROOT / "node_modules/typescript/bin/tsc", "--project", config]
         self.assert_check(self.run_check(*check), True, "")
         for before, after in [("expectedPage: number, expectedPageSize: number): unknown",
@@ -1322,7 +1322,7 @@ class StaticGateTests(unittest.TestCase):
         self.assert_check(self.run_check(*check), True, "")
 
     def test_search_file_types_coverage_gate_fails_closed(self):
-        paths = ["static/search/file-types.js", "scripts/search/check_search_file_types_coverage.mjs",
+        paths = ["static/search/catalog/domain/file-types.js", "scripts/search/check_search_file_types_coverage.mjs",
                  "tests/search/baselines/test_search_extension_inventory_baseline.mjs", "static/app.js"]
         for path in [*paths, "scripts/check_tap_contracts.mjs"]:
             target = self.root / path
@@ -1342,7 +1342,7 @@ class StaticGateTests(unittest.TestCase):
         test.write_text('throw new Error("failed file types test");\n')
         self.assert_check(self.run_check(*check), False, "failed file types test")
         test.write_text('import vm from "node:vm"; import fs from "node:fs";\n'
-                        'const filename = process.cwd() + "/static/search/file-types.js";\n'
+                        'const filename = process.cwd() + "/static/search/catalog/domain/file-types.js";\n'
                         'vm.runInNewContext(fs.readFileSync(filename, "utf8"), {}, {filename});\n')
         self.assert_check(self.run_check(*check), False, "coverage")
         names = ["all 67 ordered filter extensions are pinned, including case-sensitive lookup",
@@ -1352,7 +1352,7 @@ class StaticGateTests(unittest.TestCase):
                  "const bindings retain their original mutable array and map contents",
                  "inventory data is isolated between script evaluations"]
         test.write_text('import vm from "node:vm"; import fs from "node:fs"; import test from "node:test";\n'
-                        'const filename=process.cwd()+"/static/search/file-types.js";\n'
+                        'const filename=process.cwd()+"/static/search/catalog/domain/file-types.js";\n'
                         'vm.runInNewContext(fs.readFileSync(filename,"utf8"),{}, {filename});\n' +
                         '\n'.join('test.skip(' + json.dumps(name) + ', () => {});' for name in names))
         self.assert_check(self.run_check(*check), False, "coverage")
@@ -1362,10 +1362,10 @@ class StaticGateTests(unittest.TestCase):
         declaration = self.root / "reader-globals.d.ts"
         original = (ROOT / "typings/reader-globals.d.ts").read_text()
         declaration.write_text(original)
-        self.assertIn("static/search/file-types.js", load_type_config("jsconfig.strict.json")["files"])
+        self.assertIn("static/search/catalog/domain/file-types.js", load_type_config("jsconfig.strict.json")["files"])
         config.write_text(json.dumps({"compilerOptions": {"allowJs": True, "checkJs": True, "noEmit": True,
             "strict": True, "target": "esnext", "moduleDetection": "force"},
-            "files": [str(declaration), str(ROOT / "static/search/file-types.js")]}))
+            "files": [str(declaration), str(ROOT / "static/search/catalog/domain/file-types.js")]}))
         check = ["node", ROOT / "node_modules/typescript/bin/tsc", "--project", config]
         self.assert_check(self.run_check(*check), True, "")
         for before, after in [
@@ -1377,7 +1377,7 @@ class StaticGateTests(unittest.TestCase):
             self.assert_check(self.run_check(*check), False, "TS2322")
 
     def test_search_highlight_coverage_gate_fails_closed(self):
-        paths = ["static/search/highlight.js", "scripts/search/check_search_highlight_coverage.mjs",
+        paths = ["static/search/results/presentation/highlight.js", "scripts/search/check_search_highlight_coverage.mjs",
                  "tests/search/highlight/test_search_highlight_contract.js"]
         for path in [*paths, "scripts/check_tap_contracts.mjs"]:
             target = self.root / path
@@ -1409,12 +1409,12 @@ class StaticGateTests(unittest.TestCase):
         test.write_text('throw new Error("failed highlight test");\n')
         self.assert_check(self.run_check(*check), False, "failed highlight test")
         test.write_text('const vm = require("vm"), fs = require("fs");\n'
-                        'const filename = process.cwd() + "/static/search/highlight.js";\n'
+                        'const filename = process.cwd() + "/static/search/results/presentation/highlight.js";\n'
                         'vm.runInNewContext(fs.readFileSync(filename, "utf8"), {}, {filename});\n')
         self.assert_check(self.run_check(*check), False, "coverage")
 
     def test_search_highlight_coverage_checks_fractional_minimum(self):
-        for path in ("static/search/highlight.js", "scripts/search/check_search_highlight_coverage.mjs",
+        for path in ("static/search/results/presentation/highlight.js", "scripts/search/check_search_highlight_coverage.mjs",
                      "tests/search/highlight/test_search_highlight_contract.js", "scripts/check_tap_contracts.mjs"):
             target = self.root / path
             target.parent.mkdir(parents=True, exist_ok=True)
@@ -1431,10 +1431,10 @@ class StaticGateTests(unittest.TestCase):
         declaration = self.root / "reader-globals.d.ts"
         original = (ROOT / "typings/reader-globals.d.ts").read_text()
         declaration.write_text(original)
-        self.assertIn("static/search/highlight.js", load_type_config("jsconfig.strict.json")["files"])
+        self.assertIn("static/search/results/presentation/highlight.js", load_type_config("jsconfig.strict.json")["files"])
         config.write_text(json.dumps({"compilerOptions": {"allowJs": True, "checkJs": True, "noEmit": True,
             "strict": True, "target": "esnext", "moduleDetection": "force"},
-            "files": [str(declaration), str(ROOT / "static/search/highlight.js")]}))
+            "files": [str(declaration), str(ROOT / "static/search/results/presentation/highlight.js")]}))
         check = ["node", ROOT / "node_modules/typescript/bin/tsc", "--project", config]
         self.assert_check(self.run_check(*check), True, "")
         for before, after in [
@@ -1452,7 +1452,7 @@ class StaticGateTests(unittest.TestCase):
             self.assert_check(self.run_check(*check), False, "TS2322")
 
     def test_search_record_path_coverage_gate_fails_closed(self):
-        paths = ["static/search/record-path.js", "scripts/search/check_search_record_path_coverage.mjs",
+        paths = ["static/search/catalog/domain/record-path.js", "scripts/search/check_search_record_path_coverage.mjs",
                  "tests/search/record-path/test_search_record_path.js", "static/app.js"]
         for path in [*paths, "scripts/check_tap_contracts.mjs"]:
             target = self.root / path
@@ -1482,7 +1482,7 @@ class StaticGateTests(unittest.TestCase):
         test.write_text('throw new Error("failed path test");\n')
         self.assert_check(self.run_check(*check), False, "failed path test")
         test.write_text('const vm = require("vm"), fs = require("fs");\n'
-                        'const filename = process.cwd() + "/static/search/record-path.js";\n'
+                        'const filename = process.cwd() + "/static/search/catalog/domain/record-path.js";\n'
                         'vm.runInNewContext(fs.readFileSync(filename, "utf8"), {}, {filename});\n')
         self.assert_check(self.run_check(*check), False, "coverage")
 
@@ -1491,10 +1491,10 @@ class StaticGateTests(unittest.TestCase):
         declaration = self.root / "reader-globals.d.ts"
         original = (ROOT / "typings/reader-globals.d.ts").read_text()
         declaration.write_text(original)
-        self.assertIn("static/search/record-path.js", load_type_config("jsconfig.strict.json")["files"])
+        self.assertIn("static/search/catalog/domain/record-path.js", load_type_config("jsconfig.strict.json")["files"])
         config.write_text(json.dumps({"compilerOptions": {"allowJs": True, "checkJs": True, "noEmit": True,
             "strict": True, "target": "esnext", "moduleDetection": "force"},
-            "files": [str(declaration), str(ROOT / "static/search/record-path.js")]}))
+            "files": [str(declaration), str(ROOT / "static/search/catalog/domain/record-path.js")]}))
         check = ["node", ROOT / "node_modules/typescript/bin/tsc", "--project", config]
         self.assert_check(self.run_check(*check), True, "")
         for before, after in [
@@ -1508,7 +1508,7 @@ class StaticGateTests(unittest.TestCase):
             self.assert_check(self.run_check(*check), False, "TS2322")
 
     def test_search_size_coverage_gate_fails_closed(self):
-        paths = ["static/search/size-format.js", "scripts/search/check_search_size_coverage.mjs",
+        paths = ["static/search/results/presentation/size-format.js", "scripts/search/check_search_size_coverage.mjs",
                  "tests/search/size/test_search_size_format.js", "tests/search/size/test_search_size_render_contract.js"]
         for path in [*paths, "scripts/check_tap_contracts.mjs"]:
             target = self.root / path
@@ -1563,7 +1563,7 @@ class StaticGateTests(unittest.TestCase):
         config = self.root / "jsconfig.json"
         config.write_text(json.dumps({"compilerOptions": {"allowJs": True, "checkJs": True, "noEmit": True,
             "strict": True, "target": "esnext", "moduleDetection": "force"},
-            "files": [str(declaration), str(ROOT / "static/search/size-format.js")]}))
+            "files": [str(declaration), str(ROOT / "static/search/results/presentation/size-format.js")]}))
         check = ["node", ROOT / "node_modules/typescript/bin/tsc", "--project", config]
         self.assert_check(self.run_check(*check), True, "")
         before = "declare function formatSize(bytes: number | string | null | undefined): string | object | undefined;"
@@ -1644,7 +1644,7 @@ class StaticGateTests(unittest.TestCase):
         declaration.write_text(original)
         config.write_text(json.dumps({"compilerOptions": {"allowJs": True, "checkJs": True, "noEmit": True,
             "strict": True, "target": "esnext", "moduleDetection": "force"},
-            "files": [str(declaration), str(ROOT / "static/search/size-format.js")]}))
+            "files": [str(declaration), str(ROOT / "static/search/results/presentation/size-format.js")]}))
         check = ["node", ROOT / "node_modules/typescript/bin/tsc", "--project", config]
         self.assert_check(self.run_check(*check), True, "")
         before = "declare function fmtSizeUrl(bytes: number | null | undefined): string | null;"
@@ -2075,10 +2075,10 @@ class StaticGateTests(unittest.TestCase):
         declaration = self.root / "reader-globals.d.ts"
         original = (ROOT / "typings/reader-globals.d.ts").read_text()
         declaration.write_text(original)
-        self.assertIn("static/search/search-session.js", load_type_config("jsconfig.strict.json")["files"])
+        self.assertIn("static/search/execution/application/session.js", load_type_config("jsconfig.strict.json")["files"])
         config.write_text(json.dumps({"compilerOptions": {"allowJs": True, "checkJs": True, "noEmit": True,
             "strict": True, "target": "esnext", "moduleDetection": "force"},
-            "files": [str(declaration), str(ROOT / "static/search/search-session.js")]}))
+            "files": [str(declaration), str(ROOT / "static/search/execution/application/session.js")]}))
         check = ["node", ROOT / "node_modules/typescript/bin/tsc", "--project", config]
         self.assert_check(self.run_check(*check), True, "")
         for before, after in [
@@ -2091,7 +2091,7 @@ class StaticGateTests(unittest.TestCase):
             self.assert_check(self.run_check(*check), False, "TS2322")
         declaration.write_text(original)
         implementation = self.root / "static/search-session.js"
-        source = (ROOT / "static/search/search-session.js").read_text()
+        source = (ROOT / "static/search/execution/application/session.js").read_text()
         before = "return { openSearchSessionDB, persistSearchSession, restoreSearchSession };"
         self.assertEqual(source.count(before), 1)
         config.write_text(json.dumps({"compilerOptions": {"allowJs": True, "checkJs": True, "noEmit": True,
@@ -2156,9 +2156,9 @@ class StaticGateTests(unittest.TestCase):
 
         # Compile an isolated physical copy of the implementation with the
         # production exact options; a permissive declaration alone cannot pass.
-        implementation = self.root / "static/search/reader-navigation.js"
+        implementation = self.root / "static/search/reader-host/application/navigation.js"
         implementation.parent.mkdir(parents=True, exist_ok=True)
-        body = (ROOT / "static/search/reader-navigation.js").read_text()
+        body = (ROOT / "static/search/reader-host/application/navigation.js").read_text()
         implementation.write_text(body)
         declarations = ROOT / "typings/reader-globals.d.ts"
         config.write_text(json.dumps({"compilerOptions": original["compilerOptions"],
@@ -2179,7 +2179,7 @@ class StaticGateTests(unittest.TestCase):
                 self.assert_check(self.run_check(*check), False, "TS2322")
 
     def test_reader_navigation_baseline_gate_fails_closed(self):
-        paths = ["static/search/reader-navigation.js", "scripts/search/check_reader_navigation_baseline.mjs",
+        paths = ["static/search/reader-host/application/navigation.js", "scripts/search/check_reader_navigation_baseline.mjs",
                  "tests/search/reader-navigation/test_reader_navigation_baseline.mjs", "scripts/check_tap_contracts.mjs"]
         for path in paths:
             target = self.root / path
@@ -2218,7 +2218,7 @@ class StaticGateTests(unittest.TestCase):
         self.assert_check(self.run_check(*check), False, "all named baseline contracts")
 
     def test_reader_navigation_coverage_gate_requires_exact_source_row_and_thresholds(self):
-        paths = ["static/search/reader-navigation.js", "scripts/search/check_reader_navigation_baseline.mjs",
+        paths = ["static/search/reader-host/application/navigation.js", "scripts/search/check_reader_navigation_baseline.mjs",
                  "tests/search/reader-navigation/test_reader_navigation_baseline.mjs", "scripts/check_tap_contracts.mjs"]
         for path in paths:
             target = self.root / path
@@ -2227,7 +2227,7 @@ class StaticGateTests(unittest.TestCase):
         gate = self.root / paths[1]
         original = gate.read_text()
         check = ["node", paths[1]]
-        self.assert_check(self.run_check(*check), True, "reader-navigation.js |")
+        self.assert_check(self.run_check(*check), True, "navigation.js |")
         # Keep the real subprocess and TAP report but reject its parsed row.
         anchor = 'const rows = text.split(/\\r?\\n/).flatMap(line => {'
         self.assertEqual(original.count(anchor), 1)
@@ -3006,9 +3006,9 @@ class StaticGateTests(unittest.TestCase):
         options = original["compilerOptions"]
         for flag in ("allowJs", "checkJs", "noEmit", "strict", "noUncheckedIndexedAccess", "exactOptionalPropertyTypes"):
             self.assertIs(options.get(flag), True, flag)
-        required = {"static/search/search-session.js", "static/search/reader-navigation.js", "static/search/download-controller.js", "static/search/result-identity.js", "static/search/record-path.js",
-                    "static/search/folder-selection.js", "static/search/domain/height-index.js", "static/search/domain/stable-stringify.js", "static/search/domain/search-view-key.js", "static/search/domain/search-recovery.js", "static/search/domain/search-window-page.js", "static/search/presentation/sidebar-render.js", "static/search/response-validation.js", "static/search/response-cache.js", "static/search/file-types.js",
-                    "static/search/highlight.js", "static/search/size-format.js"}
+        required = {"static/search/execution/application/session.js", "static/search/reader-host/application/navigation.js", "static/search/downloads/application/controller.js", "static/search/results/domain/result-identity.js", "static/search/catalog/domain/record-path.js",
+                    "static/search/sidebar/domain/folder-selection.js", "static/search/domain/height-index.js", "static/search/domain/stable-stringify.js", "static/search/domain/search-view-key.js", "static/search/domain/search-recovery.js", "static/search/domain/search-window-page.js", "static/search/presentation/sidebar-render.js", "static/search/requests/domain/response-validation.js", "static/search/requests/infrastructure/response-cache.js", "static/search/catalog/domain/file-types.js",
+                    "static/search/results/presentation/highlight.js", "static/search/results/presentation/size-format.js"}
         required.update({
             "static/search/input/domain/ownership.js",
             "static/search/input/application/controller.js",
@@ -3109,19 +3109,19 @@ class StaticGateTests(unittest.TestCase):
             shutil.copyfile(ROOT / name, target)
         production_check = ["node", ROOT / "node_modules/typescript/bin/tsc", "--project", local_config]
         self.assert_check(self.run_check(*production_check), True, "")
-        module = self.root / "static/search/result-identity.js"
+        module = self.root / "static/search/results/domain/result-identity.js"
         module.write_text(module.read_text() + '\n/** @param {string[]} values @returns {string} */ function probe(values) { return values[0]; }\n')
         self.assert_check(self.run_check(*production_check), False, "TS2322")
-        shutil.copyfile(ROOT / "static/search/result-identity.js", module)
-        module = self.root / "static/search/highlight.js"
+        shutil.copyfile(ROOT / "static/search/results/domain/result-identity.js", module)
+        module = self.root / "static/search/results/presentation/highlight.js"
         module.write_text(module.read_text() + '\n/** @param {string[]} values @returns {string} */ function probe(values) { return values[0]; }\n')
         self.assert_check(self.run_check(*production_check), False, "TS2322")
-        shutil.copyfile(ROOT / "static/search/highlight.js", module)
-        module = self.root / "static/search/size-format.js"
+        shutil.copyfile(ROOT / "static/search/results/presentation/highlight.js", module)
+        module = self.root / "static/search/results/presentation/size-format.js"
         module.write_text(module.read_text() + '\n/** @param {string[]} values @returns {string} */ function probe(values) { return values[0]; }\n')
         self.assert_check(self.run_check(*production_check), False, "TS2322")
-        shutil.copyfile(ROOT / "static/search/size-format.js", module)
-        module = self.root / "static/search/download-controller.js"
+        shutil.copyfile(ROOT / "static/search/results/presentation/size-format.js", module)
+        module = self.root / "static/search/downloads/application/controller.js"
         module.write_text(module.read_text() + '\n/** @param {string[]} values @returns {string} */ function probe(values) { return values[0]; }\n')
         self.assert_check(self.run_check(*production_check), False, "TS2322")
 
@@ -3135,7 +3135,7 @@ class StaticGateTests(unittest.TestCase):
             shutil.copyfile(ROOT / name, target)
         check = ["node", ROOT / "node_modules/typescript/bin/tsc", "--project", config]
         self.assert_check(self.run_check(*check), True, "")
-        module = self.root / "static/search/size-format.js"
+        module = self.root / "static/search/results/presentation/size-format.js"
         source = module.read_text()
         assertions = [('/** @type {string} */ (m[1])', 'm[1]', "TS2345"),
                       ('@returns {string | object | undefined}', '@returns {string | object}', "TS2322")]
@@ -3154,7 +3154,7 @@ class StaticGateTests(unittest.TestCase):
             shutil.copyfile(ROOT / name, target)
         check = ["node", ROOT / "node_modules/typescript/bin/tsc", "--project", config]
         self.assert_check(self.run_check(*check), True, "")
-        module = self.root / "static/search/highlight.js"
+        module = self.root / "static/search/results/presentation/highlight.js"
         source = module.read_text()
         assertion = '/** @type {string} */ (HTML_ESCAPE_MAP[ch])'
         self.assertEqual(source.count(assertion), 1)
@@ -4748,9 +4748,9 @@ for (const [project, base] of [['github','/search/static/'], ['hf','/static/']])
         config.write_text(json.dumps({"compilerOptions": {"allowJs": True, "checkJs": True, "noEmit": True,
             "strict": False, "skipLibCheck": True, "target": "esnext", "moduleDetection": "force"},
             "files": [str(ROOT / "typings/reader-globals.d.ts"),
-                      str(ROOT / "static/search/search-session.js"),
-                      str(ROOT / "static/search/download-controller.js"),
-                      str(ROOT / "static/search/reader-navigation.js"), "static/global-contract.js"]}))
+                      str(ROOT / "static/search/execution/application/session.js"),
+                      str(ROOT / "static/search/downloads/application/controller.js"),
+                      str(ROOT / "static/search/reader-host/application/navigation.js"), "static/global-contract.js"]}))
         source.write_text("console.log('contracts loaded');\n")
         check = ["node", ROOT / "node_modules/typescript/bin/tsc", "--project", config]
         self.assert_check(self.run_check(*check), True, "")

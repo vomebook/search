@@ -140,7 +140,7 @@ process.stdout.write(stripBundledScripts(readFileSync('static/index.html','utf8'
           const trigger=document.createElement('button');document.body.append(trigger);trigger.focus();
           const existing=document.createElement('div');existing.setAttribute('inert','');
           existing.setAttribute('aria-hidden','false');document.body.append(existing);
-          const readerPath=new URL(document.querySelector('script[src*="search/reader-navigation.js"]').src).pathname.replace('search/reader-navigation.js','reader.html');
+          const readerPath=new URL(document.querySelector('script[src*="search/reader-host/application/navigation.js"]').src).pathname.replace('search/reader-host/application/navigation.js','reader.html');
           const target=readerPath+'?ext=txt&url=https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/a.txt';
           const returnUrl=location.href;
           navigateToReader(target);const first=readerHost.overlay;
@@ -196,7 +196,7 @@ process.stdout.write(stripBundledScripts(readFileSync('static/index.html','utf8'
     def test_reader_title_tracks_foreground_and_restores_search(self):
         result = self.page.evaluate('''async () => {
           document.title='搜索原始标题';
-          const path=new URL(document.querySelector('script[src*="search/reader-navigation.js"]').src).pathname.replace('search/reader-navigation.js','reader.html');
+          const path=new URL(document.querySelector('script[src*="search/reader-host/application/navigation.js"]').src).pathname.replace('search/reader-host/application/navigation.js','reader.html');
           const send=(source,title,origin=location.origin)=>window.dispatchEvent(new MessageEvent('message',
             {origin,source,data:{type:'voice-reader-title',title}}));
           navigateToReader(path+'?ext=txt'); const first=readerHost.overlay;
@@ -651,7 +651,7 @@ process.stdout.write(stripBundledScripts(readFileSync('static/index.html','utf8'
           };
           const holder=document.createElement('div');holder.id='priority-reader-test';
           DOM.sidebarContent.parentNode.insertBefore(holder,DOM.sidebarContent);
-          const path=new URL(document.querySelector('script[src*="search/reader-navigation.js"]').src).pathname.replace('search/reader-navigation.js','reader.html');
+          const path=new URL(document.querySelector('script[src*="search/reader-host/application/navigation.js"]').src).pathname.replace('search/reader-host/application/navigation.js','reader.html');
           for(const id of ['aaaaaaaaaaaaa','bbbbbbbbbbbbb']){
             const row=document.createElement('div');row.className='browser-item';row.dataset.type='file';
             row.dataset.readerUrl=path+'?id='+id+'&ext=txt';row.dataset.readUrl=row.dataset.readerUrl;
@@ -698,7 +698,7 @@ process.stdout.write(stripBundledScripts(readFileSync('static/index.html','utf8'
               options.signal.addEventListener('abort',()=>reject(new DOMException('cancelled','AbortError')),{once:true});
             });
           };
-          const path=new URL(document.querySelector('script[src*="search/reader-navigation.js"]').src).pathname.replace('search/reader-navigation.js','reader.html');
+          const path=new URL(document.querySelector('script[src*="search/reader-host/application/navigation.js"]').src).pathname.replace('search/reader-host/application/navigation.js','reader.html');
           const first=document.createElement('button'),second=document.createElement('button');
           first.dataset.readerUrl=path+'?id=aaaaaaaaaaaaa&ext=txt';
           second.dataset.readerUrl=path+'?id=ccccccccccccc&ext=txt';
@@ -747,7 +747,7 @@ process.stdout.write(stripBundledScripts(readFileSync('static/index.html','utf8'
               Link:'https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/next.txt',Folder:[]})));
           };
           try {
-            const path=new URL(document.querySelector('script[src*="search/reader-navigation.js"]').src).pathname.replace('search/reader-navigation.js','reader.html');
+            const path=new URL(document.querySelector('script[src*="search/reader-host/application/navigation.js"]').src).pathname.replace('search/reader-host/application/navigation.js','reader.html');
             navigateToReader(path+'?ext=txt');closeReaderOverlay();history.replaceState(null,'',previousUrl);
             await randomTxt();await new Promise(resolve=>originalTimer(resolve,100));
             const recovered=aborted&&!!readerHost.overlay;
@@ -903,7 +903,7 @@ process.stdout.write(stripBundledScripts(readFileSync('static/index.html','utf8'
 
     def test_untrusted_and_stale_messages_cannot_change_active_reader(self):
         result = self.page.evaluate('''() => {
-          const readerPath=new URL(document.querySelector('script[src*="search/reader-navigation.js"]').src).pathname.replace('search/reader-navigation.js','reader.html');
+          const readerPath=new URL(document.querySelector('script[src*="search/reader-host/application/navigation.js"]').src).pathname.replace('search/reader-host/application/navigation.js','reader.html');
           const target=readerPath+'?ext=txt';navigateToReader(target);
           const first=readerHost.overlay, oldSource=first.contentWindow, theme=STATE.isDark;
           const message={type:'voice-reader-open',url:target+'&title=bad'};
@@ -920,7 +920,7 @@ process.stdout.write(stripBundledScripts(readFileSync('static/index.html','utf8'
 
     def test_unavailable_session_storage_does_not_block_replacement(self):
         result = self.page.evaluate('''() => {
-          const readerPath=new URL(document.querySelector('script[src*="search/reader-navigation.js"]').src).pathname.replace('search/reader-navigation.js','reader.html');
+          const readerPath=new URL(document.querySelector('script[src*="search/reader-host/application/navigation.js"]').src).pathname.replace('search/reader-host/application/navigation.js','reader.html');
           const target=readerPath+'?ext=txt';navigateToReader(target);const first=readerHost.overlay;
           const original=Storage.prototype.setItem;
           try {
@@ -938,8 +938,8 @@ process.stdout.write(stripBundledScripts(readFileSync('static/index.html','utf8'
           return {url:location.href, state:history.state, rows:STATE.results.map(getResultStableId)};
         }''')
         opened = self.page.evaluate('''() => {
-          const path=new URL(document.querySelector('script[src*="search/reader-navigation.js"]').src)
-            .pathname.replace('search/reader-navigation.js','reader.html');
+          const path=new URL(document.querySelector('script[src*="search/reader-host/application/navigation.js"]').src)
+            .pathname.replace('search/reader-host/application/navigation.js','reader.html');
           navigateToReader(path+'?ext=txt&title=Delayed');
           history.replaceState({...history.state, foreignReader:{keep:2}}, '', location.href);
           return {url:location.href, state:history.state, length:history.length};
@@ -979,8 +979,8 @@ process.stdout.write(stripBundledScripts(readFileSync('static/index.html','utf8'
 
     def test_watchdog_recovery_rejects_foreign_and_non_search_targets(self):
         self.page.evaluate('''() => {
-          const path=new URL(document.querySelector('script[src*="search/reader-navigation.js"]').src)
-            .pathname.replace('search/reader-navigation.js','reader.html');
+          const path=new URL(document.querySelector('script[src*="search/reader-host/application/navigation.js"]').src)
+            .pathname.replace('search/reader-host/application/navigation.js','reader.html');
           navigateToReader(path+'?ext=txt');
         }''')
         self.page.frame_locator('.reader-overlay').locator('body').wait_for()

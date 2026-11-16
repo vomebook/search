@@ -29,7 +29,7 @@ function fixture(overrides = {}) {
       return new Promise((resolve, reject) => requests.push({url, signal: options.signal, resolve, reject}));
     },
   };
-  const filename = path.join(__dirname, "../../../static/search/download-controller.js");
+  const filename = path.join(__dirname, "../../../static/search/downloads/application/controller.js");
   vm.runInNewContext(fs.readFileSync(filename, "utf8"), sandbox, {filename});
   const controller = sandbox.VoiceOfMLDownloadController.createDownloadController({
     buildCheckUrl: link => "check:" + link,

@@ -309,7 +309,9 @@ test("Reader return and search snapshot state is preserved", () => {
 });
 
 test("Worker retains tokenizer and fuzzy edit distance", () => {
-  assert.match(worker, /function tokenize/);
+  assert.match(worker, /importScripts\("\.\/worker\/domain\/text\.js"\)/);
+  const text = fs.readFileSync("static/search/worker/domain/text.js", "utf8");
+  assert.match(text, /function tokenize/);
   assert.match(worker, /function editDistance/);
 });
 test("Worker retains bounded wildcard matching", () => {
@@ -506,12 +508,12 @@ test("reader uses original files and lazy PDF canvas rendering", () => {
   assert.match(resultInteractions, /deps\.navigateToReader\(actionBtn\.dataset\.readerUrl\)/);
   assert.match(resultInteractions, /const readerLink = browserItem\.dataset\.readerUrl/);
   assert.match(resultInteractions, /deps\.navigateToReader\(readerLink\)/);
-  const navigation = fs.readFileSync('static/search/reader-navigation.js', 'utf8');
+  const navigation = fs.readFileSync('static/search/reader-host/application/navigation.js', 'utf8');
   assert.match(navigation, /url\.searchParams\.set\("return", returnUrl\)/);
   assert.match(navigation, /sessionStorage\.setItem\("reader-return:" \+ token/);
   assert.match(navigation, /crypto\.getRandomValues\(new Uint32Array\(4\)\)/);
-  assert.match(html, /reader-navigation\.js/);
-  assert.match(sw, /reader-navigation\.js/);
+  assert.match(html, /search\/reader-host\/application\/navigation\.js/);
+  assert.match(sw, /search\/reader-host\/application\/navigation\.js/);
   assert.doesNotMatch(app, /openPendingWindow/);
   assert.match(reader, /new URL\(returnUrl, location\.origin\)/);
   assert.match(reader, /sessionStorage\.removeItem\(returnHistoryKey\)/);

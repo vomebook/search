@@ -100,8 +100,9 @@ class ServiceWorkerIntegrationTest(unittest.TestCase):
 
     def test_real_upgrade_preserves_previous_generation_and_failed_install_isolation(self):
         source = self.origin_path('static/sw.js').read_text()
-        old_asset = '/search/static/upgrade-old.111111111111.js'
-        current_asset = '/search/static/upgrade-current.222222222222.js'
+        # Actual prior release URL; the implementation now lives in reader-host.
+        old_asset = '/search/static/search/reader-navigation.6739fa74e2e7.js'
+        current_asset = '/search/static/search/reader-host/application/navigation.6739fa74e2e7.js'
         prefix = 'vomebook-search-'
         names = {version: prefix + version for version in ('browser-a', 'browser-b', 'browser-c')}
 
@@ -299,7 +300,7 @@ class ServiceWorkerIntegrationTest(unittest.TestCase):
         expected_paths = [
             "/search/",
             "/search/static/app.js",
-            "/search/static/search/reader-navigation.js",
+            "/search/static/search/reader-host/application/navigation.js",
             "/search/static/search/index-worker.js",
             "/search/data/initial/manifest.json",
             "/search/data/sidebar/manifest.json",

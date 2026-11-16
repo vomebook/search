@@ -10,7 +10,7 @@ const source = fs.readFileSync(path.join(root, 'static/app.js'), 'utf8');
 const match = source.match(/^function isValidSearchResponse\([^]*?^}/m);
 assert.ok(match, 'host validator binding must remain inline');
 const context = vm.createContext({});
-const filename = path.join(root, 'static/search/response-validation.js');
+const filename = path.join(root, 'static/search/requests/domain/response-validation.js');
 vm.runInContext(fs.readFileSync(filename, 'utf8'), context, {filename});
 vm.runInContext(match[0], context);
 const validate = context.isValidSearchResponse;

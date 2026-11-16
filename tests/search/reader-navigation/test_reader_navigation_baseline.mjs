@@ -7,7 +7,7 @@ import path from 'node:path';
 import test from 'node:test';
 import vm from 'node:vm';
 
-const filename = path.join(process.cwd(), 'static/search/reader-navigation.js');
+const filename = path.join(process.cwd(), 'static/search/reader-host/application/navigation.js');
 const source = fs.readFileSync(filename, 'utf8');
 const origin = 'https://search.example';
 const readerPath = '/search/static/reader.html';

@@ -5,7 +5,7 @@ const assert=require('assert');
 const {test,run}=require('../../support/test_harness');
 const {searchTestProjects}=require('../../support/search_test_projects');
 
-// Folder selection helpers moved to static/search/folder-selection.js; expose the
+// Folder selection helpers moved to static/search/sidebar/domain/folder-selection.js; expose the
 // project's own module under the original names so the host functions use it too.
 const folderSelectionNames=['folderPathCovered','createFolderSelectionLookup','folderSelectionState','applyFolderSelectionToNode'];
 const folderSelectionSources=new Map();
@@ -29,7 +29,7 @@ function install(source,c,names) {
 for(const {name:project,root} of searchTestProjects()) {
   const source=fs.readFileSync(path.join(root,'static/app.js'),'utf8');
   projectRoots.set(source,root);
-  folderSelectionSources.set(source,fs.readFileSync(path.join(root,'static/search/folder-selection.js'),'utf8'));
+  folderSelectionSources.set(source,fs.readFileSync(path.join(root,'static/search/sidebar/domain/folder-selection.js'),'utf8'));
   function keysFixture() {
     const c={STATE:{mode:'global',repoFull:'',query:'book',filterMinSize:null,filterMaxSize:null,
       sort:'relevance',searchFolders:true,exact:true,useLocalMode:true,pageSize:100,

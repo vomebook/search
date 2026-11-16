@@ -1313,7 +1313,7 @@ test("Chinese multi-character queries require adjacent Chinese pairs", async () 
 test("main-thread root select-all represents and persists direct root files with the empty self path", () => {
   const context = vm.createContext({ Set, STATE:{folderTree:[]},
     updateFilterCancelButtons(){}, scheduleFilterSearch(){}, showToast(){throw Error("unexpected limit");} });
-  vm.runInContext(fs.readFileSync("static/search/folder-selection.js", "utf8"), context);
+  vm.runInContext(fs.readFileSync("static/search/sidebar/domain/folder-selection.js", "utf8"), context);
   const treeSource = fs.readFileSync("static/search/sidebar/presentation/folder-tree.js", "utf8");
   require('../../support/sidebar_fixture').installSidebarTree(process.cwd(), context);
   context.folderSelectionState = context.VoiceOfMLSearchFolderSelection.folderSelectionState;

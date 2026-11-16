@@ -49,7 +49,7 @@ class SessionTransactionBrowserTests(unittest.TestCase):
         self.page.route('**/session-fixture*', lambda route: route.fulfill(
             content_type='text/html', body='<!doctype html><title>Session transaction</title>'))
         self.page.goto(self.origin + '/session-fixture?q=first')
-        self.page.add_script_tag(url=self.origin + '/static/search/search-session.js')
+        self.page.add_script_tag(url=self.origin + '/static/search/execution/application/session.js')
         self.page.evaluate('''() => {
           window.session = VoiceOfMLSearchSession.createSearchSession({
             canPersist: () => true, canRestore: target => !target || target.origin === location.origin

@@ -1,13 +1,13 @@
 import {spawnSync} from "node:child_process";
 import {hasPassingTapContracts} from "../check_tap_contracts.mjs";
 
-// Node 26/V8 scope: search/highlight.js and its pinned behavior contracts.
+// Node 26/V8 scope: search/results/presentation/highlight.js and its pinned behavior contracts.
 // The unhit branch guards an empty RegExp match, which ordinary escaped terms
 // cannot produce. Reject an unloaded source or any passing-but-empty report.
 const minimum = [100, 95.45, 100];
 const result = spawnSync(process.execPath, [
   "--test", "--test-reporter=tap", "--experimental-test-coverage",
-  "--test-coverage-include=**/static/search/highlight.js",
+  "--test-coverage-include=**/static/search/results/presentation/highlight.js",
   ...minimum.map((value, index) => `--test-coverage-${["lines", "branches", "functions"][index]}=${value}`),
   "tests/search/highlight/test_search_highlight_contract.js"
 ], {encoding: "utf8"});

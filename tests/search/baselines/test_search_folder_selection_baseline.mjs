@@ -6,7 +6,7 @@ import test from 'node:test';
 import vm from 'node:vm';
 
 const root = process.cwd();
-const modulePath = path.join(root, 'static/search/folder-selection.js');
+const modulePath = path.join(root, 'static/search/sidebar/domain/folder-selection.js');
 const context = vm.createContext({});
 vm.runInContext(fs.readFileSync(modulePath, 'utf8'), context, {filename: modulePath});
 const api = context.VoiceOfMLSearchFolderSelection;
