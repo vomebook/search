@@ -36,7 +36,38 @@ test('extracted text algorithms agree with the frozen parent across Unicode and 
     assert.strictEqual(actual.compareCodepoints(a, b), reference.compareCodepoints(a, b), normal([a, b]));
   }
 });
-test('build pins the worker import and precaches both assets for offline startup', () => {
+test('intersection agrees with frozen parent across mixed posting lists and threshold boundaries', () => {
+  const actualIntersection = load('static/search/worker/domain/intersection.js').intersectCandidateLists;
+  const oldIntersection = load('tests/search/worker/intersection-parent.fixture.txt').intersectCandidateLists;
+  let seed = 73;
+  const rand = n => { seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0; return seed % n; };
+  const check = (lists, sorted) => {
+    const before = lists.map(list => Array.from(list));
+    const expected = oldIntersection(lists, sorted), result = actualIntersection(lists, sorted);
+    assert.strictEqual(normal(result), normal(expected));
+    assert.strictEqual(result.constructor.name, expected.constructor.name);
+    assert.deepStrictEqual(lists.map(list => Array.from(list)), before);
+  };
+  check([], false);
+  for (let n = 0; n < 1200; n++) {
+    const lists = Array.from({length: rand(5)}, () => {
+      const values = Array.from({length: rand(35)}, () => rand(50));
+      return rand(2) ? values : Uint32Array.from(values);
+    });
+    check(lists, false);
+    check(lists.map(list => list.slice().sort((a, b) => a - b)), true);
+  }
+  for (const size of [0, 1, 510, 511, 512, 513, 1024]) {
+    const first = Array.from({length: size}, (_, i) => i * 2);
+    const second = Array.from({length: size + 7}, (_, i) => i * 2 + (i % 3 === 0 ? 1 : 0));
+    for (const a of [first, Uint32Array.from(first)]) for (const b of [second, Uint32Array.from(second)]) {
+      check([a, b], true); check([b, a], true); check([a], true); check([a, b], false);
+    }
+  }
+  check([[9, 7, 9, 1], Uint32Array.from([1, 7, 9])], false);
+  check([Uint32Array.from([9, 7, 9, 1]), [1, 7, 9]], false);
+});
+test('build pins worker imports and includes assets in the cache manifest', () => {
   const root = process.cwd();
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'worker-build-'));
   const out = path.join(temp, 'out');
@@ -47,9 +78,10 @@ test('build pins the worker import and precaches both assets for offline startup
   }
   try {
     const files = resources.buildFiles('github');
-    assert(files.indexOf('search/worker/domain/text.js') < files.indexOf('search/index-worker.js'));
+    assert(files.indexOf('search/worker/domain/text.js') < files.indexOf('search/worker/domain/intersection.js'));
+    assert(files.indexOf('search/worker/domain/intersection.js') < files.indexOf('search/index-worker.js'));
     for (const name of files) {
-      const real = ['search/worker/domain/text.js', 'search/index-worker.js'].includes(name);
+      const real = ['search/worker/domain/text.js', 'search/worker/domain/intersection.js', 'search/index-worker.js'].includes(name);
       put('static/' + name, real ? fs.readFileSync(path.join(root, 'static', name)) : '');
     }
     put('static/app.js', 'new Worker("static/search/index-worker.js");');
@@ -65,6 +97,10 @@ test('build pins the worker import and precaches both assets for offline startup
     const imported = worker.match(/importScripts\("(\.\/worker\/domain\/text\.[a-f0-9]{12}\.js)"\)/)[1];
     const resolved = new URL(imported, 'https://example.test/search/' + workerUrl).pathname;
     assert(fs.existsSync(path.join(out, resolved.slice('/search/'.length))));
+    const intersection = worker.match(/importScripts\("(\.\/worker\/domain\/intersection\.[a-f0-9]{12}\.js)"\)/)[1];
+    const intersectionPath = new URL(intersection, 'https://example.test/search/' + workerUrl).pathname;
+    assert(fs.existsSync(path.join(out, intersectionPath.slice('/search/'.length))));
+    assert(sw.includes(intersectionPath));
     assert(sw.includes('/search/' + workerUrl));
     assert(sw.includes(resolved));
   } finally { fs.rmSync(temp, {recursive: true, force: true}); }

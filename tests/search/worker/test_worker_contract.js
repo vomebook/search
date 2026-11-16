@@ -63,8 +63,8 @@ function makeWorker(workerSource = source, options = {}) {
   };
   vm.createContext(context);
   context.importScripts = url => {
-    assert.strictEqual(url, "./worker/domain/text.js");
-    vm.runInContext(fs.readFileSync("static/search/worker/domain/text.js", "utf8"), context, {filename: url});
+    assert.ok(["./worker/domain/text.js", "./worker/domain/intersection.js"].includes(url));
+    vm.runInContext(fs.readFileSync("static/search/" + url.slice(2), "utf8"), context, {filename: url});
   };
   vm.runInContext(workerSource, context, { filename: "static/search/index-worker.js" });
   async function send(type, payload, options) {

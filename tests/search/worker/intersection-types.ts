@@ -1,0 +1,10 @@
+type AssertIntersection<T extends true> = T;
+type IntersectionArgs = Parameters<typeof intersectCandidateLists>;
+type RejectStringPosting = AssertIntersection<string[][] extends IntersectionArgs[0] ? false : true>;
+type RejectNullPosting = AssertIntersection<null[] extends IntersectionArgs[0] ? false : true>;
+type RejectWrongSorted = AssertIntersection<string extends NonNullable<IntersectionArgs[1]> ? false : true>;
+type AcceptMixedPosting = AssertIntersection<(number[] | Uint32Array)[] extends IntersectionArgs[0] ? true : false>;
+const sortedIntersection: number[] = intersectCandidateLists([[1], new Uint32Array([1])], true);
+const unsortedIntersection: number[] | Uint32Array = intersectCandidateLists([new Uint32Array([1])]);
+type AcceptSortedResult = AssertIntersection<typeof sortedIntersection extends number[] ? true : false>;
+type AcceptUnsortedResult = AssertIntersection<typeof unsortedIntersection extends number[] | Uint32Array ? true : false>;

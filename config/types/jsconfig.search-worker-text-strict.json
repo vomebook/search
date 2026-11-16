@@ -9,5 +9,6 @@
     "target": "esnext",
     "lib": ["esnext", "webworker"]
   },
-  "files": ["../../static/search/worker/domain/text.js"]
+  "files": ["../../static/search/worker/domain/text.js",
+    "../../static/search/worker/domain/intersection.js", "../../tests/search/worker/intersection-types.ts"]
 }
