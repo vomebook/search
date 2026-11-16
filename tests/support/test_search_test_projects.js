@@ -4,6 +4,7 @@ const os = require("os");
 const path = require("path");
 const { test, run } = require("./test_harness");
 const { searchTestProjects } = require("./search_test_projects");
+const {spawnSync} = require("child_process");
 
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), "search-test-projects-"));
 const workspace = path.join(dir, "repo");
@@ -25,6 +26,18 @@ test("default mode requires and selects both sibling sites", () => {
   } finally {
     fs.writeFileSync(path.join(hf, "static", "app.js"), "// fixture");
   }
+});
+
+test("response-cache entry runs its own checkout without project environment", () => {
+  const env = {...process.env};
+  delete env.SEARCH_TEST_PROJECT;
+  delete env.SEARCH_TEST_ROOT;
+  const script = path.resolve(__dirname, "../search/response-cache/test_response_cache.js");
+  const result = spawnSync(process.execPath, [script], {cwd: dir, env, encoding: "utf8", timeout: 30000});
+  assert.strictEqual(result.error, undefined);
+  assert.strictEqual(result.status, 0, result.stdout + result.stderr);
+  assert.match(result.stdout, /github-Search response store declarations enforce page and dependency contracts/);
+  assert.doesNotMatch(result.stdout, /huggingface-Search/);
 });
 
 test("explicit mode selects exactly the named root independent of cwd", () => {

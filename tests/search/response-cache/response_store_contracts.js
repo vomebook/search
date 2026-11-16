@@ -7,7 +7,10 @@ const {spawnSync} = require("node:child_process");
 const {test} = require("../../support/test_harness");
 const {searchTestProjects} = require("../../support/search_test_projects");
 
-for (const {name, root} of searchTestProjects()) {
+const projectEnv = process.env.SEARCH_TEST_PROJECT === undefined && process.env.SEARCH_TEST_ROOT === undefined
+  ? {SEARCH_TEST_PROJECT: "github-Search", SEARCH_TEST_ROOT: path.resolve(__dirname, "../../..")}
+  : process.env;
+for (const {name, root} of searchTestProjects(projectEnv)) {
 function responseFixture() {
   let id = 0;
   const frames = new Map(), timers = new Map(), metadata = [];
