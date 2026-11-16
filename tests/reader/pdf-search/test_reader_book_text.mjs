@@ -9,6 +9,7 @@ const spans = [
 const first = { page: 1, text: "😀abcneedle", text_spans: spans };
 assert.deepEqual(hitBoxes(first, 2, 3).map(hit => hit.block), [1]);
 assert.deepEqual(hitBoxes(first, 5, 6).map(hit => hit.block), [2]);
+assert.equal(hitBoxes({text: 'a', text_spans: [{start: 0, end: 1, box: [0, 0, 1, 1], precision: {}}]}, 0, 1)[0].precision, 'block');
 
 const pages = [first, ...Array.from({ length: 5 }, (_, index) => ({
   page: index + 2, text: "needle ".repeat(61), text_spans: []

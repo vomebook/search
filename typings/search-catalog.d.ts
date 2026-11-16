@@ -19,10 +19,10 @@ declare var VoiceOfMLCatalogSidebarPayload: {
 declare var VoiceOfMLCatalogClient: {create(deps: PagesCatalogDependencies): {
   fetchRepos(): Promise<VoiceOfMLFilterCount[] | null>;
   fetchExtensions(repo: string | null): Promise<VoiceOfMLFilterCount[] | null>;
-  fetchFolderTree(repo: string, cacheKey?: string | null): Promise<VoiceOfMLFilterFolder[] | null>;
-  fetchFolderContents(repo: string, path: string): Promise<VoiceOfMLSidebarEntries | null | undefined>;
+  fetchFolderTree(repo: string | null, cacheKey?: string | null): Promise<VoiceOfMLFilterFolder[] | null>;
+  fetchFolderContents(repo: string | null, path: string): Promise<VoiceOfMLSidebarEntries | null | undefined>;
   loadSidebarInitial(repo: string | null): Promise<VoiceOfMLSidebarEntries | null>;
-  getFolderContents(repo: string, path: string): Promise<VoiceOfMLSidebarEntries | undefined>;
+  getFolderContents(repo: string | null, path: string): Promise<VoiceOfMLSidebarEntries | undefined>;
   folderTreeCache: Map<string, VoiceOfMLFilterFolder[]>;
   folderContentsCache: BoundedResponseCache<VoiceOfMLSidebarEntries>;
   browserApiCache: BoundedResponseCache<VoiceOfMLSidebarEntries>;

@@ -33,7 +33,7 @@ function hitBoxesAtOffsets(page, begin, end) {
   }
   for (let index = low; index < spans.length && spans[index].start < end; index++) {
     const span = spans[index];
-    boxes.push({ box: span.box, block: span.block, precision: span.precision || "block" });
+    boxes.push({ box: span.box, block: span.block, precision: typeof span.precision === "string" && span.precision ? span.precision : "block" });
   }
   return boxes;
 }

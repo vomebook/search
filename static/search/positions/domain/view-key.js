@@ -2,7 +2,7 @@
 // The host supplies its own sort and legacy serialization callbacks.
 (function () {
   /**
-   * @typedef {{mode: string, repoFull: string, query: string, filterMinSize: number | null,
+   * @typedef {{mode: string, repoFull: string | null, query: string, filterMinSize: number | null,
    *   filterMaxSize: number | null, searchFolders: boolean, exact: boolean,
    *   useLocalMode?: boolean, pageSize: number, filterRepos: string[], filterExtensions: string[],
    *   filterFolderSelfs: string[], filterFolderSubtrees: string[], filterFolders: string[]}} SearchViewState

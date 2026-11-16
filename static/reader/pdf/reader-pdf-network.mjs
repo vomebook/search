@@ -11,6 +11,12 @@ const PDF_LARGE_FLAT_GAP_BUDGET = PDF_LARGE_FLAT_CHUNK_BYTES * 3;
 // Preserve the existing public import path while cache ownership is isolated.
 export { createPdfRangeCache };
 
+/**
+ * @template T
+ * @param {PromiseLike<T>} promise
+ * @param {AbortSignal} signal
+ * @returns {Promise<T>}
+ */
 function abortable(promise, signal) {
   return new Promise((resolve, reject) => {
     const abort = () => reject(signal.reason);
@@ -20,16 +26,42 @@ function abortable(promise, signal) {
   });
 }
 
+/**
+ * @typedef {{url: string, rangeChunkSize: number}} RangeOptions
+ * @typedef {{total: number, etag: string | null}} RangeVersion
+ * @typedef {ReturnType<typeof createPdfRangeCache>} RangeCache
+ * @typedef {{signal: AbortSignal, readBytes: (response: Response, limit: number) => Promise<Uint8Array>, limit: number, rangeLimit?: number, rangeCache?: RangeCache | null, canPrefetchFirstPage?: () => boolean}} RangeHooks
+ * @typedef {({bytes: Uint8Array, total: number, etag: string | null, complete?: boolean} | {bytes: Uint8Array, total?: undefined, etag?: undefined, complete: true})} RangeResult
+ * @typedef {{begin: number, end: number}} Bounds
+ * @typedef {{bytes: Uint8Array}} BytesResult
+ * @typedef {ReturnType<typeof preparePdfRangeHint>} RangeHint
+ * @typedef {{bytes: Uint8Array, total?: number, etag?: string | null, complete?: boolean, tail?: RangeHint | null, extendedTail?: RangeHint | null, openingRanges?: RangeHint[], rangeChunkSize?: number, cancelInitial?: (reason?: unknown) => void}} InitialRange
+ * @typedef {import('../../../typings/reader-pdf-engine-strict').PdfDocument} PdfDocument
+ * @typedef {{promise: Promise<PdfDocument>, destroy: () => Promise<void> | void}} PdfTask
+ * @typedef {{abort: () => void, requestDataRange: (begin: number, end: number) => void, onDataRange: (begin: number, bytes: Uint8Array) => void}} PdfTransport
+ * @typedef {{PDFDataRangeTransport?: unknown}} PdfEngine
+ * @typedef {RangeHooks & {onError?: (error: unknown) => void, initial?: Promise<InitialRange | null> | null, canPrefetchOpening?: () => boolean, admitRange?: ((signal: AbortSignal) => Promise<(() => void) | null>) | null, boundedMetadata?: boolean, ratePriority?: ((begin: number, end: number) => void) | null}} TransportHooks
+ * @typedef {Bounds & {resolve: (value: BytesResult) => void, reject: (reason?: unknown) => void}} DemandRow
+ * @typedef {{at: number, attempt: number, range: number[] | null, headersMs: number, bodyMs: number, bytes: number, status?: number, serverTiming?: string, totalMs?: number, error?: string}} TimingRow
+ * @typedef {{owner: AbortController, active: AbortSignal, generation: number, row: TimingRow, finished?: boolean, idle?: number, deadline?: number, bodyAt?: number}} RequestRecord
+ * @typedef {{signal: AbortSignal, start: number, end: number, url: string, resolve: () => void, reject: (reason?: unknown) => void}} RateAdmission
+ */
 // Complete bodies retain `limit`. A validated range-transport document may be
 // larger (`rangeLimit`): PDF.js reserves one length-sized buffer, but only
 // demanded chunks are fetched or written. See the dated large-PDF report.
+/**
+ * @param {RangeOptions} options @param {number} begin @param {number} end
+ * @param {RangeHooks} hooks @param {RangeVersion | null} [expected]
+ * @param {((version: RangeVersion) => void) | null} [onHeaders] @param {boolean} [partialOnly]
+ * @returns {Promise<RangeResult | null>}
+ */
 async function readPdfRange(options, begin, end, {signal, readBytes, limit, rangeLimit = limit, rangeCache}, expected = null, onHeaders = null, partialOnly = false) {
   signal.throwIfAborted();
   const key = new URL(options.url, globalThis.location?.href).href;
   let cached = null;
-  try { if (expected) cached = rangeCache?.get(key, begin, Math.min(end, expected.total), expected); }
+  try { if (expected) cached = rangeCache?.get(key, begin, Math.min(end, expected.total), /** @type {{total: number, etag: string}} */ (expected)); }
   catch (_) { /* Cache allocation failure must retain normal network reading. */ }
-  if (cached) return {bytes:cached, total:expected.total, etag:expected.etag};
+  if (cached && expected) return {bytes:cached, total:expected.total, etag:expected.etag};
   const response = await fetch(options.url, {
     headers: {Range: `bytes=${begin}-${end-1}`}, signal, credentials:"same-origin"
   });
@@ -59,7 +91,7 @@ async function readPdfRange(options, begin, end, {signal, readBytes, limit, rang
     const bytes = await readBytes(response, last-start+1);
     if (bytes.byteLength !== last-start+1) throw invalid();
     signal.throwIfAborted();
-    try { rangeCache?.put(key, start, bytes, {total, etag}); }
+    try { rangeCache?.put(key, start, bytes, /** @type {{total: number, etag: string}} */ ({total, etag})); }
     catch (_) { /* Retaining an optional copy must never fail the document. */ }
     return {bytes, total, etag, complete:bytes.byteLength === total};
   } catch (error) {
@@ -68,10 +100,18 @@ async function readPdfRange(options, begin, end, {signal, readBytes, limit, rang
   }
 }
 
+/** @param {RangeOptions} options @param {number} begin @param {number} end @param {RangeHooks} hooks @param {RangeVersion} expected */
 function preparePdfRangeHint(options, begin, end, hooks, expected) {
+  /** @type {Set<{begin: number, end: number, resolve: (value: BytesResult | null) => void}>} */
   const waiters = new Set();
-  let bytes = null, loaded = 0, complete = false, failed = false;
-  let published = false, failure = null, failureHandler = null, notified = false;
+  /** @type {Uint8Array | null} */
+  let bytes = null;
+  let loaded = 0, complete = false, failed = false;
+  /** @type {unknown} */
+  let failure = null;
+  /** @type {((error: unknown) => void) | null} */
+  let failureHandler = null;
+  let published = false, notified = false;
   const notifyFailure = () => {
     if (!failed || !published || notified || !failureHandler || hooks.signal.aborted) return;
     notified = true;
@@ -85,7 +125,7 @@ function preparePdfRangeHint(options, begin, end, hooks, expected) {
       published = true;
       // Each PDF.js range reader accepts one complete, exact requested buffer.
       // A proper subrange must not wait for unrelated trailing hint bytes/EOF.
-      waiter.resolve({bytes:bytes.slice(waiter.begin - begin, waiter.end - begin)});
+      waiter.resolve({bytes:/** @type {Uint8Array} */ (bytes).slice(waiter.begin - begin, waiter.end - begin)});
     }
   };
   const promise = readPdfRange(options, begin, end, {
@@ -117,7 +157,7 @@ function preparePdfRangeHint(options, begin, end, hooks, expected) {
     }
   }, expected).then(result => {
     // readPdfRange retains only an exact, version-checked complete response.
-    bytes = result.bytes;
+    bytes = /** @type {RangeResult} */ (result).bytes;
     loaded = bytes.byteLength;
     complete = true;
     flush();
@@ -133,25 +173,31 @@ function preparePdfRangeHint(options, begin, end, hooks, expected) {
   });
   return {
     begin, end, promise,
+    /** @param {number} from @param {number} last */
     read(from, last) {
       if (from < begin || last > end || last <= from) return Promise.reject(new Error("PDF_RANGE_INVALID"));
+      /** @type {PromiseWithResolvers<BytesResult | null>} */
       const pending = Promise.withResolvers();
       waiters.add({begin:from, end:last, resolve:pending.resolve});
       flush();
       return pending.promise;
     },
+    /** @param {(error: unknown) => void} handler */
     onFailure(handler) { failureHandler = handler; notifyFailure(); }
   };
 }
 
 // The first demand overlaps engine preparation. After its complete validation,
 // qualified page-one files may overlap bounded opening or tail range hints.
+/** @param {RangeOptions} options @param {RangeHooks} hooks */
 export async function preparePdfInitialRange(options, hooks) {
   hooks = {...hooks, rangeCache:hooks.rangeCache === undefined ? sharedPdfRangeCache() : hooks.rangeCache};
   const owner = new AbortController();
   const signal = AbortSignal.any([hooks.signal, owner.signal]);
+  /** @type {ReturnType<typeof preparePdfRangeHint> | null} */
   let tail = null, extendedTail = null;
   try {
+    /** @param {RangeVersion} metadata */
     const onHeaders = metadata => {
       if (metadata.total <= options.rangeChunkSize * 4) return;
       // Start the existing two-chunk tail on validated headers, not after the
@@ -170,61 +216,77 @@ export async function preparePdfInitialRange(options, hooks) {
       const checked = await readPdfRange(options, 0, 1, {...hooks, signal, rangeCache:null}, null, null, true);
       if (checked && checked.etag === previous.etag && checked.total === previous.total) {
         let bytes = null;
-        try { bytes = hooks.rangeCache?.get(key, 0, Math.min(options.rangeChunkSize, checked.total), checked); } catch (_) {}
+        try { bytes = hooks.rangeCache?.get(key, 0, Math.min(options.rangeChunkSize, /** @type {number} */ (checked.total)), /** @type {{total: number, etag: string}} */ (checked)); } catch (_) {}
         if (bytes) {
           first = {bytes, total:checked.total, etag:checked.etag, complete:bytes.byteLength === checked.total};
-          if (!first.complete) onHeaders(first);
+          if (!first.complete) onHeaders(/** @type {RangeVersion} */ (first));
         }
       }
     }
     first ||= await readPdfRange(options, 0, options.rangeChunkSize, {...hooks, signal}, null, onHeaders);
     if (!first) { owner.abort(); return first; }
+    // A complete 200 response has no range metadata; arithmetic below is only
+    // meaningful for a partial response and is skipped by its existing guards.
+    const rangeFirst = /** @type {RangeResult & RangeVersion} */ (first);
+    const currentTail = /** @type {RangeHint | null} */ (tail);
+    /** @type {ReturnType<typeof preparePdfRangeHint>[]} */
     const openingRanges = [];
     const pageOne = !first.complete && hooks.canPrefetchFirstPage?.();
-    const connection = globalThis.navigator?.connection;
-    const extraLookahead = pageOne && !connection?.saveData && !["slow-2g", "2g"].includes(connection?.effectiveType);
+    const connection = /** @type {(Navigator & {connection?: {saveData?: boolean, effectiveType?: string}}) | undefined} */ (globalThis.navigator)?.connection;
+    const extraLookahead = pageOne && !connection?.saveData && !["slow-2g", "2g"].includes(/** @type {string} */ (connection?.effectiveType));
     const rangeChunkSize = first.complete ? options.rangeChunkSize :
-      choosePdfRangeChunkSize(first.bytes, first.total, options.rangeChunkSize);
+      choosePdfRangeChunkSize(first.bytes, rangeFirst.total, options.rangeChunkSize);
     // The ordinary tail ends after startxref but some flat files store a
     // large xref immediately before it. One extra chunk avoids serial tiny
     // reads; it remains ETag-bound and is suppressed for data-saving modes.
-    const largeFlatTail = !connection?.saveData && !["slow-2g", "2g"].includes(connection?.effectiveType) &&
-      first.total > options.rangeChunkSize * 6 && tail && rangeChunkSize === PDF_LARGE_FLAT_CHUNK_BYTES;
+    const largeFlatTail = !connection?.saveData && !["slow-2g", "2g"].includes(/** @type {string} */ (connection?.effectiveType)) &&
+      rangeFirst.total > options.rangeChunkSize * 6 && currentTail && rangeChunkSize === PDF_LARGE_FLAT_CHUNK_BYTES;
     const tailStart = largeFlatTail
-      ? Math.max(options.rangeChunkSize, tail.begin - options.rangeChunkSize)
-      : extraLookahead ? firstPageTailHintStart(first.bytes, first.total, options.rangeChunkSize) : 0;
-    if (tailStart && tail) extendedTail = preparePdfRangeHint(options, tailStart, tail.begin, {...hooks, signal}, first);
+      ? Math.max(options.rangeChunkSize, /** @type {RangeHint} */ (currentTail).begin - options.rangeChunkSize)
+      : extraLookahead ? firstPageTailHintStart(first.bytes, rangeFirst.total, options.rangeChunkSize) : 0;
+    if (tailStart && currentTail) extendedTail = preparePdfRangeHint(options, tailStart, currentTail.begin, {...hooks, signal}, rangeFirst);
     const end = pageOne
-      ? firstPageSectionEnd(first.bytes, first.total, options.rangeChunkSize) ||
-        (extraLookahead ? firstImageSectionEnd(first.bytes, first.total, options.rangeChunkSize) : 0) : 0;
+      ? firstPageSectionEnd(first.bytes, rangeFirst.total, options.rangeChunkSize) ||
+        (extraLookahead ? firstImageSectionEnd(first.bytes, rangeFirst.total, options.rangeChunkSize) : 0) : 0;
     for (let begin = options.rangeChunkSize; begin < end; begin += options.rangeChunkSize * 2) {
       const last = Math.min(end, begin + options.rangeChunkSize * 2);
-      openingRanges.push(preparePdfRangeHint(options, begin, last, {...hooks, signal}, first));
+      openingRanges.push(preparePdfRangeHint(options, begin, last, {...hooks, signal}, rangeFirst));
     }
-    return {...first, tail, extendedTail, openingRanges, rangeChunkSize, cancelInitial:reason => owner.abort(reason)};
+    return {...first, tail, extendedTail, openingRanges, rangeChunkSize, cancelInitial:/** @param {unknown} [reason] */ reason => owner.abort(reason)};
   } catch (error) {
     owner.abort(error);
     throw error;
   }
 }
 
+/** @param {PdfEngine} pdfjs @param {RangeOptions} options @param {TransportHooks} hooks */
 export async function openPdfRangeTask(pdfjs, options, {signal, readBytes, limit, rangeLimit = limit, onError, initial = null,
   rangeCache = sharedPdfRangeCache(), canPrefetchFirstPage = () => false, canPrefetchOpening = () => false, admitRange = null,
   boundedMetadata = false, ratePriority = null}) {
-  if (typeof pdfjs.PDFDataRangeTransport !== "function") return pdfjs.getDocument(options);
+  const engine = /** @type {PdfEngine & {getDocument: (options: RangeOptions & {data?: Uint8Array, range?: PdfTransport}) => PdfTask, PDFDataRangeTransport?: new (total: number, bytes: Uint8Array, progressiveDone: boolean) => PdfTransport}} */ (pdfjs);
+  if (typeof engine.PDFDataRangeTransport !== "function") return engine.getDocument(options);
   let chunkSize = options.rangeChunkSize;
   const owner = new AbortController();
   const active = AbortSignal.any([signal, owner.signal]);
-  let task = null, stopped = false, prepared = null;
+  /** @type {PdfTask | null} */
+  let task = null;
+  /** @type {InitialRange | null} */
+  let prepared = null;
+  let stopped = false;
   const failure = Promise.withResolvers();
   failure.promise.catch(() => {});
-  const rangeWaiters = [], demandQueue = [];
+  /** @type {(Bounds & {resolve: () => void})[]} */
+  const rangeWaiters = [];
+  /** @type {DemandRow[]} */
+  const demandQueue = [];
+  /** @type {Bounds[]} */
   const priorityRanges = [];
   let demandScheduled = false, demandTimer = 0;
   let rangeReads = 0, metadataAdmission = false;
   // Reserve one existing transport slot for current foreground demand ranges.
   // This promotes a PDF.js demand already in the queue; it never fetches a
   // guessed page range and never raises the document's concurrency ceiling.
+  /** @param {Bounds} row */
   const isPriority = row => priorityRanges.some(range => row.begin < range.end && row.end > range.begin);
   const drainRanges = () => {
     while (rangeWaiters.length && rangeReads < PDF_METADATA_RANGE_CONCURRENCY) {
@@ -235,6 +297,7 @@ export async function openPdfRangeTask(pdfjs, options, {signal, readBytes, limit
       rangeWaiters.splice(index,1)[0].resolve();
     }
   };
+  /** @param {number} begin @param {number} end */
   const admitMetadata = (begin,end) => {
     if (!metadataAdmission) return Promise.resolve(null);
     active.throwIfAborted();
@@ -267,6 +330,7 @@ export async function openPdfRangeTask(pdfjs, options, {signal, readBytes, limit
       if (active.aborted) abort();
     });
   };
+  /** @param {unknown} [reason] */
   const stop = reason => {
     if (stopped) return;
     stopped = true;
@@ -281,6 +345,7 @@ export async function openPdfRangeTask(pdfjs, options, {signal, readBytes, limit
   signal.addEventListener("abort", cancelled, {once:true});
   // Optional admission for demand reads only: the bootstrap, tail and opening
   // hints are already bounded. A queued read is cancelled with its document.
+  /** @param {number} begin @param {number} end @param {RangeVersion | null} [expected] */
   const read = async (begin, end, expected = null) => {
     const metadataRelease = await admitMetadata(begin,end);
     let release = null;
@@ -303,6 +368,7 @@ export async function openPdfRangeTask(pdfjs, options, {signal, readBytes, limit
       return;
     }
     const pending = demandQueue.splice(0).sort((a, b) => a.begin - b.begin || a.end - b.end);
+    /** @type {(Bounds & {rows: DemandRow[], gapBytes: number})[]} */
     const groups = [];
     for (const row of pending) {
       const previous = groups.at(-1);
@@ -315,13 +381,14 @@ export async function openPdfRangeTask(pdfjs, options, {signal, readBytes, limit
         previous.rows.push(row);
       } else groups.push({begin:row.begin, end:row.end, rows:[row], gapBytes:0});
     }
-    for (const group of groups) read(group.begin, group.end, prepared).then(result => {
+    for (const group of groups) read(group.begin, group.end, /** @type {RangeVersion | null} */ (prepared)).then(result => {
       for (const row of group.rows)
-        row.resolve({bytes:result.bytes.slice(row.begin - group.begin, row.end - group.begin)});
+        row.resolve({bytes:/** @type {RangeResult} */ (result).bytes.slice(row.begin - group.begin, row.end - group.begin)});
     }, error => { for (const row of group.rows) row.reject(error); });
   };
+  /** @param {number} begin @param {number} end */
   const demand = (begin, end) => {
-    if (!metadataAdmission) return read(begin, end, prepared);
+    if (!metadataAdmission) return read(begin, end, /** @type {RangeVersion | null} */ (prepared));
     if (active.aborted) return Promise.reject(active.reason);
     return new Promise((resolve, reject) => {
       demandQueue.push({begin, end, resolve, reject});
@@ -339,16 +406,17 @@ export async function openPdfRangeTask(pdfjs, options, {signal, readBytes, limit
     });
   };
   try {
-    const first = prepared = await (initial || preparePdfInitialRange(options,
+    const initialResult = prepared = await (initial || preparePdfInitialRange(options,
       {signal:active, readBytes, limit, rangeLimit, rangeCache, canPrefetchFirstPage}));
+    const first = /** @type {(InitialRange & RangeVersion) | null} */ (initialResult);
     active.throwIfAborted();
     if (!first) {
       stop();
-      return pdfjs.getDocument(options);
+      return engine.getDocument(options);
     }
     if (first.complete) {
       stop();
-      return pdfjs.getDocument({...options, data:first.bytes});
+      return engine.getDocument({...options, data:first.bytes});
     }
     // The initial prefix and tail remain available at their original size;
     // only PDF.js's subsequent demand chunk granularity changes.
@@ -357,7 +425,7 @@ export async function openPdfRangeTask(pdfjs, options, {signal, readBytes, limit
         options.rangeChunkSize === PDF_DEFAULT_CHUNK_BYTES) chunkSize = candidate;
     metadataAdmission = boundedMetadata || chunkSize < options.rangeChunkSize;
     // PDF.js owns parsing and range demand; the bootstrap is the first real range.
-    const transport = new pdfjs.PDFDataRangeTransport(first.total, first.bytes, true);
+    const transport = new engine.PDFDataRangeTransport(first.total, first.bytes, true);
     transport.abort = () => stop(new DOMException("PDF transport closed", "AbortError"));
     // PDF.js parses non-linearized files from their end (trailer, then the
     // cross-reference table), demanding those chunks one round trip at a
@@ -376,7 +444,7 @@ export async function openPdfRangeTask(pdfjs, options, {signal, readBytes, limit
     const length = stream && /\/Length\s+(\d+)(?:\s+\d+\s+R)?(?=[\s/>])/.exec(header.slice(0, stream.index));
     const streamEnd = length && stream.index + stream[0].length + Number(length[1]);
     const openingStreamContinues = length && !/\sR$/.test(length[0]) && Number.isSafeInteger(streamEnd) &&
-      streamEnd > first.bytes.byteLength && streamEnd <= first.total;
+      /** @type {number} */ (streamEnd) > first.bytes.byteLength && /** @type {number} */ (streamEnd) <= first.total;
     // One chunk only; deep restorations and non-v3/native URLs do not opt in.
     const openingRanges = first.openingRanges || [];
     const prefix = !metadataAdmission && first.total > chunkSize * 4 && openingStreamContinues && canPrefetchOpening() &&
@@ -384,6 +452,7 @@ export async function openPdfRangeTask(pdfjs, options, {signal, readBytes, limit
       ? {begin:chunkSize, end:chunkSize * 2,
         promise:read(chunkSize, chunkSize * 2, first).catch(() => null)}
       : null;
+    /** @param {number} begin @param {number} end */
     const fetchOrdinaryRange = (begin, end) => prefix && begin >= prefix.begin && end <= prefix.end
       ? prefix.promise.then(result => result
         ? {bytes:result.bytes.slice(begin - prefix.begin, end - prefix.begin)}
@@ -400,6 +469,7 @@ export async function openPdfRangeTask(pdfjs, options, {signal, readBytes, limit
       : extendedTail && begin >= extendedTail.begin && end <= extendedTail.end
       ? extendedTail.read(begin, end).then(result => result || demand(begin, end))
       : demand(begin, end);
+    /** @param {number} begin @param {number} end */
     const fetchRange = (begin, end) => {
       const parts = [];
       let offset = begin;
@@ -421,17 +491,19 @@ export async function openPdfRangeTask(pdfjs, options, {signal, readBytes, limit
         return {bytes};
       });
     };
+    /** @param {unknown} error */
     const fail = error => {
       if (stopped) return;
       failure.reject(error);
       stop(error);
-      task?.destroy()?.catch?.(() => {});
+      const destroyed = task?.destroy();
+      if (destroyed) destroyed.catch?.(() => {});
       onError?.(error);
     };
     for (const hint of [tail, extendedTail, ...openingRanges]) hint?.onFailure(fail);
     /** @param {{begin?: number, end?: number}} [range] */
     const prioritizeRange = ({begin,end} = {}) => {
-      if (!Number.isSafeInteger(begin) || !Number.isSafeInteger(end) || begin < 0 || end <= begin || end > first.total) return;
+      if (typeof begin !== "number" || typeof end !== "number" || !Number.isSafeInteger(begin) || !Number.isSafeInteger(end) || begin < 0 || end <= begin || end > first.total) return;
       ratePriority?.(begin,end);
       // A requested range may already be in the short large-flat batching
       // window when the page worker promotes it. Flush now, without adding
@@ -455,12 +527,13 @@ export async function openPdfRangeTask(pdfjs, options, {signal, readBytes, limit
         if (!stopped) transport.onDataRange(begin,result.bytes);
       }).catch(fail);
     };
-    task = pdfjs.getDocument({...options, rangeChunkSize:chunkSize, range:transport});
-    task.promise.catch(error => stop(error));
+    task = engine.getDocument({...options, rangeChunkSize:chunkSize, range:transport});
+    const activeTask = task;
+    activeTask.promise.catch(error => stop(error));
     return {
-      promise:Promise.race([task.promise,failure.promise]),
+      promise:Promise.race([activeTask.promise,failure.promise]),
       prioritizeRange,
-      destroy() {transport.abort();return task.destroy();}
+      destroy() {transport.abort();return activeTask.destroy();}
     };
   } catch (error) {
     stop(error);
@@ -468,21 +541,35 @@ export async function openPdfRangeTask(pdfjs, options, {signal, readBytes, limit
   }
 }
 
+/**
+ * @param {{idleMs?: number, attemptMs?: number, initialIdleMs?: number,
+ *   initialTotalMs?: number, rateLimitDelayMs?: number, rateLimitSpacingMs?: number,
+ *   maxRateLimitDelayMs?: number, rateLimitRecoveryMs?: number}} [options]
+ */
 export function createPdfFetchPolicy({idleMs = 15000, attemptMs = 45000,
   initialIdleMs = 10000, initialTotalMs = 120000,
   rateLimitDelayMs = 1000, rateLimitSpacingMs = 100, maxRateLimitDelayMs = 10000,
   rateLimitRecoveryMs = 3000} = {}) {
+  /** @type {Set<string>} */
   const documents = new Set();
-  const versions = new Map(), timings = [];
+  /** @type {Map<string, string>} */
+  const versions = new Map();
+  /** @type {TimingRow[]} */
+  const timings = [];
   const controller = new AbortController();
   const nativeFetch = globalThis.fetch;
-  let version = null, inconsistent = false;
+  /** @type {string | null} */
+  let version = null;
+  let inconsistent = false;
   // Shared per-document admission activates only after HTTP 429. The 100ms
   // recovery spacing is a conservative retry policy, not a claimed origin
   // limit; normal traffic is unaffected and all waiters remain cancellable.
   let throttled = false, throttleUntil = 0, nextRateStart = 0, recovering = false, rateGeneration = 0;
+  /** @type {Map<string, number>} */
   const blockedUntil = new Map();
+  /** @type {(Bounds & {url: string | null})[]} */
   const ratePriorityRanges = [];
+  /** @type {RateAdmission[]} */
   const rateAdmissions = [];
   let recoveryIdle = 0, rateTimer = 0, normalRecoveryAdmissions = 0;
   const now = () => performance.now();
@@ -505,6 +592,7 @@ export function createPdfFetchPolicy({idleMs = 15000, attemptMs = 45000,
     }
     if (rateAdmissions.length) rateTimer=setTimeout(drainRate,Math.max(0,nextRateStart-now()));
   };
+  /** @param {Response} response @param {string} url */
   const noteRateLimit = (response,url) => {
     rateGeneration++;
     normalRecoveryAdmissions = 0;
@@ -532,6 +620,7 @@ export function createPdfFetchPolicy({idleMs = 15000, attemptMs = 45000,
     throttleUntil = Math.max(throttleUntil, now() + Math.max(delay,rateLimitDelayMs));
     return true;
   };
+  /** @param {number} generation */
   const noteRateSuccess = generation => {
     if (!recovering || !throttled || generation !== rateGeneration) return;
     clearTimeout(recoveryIdle);
@@ -541,22 +630,27 @@ export function createPdfFetchPolicy({idleMs = 15000, attemptMs = 45000,
       }
     },rateLimitRecoveryMs);
   };
+  /** @param {number} begin @param {number} end @param {string | null} [url] */
   const enqueueRangePriority = (begin,end,url) => {
     if (!Number.isSafeInteger(begin) || !Number.isSafeInteger(end) || begin < 0 || end <= begin) return;
     try {url = url ? new URL(url,location.href).href : null;} catch (_) {return;}
     ratePriorityRanges.push({begin,end,url});
     if (ratePriorityRanges.length > 32) ratePriorityRanges.shift();
   };
+  /** @param {number} start @param {number} end @param {string} url */
   const ratePriority = (start,end,url) => ratePriorityRanges.some(range=>(!range.url || range.url===url) && start < range.end && end >= range.begin);
+  /** @param {AbortSignal} signal @param {number} start @param {number} end @param {string} url */
   const rateAdmission = async (signal,start,end,url) => {
     signal.throwIfAborted();
     if ((blockedUntil.get(url) || 0) > now())
       throw Object.assign(new Error("PDF rate limited"),{status:429,code:"READER_PDF_RATE_LIMIT",retryable:false});
     blockedUntil.delete(url);
     if (!throttled) return;
+    /** @type {{resolve: () => void, reject: (reason?: unknown) => void} | undefined} */
     let complete;
+    /** @type {Promise<void>} */
     const admitted = new Promise((resolve,reject)=>{complete={resolve,reject};});
-    const row={signal,start,end,url,...complete};rateAdmissions.push(row);
+    const row={signal,start,end,url,.../** @type {{resolve: () => void, reject: (reason?: unknown) => void}} */ (complete)};rateAdmissions.push(row);
     const cancel = () => {
       const index=rateAdmissions.indexOf(row);
       if (index>=0) rateAdmissions.splice(index,1);
@@ -568,6 +662,7 @@ export function createPdfFetchPolicy({idleMs = 15000, attemptMs = 45000,
     if (!rateTimer) drainRate();
     return admitted.finally(()=>signal.removeEventListener("abort",cancel));
   };
+  /** @param {Response} response @param {string} url */
   const remember = (response, url) => {
     const etag = response.headers.get("ETag");
     const range = /^bytes \d+-\d+\/(\d+)$/.exec(response.headers.get("Content-Range") || "");
@@ -585,7 +680,9 @@ export function createPdfFetchPolicy({idleMs = 15000, attemptMs = 45000,
     versions.set(url, identity);
     version = identity;
   };
+  /** @type {typeof fetch} */
   const pdfFetch = async (input, init) => {
+    /** @type {string} */
     let url;
     try { url = new URL(input instanceof Request ? input.url : input, location.href).href; }
     catch (_) { return nativeFetch.call(globalThis, input, init); }
@@ -612,14 +709,23 @@ export function createPdfFetchPolicy({idleMs = 15000, attemptMs = 45000,
     const initialAt = performance.now();
     const admissionRemaining = () => Math.max(0, (initialRecovery ? initialTotalMs : attemptMs * 2) -
       (performance.now()-initialAt));
-    let attempt = 0, rateRetried = false, record, response, reader, length = 0, delivered = 0, validator = null, stopped = false;
+    let attempt = 0, rateRetried = false, length = 0, delivered = 0, stopped = false;
+    /** @type {RequestRecord} */
+    let record;
+    /** @type {Response | null} */
+    let response = null;
+    /** @type {ReadableStreamDefaultReader<Uint8Array> | null} */
+    let reader = null;
+    /** @type {string | null} */
+    let validator = null;
+    /** @param {unknown} [error] */
     function finish(error = null) {
       if (!record || record.finished) return;
       record.finished = true;
       clearTimeout(record.idle); clearTimeout(record.deadline);
       const row = record.row;
       if (error) {
-        row.error = signal.aborted ? "cancelled" : error.name === "TimeoutError" ? "timeout" : "failure";
+        row.error = signal.aborted ? "cancelled" : /** @type {{name?: string}} */ (error).name === "TimeoutError" ? "timeout" : "failure";
         record.owner.abort(error);
       }
       if (reader) {
@@ -641,14 +747,18 @@ export function createPdfFetchPolicy({idleMs = 15000, attemptMs = 45000,
       record.deadline = setTimeout(timeout,Math.max(0,initialRecovery
         ? initialTotalMs-(performance.now()-initialAt) : attemptMs-(performance.now()-record.row.at)));
     }
-    function retryable(error) {
+    /** @param {unknown} cause */
+    function retryable(cause) {
+      const error = /** @type {{status?: number, retryable?: boolean, name?: string} | null} */ (cause);
       const valid = !signal.aborted && (initialRecovery
         ? performance.now()-initialAt < initialTotalMs : eligible && (!delivered || validator));
       if (!valid) return false;
       if (error?.status === 429) return !rateRetried && error.retryable;
       return attempt === 0 && (error?.retryable || error?.name === "TimeoutError" || error instanceof TypeError);
     }
-    function advance(error) {
+    /** @param {unknown} cause */
+    function advance(cause) {
+      const error = /** @type {{status?: number} | null} */ (cause);
       if (error?.status === 429) rateRetried = true;
       else attempt++;
     }
@@ -668,39 +778,40 @@ export function createPdfFetchPolicy({idleMs = 15000, attemptMs = 45000,
       record = {owner, active:AbortSignal.any([signal,owner.signal]), generation:rateGeneration,
         row:{at:performance.now(),attempt,range:match?[start,end]:null,headersMs:0,bodyMs:0,bytes:0}};
       if (eligible || initialRecovery) arm();
-      response = await abortable(Promise.resolve(nativeFetch.call(globalThis,input,{...init,cache:"no-store",signal:record.active}))
+      const received = await abortable(Promise.resolve(nativeFetch.call(globalThis,input,{...init,cache:"no-store",signal:record.active}))
         .then(value => {
           if (owner.signal.aborted || signal.aborted) {value.body?.cancel().catch(() => {});throw record.active.reason;}
           return value;
         }),record.active);
+      response = received;
       record.row.headersMs = performance.now()-record.row.at;
-      record.row.status = response.status;
-      record.row.serverTiming = (response.headers.get("Server-Timing") || "").slice(0,512);
-      if ((eligible || initialRecovery) && response.status === 429) {
-        const retryable = noteRateLimit(response,url);
+      record.row.status = received.status;
+      record.row.serverTiming = (received.headers.get("Server-Timing") || "").slice(0,512);
+      if ((eligible || initialRecovery) && received.status === 429) {
+        const retryable = noteRateLimit(received,url);
         throw Object.assign(new Error("PDF rate limited"),{retryable,status:429,code:"READER_PDF_RATE_LIMIT"});
       }
-      if ((eligible || initialRecovery) && [408,500,502,503,504].includes(response.status))
+      if ((eligible || initialRecovery) && [408,500,502,503,504].includes(received.status))
         throw Object.assign(new Error("PDF temporary upstream failure"),{retryable:true});
       // PDF.js needs headers immediately to cancel the full GET and demand ranges.
       // Initial recovery must not read or wait for this potentially large body.
-      if (response.ok) {
-        remember(response,url);
+      if (received.ok) {
+        remember(received,url);
         if (eligible || initialRecovery) noteRateSuccess(record.generation);
       }
-      if (!eligible || response.status !== 206) {
+      if (!eligible || received.status !== 206) {
         if (delivered) throw new Error("PDF_RANGE_INVALID");
         return false;
       }
-      const actual = /^bytes (\d+)-(\d+)\/(\d+)$/.exec(response.headers.get("Content-Range") || "");
+      const actual = /^bytes (\d+)-(\d+)\/(\d+)$/.exec(received.headers.get("Content-Range") || "");
       if (!actual || actual.slice(1).some(value=>!Number.isSafeInteger(Number(value))) ||
           Number(actual[1]) !== start || Number(actual[2]) !== Math.min(end,Number(actual[3])-1) || Number(actual[3]) <= start)
         throw new Error("PDF_RANGE_INVALID");
-      const size = Number(actual[2])-start+1, etag = response.headers.get("ETag");
+      const size = Number(actual[2])-start+1, etag = received.headers.get("ETag");
       if (delivered && (etag !== validator || size !== length)) throw new Error("PDF_SOURCE_CHANGED");
       length = size;
       validator = /^"[^"\r\n]+"$/.test(etag || "") ? etag : null;
-      reader = response.body.getReader();
+      reader = /** @type {ReadableStream<Uint8Array>} */ (received.body).getReader();
       record.bodyAt = performance.now();
       clearTimeout(record.idle); clearTimeout(record.deadline);
       return true;
@@ -710,8 +821,9 @@ export function createPdfFetchPolicy({idleMs = 15000, attemptMs = 45000,
       try {streaming = await open();break;}
       catch(error) {const retry = retryable(error);finish(error);if (!retry) throw error;advance(error);}
     }
-    if (!streaming) {finish();return response;}
-    const firstResponse = response;
+    if (!streaming) {finish();return /** @type {Response} */ (/** @type {unknown} */ (response));}
+    const firstResponse = /** @type {Response} */ (/** @type {unknown} */ (response));
+    /** @type {ReadableStreamDefaultController<Uint8Array>} */
     let output;
     const abort = () => {
       if (stopped) return;
@@ -724,7 +836,7 @@ export function createPdfFetchPolicy({idleMs = 15000, attemptMs = 45000,
         while (!stopped) {
           try {
             arm();
-            const chunk = await abortable(reader.read(),record.active);
+            const chunk = await abortable(/** @type {ReadableStreamDefaultReader<Uint8Array>} */ (reader).read(),record.active);
             clearTimeout(record.idle); clearTimeout(record.deadline);
             if (stopped) return;
             if (chunk.done) {
@@ -764,6 +876,7 @@ export function createPdfFetchPolicy({idleMs = 15000, attemptMs = 45000,
   };
   globalThis.fetch = pdfFetch;
   return {
+    /** @param {Iterable<string>} urls */
     add(urls) {
       for (const url of urls) documents.add(new URL(url, location.href).href);
     },

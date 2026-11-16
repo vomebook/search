@@ -47,9 +47,9 @@ interface VoiceOfMLFilterDependencies {
   elements: {repoSection: HTMLElement; repoList: VoiceOfMLCheckboxContainer; folderSection: HTMLElement; folderTree: VoiceOfMLFolderElement; extList: HTMLElement};
   tree: VoiceOfMLFolderTree; lists: VoiceOfMLFilterList; orderedExtensions: string[];
   cache: Map<string, VoiceOfMLFilterFolder[]>;
-  initial(repo: string | null): Promise<{repos?: VoiceOfMLFilterCount[]; folders?: VoiceOfMLSidebarFolder[]} | null>;
-  fetchRepos(): Promise<VoiceOfMLFilterCount[]>;
-  fetchExtensions(repo: string | null): Promise<VoiceOfMLFilterCount[]>;
+  initial(repo: string | null): Promise<VoiceOfMLSidebarEntries | null>;
+  fetchRepos(): Promise<VoiceOfMLFilterCount[] | null>;
+  fetchExtensions(repo: string | null): Promise<VoiceOfMLFilterCount[] | null>;
   fetchFolders(repo: string | null, full?: string | null): Promise<VoiceOfMLFilterFolder[] | null>;
   localFolders(repo: string | null): Promise<{tree?: VoiceOfMLFilterFolder[]} | null>;
   extensionCounts(repo: string | null): Record<string, number>;
@@ -89,7 +89,7 @@ interface VoiceOfMLSidebarDirectoryPresentation {
   breadcrumb(path: string): HTMLElement; begin(path: string, readRepo: () => string): {list: HTMLElement; currentRepo: string}; message(html: string): void;
 }
 interface VoiceOfMLSidebarDirectoryView {
-  mode: string; repo: string; repoFull: string; browserPath: string; routeId: number;
+  mode: string; repo: string | null; repoFull: string | null; browserPath: string; routeId: number;
   repos: VoiceOfMLFilterCount[]; apiAvailable: boolean; useLocalMode: boolean; dataLoaded: boolean;
   tree: VoiceOfMLFilterFolder[] | null;
 }
@@ -100,8 +100,8 @@ interface VoiceOfMLSidebarDirectoryDependencies {
   initial(repo: string | null): Promise<VoiceOfMLSidebarEntries | null>;
   fetchRepos(): Promise<VoiceOfMLFilterCount[] | null>;
   publishRepos(repos: VoiceOfMLFilterCount[] | null): void;
-  fetchContents(repo: string, path: string): Promise<VoiceOfMLSidebarEntries | null>;
-  localContents(repo: string, path: string): Promise<VoiceOfMLSidebarEntries | null>;
+  fetchContents(repo: string | null, path: string): Promise<VoiceOfMLSidebarEntries | null | undefined>;
+  localContents(repo: string | null, path: string): Promise<VoiceOfMLSidebarEntries | null | undefined>;
   ensureLocal(force: boolean, silent: boolean): Promise<boolean>;
   cache: Map<string, VoiceOfMLSidebarEntries>;
   refreshAssets(list: HTMLElement, repo: string, path: string, routeId: number | undefined,

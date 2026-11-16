@@ -3,9 +3,9 @@
 (function () {
 /**
  * @typedef {{name: string, path?: string, count?: number}} FolderEntry
- * @typedef {{name: string, ext?: string, size?: number | null}} FileEntry
+ * @typedef {{name: string, ext?: string, size?: number | string | null}} FileEntry
  * @typedef {{folders?: FolderEntry[] | null, files?: FileEntry[] | null}} BrowserEntries
- * @typedef {{escape: (value: unknown) => string | undefined, formatSize: (value: number | null | undefined) => string | object | undefined,
+ * @typedef {{escape: (value: unknown) => string | undefined, formatSize: (value: number | string | null | undefined) => string | object | undefined,
  *   iconType: (extension: string | undefined) => string | object, name: (entry: FileEntry) => string,
  *   link: (repo: string, path: string, entry: FileEntry) => string,
  *   reader: (entry: FileEntry, repo: string, path: string) => string,

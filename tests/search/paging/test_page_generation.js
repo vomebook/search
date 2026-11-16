@@ -220,6 +220,7 @@ for (const {name: project, root} of searchTestProjects()) {
     for (const file of ['domain/copy-budget.js','application/store.js'])
       vm.runInContext(fs.readFileSync(path.join(root,'static/search/results/snapshots',file),'utf8'),context);
     context.resultSnapshots=context.VoiceOfMLResultSnapshots.create({cloneResult:r=>r});
+    vm.runInContext(source.match(/^function getSearchPageMetadata\([^]*?^}/m)[0],context);
     vm.runInContext(source.match(/^function appendSearchResults\([^]*?^}/m)[0],context);
     vm.runInContext(source.match(/^function extendSearchSnapshotBudget\([^]*?^}/m)[0],context);
     context.page=Array.from({length:500},(_,i)=>({File:String(100000+i)}));
@@ -230,6 +231,20 @@ for (const {name: project, root} of searchTestProjects()) {
     assert.strictEqual(snapshot.length,100000);
     assert.strictEqual(snapshot[99999].File,"99999");
     assert.strictEqual(context.STATE.hasMore,false);
+  });
+  test(project + " raw first page keeps legacy result array and record identities", () => {
+    const source = fs.readFileSync(path.join(root, "static/app.js"), "utf8");
+    const records = [{File: 7, Extension: ["pdf"], Folder: [42]}, null];
+    const state = {results: [], _pageCache: {}, total: 0};
+    const context = {STATE: state, rememberSearchPageMetadata() {}};
+    vm.createContext(context);
+    vm.runInContext(source.match(/^function applySearchPage\([^]*?^}/m)[0], context);
+    context.page = {results: records, page: 1, total: 2};
+    assert.strictEqual(vm.runInContext("applySearchPage(page, false)", context), true);
+    assert.strictEqual(state.results, records);
+    assert.strictEqual(state.results[0], records[0]);
+    assert.strictEqual(state.results[0].Folder[0], 42);
+    assert.strictEqual(state.results[1], null);
   });
   for (const cached of [false, true]) {
     test(project + (cached ? " deferred cache" : " foreground") + " append rejects updated generation before changing visible content", () => {
@@ -247,7 +262,7 @@ for (const {name: project, root} of searchTestProjects()) {
         limit:3, ttl:60000, getSearchViewKey:context.getSearchViewKey,
         rememberSearchPageMetadata:context.rememberSearchPageMetadata,
       });
-      for (const name of ["checkSearchPageAppend", "appendSearchResults", "deferSearchAppend", "applySearchPage"]) {
+      for (const name of ["getSearchPageMetadata", "checkSearchPageAppend", "appendSearchResults", "deferSearchAppend", "applySearchPage"]) {
         vm.runInContext(source.match(new RegExp("^function " + name + "\\([^]*?^}", "m"))[0], context);
       }
       context.nextPage = {results:next,total:2,page:2,page_size:1,generation:"B"};

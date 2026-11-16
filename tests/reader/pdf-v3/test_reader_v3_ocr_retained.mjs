@@ -62,6 +62,7 @@ Object.assign(reader, createReaderPdfTextRuntime(reader));
 const repository = reader.createPdfV3Repository(source, 1);
 assert.equal(repository.preview, undefined);
 assert.deepEqual(await repository.textPage(index, 1), layer);
+assert.equal((await repository.read(index)).kind, 'pdf-text-layer-index');
 assert.deepEqual(requests, [index.path, partition.path, page.path]);
 repository.dispose();
 await assert.rejects(repository.textPage(index, 1), {name: 'AbortError'});

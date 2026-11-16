@@ -114,6 +114,7 @@ export function createReaderPdfEngine(readerContext) {
         if ((/** @type {{code?: string} | null | undefined} */ (error))?.code !== "READER_ENGINE_NETWORK" || attempt === 2) throw error;
       }
     }
+    throw new Error("PDF worker preparation exhausted retries");
   }
 
   /** @param {PdfModule} pdfjs @param {number} attempt @param {boolean} firstPage @param {AbortSignal | null} signal */
@@ -348,7 +349,7 @@ export function createReaderPdfEngine(readerContext) {
         const entry = saved?.value;
         const freshPageOne = saved && (!entry || (Number(entry.page) === 1 &&
           Number(entry.pageOffset || 0) === 0 && !entry.id));
-        const stagedCandidate = first && !first.complete && first.bytes instanceof Uint8Array &&
+        const stagedCandidate = first && !first.complete && typeof first.total === "number" && first.bytes instanceof Uint8Array &&
           first.bytes[0] === 0x25 && first.bytes[1] === 0x50 && first.bytes[2] === 0x44 &&
           first.bytes[3] === 0x46 && first.bytes[4] === 0x2d && (
           readerContext.isFirstPageCandidate(first.bytes, first.total, first.rangeChunkSize) ||

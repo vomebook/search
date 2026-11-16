@@ -76,6 +76,7 @@ function retainFilterRenderingForRoute(routeId) {
 
 /** @param {number} [routeId] */
 async function renderRepoFilter(routeId) {
+  /** @type {VoiceOfMLFilterCount[] | null} */
   var repos = deps.readView().repos;
   if (!repos || repos.length === 0) {
     try {

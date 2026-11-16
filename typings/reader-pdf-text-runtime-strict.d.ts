@@ -13,13 +13,13 @@ export interface PdfDocument { numPages: number; _pdfInfo?: {readerPageCountPend
 export interface Shell extends HTMLElement { _ocrPromise?: Promise<void>; _textEpoch?: number; _bookmarkTextItems?: {text: string | undefined; y: number}[] }
 export interface Request { demanded: boolean; generation: number | null; page: number }
 export type TextTask = Promise<TextContent> & {request: Request};
-export interface Repository { textIndex(ref: Resource): Promise<import('./reader-v3-strict').TextIndex>; textPage(ref: Resource, page: number): Promise<import('./reader-v3-strict').TextLayer> }
+export interface Repository { read(ref: Resource): Promise<unknown>; dispose(): void; textIndex(ref: Resource): Promise<import('./reader-v3-strict').TextIndex>; textPage(ref: Resource, page: number): Promise<import('./reader-v3-strict').TextLayer> }
 export interface Context {
   ocrManifestUrl: string; readerAbortController: AbortController; documentState: {pageCount: number};
   pdfOcrManifest: OcrManifest | null; pdfOcrManifestPromise: Promise<OcrManifest> | null;
   pdfOcrPagePromises: Map<number, Promise<OcrPayload>>; pdfTextLayerRepository: Repository | null;
   pdfV3Map: {pages: {width: number; height: number}[]} | null;
-  pdfDocument: PdfDocument | null; capability: {mode?: string} | null;
+  pdfDocument: PdfDocument | null; capability: {mode?: string | null} | null;
   fullSearchController: {resetAvailability(): void}; syncCapabilityControls(): void;
   PDF_TEXT_CONTENT_CACHE_BYTES: number; pdfTextContentCacheBytes: number; pdfTextContentCache: Map<number, {content: TextContent; bytes: number}>;
   PDF_OCR_PAGE_CACHE_BYTES: number; pdfOcrPageCacheBytes: number; pdfOcrPageCache: Map<number, {payload: OcrPayload; bytes: number}>;

@@ -39,15 +39,22 @@ export function createReaderPdfSearch(readerContext) {
       readerContext.pdfBookSearchClient.dispose();
       readerContext.pdfBookSearchClient = null;
     }
-    if (!readerContext.pdfBookSearchClient)
+    if (!readerContext.pdfBookSearchClient) {
+      let url = textUrl;
+      if (!url) {
+        const source = readerContext.pdfOcrSource();
+        if (!source) throw new Error("PDF_OCR_SOURCE_INVALID");
+        url = source.assetUrl(manifest.book_text.path);
+      }
       readerContext.pdfBookSearchClient = module.createPdfBookSearch({
-        url: textUrl || readerContext.pdfOcrSource().assetUrl(manifest.book_text.path),
+        url,
         sha256: manifest.book_text.sha256,
         bytes: manifest.book_text.bytes,
         pageCount: readerContext.documentState.pageCount,
         sourceSha: manifest.source_sha256,
         ...partitioned
       });
+    }
     return readerContext.pdfBookSearchClient;
   }
 
@@ -59,7 +66,7 @@ export function createReaderPdfSearch(readerContext) {
     readerContext.pdfBookSearchPrefetchPromise = (async () => {
       const manifest = await readerContext.loadPdfOcrManifest();
       const bytes = Number(manifest?.book_text?.bytes);
-      if (!Number.isSafeInteger(bytes) || bytes < 1 || bytes > readerContext.PDF_BOOK_SEARCH_PREFETCH_MAX_BYTES) return;
+      if (!manifest || !Number.isSafeInteger(bytes) || bytes < 1 || bytes > readerContext.PDF_BOOK_SEARCH_PREFETCH_MAX_BYTES) return;
       const client = await readerContext.ensurePdfBookSearchClient(manifest);
       await client.prefetch();
     })().catch(() => {});
@@ -78,6 +85,7 @@ export function createReaderPdfSearch(readerContext) {
   /** @param {string} query @param {number} generation */
   async function searchConcentratedPdf(query, generation) {
     const manifest = await readerContext.loadPdfOcrManifest();
+    if (!manifest) throw new Error("本书集中全文尚未生成");
     const client = await readerContext.ensurePdfBookSearchClient(manifest);
     /** @type {(ReaderPdfSearch.Hit & ReaderPdfSearch.Result)[]} */
     let firstPageResults = [];

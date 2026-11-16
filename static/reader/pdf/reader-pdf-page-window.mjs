@@ -1,14 +1,16 @@
+/** @param {import('../../../typings/reader-page-window-strict').PageWindowContext} readerContext */
 export function createReaderPdfPageWindow(readerContext) {
+  /** @param {number} total */
   async function preloadPdfFirstPage(total) {
     if (readerContext.capability.mode !== "image-pages") return;
     await readerContext.getInitialReaderRestoration();
     try {
       const source = readerContext.pdfPageManifest || readerContext.pdfManifestSource();
       if (!source) return;
-      if (["jxl", "png", "mixed"].includes(source.codec)) return;
+      if (["jxl", "png", "mixed"].includes(source.codec || "")) return;
       const page = readerContext.initialReaderPage(total);
       readerContext.pdfFirstPagePreloadPage = page;
-      const pageUrl = new URL(source.pageUrl(page));
+      const pageUrl = new URL(/** @type {(page: number) => string} */ (source.pageUrl)(page));
       if (!navigator.connection?.saveData) {
         readerContext.pdfFirstPagePreload = new Image();
         readerContext.pdfFirstPagePreload.decoding = "async";
@@ -30,6 +32,7 @@ export function createReaderPdfPageWindow(readerContext) {
         );
   }
 
+  /** @param {number} page */
   function pdfPageEntry(page) {
     if (!readerContext.pdfPageManifest || page < 1 || page > readerContext.pdfPageManifest.pageCount) return null;
     const pageEntry = (
@@ -45,24 +48,33 @@ export function createReaderPdfPageWindow(readerContext) {
   // Geometry state is shared by direct PDF and ordinary image-page formats.
   let pdfPagesBook = { seedRatio: 0 };
 
+  /** @param {import('../../../typings/reader-page-window-strict').PdfOutlineDocument | import('../../../typings/reader-page-window-strict').DjvuOutlineDocument} pdf */
   async function loadPdfOutline(pdf) {
     if (typeof pdf?.getOutline !== "function") return;
     try {
-      const outline = await readerContext.awaitReader(pdf.getOutline()),
-        entries = [];
+      const outline = await readerContext.awaitReader(pdf.getOutline());
+      /** @type {import('../../../typings/reader-page-window-strict').PdfOutlineEntry[]} */
+      const entries = [];
+      /** @param {string} value */
       const cleanLabel = (value) =>
         String(value || "未命名章节")
           .replace(/[\u2610-\u2612\u25a1]\s*[xX×]?\s*$/u, "")
           .trim() || "未命名章节";
+      /** @param {import('../../../typings/reader-page-window-strict').PdfOutlineItem[] | null | undefined} items @param {number} depth */
       const append = async (items, depth = 0) => {
         for (const item of items || []) {
           readerContext.assertReaderActive();
           let destination = item.dest,
             page = 0;
-          if (typeof destination === "string") destination = await pdf.getDestination(destination);
+          if (typeof destination === "string") destination = await /** @type {(name: string) => Promise<readonly unknown[] | null>} */ (pdf.getDestination)(destination);
           if (destination && destination[0]) {
             try {
-              page = (await pdf.getPageIndex(destination[0])) + 1;
+              // Preserve the original call for malformed destinations as well:
+              // each adapter receives the unmodified destination and may reject it.
+              const ref = destination[0];
+              page = (await (typeof ref === "number"
+                ? /** @type {import('../../../typings/reader-page-window-strict').DjvuOutlineDocument} */ (pdf).getPageIndex(ref)
+                : /** @type {import('../../../typings/reader-page-window-strict').PdfOutlineDocument} */ (pdf).getPageIndex(/** @type {object} */ (ref)))) + 1;
             } catch (_) {}
           }
           entries.push({
@@ -85,16 +97,22 @@ export function createReaderPdfPageWindow(readerContext) {
   // The first measured page geometry replaces the A4 estimate for unrendered
   // shells and virtual chunk heights. Callers run inside applyPdfShellGeometry,
   // which keeps the reading anchor in place.
+  /** @param {number} width @param {number} height */
   function seedPdfPageGeometry(width, height) {
     if (pdfPagesBook.seedRatio || readerContext.pdfV3Map || !(width > 0 && height > 0)) return;
     const ratio = height / width;
     pdfPagesBook.seedRatio = ratio;
     if (Math.abs(ratio / 1.414 - 1) < .001) return;
-    for (const shell of readerContext.content.querySelectorAll(".reader-page:not([data-page-geometry])"))
+    for (const shell of /** @type {NodeListOf<HTMLElement>} */ (readerContext.content.querySelectorAll(".reader-page:not([data-page-geometry])")))
       shell.style.aspectRatio = `1 / ${ratio}`;
     readerContext.pdfShellWindow?.setDefaultRatio(ratio);
   }
 
+  /**
+   * @param {(page: number) => HTMLElement} createShell
+   * @param {number} total
+   * @param {number} batchSize
+   */
   async function appendShellsBatched(createShell, total, batchSize) {
     for (let start = 2; start <= total; start += batchSize) {
       readerContext.assertReaderActive();
@@ -112,6 +130,7 @@ export function createReaderPdfPageWindow(readerContext) {
     }
   }
 
+  /** @param {Element} element */
   function pdfSelectionIntersects(element) {
     const selection = document.getSelection();
     if (!selection?.rangeCount) return false;
@@ -119,6 +138,11 @@ export function createReaderPdfPageWindow(readerContext) {
     return !selection.isCollapsed && selection.getRangeAt(0).intersectsNode(element);
   }
 
+  /**
+   * @param {number} x
+   * @param {number} y
+   * @param {{anchorNode: Node | null, anchorOffset: number} | null} [start]
+   */
   function correctPdfCrossPageSelection(x, y, start = null) {
     const selection = document.getSelection();
     if (!selection?.rangeCount) return;
@@ -128,7 +152,7 @@ export function createReaderPdfPageWindow(readerContext) {
     const origin = anchorNode?.parentElement?.closest(".reader-page");
     let target = document.elementFromPoint(x, y)?.closest(".reader-page");
     const caret = start?.anchorNode && readerContext.independentTextCaret(document, x, y);
-    if (caret && origin?.contains(anchorNode) && readerContext.content.contains(caret.node)) {
+    if (caret && anchorNode && origin?.contains(anchorNode) && readerContext.content.contains(caret.node)) {
       selection.setBaseAndExtent(anchorNode, anchorOffset, caret.node, caret.offset);
       return;
     }
@@ -140,7 +164,7 @@ export function createReaderPdfPageWindow(readerContext) {
         if (gap < distance) { distance = gap; target = shell; }
       }
     }
-    if (!origin || !target || origin === target || !readerContext.content.contains(origin) || !readerContext.content.contains(target)) return;
+    if (!anchorNode || !origin || !target || origin === target || !readerContext.content.contains(origin) || !readerContext.content.contains(target)) return;
     const runs = [...target.querySelectorAll(".reader-pdf-text-run")].filter((run) => run.firstChild?.nodeType === Node.TEXT_NODE);
     if (!runs.length) return;
     let nearest = null, distance = Infinity;
@@ -151,7 +175,8 @@ export function createReaderPdfPageWindow(readerContext) {
       const gap = Math.hypot(dx, dy);
       if (gap < distance) { nearest = run; distance = gap; }
     }
-    const node = nearest.firstChild, rect = nearest.getBoundingClientRect();
+    if (!nearest || nearest.firstChild?.nodeType !== Node.TEXT_NODE) return;
+    const node = /** @type {Text} */ (nearest.firstChild), rect = nearest.getBoundingClientRect();
     let offset;
     if (y < rect.top || y > rect.bottom) {
       offset = y < rect.top ? 0 : node.length;
@@ -174,15 +199,27 @@ export function createReaderPdfPageWindow(readerContext) {
     selection.setBaseAndExtent(anchorNode, anchorOffset, node, offset);
   }
 
+  /**
+   * @param {number} total
+   * @param {import('../../../typings/reader-page-window-strict').WindowShell} firstShell
+   * @param {(page: number) => import('../../../typings/reader-page-window-strict').WindowShell} createShell
+   * @param {(shell: import('../../../typings/reader-page-window-strict').WindowShell) => void} unobserve
+   * @param {number} defaultRatio
+   * @param {Map<number, import('../../../typings/reader-page-window-strict').WindowShell> | null} [retainedShells]
+   */
   function createPdfShellWindow(total, firstShell, createShell, unobserve, defaultRatio, retainedShells = null) {
     // `defaultRatio` may be replaced once a real page geometry is known.
     if (total <= 256) return null;
-    const chunkSize = 32, chunks = [], ratios = new Map();
+    const chunkSize = 32;
+    /** @type {import('../../../typings/reader-page-window-strict').PdfWindowChunk[]} */
+    const chunks = [];
+    const ratios = new Map();
     let frame = 0, disposed = false;
     const readWidth = () => {
       const style = getComputedStyle(readerContext.content);
       return (readerContext.content.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight)) * readerContext.documentState.zoom;
     };
+    /** @param {import('../../../typings/reader-page-window-strict').PdfWindowChunk} chunk @param {number} width */
     const chunkHeight = (chunk, width) => {
       let height = 0;
       for (let page = chunk.start; page <= chunk.end; page++)
@@ -203,10 +240,10 @@ export function createReaderPdfPageWindow(readerContext) {
     // Keep previously selected text nodes connected to the document while
     // assigning the verified prefix to its virtual chunks. Unvisited chunks
     // remain placeholders and are mounted/retired by the ordinary window.
-    if (retainedShells?.size) readerContext.content.insertBefore(fragment, retainedShells.values().next().value);
+    if (retainedShells?.size) readerContext.content.insertBefore(fragment, retainedShells.values().next().value || null);
     else readerContext.content.appendChild(fragment);
     const selection = retainedShells ? document.getSelection() : null;
-    const savedSelection = selection?.rangeCount && [...retainedShells.values()].some(shell => readerContext.pdfSelectionIntersects(shell))
+    const savedSelection = selection?.rangeCount && retainedShells && [...retainedShells.values()].some(shell => readerContext.pdfSelectionIntersects(shell))
       ? {anchor:selection.anchorNode, anchorOffset:selection.anchorOffset, focus:selection.focusNode, focusOffset:selection.focusOffset,
         ranges:[...Array(selection.rangeCount)].map((_,index)=>{
           const range=selection.getRangeAt(index);
@@ -224,12 +261,12 @@ export function createReaderPdfPageWindow(readerContext) {
       chunk.mounted = true;
       for (const shell of retained) {
         chunk.element.appendChild(shell);
-        retainedShells.delete(Number(shell.dataset.page));
+        retainedShells?.delete(Number(shell.dataset.page));
       }
       for (let page=chunk.start;page<=chunk.end;page++) {
         const existing=chunk.element.querySelector(`.reader-page[data-page="${page}"]`);
         if (existing) continue;
-        const next=[...chunk.element.children].find(node => Number(node.dataset.page) > page);
+        const next=[...chunk.element.children].find(node => Number(/** @type {HTMLElement} */ (node).dataset.page) > page);
         chunk.element.insertBefore(createShell(page),next || null);
       }
     }
@@ -245,6 +282,7 @@ export function createReaderPdfPageWindow(readerContext) {
         }
       } catch (_) { /* A concurrent selection edit must not break the document. */ }
     }
+    /** @param {import('../../../typings/reader-page-window-strict').PdfWindowChunk} chunk */
     function mount(chunk) {
       if (chunk.mounted) return;
       const pages = document.createDocumentFragment();
@@ -258,20 +296,23 @@ export function createReaderPdfPageWindow(readerContext) {
       chunk.element.appendChild(pages);
       chunk.mounted = true;
     }
+    /** @param {import('../../../typings/reader-page-window-strict').PdfWindowChunk} chunk */
     function canUnmount(chunk) {
       return chunk.mounted && !chunk.element.contains(document.activeElement) &&
         !readerContext.pdfSelectionIntersects(chunk.element);
     }
+    /** @param {import('../../../typings/reader-page-window-strict').PdfWindowChunk} chunk */
     function measureChunk(chunk) {
-      for (const shell of chunk.element.children) {
+      for (const shell of /** @type {HTMLCollectionOf<import('../../../typings/reader-page-window-strict').WindowShell>} */ (chunk.element.children)) {
         const bounds = shell.getBoundingClientRect();
         if (bounds.width && bounds.height) ratios.set(Number(shell.dataset.page), bounds.height / bounds.width);
       }
     }
+    /** @param {import('../../../typings/reader-page-window-strict').PdfWindowChunk} chunk @param {number} width */
     function unmount(chunk, width) {
       if (!chunk.mounted || chunk.element.contains(document.activeElement) ||
           readerContext.pdfSelectionIntersects(chunk.element)) return;
-      for (const shell of chunk.element.children) {
+      for (const shell of /** @type {HTMLCollectionOf<import('../../../typings/reader-page-window-strict').WindowShell>} */ (chunk.element.children)) {
         const page = Number(shell.dataset.page);
         shell._textEpoch = (shell._textEpoch || 0) + 1;
         shell._renderCancel?.();
@@ -283,16 +324,17 @@ export function createReaderPdfPageWindow(readerContext) {
       chunk.element.setAttribute("aria-hidden", "true");
       chunk.mounted = false;
     }
+    /** @param {number} index */
     function show(index) {
       if (disposed) return;
       const anchor = readerContext.pageAtMarker();
-      const before = readerContext.isPdfPageVisible(anchor) ? anchor.getBoundingClientRect().top : undefined;
+      const before = readerContext.isPdfPageVisible(anchor) ? /** @type {Element} */ (anchor).getBoundingClientRect().top : undefined;
       const retiring = chunks.filter((chunk, i) => Math.abs(i - index) > 2 && canUnmount(chunk));
       const width = retiring.length ? readWidth() : 0;
       // Capture all retiring page geometry before mounting or removing any chunks.
       for (const chunk of retiring) measureChunk(chunk);
       for (let i = Math.max(0, index - 2); i <= Math.min(chunks.length - 1, index + 2); i++)
-        mount(chunks[i]);
+        mount(/** @type {import('../../../typings/reader-page-window-strict').PdfWindowChunk} */ (chunks[i]));
       for (const chunk of retiring) unmount(chunk, width);
       if (anchor?.isConnected && before !== undefined)
         readerContext.viewport.scrollTop += anchor.getBoundingClientRect().top - before;
@@ -304,13 +346,13 @@ export function createReaderPdfPageWindow(readerContext) {
       const index = chunks.findIndex((chunk) => chunk.element.offsetTop + chunk.element.offsetHeight > marker);
       show(index < 0 ? chunks.length - 1 : index);
     }
-    mount(chunks[0]);
+    mount(/** @type {import('../../../typings/reader-page-window-strict').PdfWindowChunk} */ (chunks[0]));
     const resizeObserver = new ResizeObserver(() => resize());
     resizeObserver.observe(readerContext.viewport);
     function resize() {
       if (disposed) return;
       const anchor = readerContext.pageAtMarker();
-      const before = readerContext.isPdfPageVisible(anchor) ? anchor.getBoundingClientRect().top : undefined;
+      const before = readerContext.isPdfPageVisible(anchor) ? /** @type {Element} */ (anchor).getBoundingClientRect().top : undefined;
       const width = readWidth();
       for (const chunk of chunks) if (!chunk.mounted) chunk.element.style.height = `${chunkHeight(chunk, width)}px`;
       if (anchor?.isConnected && before !== undefined)
@@ -321,17 +363,20 @@ export function createReaderPdfPageWindow(readerContext) {
       if (!disposed && !frame) frame = requestAnimationFrame(sync);
     }
     const window = {
+      /** @param {number} page Integer in [1, total]; outside this range may return null or throw. Throws after disposal. */
       ensure(page) {
         const index = Math.floor((page - 1) / chunkSize);
         show(index);
-        return chunks[index].element.querySelector(`.reader-page[data-page="${page}"]`);
+        return (/** @type {import('../../../typings/reader-page-window-strict').PdfWindowChunk} */ (chunks[index])).element.querySelector(`.reader-page[data-page="${page}"]`);
       },
+      /** @param {import('../../../typings/reader-page-window-strict').WindowShell} shell */
       remember(shell) {
         if (!shell.isConnected) return;
         const bounds = shell.getBoundingClientRect();
         if (bounds.width && bounds.height) ratios.set(Number(shell.dataset.page), bounds.height / bounds.width);
       },
       // The caller owns anchor compensation (see seedPdfPageGeometry).
+      /** @param {number} ratio */
       setDefaultRatio(ratio) {
         if (disposed || !(ratio > 0)) return;
         defaultRatio = ratio;
@@ -353,6 +398,7 @@ export function createReaderPdfPageWindow(readerContext) {
     return window;
   }
 
+  /** @param {Response | Promise<Response>} prepared */
   async function renderPdfPages(prepared) {
     pdfPagesBook = { seedRatio: 0 };
     const book = pdfPagesBook;
@@ -394,11 +440,14 @@ export function createReaderPdfPageWindow(readerContext) {
       readerContext.capability = readerContext.readerRuntime.negotiate(VoiceOfMLReader.capability("pdf"));
       readerContext.readerRuntime.update("source", { extension: "pdf" });
       readerContext.syncCapabilityControls();
-      const { openDirectDjvu } = await import("/search/static/reader/pdf/reader-djvu-loader.mjs");
+      /** @type {string} */
+      const djvuLoaderUrl = "/search/static/reader/pdf/reader-djvu-loader.mjs";
+      // The deployed URL stays absolute; the relative type import checks the actual loader API.
+      const { openDirectDjvu } = /** @type {typeof import('./reader-djvu-loader.mjs')} */ (await import(djvuLoaderUrl));
       let pdf;
       try {
         const pageMap = repository.read(manifest.page_map).then(map => readerContext.validatePageMap(map, manifest));
-        pdf = await openDirectDjvu(readerContext, manifest, pageMap);
+        pdf = /** @type {import('../../../typings/reader-page-window-strict').DirectDjvuDocument} */ (await openDirectDjvu(readerContext, manifest, pageMap));
         readerContext.pdfV3Map = await pageMap;
         return await readerContext.renderPdf(pdf);
       } catch (error) {
@@ -426,11 +475,11 @@ export function createReaderPdfPageWindow(readerContext) {
     readerContext.assertReaderActive();
     const source = readerContext.pdfManifestSource();
     const totalPages = manifest.page_count;
-    if (!source) throw new Error("PDF_MANIFEST_INVALID");
-    readerContext.pdfPageManifest = { ...source, pageCount: totalPages, codec: "webp", sourceFormat: "image" };
+    if (!source?.pageUrl) throw new Error("PDF_MANIFEST_INVALID");
+    readerContext.pdfPageManifest = { ...source, pageUrl: source.pageUrl, pageCount: totalPages, codec: "webp", sourceFormat: "image" };
     readerContext.updateDocumentState({ pageCount: totalPages });
     readerContext.pageInput.max = String(totalPages);
-    document.querySelector("#page-total").textContent = `/ ${totalPages}`;
+    /** @type {HTMLElement} */ (document.querySelector("#page-total")).textContent = `/ ${totalPages}`;
     readerContext.status.textContent = `${totalPages} 页`;
     await readerContext.getInitialReaderRestoration();
     const initialPage = readerContext.initialReaderPage(totalPages);
@@ -471,6 +520,7 @@ export function createReaderPdfPageWindow(readerContext) {
       },
       { root: readerContext.viewport, threshold: 0 }
     );
+    /** @param {import('../../../typings/reader-page-window-strict').WindowShell} shell */
     const observeShell = (shell) => {
       if (initialRenderGate) {
         shell._pdfObserversPending = true;
@@ -481,7 +531,7 @@ export function createReaderPdfPageWindow(readerContext) {
     };
     const releaseInitialRenderGate = () => {
       initialRenderGate = false;
-      for (const shell of readerContext.content.querySelectorAll(".reader-page")) {
+      for (const shell of /** @type {NodeListOf<import('../../../typings/reader-page-window-strict').WindowShell>} */ (readerContext.content.querySelectorAll(".reader-page"))) {
         if (!shell._pdfObserversPending) continue;
         delete shell._pdfObserversPending;
         observeShell(shell);
@@ -491,13 +541,14 @@ export function createReaderPdfPageWindow(readerContext) {
       observer.disconnect();
       visibleObserver.disconnect();
     });
+    /** @param {number} page */
     const createShell = (page) => {
       const shell = document.createElement("section");
       shell.className = "reader-page";
       shell.dataset.page = String(page);
       shell.style.aspectRatio = `1 / ${book.seedRatio || 1.414}`;
       if (readerContext.pdfV3Map) {
-        const geometry = readerContext.pdfV3Map.pages[page - 1];
+        const geometry = /** @type {import('../../../typings/reader-v3-strict').PageMap['pages'][number]} */ (readerContext.pdfV3Map.pages[page - 1]);
         shell.style.aspectRatio = `${geometry.width} / ${geometry.height}`;
       }
       readerContext.pdfManifestShells[page] = shell;
@@ -546,9 +597,11 @@ export function createReaderPdfPageWindow(readerContext) {
     }
   }
 
+  /** @param {Response | Promise<Response>} prepared */
   async function renderImagePages(prepared) {
     const response = await prepared;
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    /** @type {{version: number, kind: string, page_count: number, pages: {path: string, bytes: number, sha256: string}[]}} */
     const manifest = JSON.parse(
       await VoiceOfMLReaderSecurity.readText(response, VoiceOfMLReaderSecurity.LIMITS.manifestBytes)
     );
@@ -572,13 +625,23 @@ export function createReaderPdfPageWindow(readerContext) {
     })));
   }
 
+  /** @param {import('../../../typings/reader-page-window-strict').PdfPreviewDocument | import('../../../typings/reader-page-window-strict').DirectDjvuDocument | Promise<import('../../../typings/reader-page-window-strict').PdfPreviewDocument | import('../../../typings/reader-page-window-strict').DirectDjvuDocument>} prepared */
   async function renderPdf(prepared) {
     const pdf = await prepared;
     readerContext.assertReaderActive();
-    let previewShell = null, previewAnchor = null, previewPadding = null;
+    /** @type {import('../../../typings/reader-page-window-strict').WindowShell | null} */
+    let previewShell = null;
+    /** @type {{page: number, top: number | null} | null} */
+    let previewAnchor = null;
+    /** @type {HTMLDivElement | null} */
+    let previewPadding = null;
     let previewNavigationChanged = false;
+    /** @type {Map<number, import('../../../typings/reader-page-window-strict').WindowShell>} */
     const previewPages = new Map();
-    if (pdf._pdfInfo?.readerPageCountPending === true) {
+    const previewDocument = pdf;
+    if (previewDocument._pdfInfo?.readerPageCountPending === true) {
+      // A pending page count is a PDF.js staged document with a transport.
+      const pdf = /** @type {import('../../../typings/reader-page-window-strict').PendingPdfDocument} */ (previewDocument);
       // Until validation succeeds neither navigation nor history receives an
       // untrusted count. The preview uses the original page and renderer.
       const navigation = readerContext.readerRuntime.currentGeneration("navigation");
@@ -594,15 +657,26 @@ export function createReaderPdfPageWindow(readerContext) {
         if (preservePreview) return;
         for (const shell of previewPages.values()) { shell._renderCancel?.(); shell.remove(); }
       });
-      let controls = null, previousDisabled = false;
+      /** @type {HTMLElement | null} */
+      let controls = null;
+      let previousDisabled = false;
       let bookmarkDisabled = false;
       let verifiedCount = null;
       let previewWidth = null, previewZoom = null;
       let provisionalDocument = false;
       let previewActive = true, previewCount = 1, previewPage = 1, previewTurnUntil = 0;
-      let prefixTask = null, previewMoreTask = null, previewRefs = null;
+      /** @type {Promise<void> | null} */
+      let prefixTask = null;
+      /** @type {Promise<void> | null} */
+      let previewMoreTask = null;
+      /** @type {unknown[] | null} */
+      let previewRefs = null;
       let previewPendingPage = 0, previewExhausted = false, previewPrefixFailed = false, previewPrefixTimer = 0;
-      let warmTask = null, cancelWarm = null;
+      /** @type {Promise<void> | null} */
+      let warmTask = null;
+      /** @type {(() => void) | null} */
+      let cancelWarm = null;
+      /** @type {(() => Promise<{count: number, refs: unknown[]}>) | null} */
       let startValidation = null;
       let validationTimer = 0;
       let removePreviewControls = () => {};
@@ -613,7 +687,7 @@ export function createReaderPdfPageWindow(readerContext) {
         disconnectPreviewObserver(); disconnectPreviewObserver = () => {};
       };
       readerContext.status.textContent = "正在检查文档";
-      document.querySelector("#page-total").textContent = "";
+      /** @type {HTMLElement} */ (document.querySelector("#page-total")).textContent = "";
       const gateControls = /** @type {HTMLElement} */ (document.querySelector(".page-controls")), gateWasHidden = gateControls.hidden;
       gateControls.hidden = true;
       try {
@@ -623,9 +697,9 @@ export function createReaderPdfPageWindow(readerContext) {
           // Prefix identities come from the current catalog, even when an old
           // linearized first-page hint exists after an incremental update.
           const refs = await readerContext.awaitReader(
-            pdf._transport.messageHandler.sendWithPromise("ReaderGetPagePrefix", {limit:1}), lifetime.signal);
+            /** @type {NonNullable<import('../../../typings/reader-page-window-strict').PdfPreviewDocument['_transport']>} */ (pdf._transport).messageHandler.sendWithPromise("ReaderGetPagePrefix", {limit:1}), lifetime.signal);
           const installed = await readerContext.awaitReader(
-            pdf._transport.messageHandler.sendWithPromise("ReaderInstallPagePrefix", null), lifetime.signal);
+            /** @type {NonNullable<import('../../../typings/reader-page-window-strict').PdfPreviewDocument['_transport']>} */ (pdf._transport).messageHandler.sendWithPromise("ReaderInstallPagePrefix", null), lifetime.signal);
           if (!Array.isArray(refs) || refs.length !== 1 || installed?.refs?.[0] !== refs[0]) throw new Error("PDF_PREFIX_INVALID");
           previewRefs = refs;
           const page = await readerContext.awaitReader(pdf.getPage(1), lifetime.signal);
@@ -648,8 +722,8 @@ export function createReaderPdfPageWindow(readerContext) {
           bookmarkDisabled = readerContext.bookmarkRibbon.disabled;
           readerContext.bookmarkRibbon.disabled = true;
           readerContext.status.textContent = "正在检查文档";
-          document.querySelector("#page-total").textContent = "";
-          controls = document.querySelector(".page-controls");
+          /** @type {HTMLElement} */ (document.querySelector("#page-total")).textContent = "";
+          controls = /** @type {HTMLElement} */ (document.querySelector(".page-controls"));
           controls.hidden = true;
           readerContext.pdfDocument = pdf;
           provisionalDocument = true;
@@ -674,13 +748,13 @@ export function createReaderPdfPageWindow(readerContext) {
           prefixTask = prefix.then(async refs => {
             if (!previewActive || !Array.isArray(refs) || refs.length < 2 || refs.length > 4) { startValidation?.(); return; }
             const installed = await readerContext.awaitReader(
-              pdf._transport.messageHandler.sendWithPromise("ReaderInstallPagePrefix", null), lifetime.signal);
+              /** @type {NonNullable<import('../../../typings/reader-page-window-strict').PdfPreviewDocument['_transport']>} */ (pdf._transport).messageHandler.sendWithPromise("ReaderInstallPagePrefix", null), lifetime.signal);
             if (!previewActive || installed?.refs?.length !== refs.length ||
                 installed.refs.some((ref, index) => ref !== refs[index])) { startValidation?.(); return; }
             previewRefs = refs;
             const count = refs.length;
             previewCount = count;
-            pdf._transport.pagesMapper.pagesNumber = count;
+            /** @type {NonNullable<import('../../../typings/reader-page-window-strict').PdfPreviewDocument['_transport']>} */ (pdf._transport).pagesMapper.pagesNumber = count;
             // Warm only the next page the reader can actually request. The
             // detached canvas is disposable and yields to visible rendering.
             warmTask = pdf.getPage(2).then(async page => {
@@ -695,14 +769,14 @@ export function createReaderPdfPageWindow(readerContext) {
                 acquired = true;
                 if (!previewActive) return;
                 const base = page.getViewport({scale:1});
-                const scale = Math.min(pdf.readerRenderScaleLimit ?? 3, previewShell.clientWidth / base.width);
+                const scale = Math.min(pdf.readerRenderScaleLimit ?? 3, /** @type {import('../../../typings/reader-page-window-strict').WindowShell} */ (previewShell).clientWidth / base.width);
                 const viewport = page.getViewport({scale});
                 const outputScale = readerContext.pdfOutputScale(viewport);
                 const canvas = document.createElement("canvas");
                 const width = Math.ceil(viewport.width * outputScale), height = Math.ceil(viewport.height * outputScale);
                 if (width * height > readerContext.pdfPixelBudget()) return;
                 canvas.width = width; canvas.height = height;
-                const task = page.render({canvasContext:canvas.getContext("2d"),viewport,
+                const task = page.render({canvasContext:/** @type {CanvasRenderingContext2D} */ (canvas.getContext("2d")),viewport,
                   transform:outputScale === 1 ? null : [outputScale,0,0,outputScale,0,0]});
                 cancelWarm = () => { cancelQueued(); task.cancel?.(); };
                 const untrack = readerContext.trackReaderResource(() => task.cancel?.());
@@ -714,7 +788,7 @@ export function createReaderPdfPageWindow(readerContext) {
               }
             });
             warmTask.catch(() => {});
-            controls.hidden = false;
+            /** @type {HTMLElement} */ (controls).hidden = false;
             const total = /** @type {HTMLElement} */ (document.querySelector("#page-total")),
               previous = /** @type {HTMLButtonElement} */ (document.querySelector("#page-prev")),
               next = /** @type {HTMLButtonElement} */ (document.querySelector("#page-next"));
@@ -727,6 +801,7 @@ export function createReaderPdfPageWindow(readerContext) {
             previous.setAttribute("aria-label", "上一页");
             next.setAttribute("aria-label", "下一页");
             readerContext.status.textContent = "正在检查文档，可顺序阅读";
+            /** @param {import('../../../typings/reader-page-window-strict').WindowShell} shell @param {number | boolean} priority */
             const renderPreview = (shell, priority = readerContext.pdfPagePriority(shell)) => {
               const generation = readerContext.readerRuntime.currentGeneration("pdf");
               readerContext.renderPdfInBackground(shell, false, priority)?.then(() => {
@@ -737,6 +812,7 @@ export function createReaderPdfPageWindow(readerContext) {
                 shell.dataset.previewZoom = String(readerContext.documentState.zoom);
               }).catch(() => {});
             };
+            /** @param {number} delta */
             const turn = delta => {
               cancelWarm?.();
               if (delta < 0) previewPendingPage = 0;
@@ -759,7 +835,7 @@ export function createReaderPdfPageWindow(readerContext) {
                 shell = document.createElement("section");
                 shell.className = "reader-page reader-pdf-opening";
                 shell.dataset.page = String(previewPage);
-                shell.style.aspectRatio = previewShell.style.aspectRatio;
+                shell.style.aspectRatio = /** @type {import('../../../typings/reader-page-window-strict').WindowShell} */ (previewShell).style.aspectRatio;
                 shell.setAttribute("role", "region");
                 shell.setAttribute("aria-label", `第 ${previewPage} 页，正在检查文档`);
                 const text = document.createElement("div");
@@ -795,7 +871,9 @@ export function createReaderPdfPageWindow(readerContext) {
               if (delta > 0 && previewPage === previewCount) requestMore();
               else if (delta > 0 && previewPage === previewCount - 1) scheduleMore();
             };
+            /** @param {Event} event */
             const onPrevious = event => { event.stopImmediatePropagation(); turn(-1); };
+            /** @param {Event} event */
             const onNext = event => { event.stopImmediatePropagation(); turn(1); };
             const ensureSequentialShells = (start = 2) => {
               for (let number=start; number<=previewCount; number++) {
@@ -803,7 +881,7 @@ export function createReaderPdfPageWindow(readerContext) {
                 const shell=document.createElement("section");
                 shell.className="reader-page reader-pdf-opening";
                 shell.dataset.page=String(number);
-                shell.style.aspectRatio=previewShell.style.aspectRatio;
+                shell.style.aspectRatio=/** @type {import('../../../typings/reader-page-window-strict').WindowShell} */ (previewShell).style.aspectRatio;
                 shell.setAttribute("role","region");
                 shell.setAttribute("aria-label",`第 ${number} 页，正在检查文档`);
                 const text=document.createElement("div");
@@ -839,7 +917,7 @@ export function createReaderPdfPageWindow(readerContext) {
                   pdf._transport.messageHandler.sendWithPromise("ReaderGetPagePrefix", {limit}), lifetime.signal);
                 if (!previewActive) return;
                 if (!Array.isArray(refs) || refs.length > limit || refs.length < previewCount ||
-                    previewRefs.some((ref,index) => refs[index] !== ref)) throw new Error("PDF_PREFIX_INVALID");
+                    (/** @type {unknown[]} */ (previewRefs)).some((ref,index) => refs[index] !== ref)) throw new Error("PDF_PREFIX_INVALID");
                 if (refs.length < limit) {
                   previewExhausted = true;
                   previewPendingPage = 0;
@@ -847,14 +925,14 @@ export function createReaderPdfPageWindow(readerContext) {
                   return;
                 }
                 const installed = await readerContext.awaitReader(
-                  pdf._transport.messageHandler.sendWithPromise("ReaderInstallPagePrefix", null), lifetime.signal);
+                  /** @type {NonNullable<import('../../../typings/reader-page-window-strict').PdfPreviewDocument['_transport']>} */ (pdf._transport).messageHandler.sendWithPromise("ReaderInstallPagePrefix", null), lifetime.signal);
                 if (!previewActive) return;
                 if (installed?.refs?.length !== refs.length || installed.refs.some((ref,index) => ref !== refs[index]))
                   throw new Error("PDF_PREFIX_INVALID");
                 previewRefs = refs;
                 const previousCount = previewCount;
                 previewCount = refs.length;
-                pdf._transport.pagesMapper.pagesNumber = previewCount;
+                /** @type {NonNullable<import('../../../typings/reader-page-window-strict').PdfPreviewDocument['_transport']>} */ (pdf._transport).pagesMapper.pagesNumber = previewCount;
                 ensureSequentialShells(previousCount + 1);
                 readerContext.status.textContent = "正在检查文档，可顺序阅读";
                 if (previewPendingPage === previewCount && previewPage === previewCount - 1) {
@@ -887,7 +965,7 @@ export function createReaderPdfPageWindow(readerContext) {
               if (performance.now() < previewTurnUntil) return;
               const shell = readerContext.pageAtMarker();
               const number = Number(shell?.dataset.page);
-              if (previewActive && number >= 1 && number <= previewCount) {
+              if (previewActive && shell && number >= 1 && number <= previewCount) {
                 if (number !== 1 && !previewNavigationChanged && saved) readerContext.beginReaderNavigation();
                 if (number !== 1) previewNavigationChanged = true;
                 previewPage = number;
@@ -899,9 +977,10 @@ export function createReaderPdfPageWindow(readerContext) {
             const onScrollIntent = () => {
               previewTurnUntil = 0; previewPendingPage = 0;
             };
+            /** @param {KeyboardEvent} event */
             const onPageKeyIntent = event => {
               if (!event.defaultPrevented && !event.altKey && !event.ctrlKey && !event.metaKey &&
-                  !["INPUT", "TEXTAREA", "SELECT", "BUTTON"].includes(event.target?.tagName) &&
+                  !["INPUT", "TEXTAREA", "SELECT", "BUTTON"].includes(/** @type {Element | null} */ (event.target)?.tagName || "") &&
                   ["PageDown", "PageUp", "ArrowDown", "ArrowUp", " "].includes(event.key)) onScrollIntent();
             };
             readerContext.viewport.addEventListener("scroll", onScroll, {passive:true});
@@ -929,16 +1008,17 @@ export function createReaderPdfPageWindow(readerContext) {
         const timer = setTimeout(() => timed.reject(Object.assign(new Error("PDF 检查超时，请重试加载。"),
           {code:"READER_PDF_TRANSPORT"})), readerContext.READER_PROXY_TIMEOUT_MS);
         try {
+          /** @type {Promise<{count: number, refs: unknown[]}> | null} */
           let validation = null;
           const validationStarted = Promise.withResolvers();
           startValidation = () => {
             if (!validation) {
-              validation = pdf._transport.messageHandler.sendWithPromise("ReaderValidatePageCount", null);
+              validation = /** @type {NonNullable<import('../../../typings/reader-page-window-strict').PdfPreviewDocument['_transport']>} */ (pdf._transport).messageHandler.sendWithPromise("ReaderValidatePageCount", null);
               validationStarted.resolve(validation);
             }
             return validation;
           };
-          if (prefixTask) validationTimer = setTimeout(() => startValidation(),350);
+          if (prefixTask) validationTimer = setTimeout(() => startValidation?.(),350);
           else startValidation();
           const verified = await readerContext.awaitReader(Promise.race([
             validationStarted.promise, timed.promise
@@ -962,8 +1042,8 @@ export function createReaderPdfPageWindow(readerContext) {
           }
         } finally { clearTimeout(timer); }
       } catch (error) {
-        cancelWarm?.();
-        previewPadding?.remove();
+        (/** @type {(() => void) | null} */ (cancelWarm))?.();
+        (/** @type {HTMLDivElement | null} */ (previewPadding))?.remove();
         if (provisionalDocument && readerContext.pdfDocument === pdf) readerContext.pdfDocument = null;
         for (const shell of previewPages.values()) { shell._renderCancel?.(); shell.remove(); }
         throw error;
@@ -972,7 +1052,7 @@ export function createReaderPdfPageWindow(readerContext) {
         clearTimeout(validationTimer);
         clearTimeout(previewPrefixTimer);
         releasePrefixTimeout();
-        cancelWarm?.();
+        (/** @type {(() => void) | null} */ (cancelWarm))?.();
         cleanupControls();
         preservePreview = verifiedCount !== null && !readerContext.readerAbortController.signal.aborted;
         untrackPreview();
@@ -985,7 +1065,7 @@ export function createReaderPdfPageWindow(readerContext) {
       }
       readerContext.assertReaderActive();
       pdf._pdfInfo.numPages = verifiedCount;
-      pdf._transport.pagesMapper.pagesNumber = verifiedCount;
+      /** @type {NonNullable<import('../../../typings/reader-page-window-strict').PdfPreviewDocument['_transport']>} */ (pdf._transport).pagesMapper.pagesNumber = verifiedCount;
       delete pdf._pdfInfo.readerPageCountPending;
       if (previewShell) {
         const anchor = previewNavigationChanged && previewAnchor ? previewPages.get(previewAnchor.page) : readerContext.pageAtMarker();
@@ -1020,7 +1100,7 @@ export function createReaderPdfPageWindow(readerContext) {
         delete previewShell.dataset.previewReady;
         delete previewShell.dataset.previewPdfGeneration;
         previewShell.tabIndex = 0;
-        previewShell.addEventListener("focus", () => readerContext.renderPdfInBackground(previewShell));
+        previewShell.addEventListener("focus", () => readerContext.renderPdfInBackground(/** @type {import('../../../typings/reader-page-window-strict').WindowShell} */ (previewShell)));
       }
       if (previewAnchor && !previewPages.has(previewAnchor.page) && !previewNavigationChanged) previewAnchor = null;
     }
@@ -1041,7 +1121,7 @@ export function createReaderPdfPageWindow(readerContext) {
       }
     }
     readerContext.pageInput.max = String(readerContext.documentState.pageCount);
-    document.querySelector("#page-total").textContent = `/ ${readerContext.documentState.pageCount}`;
+    /** @type {HTMLElement} */ (document.querySelector("#page-total")).textContent = `/ ${readerContext.documentState.pageCount}`;
     readerContext.status.textContent = `${pdf.numPages} 页`;
     await readerContext.getInitialReaderRestoration();
     const initialPage = previewAnchor?.page || readerContext.initialReaderPage(pdf.numPages);
@@ -1075,6 +1155,7 @@ export function createReaderPdfPageWindow(readerContext) {
       root: document.querySelector("#viewport"),
       threshold: [0, 0.5, 1]
     });
+    /** @param {import('../../../typings/reader-page-window-strict').WindowShell} shell */
     const observeShell = (shell) => {
       if (initialRenderGate) {
         shell._pdfObserversPending = true;
@@ -1086,7 +1167,7 @@ export function createReaderPdfPageWindow(readerContext) {
     };
     const releaseInitialRenderGate = () => {
       initialRenderGate = false;
-      for (const shell of readerContext.content.querySelectorAll(".reader-page")) {
+      for (const shell of /** @type {NodeListOf<import('../../../typings/reader-page-window-strict').WindowShell>} */ (readerContext.content.querySelectorAll(".reader-page"))) {
         if (!shell._pdfObserversPending) continue;
         delete shell._pdfObserversPending;
         observeShell(shell);
@@ -1097,9 +1178,10 @@ export function createReaderPdfPageWindow(readerContext) {
       visibleObserver.disconnect();
       pageObserver.disconnect();
     });
+    /** @param {number} page */
     const createShell = (page) => {
       if (previewPages.has(page)) {
-        const existing = previewPages.get(page);
+        const existing = /** @type {import('../../../typings/reader-page-window-strict').WindowShell} */ (previewPages.get(page));
         // Virtual-window eviction must not resurrect stale canvas/text.
         previewPages.delete(page);
         observeShell(existing);
@@ -1110,7 +1192,7 @@ export function createReaderPdfPageWindow(readerContext) {
       shell.dataset.page = String(page);
       shell.style.aspectRatio = `${firstViewport.width} / ${firstViewport.height}`;
       if (readerContext.pdfV3Map) {
-        const geometry = readerContext.pdfV3Map.pages[page - 1];
+        const geometry = /** @type {import('../../../typings/reader-v3-strict').PageMap['pages'][number]} */ (readerContext.pdfV3Map.pages[page - 1]);
         shell.style.aspectRatio = `${geometry.width} / ${geometry.height}`;
       }
       shell.tabIndex = 0;
@@ -1146,11 +1228,11 @@ export function createReaderPdfPageWindow(readerContext) {
         ? readerContext.pdfShellWindow.ensure(initialPage)
         : (await readerContext.pdfShellsReady, readerContext.content.querySelector(`.reader-page[data-page="${initialPage}"]`));
       if (!targetShell) throw new Error("PDF initial page shell missing");
-      previewPadding?.remove();
+      (/** @type {HTMLDivElement | null} */ (previewPadding))?.remove();
       if (previewAnchor) {
         const anchor = readerContext.content.querySelector(`.reader-page[data-page="${previewAnchor.page}"]`);
         if (anchor) {
-          readerContext.viewport.scrollTop += anchor.getBoundingClientRect().top - previewAnchor.top;
+          readerContext.viewport.scrollTop += anchor.getBoundingClientRect().top - /** @type {number} */ (previewAnchor.top);
           readerContext.updateDocumentState({page:previewAnchor.page});
           readerContext.pageInput.value = String(previewAnchor.page);
           readerContext.pageNavigationLockUntil = performance.now() + 500;
@@ -1171,6 +1253,7 @@ export function createReaderPdfPageWindow(readerContext) {
       // components. Keep first paint fast; fetch the whole original only when
       // the reader explicitly opens its contents panel.
       let requested=false;
+      /** @param {string} label @returns {import('../../../typings/reader-page-window-strict').PdfOutlineEntry} */
       const outlineEntry=(label)=>({label,depth:0,activate:async(generation)=>{
         if (requested) return false;
         requested=true;

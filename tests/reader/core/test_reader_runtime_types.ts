@@ -6,6 +6,10 @@ const runtime = VoiceOfMLReaderRuntime.createReaderRuntime({
 });
 runtime.update("document", {page: 2, restorationReady: true});
 runtime.update("source", {url: "book"});
+runtime.update("panel", {editingBookmark: {id: 'bookmark', url: 'book', schemaVersion: 1, label: 'bookmark', createdAt: 1}});
+runtime.update("panel", {editingBookmark: null});
+// @ts-expect-error editing requires a bookmark, not an arbitrary value
+runtime.update("panel", {editingBookmark: {id: 3}});
 runtime.update("formats", {active: "pdf", pdf: {activeRenders: 1}});
 runtime.updateFormat("pdf", {activeRenders: 1});
 runtime.updateFormat("custom", {value: false});
@@ -16,6 +20,14 @@ runtime.snapshot().formats.pdf.activeRenders;
 runtime.snapshot().formats.active;
 runtime.snapshot().formats.custom?.value;
 runtime.negotiate({mode: "pdf"});
+const contractCapability = VoiceOfMLReader.capability("pdf");
+const negotiated: ReturnType<import('../../../typings/reader-contract-strict').ReaderContract['capability']> = runtime.negotiate(contractCapability);
+negotiated.features.search.valueOf();
+const bindingsNegotiate: import('../../../typings/reader-bindings-strict').ReaderBindingsContext['readerRuntime']['negotiate'] = runtime.negotiate;
+const pageNegotiate: import('../../../typings/reader-page-window-strict').PageWindowContext['readerRuntime']['negotiate'] = runtime.negotiate;
+void bindingsNegotiate; void pageNegotiate;
+// @ts-expect-error a partial runtime capability is not a complete contract capability
+const incomplete: typeof negotiated = runtime.negotiate({mode: "pdf"});
 // @ts-expect-error capability must be set using negotiate
 runtime.update("capability", {mode: "pdf"});
 // @ts-expect-error an unknown format may not exist, even without noUncheckedIndexedAccess

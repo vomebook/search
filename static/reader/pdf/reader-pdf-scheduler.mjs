@@ -304,7 +304,7 @@ export function createReaderPdfScheduler(readerContext) {
     if (priority < 2 || pdfPreviewActive.size < PDF_PREVIEW_SLOTS) return false;
     let victim = null, lowest = Infinity;
     for (const [holder, entry] of pdfPreviewActive) {
-      if (holder === shell || readerContext.isPdfPageVisible(holder) || readerContext.pdfSelectionIntersects?.(holder)) continue;
+      if (!holder || holder === shell || readerContext.isPdfPageVisible(holder) || readerContext.pdfSelectionIntersects(holder)) continue;
       const value = readerContext.pdfPagePriority(holder);
       if (value < lowest) { lowest = value; victim = entry; }
     }
@@ -434,7 +434,7 @@ export function createReaderPdfScheduler(readerContext) {
     const limit = matchMedia("(max-width: 700px)").matches ? 2 : 3;
     for (let index = readerContext.pdfTextWaiters.length - 1; index >= 0; index--) {
       const request = readerContext.pdfTextWaiters[index].request;
-      if (request && !request.demanded && !readerContext.isReaderGenerationCurrent("search", request.generation)) {
+      if (request && !request.demanded && (request.generation === null || !readerContext.isReaderGenerationCurrent("search", request.generation))) {
         if (readerContext.pdfTextContentPromises.get(request.page)?.request === request)
           readerContext.pdfTextContentPromises.delete(request.page);
         readerContext.pdfTextWaiters.splice(index, 1)[0].reject(readerContext.readerAbortError());

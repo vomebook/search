@@ -11,10 +11,12 @@ declare namespace ReaderSearchBackends {
   interface ChapterProgress extends Page<ChapterResult> { scanned: number; chapters: number }
   type ChapterConfiguration = import('./reader-chapter-search-strict').Configuration;
   interface TextPart { node: Text; start: number; end: number }
-  interface ChapterArticle extends HTMLElement { _chapterSearchHead: Node | null }
+  interface ChapterArticle extends HTMLElement { _chapterSearchHead?: Node | null }
   interface ChapterClient {
     failed: boolean;
     dispose(): void;
+    cancel(): void;
+    page(offset: number): Promise<Page<ChapterResult>>;
     search(query: string, progress: (page: ChapterProgress) => void): Promise<Page<ChapterResult>>;
   }
   interface ChapterModule {

@@ -10,7 +10,7 @@ export interface ReaderUiPanelPatch {
   open?: boolean;
   selected?: string;
   showingAllBookmarks?: boolean;
-  editingBookmark?: unknown;
+  editingBookmark?: import('./reader-store-strict').BookmarkEntry | null;
 }
 export interface ReaderUiScrollAnchor {
   node: Element;

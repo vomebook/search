@@ -184,6 +184,16 @@
       cancelAnimationFrame(handle);
       frames.delete(handle);
     }
+    /**
+     * @overload
+     * @param {ReturnType<import('../../../typings/reader-contract-strict').ReaderContract['capability']>} capability
+     * @returns {Readonly<ReturnType<import('../../../typings/reader-contract-strict').ReaderContract['capability']>>}
+     */
+    /**
+     * @overload
+     * @param {Capability | null | undefined} capability
+     * @returns {Readonly<Capability & {features: object}>}
+     */
     /** @param {Capability | null | undefined} capability */
     function negotiate(capability) {
       const mode = capability?.mode || "unsupported";

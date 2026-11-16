@@ -1,0 +1,18 @@
+export interface Batch { start: number; end: number; text: string; first: boolean; segment_ends: number[]; context_before: string; context_after: string }
+export interface Part { index: number; start: number; end: number; audio_url: string; bytes?: unknown; pitch_semitones?: unknown; pause_kind?: unknown; pause_after_seconds?: unknown }
+export interface Adapter { readonly text: string; readonly done: boolean; root?: Node | null; ensure(length: number): Promise<void>; progress?(): string; locateTop?(): Promise<number>; offsetAtTop?(): number; range?(start: number, end: number): Range | null; follow?(start: number, end: number): void | Promise<void>; reveal?(position: number): void | Promise<void>; inView?(position: number): boolean; saveView?(): { top: number; frame: number | null }; restoreView?(view: { top: number; frame: number | null }): void }
+export interface Snapshot { id: string; title: string; text: string; adapter?: Adapter; growing?: Promise<void> | null }
+export interface Preview extends Snapshot { snapshot?: Snapshot; host?: HTMLElement | null; body: HTMLElement | null }
+export type PreviewInput = { id: string; title: string; host?: HTMLElement | null; body?: HTMLElement | null; tools?: Element | null; buttonClass?: string } & ({ adapter: Adapter; text?: string } | { adapter?: undefined; text: string });
+export interface History extends Batch { parts: Part[] }
+export interface Job { batch: Batch; id: unknown; nonce: string; parts: Part[]; state: unknown; retryAt: number; failures: number; deadline: number; busy?: number; message?: string; used?: boolean; cancelled?: boolean; pending?: boolean; blocked?: boolean; stale?: boolean; preloaded?: boolean; restore?: boolean }
+export interface Current { job: Job; part: Part }
+export interface Owner { snapshot: Snapshot; batch: Batch; position: number; part: number; current: Current | null; pitch: number; wantsPlay: boolean; history: History[]; jobs: Map<number, Job>; controllers: Set<AbortController & { createsJob: boolean }>; cancelled: boolean; blocked: boolean; seekEpoch: number; pumpEpoch: number | null; timer?: number; settingsChanged?: boolean }
+export interface Saved { snapshot: Snapshot; position: number; history: History[]; pitch: number; interrupted: boolean }
+export interface Clip { url: string; bytes: number; controller: AbortController | null }
+export interface Handoff { job: Job; part: Part; url: string; current: Current; timer: number }
+export interface Plan { safe(text: string, offset: number): number; sentence(text: string, offset: number): {start: number; end: number}; batch(text: string, offset: number, first?: boolean, carry?: number): Batch | null; phraseEnds(text: string, first?: boolean, carry?: number): number[]; wordEnds(text: string): {end: number; word: string}[]; wordStart(text: string, offset: number): number; clauseStart(text: string, offset: number): number; numberSpans(text: string): {start: number; end: number}[]; partIndex(batch: {start: number; segment_ends: number[]}, offset: number): number; previousSentence(text: string, offset: number): number }
+declare global {
+  function openPreview(id: string, query: string, options: {scroll: boolean}): Promise<unknown>;
+  function showToast(message: string): void;
+}

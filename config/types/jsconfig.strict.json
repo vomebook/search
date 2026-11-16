@@ -6,10 +6,25 @@
     "strict": true,
     "target": "esnext",
     "module": "esnext",
-    "moduleResolution": "bundler"
+    "moduleResolution": "bundler",
+    "paths": {
+      "/static/*": ["../../static/*"],
+      "/search/static/*": ["../../static/*"],
+      "/static/foliate-reader/view.js": ["../../typings/foliate/view.d.ts"],
+      "/search/static/foliate-reader/view.js?reader-v1": ["../../typings/foliate/view.d.ts"]
+    }
   },
   "files": [
+    "../../static/app.js",
+    "../../typings/search-app.d.ts",
+    "../../static/reader.js",
+    "../../static/reader/reader-components.mjs",
     "../../static/reader/core/reader-diagnostics.mjs",
+    "../../static/reader/core/reader-bindings.mjs",
+    "../../typings/reader-bindings-strict.d.ts",
+    "../../static/tts-client.js",
+    "../../typings/tts-client-strict.d.ts",
+    "../../typings/tts-client-contract-test.ts",
     "../../static/reader/core/reader-lifecycle.mjs",
     "../../static/reader/core/reader-runtime.js",
     "../../static/reader/core/reader-store.js",
@@ -23,6 +38,10 @@
     "../../static/reader/formats/reader-format-controller.mjs",
     "../../static/reader/search/reader-search-backends.mjs",
     "../../static/reader/pdf/reader-pdf-renderer.mjs",
+    "../../static/reader/pdf/reader-pdf-network.mjs",
+    "../../static/reader/pdf/reader-pdf-page-window.mjs",
+    "../../typings/reader-page-window-strict.d.ts",
+    "../../tests/reader/pdf-v3/page-window-types.ts",
     "../../static/reader/pdf/reader-pdf-scheduler.mjs",
     "../../static/reader/pdf/reader-pdf-engine.mjs",
     "../../static/reader/pdf/reader-pdf-search.mjs",

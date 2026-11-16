@@ -11,7 +11,7 @@ export interface TextLayer {
 export interface TextIndex { version: number; kind: string; complete: boolean; source_sha256: string; page_count: number; generation: string; revision: string; offset_unit: string; partitions: Partition[]; book_text: Resource; search_partitions?: Partition[] }
 export interface TextPartition { version: number; kind: string; source_sha256: string; generation: string; start: number; end: number; pages: TextEntry[] }
 export interface ReadingManifest {
-  version: number; kind: string; source_sha256: string; generation: string; page_count: number; source_key: string;
+  version: number; kind: 'pdf-reading'; source_sha256: string; generation: string; page_count: number; source_key: string;
   primary: { kind: string; status: string; resource: Resource | DatasetPrimary };
   preview: { complete: boolean; page_count: number; partitions: Partition[]; ready_pages: number; status?: string };
   page_map: Resource; text_layer?: Resource; components: { document: string; preview: string; text: string };

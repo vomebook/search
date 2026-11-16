@@ -10,8 +10,11 @@ interface SearchExecutionPatch {
   dataLoaded?: boolean; isLoading?: boolean; resultsSkeletonActive?: boolean;
 }
 interface SearchExecutionParams {
-  page: number; folderMatchMode?: string | null; signal?: AbortSignal;
   [key: string]: unknown;
+  q: string; page: number; pageSize: number; repos: (string | null)[] | null;
+  extensions: string[] | null; folders: string[] | null; minSize: number | null; maxSize: number | null;
+  sort: string; searchFolders: boolean; exact: boolean; signal?: AbortSignal;
+  folderMatchMode?: string | null; folderSelfs?: string[]; folderSubtrees?: string[]; anchorId?: string;
 }
 interface SearchExecutionDependencies {
   readView(): SearchExecutionView; update(patch: SearchExecutionPatch): void;

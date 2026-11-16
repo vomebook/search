@@ -22,6 +22,14 @@ async function main() {
   runtime.cancel(delayed);
   assert.strictEqual(runtime.updateFormat("pdf", { activeRenders: 1 }), true);
   assert.strictEqual(runtime.snapshot().formats.pdf.activeRenders, 1);
+  const original = sandbox.VoiceOfMLReader.capability("pdf");
+  const negotiated = runtime.negotiate(original);
+  assert.strictEqual(negotiated.extension, original.extension);
+  assert.strictEqual(negotiated.mode, original.mode);
+  assert.strictEqual(negotiated.readerMode, original.readerMode);
+  assert.strictEqual(negotiated.article, original.article);
+  assert.notStrictEqual(negotiated.features, original.features);
+  assert.ok(Object.isFrozen(negotiated) && Object.isFrozen(negotiated.features));
   const capability = runtime.negotiate({ mode: "pdf", extension: "pdf" });
   assert.deepStrictEqual(JSON.parse(JSON.stringify(capability.features)), { toc: true, search: true, zoom: true, bookmarks: true, pagination: true, media: false });
   const first = runtime.nextGeneration("navigation");

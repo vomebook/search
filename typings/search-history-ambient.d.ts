@@ -5,7 +5,7 @@ interface VoiceOfMLSearchHistoryStorePort {
 interface VoiceOfMLSearchHistoryDependencies {
   elements(): {searchInput: HTMLInputElement; searchBox: HTMLElement; historyDropdown: HTMLElement; resultsContainer: HTMLElement};
   store: VoiceOfMLSearchHistoryStorePort;
-  escapeHTML(value: string): string;
+  escapeHTML(value: string): string | undefined;
   recordHistory(): boolean;
   isComposing(): boolean;
   submitSearchQuery(query: string, options: {restore: boolean; blur: boolean}): void;

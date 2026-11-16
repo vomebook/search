@@ -1751,6 +1751,23 @@ test("dense sort reuse caps its temporary index set", async () => {
   assert.strictEqual(result.total, 65537);
   assert.strictEqual(vm.runInContext('usedSort',worker.context), true);
 });
+test("NaN randomValue uses the normal random fallback rather than returning missing fields", async () => {
+  const {worker} = await loaded();
+  const original = Math.random;
+  try {
+    Math.random = () => 0;
+    const result = await worker.request("random-record", {repo:"Repo/B", randomValue:NaN});
+    assert.strictEqual(result.record.File, "beta notes");
+    assert.strictEqual(typeof result.id, "string");
+    const reader = await worker.request("random-record", {repo:"Repo/B", readerOnly:true, randomValue:NaN});
+    assert.strictEqual(reader.record.File, "beta notes");
+    assert.strictEqual(typeof reader.id, "string");
+    const empty = await worker.request("random-record", {repo:"missing", randomValue:NaN});
+    assert.strictEqual(empty.record, null);
+    assert.strictEqual(empty.id, null);
+  } finally { Math.random = original; }
+});
+
 test("random record and reader requests honor repository filters", async () => {
   const { worker } = await loaded();
   let result = await worker.request("random-record", { repo: "Repo/B", randomValue: 0 });
@@ -1779,6 +1796,61 @@ test("folder tree request preserves direct-file and child metadata", async () =>
   assert.strictEqual(result.tree[0].hasDirectFiles, true);
   assert.strictEqual(result.tree[0].children[0].path, "docs");
 });
+test("untrusted corpus fields and protocol failures retain their legacy outcomes", async () => {
+  const worker = makeWorker();
+  for (const data of [null, 1, {}, {v:2, rp:[], fd:[], rc:"bad"}]) {
+    const response = await worker.send("replace-corpus", {data});
+    assert.strictEqual(response.ok, false);
+    assert.strictEqual(response.error.code, data === null || data === 1 ? "INVALID_CORPUS" : "UNSUPPORTED_CORPUS");
+  }
+  const data = {v:2, rp:[27], fd:[[1, null, "dir"]], rc:[[0, 42, {ext:1}, 0, {size:3}, 1]]};
+  const result = await worker.request("replace-corpus", {data});
+  assert.strictEqual(result.count, 1);
+  const page = await worker.request("local-search", {q:"42", exact:true});
+  assert.deepStrictEqual(page.records[0], {Repo:27, File:42, Extension:{ext:1}, Folder:[1,null,"dir"], Size:{size:3}, HasTxt:true});
+  const folder = await worker.send("folder-contents", {repo:27});
+  assert.strictEqual(folder.ok, false);
+  assert.strictEqual(folder.error.code, "WORKER_ERROR");
+  for (const payload of [{repos: {length:1}}, {folders: {length:1}}, {folderSelfs: 17}]) {
+    const response = await worker.send("local-search", {q:"42", exact:true, ...payload});
+    assert.strictEqual(response.ok, false);
+    assert.strictEqual(response.error.code, "WORKER_ERROR");
+  }
+  const rawCases = [null, 1, "message", {protocol:1, id:"x", type:"cancel-search", payload:{requestId:"missing"}},
+    {protocol:1, id:0, type:"local-search", payload:{q:42, repos:42}},
+    {protocol:1, id:"x", type:"unknown", payload:17}];
+  for (const raw of rawCases) {
+    const before = worker.messages.length;
+    await worker.listeners.message({data:raw});
+    const response = worker.messages[before];
+    assert.strictEqual(response.protocol, 1);
+    if (!raw || raw.protocol !== 1) assert.strictEqual(response.error.code, "PROTOCOL_MISMATCH");
+    else if (raw.type === "cancel-search") assert.deepStrictEqual(response.result, {cancelled:false});
+    else if (raw.type === "unknown") assert.strictEqual(response.error.code, "UNKNOWN_REQUEST");
+    else assert.strictEqual(response.ok, true);
+  }
+  assert.strictEqual((await worker.send("unknown", {})).error.code, "UNKNOWN_REQUEST");
+  assert.strictEqual((await worker.send("handshake", {}, {protocol:9})).error.code, "PROTOCOL_MISMATCH");
+});
+
+test("wildcard DP numeric conversion matches the original typed-array coercion", () => {
+  const {context} = makeWorker();
+  const prior = source.replace("Number(current[j] || (dot && previous[j + 1]))", "(current[j] || (dot && previous[j + 1]))")
+    .replace('Number(previous[j] && (tokens[j] === "?" ? dot : mask[j]))', '(previous[j] && (tokens[j] === "?" ? dot : mask[j]))');
+  const old = makeWorker(prior).context;
+  let seed = 123;
+  const random = n => ((seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0) % n);
+  const alphabet = ["a", "b", "*", "?", "\n", "K", "😀"];
+  for (let i = 0; i < 2000; i++) {
+    const pattern = Array.from({length: 1 + random(16)}, () => alphabet[random(alphabet.length)]).join("");
+    const text = Array.from({length: random(22)}, () => alphabet[random(alphabet.length)]).join("");
+    context.pattern = old.pattern = pattern;
+    context.text = old.text = text;
+    assert.strictEqual(vm.runInContext('compileWildcardMatcher(pattern).test(text)', context),
+      vm.runInContext('compileWildcardMatcher(pattern).test(text)', old), JSON.stringify({pattern,text}));
+  }
+});
+
 test("main thread centralizes lifecycle and never sends or decodes the corpus", () => {
   assert.match(app, /const WORKER_PROTOCOL_VERSION = 1/);
   assert.match(app, /function corpusWorkerRequest/);

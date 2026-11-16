@@ -3,8 +3,8 @@ interface VoiceOfMLShellState {
 }
 interface VoiceOfMLShellEvent { detail?: number; type?: string }
 interface VoiceOfMLShellElements {
-  themeBtn: HTMLElement; themeIconLight: HTMLElement; themeIconDark: HTMLElement;
-  mobileToggleBtn: HTMLElement; mobileIconPhone: HTMLElement; mobileIconDesktop: HTMLElement;
+  themeBtn: HTMLElement; themeIconLight: HTMLElement | SVGElement; themeIconDark: HTMLElement | SVGElement;
+  mobileToggleBtn: HTMLElement; mobileIconPhone: HTMLElement | SVGElement; mobileIconDesktop: HTMLElement | SVGElement;
   leftSidebar: HTMLElement; rightSidebar: HTMLElement; hamburgerBtn: HTMLElement;
   settingsBtn: HTMLElement; overlay: HTMLElement;
 }

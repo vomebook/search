@@ -4,10 +4,10 @@ import assert from "node:assert/strict";
 import { createReaderSource } from "../../../static/reader/core/reader-source.mjs";
 
 const saved = { fetch: globalThis.fetch, window: globalThis.window, document: globalThis.document,
-  location: globalThis.location, security: globalThis.VoiceOfMLReaderSecurity, setTimeout: globalThis.setTimeout };
+  location: globalThis.location, security: globalThis.VoiceOfMLReaderSecurity, setTimeout: globalThis.setTimeout, Element: globalThis.Element };
 afterEach(() => {
   Object.assign(globalThis, { fetch: saved.fetch, window: saved.window, document: saved.document,
-    location: saved.location, VoiceOfMLReaderSecurity: saved.security, setTimeout: saved.setTimeout });
+    location: saved.location, VoiceOfMLReaderSecurity: saved.security, setTimeout: saved.setTimeout, Element: saved.Element });
 });
 
 function fixture() {
@@ -34,8 +34,10 @@ function fixture() {
     applyReaderPathMetadata() {}, readerPathLabel: "", folderReturnUrl: "", folderNavigationTarget: null
   };
   const source = createReaderSource(context);
-  const button = { busy: false, hasAttribute() { return this.busy; },
-    setAttribute() { this.busy = true; }, removeAttribute() { this.busy = false; } };
+  globalThis.Element = class { hasAttribute() { return this.busy; }
+    setAttribute() { this.busy = true; } removeAttribute() { this.busy = false; } };
+  const button = new globalThis.Element();
+  button.busy = false;
   return { source, context, feedback, frames, heading, button,
     event: { currentTarget: button, preventDefault() {} } };
 }

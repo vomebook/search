@@ -447,7 +447,7 @@ export function createReaderHtmlFormat(readerContext) {
         style.textContent = text;
         output.push(style);
       } else {
-        const style = node.cloneNode(false);
+        const style = /** @type {Element} */ (node.cloneNode(false));
         style.textContent = await inlineCssImports(node.textContent || "");
         output.push(style);
       }

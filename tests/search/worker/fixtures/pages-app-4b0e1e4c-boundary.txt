@@ -1,0 +1,36 @@
+// Extracted host boundaries from Pages revision 4b0e1e4c6e37ebcf338456fda9fb9913aa33ec8c.
+async function loadData() {
+  const intent = searchIntentId, key = getSearchViewKey();
+  try {
+    const metadata = await corpusWorkerRequest("load-corpus", { url: new URL(DATA_URL, document.baseURI).href }, WORKER_LOAD_TIMEOUT);
+    repoList = Array.isArray(metadata.repos) ? metadata.repos : [];
+    extensionCounts = {};
+    for (const item of metadata.extensions || []) extensionCounts[item.name] = item.count || 0;
+    repoExtensionCounts = metadata.extensionsByRepo || {};
+    extensionList = (metadata.extensions || []).map(function(item) { return item.name; });
+    readerMetadata = metadata.reader || { available: false, count: 0, byRepo: {} };
+    return true;
+  } catch (e) {
+    console.error("Data load failed:", e);
+    if (e && e.code === "PROTOCOL_MISMATCH" && intent === searchIntentId && key === getSearchViewKey()) showToast("本地搜索版本不匹配，请刷新页面");
+    return false;
+  }
+}
+async function doSearchLocal(params) {
+  const workerParams = Object.assign({}, params);
+  delete workerParams.signal;
+  const data = await corpusWorkerRequest("local-search", workerParams, WORKER_REQUEST_TIMEOUT, params.signal);
+  return cloneSearchData({
+    results: data.records || [],
+    total: data.total || 0,
+    page: data.page,
+    page_size: data.pageSize,
+    generation: data.snapshot_generation,
+    anchor_index: data.anchor_index,
+  });
+}
+const legacyPorts = {
+  localWorker: (repo, path) => corpusWorkerRequest("folder-contents", { repo, path }, WORKER_REQUEST_TIMEOUT),
+  localFolders: repo => corpusWorkerRequest("folder-tree", {repo}, WORKER_REQUEST_TIMEOUT),
+  localRecord: (repo, readerOnly) => corpusWorkerRequest("random-record", { repo, readerOnly }, WORKER_REQUEST_TIMEOUT),
+};

@@ -3,7 +3,7 @@ interface VoiceOfMLDiscoveryRecord {
   Link?: string; link?: string; ReaderExtension?: string;
 }
 interface VoiceOfMLRandomDiscoveryDependencies {
-  readView(): {dataLoaded: boolean; repoFull: string; repo: string; mode: string};
+  readView(): {dataLoaded: boolean; repoFull: string | null; repo: string | null; mode: string};
   requests: {id: number};
   button(): HTMLElement | null | undefined;
   apiBase: string;

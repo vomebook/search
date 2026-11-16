@@ -44,6 +44,9 @@ class StaticGateTests(unittest.TestCase):
             for name in ("reader-security-strict.d.ts", "reader-store-strict.d.ts",
                          "reader-contract-strict.d.ts", "reader-toc-strict.d.ts"):
                 shutil.copyfile(ROOT / "typings" / name, directory / name)
+        # Reader declarations import other declarations; preserve that graph in fixtures.
+        for declaration in (ROOT / "typings").glob("reader-*.d.ts"):
+            shutil.copyfile(declaration, self.root / "typings" / declaration.name)
         for filename in ("eslint.config.mjs", "ruff.toml"):
             shutil.copyfile(ROOT / filename, self.root / filename)
         # Node's module resolver follows this symlink to the already installed,
@@ -2325,8 +2328,8 @@ class StaticGateTests(unittest.TestCase):
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(ROOT / path, target)
         check = ['node', paths[0]]
-        message = 'PDF prefetch requires six passing named contracts'
-        self.assert_check(self.run_check(*check), True, '# pass 6')
+        message = 'PDF prefetch requires eight passing named contracts'
+        self.assert_check(self.run_check(*check), True, '# pass 8')
         for path in paths[2:4]:
             source = self.root / path
             original = source.read_text()
@@ -2343,12 +2346,20 @@ class StaticGateTests(unittest.TestCase):
             source.write_text(original.replace(anchor, replacement))
             self.assert_check(self.run_check(*check), False, message)
         source.write_text(original)
+        for name in ('missing OCR manifest reports no concentrated text',
+                     'missing OCR source rejects before constructing a search client'):
+            anchor = "test('" + name + "'"
+            self.assertEqual(original.count(anchor), 1)
+            for replacement in ("test('renamed OCR contract'", "test.skip('" + name + "'"):
+                source.write_text(original.replace(anchor, replacement))
+                self.assert_check(self.run_check(*check), False, message)
+        source.write_text(original)
         worker = self.root / paths[4]
         worker_original = worker.read_text()
         worker.write_text("throw new Error('worker did not start');\n")
         self.assert_check(self.run_check(*check), False, message)
         worker.write_text(worker_original)
-        self.assert_check(self.run_check(*check), True, '# pass 6')
+        self.assert_check(self.run_check(*check), True, '# pass 8')
         gate = self.root / paths[0]
         gate_original = gate.read_text()
         self.assertEqual(gate_original.count('timeout: 45000'), 1)
@@ -2890,7 +2901,8 @@ class StaticGateTests(unittest.TestCase):
         self.assertEqual(original.count('reader-lifecycle\\.mjs'), 1)
         gate.write_text(original.replace('reader-lifecycle\\.mjs', 'missing-lifecycle\\.mjs'))
         self.assert_check(self.run_check(*check), False, 'exactly one source row')
-        for thresholds in ('[100.01, 97.47, 100]', '[100, 97.48, 100]', '[100, 97.47, 100.01]'):
+        self.assertIn('[100, 97.47, 100]', original)
+        for thresholds in ('[100.01, 97.47, 100]', '[100, 97.54, 100]', '[100, 97.47, 100.01]'):
             gate.write_text(original.replace('[100, 97.47, 100]', thresholds))
             self.assert_check(self.run_check(*check), False, 'Reader lifecycle requires named contracts')
 

@@ -20,7 +20,7 @@
     "data:prepare": "node scripts/data/prepare_test_data.mjs",
     "lint": "eslint static scripts tests --max-warnings 0",
     "markup": "node scripts/check_markup.mjs",
-    "types": "tsc --project config/types/jsconfig.check.json && tsc --project config/types/jsconfig.service-worker.json && tsc --project config/types/jsconfig.service-worker-strict.json && tsc --project config/types/jsconfig.chapter-worker-strict.json && tsc --project config/types/jsconfig.search-worker-text-strict.json && tsc --project config/types/jsconfig.strict.json && tsc --project config/types/jsconfig.search-exact.json && tsc --project config/types/jsconfig.reader-exact.json && tsc --project config/types/jsconfig.window-page-tests.json",
+    "types": "tsc --project config/types/jsconfig.check.json && tsc --project config/types/jsconfig.service-worker.json && tsc --project config/types/jsconfig.service-worker-strict.json && tsc --project config/types/jsconfig.chapter-worker-strict.json && tsc --project config/types/jsconfig.search-worker-text-strict.json && tsc --project config/types/jsconfig.search-index-worker-strict.json && tsc --project config/types/jsconfig.strict.json && tsc --project config/types/jsconfig.search-exact.json && tsc --project config/types/jsconfig.reader-exact.json && tsc --project config/types/jsconfig.window-page-tests.json",
     "check:static": "npm run lint && npm run markup && npm run types && python3 -B scripts/check_strict_inventory.py --self-test && python3 -B scripts/check_strict_inventory.py"
   },
   "_overrideNote": "minimatch 11.0.3 addresses GHSA-g3hv-75wg-m249 in the 10.x dependency; rerun checker regressions when updating ESLint.",

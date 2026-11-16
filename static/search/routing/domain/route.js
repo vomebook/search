@@ -18,15 +18,15 @@
     return { mode: parts.length === 0 ? "global" : "repo", repo: parts[0] || null, params };
   }
 
-  /** @param {VoiceOfMLRouteState} state @param {(value: number) => string} formatSize @param {VoiceOfMLRouteOptions} [options] */
+  /** @param {VoiceOfMLRouteState} state @param {(value: number) => string | null} formatSize @param {VoiceOfMLRouteOptions} [options] */
   function buildParams(state, formatSize, { includeQuery = true, displaySizes = false } = {}) {
     const sp = new URLSearchParams();
     if (includeQuery && state.query) sp.set("q", state.query);
     if (state.filterExtensions.length > 0) sp.set("ext", state.filterExtensions.join(","));
     if (state.sort !== "relevance") sp.set("sort", state.sort);
     const sizeValue = displaySizes ? formatSize : String;
-    if (state.filterMinSize !== null) sp.set("min_size", sizeValue(state.filterMinSize));
-    if (state.filterMaxSize !== null) sp.set("max_size", sizeValue(state.filterMaxSize));
+    if (state.filterMinSize !== null) sp.set("min_size", String(sizeValue(state.filterMinSize)));
+    if (state.filterMaxSize !== null) sp.set("max_size", String(sizeValue(state.filterMaxSize)));
     if (!state.searchFolders) sp.set("search_folders", "false");
     if (!state.exact) sp.set("exact", "0");
     if (!state.useLocalMode) sp.set("local", "0");

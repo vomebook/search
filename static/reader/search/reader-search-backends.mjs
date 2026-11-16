@@ -59,7 +59,7 @@ export function createReaderSearchBackends(readerContext) {
     if (!readerContext.isReaderGenerationCurrent("navigation", generation)) return false;
     readerContext.clearFullSearchMarks();
     const textProfile = readerContext.chapterSearchConfiguration?.index.text_profile;
-    const mapping = module.chapterTextMap([article._chapterSearchHead, article], textProfile);
+    const mapping = module.chapterTextMap([article._chapterSearchHead ?? null, article], textProfile);
     const match = result.snippet.text.slice(
       result.snippet.matchStart,
       result.snippet.matchStart + result.snippet.matchLength
@@ -74,7 +74,7 @@ export function createReaderSearchBackends(readerContext) {
       start = found + result.snippet.matchStart;
     }
     const parts = mapping.parts(start, start + result.length, article);
-    const headText = module.chapterTextMap([article._chapterSearchHead], textProfile).text;
+    const headText = module.chapterTextMap([article._chapterSearchHead ?? null], textProfile).text;
     if (start < headText.length) {
       const heading = document.createElement("p");
       heading.className = "reader-chapter-search-heading";

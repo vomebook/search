@@ -126,7 +126,7 @@
       corpusWorkerStartPromise = Promise.resolve().then(function() {
         return postCorpusWorkerRequest("handshake", {}, WORKER_REQUEST_TIMEOUT, null, worker);
       }).then(function(result) {
-        if (!result || result.protocol !== WORKER_PROTOCOL_VERSION) throw makeWorkerError("PROTOCOL_MISMATCH", "Refresh required: app/Worker protocol mismatch");
+        if (!result || typeof result !== "object" || !("protocol" in result) || result.protocol !== WORKER_PROTOCOL_VERSION) throw makeWorkerError("PROTOCOL_MISMATCH", "Refresh required: app/Worker protocol mismatch");
         if (worker !== corpusWorker) throw makeWorkerError("WORKER_TERMINATED", "Search Worker terminated");
         corpusWorkerStartPromise = null;
         return worker;

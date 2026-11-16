@@ -377,7 +377,7 @@ export function createReaderFoliateFormat(readerContext) {
     signal.throwIfAborted();
     readerContext.assertReaderActive();
     for (const node of doc.querySelectorAll("style,link")) node.remove();
-    const article = /** @type {HTMLElement & {_resolveSearchAnchor?: ((anchor: (source: Document) => Range) => {node: Text; start: number; end: number}[] | null) | null}} */ (document.createElement("article"));
+    const article = /** @type {import('../../../typings/reader-foliate-format-strict').FoliateArticle} */ (document.createElement("article"));
     article.dataset.section = String(index);
     const shadow = article.attachShadow({ mode: "open" }),
       baseStyle = document.createElement("style"),
@@ -535,7 +535,7 @@ export function createReaderFoliateFormat(readerContext) {
         observer.observe(placeholder);
         return placeholder;
       },
-      release: (index) => readerContext.foliateChapterRepository.release(index),
+      release: (index) => readerContext.foliateChapterRepository?.release(index) ?? false,
       preserve: (change) => readerContext.foliateScrollAnchors.preserve(change)
     });
     readerContext.foliateSectionLoader = /** @type {import('../../../typings/reader-foliate-format-strict').FoliateLoader} */ (index => {
@@ -651,12 +651,14 @@ export function createReaderFoliateFormat(readerContext) {
       : 0;
     readerContext.initialReaderTargetSection = readerContext.readerRestorationEntry?.foliateSection == null ? null : initialSection;
     readerContext.setupFoliateWindow(stream, sections);
-    if (sections[initialSection]) await readerContext.foliateChapterRepository.load(initialSection);
+    const repository = readerContext.foliateChapterRepository;
+    if (!repository) throw new Error("Foliate chapter repository not initialized");
+    if (sections[initialSection]) await repository.load(initialSection);
     readerContext.assertReaderActive();
     readerContext.markReaderContentReady();
     // Restoration targets the selected section; an unrelated slow previous
     // section is loaded in the background and remains retryable.
-    if (initialSection > 0) readerContext.foliateChapterRepository.load(initialSection - 1).catch(error => {
+    if (initialSection > 0) repository.load(initialSection - 1).catch(error => {
       if (!readerContext.readerAbortController.signal.aborted)
         console.warn("Previous EPUB chapter could not be loaded", error);
     });

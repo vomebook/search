@@ -1,3 +1,4 @@
+/** @param {import('../../../typings/reader-bindings-strict').ReaderBindingsContext} readerContext */
 export function createReaderBindings(readerContext) {
   function trackStartupOwners() {
     readerContext.readerRuntime.track(readerContext.readerRequestManager);
@@ -47,9 +48,11 @@ export function createReaderBindings(readerContext) {
 
   function readSelectedSourceSession() {
     try {
-      readerContext.localReaderData = JSON.parse(sessionStorage.getItem(`reader-source:${readerContext.readerId}`) || "null");
+      const value = /** @type {unknown} */ (JSON.parse(sessionStorage.getItem(`reader-source:${readerContext.readerId}`) || "null"));
+      readerContext.localReaderData = value && typeof value === "object" && !Array.isArray(value) ? /** @type {Record<string, unknown>} */ (value) : null;
       if (readerContext.localReaderData) sessionStorage.removeItem(`reader-source:${readerContext.readerId}`);
     } catch (_) {}
+    return readerContext.localReaderData;
   }
 
   function normalizeConvertedPdfMode() {
@@ -64,16 +67,20 @@ export function createReaderBindings(readerContext) {
   }
 
   function applySourceSessionAndCachedMetadata() {
-    if (readerContext.localReaderData) {
-      if (readerContext.localReaderData.title) readerContext.params.set("title", readerContext.localReaderData.title);
-      if (readerContext.localReaderData.extension) readerContext.params.set("ext", readerContext.localReaderData.extension);
-      if (readerContext.localReaderData.repo)
-        readerContext.params.set("path", [readerContext.localReaderData.repo, ...(readerContext.localReaderData.folder || [])].join("/"));
+    const source = readerContext.localReaderData;
+    if (source && typeof source === "object") {
+      if ("title" in source && source.title) readerContext.params.set("title", String(source.title));
+      if ("extension" in source && source.extension) readerContext.params.set("ext", String(source.extension));
+      if ("repo" in source && source.repo) {
+        const folder = "folder" in source ? source.folder : null;
+        readerContext.params.set("path", [source.repo, ...(Array.isArray(folder) || typeof folder === "string" ? folder : [])].join("/"));
+      }
     }
     try {
       const cached = sessionStorage.getItem(`reader-resolve:${readerContext.readerId}`);
       if (cached) {
-        readerContext.cachedReaderData = JSON.parse(cached);
+        const value = /** @type {unknown} */ (JSON.parse(cached));
+        readerContext.cachedReaderData = value && typeof value === "object" && !Array.isArray(value) ? /** @type {Record<string, unknown>} */ (value) : null;
         readerContext.resolvedReaderData = readerContext.cachedReaderData;
         sessionStorage.removeItem(`reader-resolve:${readerContext.readerId}`);
       }
@@ -89,8 +96,9 @@ export function createReaderBindings(readerContext) {
       extension: readerContext.extension,
       metadata: readerContext.resolvedReaderData
     });
-    readerContext.readerRuntime.events.on("phase", ({ phase }) => {
-      document.documentElement.dataset.readerPhase = phase;
+    readerContext.readerRuntime.events.on("phase", (detail) => {
+      if (detail && typeof detail === "object" && "phase" in detail && typeof detail.phase === "string")
+        document.documentElement.dataset.readerPhase = detail.phase;
     });
     readerContext.readerRuntime.track(
       VoiceOfMLReaderStore.subscribe?.((change) => {
@@ -118,6 +126,7 @@ export function createReaderBindings(readerContext) {
     );
 
     readerContext.setReaderPhase("startup");
+    /** @param {string} url */
     window.fetchFile = async (url) => {
       const requestUrl = String(url) === readerContext.sourceUrl ? readerContext.contentUrl : url;
       const response = await readerContext.readerRequestManager.request(requestUrl, readerContext.READER_PROXY_TIMEOUT_MS);
@@ -165,10 +174,12 @@ export function createReaderBindings(readerContext) {
   function initializeDocumentTitle() {
     let savedZoom = null;
     try { savedZoom = localStorage.getItem("reader-zoom"); } catch (_) {}
+    const source = readerContext.localReaderData;
+    const localTitle = source && typeof source === "object" && "title" in source ? source.title : null;
     readerContext.updateDocumentState({
       title:
         String(
-          readerContext.params.get("title") || (readerContext.localReaderData && readerContext.localReaderData.title) || readerContext.sourceName
+          readerContext.params.get("title") || localTitle || readerContext.sourceName
         ).trim() || readerContext.sourceName,
       zoom: Math.min(4, Math.max(0.25, Number(savedZoom || 100) / 100))
     });
@@ -193,7 +204,7 @@ export function createReaderBindings(readerContext) {
         stateUrl &&
         stateUrl.origin === location.origin &&
         stateUrl.pathname === "/search/static/reader.html" &&
-        cleanStateUrl.href === location.href
+        /** @type {URL} */ (cleanStateUrl).href === location.href
       ) {
         if (!readerContext.returnUrl) readerContext.returnUrl = stateUrl.searchParams.get("return") || "";
         if (!readerContext.returnNavigationToken) readerContext.returnNavigationToken = stateUrl.searchParams.get("nav") || "";
@@ -297,7 +308,7 @@ export function createReaderBindings(readerContext) {
       const button = document.createElement("button");
       button.className = "panel-search-toggle";
       button.type = "button";
-      document.querySelector("#bookmarks-panel .panel-view-header").appendChild(button);
+      /** @type {Element} */ (document.querySelector("#bookmarks-panel .panel-view-header")).appendChild(button);
     }
     readerContext.bookmarksAllButton.id = "bookmarks-all";
     readerContext.bookmarksAllButton.className = "text-action";
@@ -324,13 +335,11 @@ export function createReaderBindings(readerContext) {
     readerContext.mediaPanel.hidden = true;
     readerContext.mediaPanel.innerHTML =
       '<div class="media-panel-content"><strong>播放状态</strong><span class="media-panel-time">尚未播放</span><button class="text-action media-panel-bookmark" type="button">在当前时间添加书签</button></div>';
-    document.querySelector(".reader-panel-tabs").prepend(readerContext.mediaTab);
-    document
-      .querySelector("#history-panel")
+    /** @type {Element} */ (document.querySelector(".reader-panel-tabs")).prepend(readerContext.mediaTab);
+    /** @type {Element} */ (document.querySelector("#history-panel"))
       .insertBefore(readerContext.mediaPanel, document.querySelector("#toc-panel"));
-    readerContext.mediaPanel
-      .querySelector(".media-panel-bookmark")
-      .addEventListener("click", (event) => readerContext.openBookmarkPopover(event.currentTarget));
+    /** @type {Element} */ (readerContext.mediaPanel.querySelector(".media-panel-bookmark"))
+      .addEventListener("click", (event) => readerContext.openBookmarkPopover(event.currentTarget instanceof HTMLElement ? event.currentTarget : undefined));
     /** @type {HTMLElement} */ (document.querySelector(".page-controls")).hidden = !readerContext.capability.features.pagination;
     /** @type {HTMLElement} */ (document.querySelector(".zoom-controls")).hidden = !readerContext.capability.features.zoom;
 
@@ -360,7 +369,7 @@ export function createReaderBindings(readerContext) {
     document.querySelector("#reader-panel-path")?.addEventListener("click", readerContext.navigateReaderFolder);
     let closing = false;
     window.addEventListener("pageshow", event => { if (event.persisted) closing = false; });
-    document.querySelector("#back").addEventListener("click", async () => {
+    /** @type {Element} */ (document.querySelector("#back")).addEventListener("click", async () => {
       if (closing) return;
       closing = true;
       clearTimeout(readerContext.saveTimer);
@@ -396,7 +405,7 @@ export function createReaderBindings(readerContext) {
       ["#zoom-out", -10],
       ["#zoom-in", 10]
     ])) {
-      document.querySelector(id).addEventListener("click", () => {
+      /** @type {Element} */ (document.querySelector(id)).addEventListener("click", () => {
         readerContext.setZoom(Number(readerContext.zoomInput.value) + delta);
       });
     }
@@ -416,13 +425,11 @@ export function createReaderBindings(readerContext) {
     });
 
     document.addEventListener("keydown", readerContext.handleReaderKeydown);
-    document
-      .querySelector("#page-prev")
+    /** @type {Element} */ (document.querySelector("#page-prev"))
       .addEventListener("click", () =>
         readerContext.documentState.pageCount ? readerContext.goToPage(readerContext.documentState.page - 1) : readerContext.turnViewport(-1)
       );
-    document
-      .querySelector("#page-next")
+    /** @type {Element} */ (document.querySelector("#page-next"))
       .addEventListener("click", () =>
         readerContext.documentState.pageCount ? readerContext.goToPage(readerContext.documentState.page + 1) : readerContext.turnViewport(1)
       );
@@ -432,6 +439,7 @@ export function createReaderBindings(readerContext) {
     if (window !== window.top) return;
     const readerUrl = location.href;
     let loadingSearch = false;
+    /** @param {PopStateEvent} event */
     const restoreSearchDocument = (event) => {
       if (!event.isTrusted || loadingSearch || readerContext.readerLifecycle.disposed) return;
       // Reloading an overlay URL creates a standalone Reader document which can
@@ -458,6 +466,7 @@ export function createReaderBindings(readerContext) {
       } catch (_) {}
       location.reload();
     };
+    /** @param {PageTransitionEvent} event */
     const resume = (event) => { if (event.persisted) loadingSearch = false; };
     window.addEventListener("popstate", restoreSearchDocument);
     window.addEventListener("pageshow", resume);
@@ -503,8 +512,8 @@ export function createReaderBindings(readerContext) {
     // Bookmark dialog owns focus and temporarily makes only its siblings inert.
 
     readerContext.bookmarkRibbon.addEventListener("click", () => readerContext.openBookmarkPopover(readerContext.bookmarkRibbon));
-    document.querySelector("#bookmark-cancel").addEventListener("click", readerContext.closeBookmarkPopover);
-    document.querySelector("#bookmark-add").addEventListener("click", async (event) => {
+    /** @type {Element} */ (document.querySelector("#bookmark-cancel")).addEventListener("click", readerContext.closeBookmarkPopover);
+    /** @type {Element} */ (document.querySelector("#bookmark-add")).addEventListener("click", async (event) => {
       const button = /** @type {HTMLButtonElement} */ (event.currentTarget),
         editing = readerContext.panelState.editingBookmark;
       const snapshot = readerContext.pendingBookmarkSnapshot || editing || readerContext.captureBookmarkSnapshot();
@@ -533,13 +542,13 @@ export function createReaderBindings(readerContext) {
           await readerContext.renderBookmarks();
           if (editing && invoker && !invoker.isConnected && document.activeElement === document.body)
             (
-              document.querySelector(
+              /** @type {HTMLElement} */ (document.querySelector(
                 `#bookmarks-list [data-bookmark-id="${CSS.escape(editing.id)}"] .panel-item-edit`
-              ) || readerContext.bookmarksAllButton
+              )) || readerContext.bookmarksAllButton
             ).focus();
         }
       } catch (_) {
-        document.querySelector("#bookmark-prompt").textContent = "书签保存失败，请重试。";
+        /** @type {Element} */ (document.querySelector("#bookmark-prompt")).textContent = "书签保存失败，请重试。";
       } finally {
         button.disabled = false;
       }
@@ -553,15 +562,15 @@ export function createReaderBindings(readerContext) {
       if (event.key !== "Tab") return;
       const controls = [
         ...readerContext.bookmarkPopover.querySelectorAll("input,textarea,select,button,a[href],[tabindex]")
-      ].filter((node) => !node.disabled && node.tabIndex >= 0 && node.getClientRects().length);
+      ].filter((node) => !/** @type {HTMLButtonElement} */ (node).disabled && /** @type {HTMLElement} */ (node).tabIndex >= 0 && node.getClientRects().length);
       const first = controls[0],
         last = controls[controls.length - 1];
       if (event.shiftKey && document.activeElement === first) {
         event.preventDefault();
-        last.focus();
+        /** @type {HTMLElement} */ (last).focus();
       } else if (!event.shiftKey && document.activeElement === last) {
         event.preventDefault();
-        first.focus();
+        /** @type {HTMLElement} */ (first).focus();
       }
     });
     for (const button of /** @type {NodeListOf<HTMLButtonElement>} */ (document.querySelectorAll(".reader-panel-tabs button")))
@@ -593,7 +602,7 @@ export function createReaderBindings(readerContext) {
       button.textContent = "搜索";
       button.hidden = false;
       button.setAttribute("aria-expanded", "false");
-      const view = button.closest(".reader-panel-view"), input = view.querySelector(".panel-search");
+      const view = /** @type {Element} */ (button.closest(".reader-panel-view")), input = /** @type {Element} */ (view.querySelector(".panel-search"));
       input.id ||= `${view.id}-search`;
       button.setAttribute("aria-controls", input.id);
       button.setAttribute("aria-label", `搜索${view.querySelector(".panel-view-header strong")?.textContent || "列表"}`);
@@ -602,7 +611,7 @@ export function createReaderBindings(readerContext) {
       );
     }
     for (const input of /** @type {NodeListOf<HTMLInputElement>} */ (document.querySelectorAll(".panel-search"))) {
-      const view = input.closest(".reader-panel-view");
+      const view = /** @type {Element} */ (input.closest(".reader-panel-view"));
       input.type = "search";
       input.setAttribute(
         "aria-label",
@@ -613,7 +622,7 @@ export function createReaderBindings(readerContext) {
       });
       input.addEventListener("compositionend", () => readerContext.filterPanel(view));
     }
-    document.querySelector("#history-clear").addEventListener("click", async () => {
+    /** @type {Element} */ (document.querySelector("#history-clear")).addEventListener("click", async () => {
       if (!confirm("清空全部阅读历史？")) return;
       readerContext.historySuppressed = true;
       await readerContext.progressSaveChain;
@@ -664,10 +673,9 @@ export function createReaderBindings(readerContext) {
     });
     /** @type {HTMLButtonElement} */ (document.querySelector("#history"))
       .addEventListener("click", (event) =>
-        readerContext.setReaderPanelOpen(document.querySelector("#history").getAttribute("aria-expanded") !== "true", false, event.detail === 0)
+        readerContext.setReaderPanelOpen(/** @type {Element} */ (document.querySelector("#history")).getAttribute("aria-expanded") !== "true", false, event.detail === 0)
       );
-    document
-      .querySelector("#history-close")
+    /** @type {Element} */ (document.querySelector("#history-close"))
       .addEventListener("click", () => readerContext.setReaderPanelOpen(false, true));
     readerContext.viewport.addEventListener("scroll", readerContext.handleReaderPositionChange, { passive: true });
 
@@ -682,16 +690,17 @@ export function createReaderBindings(readerContext) {
         readerContext.pdfSelectionPointer = null;
         return;
       }
-      const run = event.target.closest?.(".reader-pdf-text-run");
+      const target = event.target instanceof Element ? event.target : null;
+      const run = target?.closest(".reader-pdf-text-run");
       const selection = document.getSelection();
-      const selectedRun = !selection?.isCollapsed && event.target.closest?.(".reader-page")
+      const selectedRun = selection && !selection.isCollapsed && target?.closest(".reader-page")
         ? selection.anchorNode?.parentElement?.closest(".reader-pdf-text-run") : null;
       const origin = run || selectedRun;
       const caret = !event.shiftKey && event.button === 0 ? readerContext.independentTextCaret(document, event.clientX, event.clientY) : null;
       readerContext.pdfSelectionPointer = origin
         ? { id: event.pointerId, x: event.clientX, y: event.clientY, frame: 0,
-            page: origin.closest(".reader-page"), anchorNode: caret?.node || (run ? null : selection.anchorNode),
-            anchorOffset: caret?.offset ?? (run ? 0 : selection.anchorOffset), caret: run ? caret : null } : null;
+            page: origin.closest(".reader-page"), anchorNode: caret?.node || (run ? null : selection?.anchorNode || null),
+            anchorOffset: caret?.offset ?? (run ? 0 : selection?.anchorOffset ?? 0), caret: run ? caret : null } : null;
     }, { passive: false });
     readerContext.viewport.addEventListener("mousedown", (event) => {
       const caret = readerContext.pdfSelectionPointer?.caret;
@@ -707,7 +716,7 @@ export function createReaderBindings(readerContext) {
       if (event.pointerType !== "mouse" || !start || start.id !== event.pointerId ||
           Math.hypot(event.clientX - start.x, event.clientY - start.y) < 6) return;
       const selection = document.getSelection();
-      if (!start.anchorNode && selection?.rangeCount && start.page.contains(selection.anchorNode) &&
+      if (!start.anchorNode && selection?.rangeCount && selection.anchorNode && start.page?.contains(selection.anchorNode) &&
           selection.anchorNode.parentElement?.closest(".reader-pdf-text-run")) {
         start.anchorNode = selection.anchorNode;
         start.anchorOffset = selection.anchorOffset;
@@ -718,14 +727,14 @@ export function createReaderBindings(readerContext) {
         if (!start.frame) start.frame = requestAnimationFrame(() => {
           start.frame = 0;
           if (readerContext.pdfSelectionPointer === start)
-            readerContext.correctPdfCrossPageSelection(start.endX, start.endY, start);
+            readerContext.correctPdfCrossPageSelection(start.endX ?? start.x, start.endY ?? start.y, start);
         });
       }
     }, { passive: true });
     document.addEventListener("pointerup", (event) => {
       const start = readerContext.pdfSelectionPointer;
       readerContext.pdfSelectionPointer = null;
-      if (event.pointerType !== "mouse" || !["pdf", "pdf-pages"].includes(readerContext.capability.mode) ||
+      if (event.pointerType !== "mouse" || !["pdf", "pdf-pages"].includes(/** @type {string} */ (readerContext.capability.mode)) ||
           !start || start.id !== event.pointerId ||
           Math.hypot(event.clientX - start.x, event.clientY - start.y) < 6) return;
       const x = event.clientX, y = event.clientY;
@@ -737,9 +746,9 @@ export function createReaderBindings(readerContext) {
   function bindSelectionAndPageLifecycle() {
     document.addEventListener("selectionchange", () => {
       if (readerContext.pdfSelectionBoundaryUpdate ||
-          !["pdf", "pdf-pages"].includes(readerContext.capability.mode)) return;
+          !["pdf", "pdf-pages"].includes(/** @type {string} */ (readerContext.capability.mode))) return;
       const selection = document.getSelection();
-      if (!selection || selection.isCollapsed || !selection.rangeCount) return;
+      if (!selection || selection.isCollapsed || !selection.rangeCount || !selection.anchorNode || !selection.focusNode) return;
       const runs = [...readerContext.content.querySelectorAll(".reader-pdf-text-run")]
         .filter((run) => run.firstChild?.nodeType === Node.TEXT_NODE);
       if (!runs.length) return;
@@ -764,11 +773,12 @@ export function createReaderBindings(readerContext) {
       let low = 0, high = runs.length;
       while (low < high) {
         const middle = (low + high) >> 1;
-        if (focus.comparePoint(runs[middle].firstChild, 0) < 0) low = middle + 1;
+        if (focus.comparePoint(/** @type {Node} */ (runs[middle].firstChild), 0) < 0) low = middle + 1;
         else high = middle;
       }
       const target = beforeAnchor ? runs[Math.min(low, runs.length - 1)] : runs[Math.max(low - 1, 0)];
       const node = target.firstChild;
+      if (!(node instanceof Text)) return;
       readerContext.pdfSelectionBoundaryUpdate = true;
       try {
         selection.setBaseAndExtent(selection.anchorNode, selection.anchorOffset, node,
@@ -800,7 +810,7 @@ export function createReaderBindings(readerContext) {
     readerContext.progressTools.className = "reader-progress-tools";
     readerContext.progressTools.innerHTML =
       '<div class="reader-progress-row"><button class="reader-chapter-prev" type="button" aria-label="上一章" title="上一章"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m14 5-7 7 7 7"/></svg></button><input class="reader-progress-range" type="range" min="0" max="100" step="0.1" value="0" aria-label="阅读进度"><span class="reader-progress-percent">0.0%</span><button class="reader-progress-undo" type="button" aria-label="撤销进度调整" title="撤销进度调整"><svg viewBox="0 0 100 100" aria-hidden="true" focusable="false"><path fill="currentColor" stroke="none" d="M22 50.5a28.5 28.5 0 1 1 11.4 22.8l-5.3 5.3A36 36 0 1 0 14.5 50.5H3l16 16 16-16z"/><circle cx="50.5" cy="50.5" r="8" fill="currentColor" stroke="none"/></svg></button><button class="reader-chapter-next" type="button" aria-label="下一章" title="下一章"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m10 5 7 7-7 7"/></svg></button></div>';
-    document.querySelector("#history-panel").appendChild(readerContext.progressTools);
+    /** @type {Element} */ (document.querySelector("#history-panel")).appendChild(readerContext.progressTools);
   }
 
   function mountProgressSummary() {
@@ -808,9 +818,8 @@ export function createReaderBindings(readerContext) {
     readerContext.readingProgressSummary.innerHTML =
       '<strong>阅读状态</strong><span class="reader-progress-summary-value">0.0%</span><button class="reader-progress-bookmark text-action" type="button">在当前位置添加书签</button>';
     readerContext.progressTools.prepend(readerContext.readingProgressSummary);
-    readerContext.readingProgressSummary
-      .querySelector(".reader-progress-bookmark")
-      .addEventListener("click", (event) => readerContext.openBookmarkPopover(event.currentTarget));
+    /** @type {Element} */ (readerContext.readingProgressSummary.querySelector(".reader-progress-bookmark"))
+      .addEventListener("click", (event) => readerContext.openBookmarkPopover(event.currentTarget instanceof HTMLElement ? event.currentTarget : undefined));
 
     readerContext.updateReadingProgressSummary();
 
@@ -888,7 +897,8 @@ export function createReaderBindings(readerContext) {
     readerContext.start().catch((error) => {
       if (readerContext.readerAbortController.signal.aborted || error?.name === "AbortError") return;
       console.error(error);
-      readerContext.fail("阅读文件解析失败，请刷新后重试，或下载原文件。", readerContext.classifyReaderError(error));
+      const code = readerContext.classifyReaderError(error);
+      readerContext.fail("阅读文件解析失败，请刷新后重试，或下载原文件。", typeof code === "string" ? code : "READER_PARSE");
     });
   }
 

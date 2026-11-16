@@ -2,6 +2,8 @@ import {spawnSync} from 'node:child_process';
 import {hasPassingTapContracts} from '../check_tap_contracts.mjs';
 
 const required = [
+  'missing OCR manifest reports no concentrated text',
+  'missing OCR source rejects before constructing a search client',
   'scheduled idle prefetch must not cancel a pending foreground PDF search',
   'background prefetch cannot reject an active search or lose progress/session',
   'background prefetch cannot reject an active page',
@@ -17,12 +19,12 @@ if (result.stdout) process.stdout.write(result.stdout);
 if (result.stderr) process.stderr.write(result.stderr);
 if (result.error) console.error(result.error);
 const lines = (result.stdout || '').split(/\r?\n/);
-const summaries = ['1..6', '# tests 6', '# pass 6', '# fail 0', '# cancelled 0', '# skipped 0', '# todo 0'];
+const summaries = ['1..8', '# tests 8', '# pass 8', '# fail 0', '# cancelled 0', '# skipped 0', '# todo 0'];
 if (result.status !== 0 || result.error || lines[0] !== 'TAP version 13' || !hasPassingTapContracts(result.stdout || '', required) ||
     !summaries.every(line => lines.filter(item => item === line).length === 1) ||
     ['# tests ', '# pass ', '# fail ', '# cancelled ', '# skipped ', '# todo '].some(prefix =>
       lines.filter(line => line.startsWith(prefix)).length !== 1) ||
     lines.filter(line => /^1\.\.\d+/.test(line)).length !== 1) {
-  console.error('PDF prefetch requires six passing named contracts and complete TAP summary');
+  console.error('PDF prefetch requires eight passing named contracts and complete TAP summary');
   process.exitCode = 1;
 }
