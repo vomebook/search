@@ -30,7 +30,15 @@ class SegmentedScrollTests(unittest.TestCase):
           STATE.results=Array.from({length:100000},(_,i)=>({Repo:'VoiceOfML/Test',
             File:'row-'+i,Extension:'txt',Folder:[],Size:1}));
           STATE.total=100000;STATE.hasMore=false;STATE.isLoading=false;STATE._loadedPage=1000;
-          resetVirtualScrollState();renderResults();await scrollFrames();
+          const createRows=VoiceOfMLVirtualRows.create;
+          VoiceOfMLVirtualRows.create=(state,scroll,deps)=>{
+            window.segmentScroll=scroll;
+            return createRows(state,scroll,deps);
+          };
+          virtualResults=undefined;
+          try { resetVirtualScrollState(); }
+          finally { VoiceOfMLVirtualRows.create=createRows; }
+          renderResults();await scrollFrames();
           window.segmentSamples=[];
           window.checkSegment=()=>{
             const c=DOM.resultsContainer, box=c.getBoundingClientRect();
@@ -97,17 +105,17 @@ class SegmentedScrollTests(unittest.TestCase):
     def test_clamped_segment_end_skips_work_but_pending_target_still_restores(self):
         result = self.page.evaluate('''async()=>{
           setResultScrollTop(getVirtualTotalHeight(),true);await scrollFrames();
-          const origin=resultScrollOrigin,top=getResultScrollTop();
+          const origin=segmentScroll.origin,top=getResultScrollTop();
           const observer=new MutationObserver(()=>{});
           observer.observe(DOM.resultsList,{attributes:true,childList:true,subtree:true});
           const idle=renderVisible(),writes=observer.takeRecords().length;observer.disconnect();
           // Restore within the same rendered window and the same clamped segment.
           // A target must reach native scrollTop even when no origin change is needed.
-          const target=top-11;resultScrollTarget=target;
+          const target=top-11;segmentScroll.target=target;
           const restored=renderVisible();checkSegment();
-          return {idle,writes,restored,origin,sameOrigin:origin===resultScrollOrigin,
+          return {idle,writes,restored,origin,sameOrigin:origin===segmentScroll.origin,
             target,actual:getResultScrollTop(),physical:DOM.resultsContainer.scrollTop,
-            cleared:resultScrollTarget===null,samples:segmentSamples};
+            cleared:segmentScroll.target===null,samples:segmentSamples};
         }''')
         self.assertFalse(result['idle'])
         self.assertEqual(result['writes'], 0)
