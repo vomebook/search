@@ -73,6 +73,41 @@ class PositionWindowTests(unittest.TestCase):
         self.assertTrue(self.page.evaluate('windowCalls.every(page=>[1,498,499,500,501,248,249,250,251,252,253,254,255,256].includes(page))'))
         self.assertEqual(self.page.evaluate('getResultStableId(STATE.results[49850])'), 'VoiceOfML/Test\0paging-49850.txt')
 
+    def test_unloaded_anchor_stays_put_when_loaded_row_above_grows(self):
+        self.page.evaluate('windowStall=251;loadResultWindowPage(250);void 0')
+        self.page.wait_for_function('resultWindow.pages.has(250)')
+        self.jump(25000)
+        self.page.wait_for_function('!!window.releaseWindow')
+        result = self.page.evaluate('''async () => {
+          const frames=async()=>{for(let i=0;i<3;i++) await new Promise(requestAnimationFrame)};
+          await frames();
+          setResultScrollTop(getVirtualOffset(25000)+7,true);
+          await frames();
+          const top=getResultScrollTop(),index=findVirtualIndex(top),offset=top-getVirtualOffset(index);
+          const row=DOM.resultsList.querySelector('.result-item[data-index="24999"]');
+          const height=row.getBoundingClientRect().height;
+          row.style.setProperty('height',(height+20)+'px','important');
+          row.style.setProperty('box-sizing','border-box','important');
+          VSCROLL.measuredRowKeys[24999]=null;VSCROLL.measuredWindowKey='';
+          VSCROLL.renderStart=-1;VSCROLL.renderEnd=-1;renderVisible();
+          await frames();
+          return {index,offset,afterIndex:findVirtualIndex(getResultScrollTop()),
+            afterOffset:getResultScrollTop()-getVirtualOffset(25000),delta:getResultScrollTop()-top,
+            growth:VSCROLL.heights[24999]-height,
+            unloaded:!STATE.results[25000] && !(25000 in VSCROLL.heights),
+            pending:resultWindow.pending.has(251)};
+        }''')
+        self.assertTrue(result['unloaded'], result)
+        self.assertTrue(result['pending'], result)
+        self.assertEqual(result['index'], 25000, result)
+        self.assertAlmostEqual(result['offset'], 7, delta=1)
+        self.assertAlmostEqual(result['growth'], 20, delta=1)
+        self.assertEqual(result['afterIndex'], 25000, result)
+        self.assertAlmostEqual(result['afterOffset'], 7, delta=1)
+        self.assertAlmostEqual(result['delta'], 20, delta=1)
+        self.page.evaluate('windowStall=0;releaseWindow()')
+        self.wait_anchor(25000, 7)
+
     def test_gap_loading_invalidates_snapshot_bytes_and_keeps_prior_snapshot_independent(self):
         self.page.evaluate('window.beforeGap=saveSearchViewSnapshot()')
         self.jump(25050)

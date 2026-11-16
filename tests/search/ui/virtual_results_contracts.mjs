@@ -154,6 +154,37 @@ test('measured heights compensate one anchor and drag keeps geometry frozen', ()
   assert.equal(c.measureHeights(), false); assert.equal(c.VSCROLL.heights[0], 80);
 });
 
+test('sparse unloaded anchor keeps its index and offset when a loaded row above grows', () => {
+  for (const render of [false, true]) {
+    const f = fixture(300), {c, STATE, list, container} = f;
+    STATE.results = new Array(300);
+    STATE.results[99] = {File: 'row-99', height: 80};
+    c.resultWindow = {total: 300};
+    c.resetVirtualScrollState(); c.ensureVirtualHeights(300);
+    assert.equal(c.VSCROLL.heightBase, 60);
+    container.scrollTop = 6007;
+    assert.equal(c.findVirtualIndex(c.getResultScrollTop()), 100);
+    if (render) {
+      c.renderVisible();
+    } else {
+      c.VSCROLL.renderStart = 99; c.VSCROLL.renderEnd = 101;
+      list.append(c.createResultRow(STATE.results[99], 99));
+      assert.equal(c.measureHeights(), true);
+    }
+    const assertAnchor = () => {
+      assert.equal(c.VSCROLL.heights[99], 80);
+      assert.equal(100 in c.VSCROLL.heights, false);
+      assert.equal(c.getResultScrollTop(), 6027);
+      assert.equal(c.findVirtualIndex(c.getResultScrollTop()), 100);
+      assert.equal(c.getResultScrollTop() - c.getVirtualOffset(100), 7);
+      assert.equal(c.VSCROLL.lastScrollTop, 6027);
+    };
+    assertAnchor();
+    f.flush();
+    assertAnchor();
+  }
+});
+
 test('logical segmentation, restored velocity and append coverage retain exact bounds', () => {
   const f = fixture(100000), {c, container, list} = f;
   c.resultWindow = {total: 100000}; c.resetVirtualScrollState(); c.ensureVirtualHeights(100000);
