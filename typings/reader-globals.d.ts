@@ -497,7 +497,7 @@ interface SearchReaderNavigationApi {
     clear(url: URL): void;
     prepare(raw: string, returnUrl: string): URL;
     remember(url: URL, returnScroll: object, replace?: boolean): void;
-    mount(url: URL): HTMLIFrameElement;
+    mount(url: URL, deferTitle?: boolean): HTMLIFrameElement | null;
     unmount(keepSpeech?: boolean): HTMLElement | null;
     dismiss(): void;
     showCloseRecovery(raw: string): void;

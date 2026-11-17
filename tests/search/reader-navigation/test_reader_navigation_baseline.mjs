@@ -92,6 +92,96 @@ function shellFixture(destination = readerPath) {
     shell: () => document.body.children.find(child => child.className === 'reader-overlay-opening')};
 }
 
+test('deferred titles survive failed history and release only for the requested URL', () => {
+  const {nav, document, context} = shellFixture();
+  const url = new URL(origin + readerPath + '?id=book&title=Filename&nav=new');
+  const frame = nav.mount(url, true);
+  assert.equal(document.title, 'Search');
+  assert.equal(frame.title, 'Filename');
+  const push = context.history.pushState;
+  context.history.pushState = () => { throw new Error('push failed'); };
+  assert.throws(() => nav.remember(url, {}), /push failed/);
+  frame.contentDocument = {URL: url.href, title: 'Loaded title'};
+  frame.dispatchEvent(new Event('load'));
+  assert.equal(frame.title, 'Loaded title');
+  assert.equal(document.title, 'Search');
+  const message = new Event('message');
+  Object.assign(message, {origin, source: frame.contentWindow, data: {type: 'voice-reader-title', title: 'Resolved title'}});
+  context.window.dispatchEvent(message);
+  assert.equal(frame.title, 'Resolved title');
+  assert.equal(document.title, 'Search', 'messages cannot bypass a failed history write');
+  context.history.pushState = push;
+  nav.remember(new URL(origin + readerPath + '?id=other'), {});
+  assert.equal(document.title, 'Search', 'an unrelated history write cannot release the pending title');
+  nav.remember(url, {});
+  assert.equal(document.title, 'Resolved title');
+  nav.dismiss();
+  document.title = 'Browser traversal title';
+  nav.unmount(false);
+  assert.equal(document.title, 'Search', 'dismiss retains the original title for post-traversal unmount');
+});
+
+test('history reentry cannot release a newer mount of the same URL', () => {
+  const {nav, document, context} = shellFixture();
+  const url = new URL(origin + readerPath + '?id=book&title=Book');
+  nav.mount(url, true);
+  const push = context.history.pushState;
+  context.history.pushState = (...args) => {
+    push(...args);
+    nav.mount(url, true);
+  };
+  nav.remember(url, {});
+  assert.equal(document.title, 'Search');
+  context.history.pushState = push;
+  nav.remember(url, {});
+  assert.equal(document.title, 'Book');
+  nav.unmount(false);
+});
+
+test('direct mount yields to disposal reentry and keeps the newer title', () => {
+  const {nav, document} = shellFixture();
+  const first = nav.mount(new URL(origin + readerPath + '?id=first&title=First'));
+  let newest;
+  first.contentWindow.addEventListener('voice-reader-dispose', () => {
+    newest = nav.mount(new URL(origin + readerPath + '?id=newest&title=Newest'));
+  });
+  const result = nav.mount(new URL(origin + readerPath + '?id=stale&title=Stale'), true);
+  assert.equal(result, newest);
+  assert.equal(document.title, 'Newest');
+  assert.equal(document.body.children.filter(child => child.tagName === 'iframe').length, 1);
+  nav.unmount(false);
+  assert.equal(document.title, 'Search');
+});
+
+test('close during disposal cancels the in-flight mount even after frame ownership is released', () => {
+  const {nav, document, input} = shellFixture();
+  const first = nav.mount(new URL(origin + readerPath + '?id=first&title=First'));
+  first.contentWindow.addEventListener('voice-reader-dispose', () => {
+    assert.equal(nav.unmount(false), null);
+  });
+  const result = nav.mount(new URL(origin + readerPath + '?id=cancelled&title=Cancelled'), true);
+  assert.equal(result, null);
+  assert.equal(document.body.children.filter(child => child.tagName === 'iframe').length, 0);
+  assert.equal(document.body.classList.contains('reader-overlay-open'), false);
+  assert.equal(input.hasAttribute('inert'), false);
+  assert.equal(input.hasAttribute('aria-hidden'), false);
+  assert.equal(document.title, 'Search');
+  assert.equal(nav.returnFocus, null);
+  assert.equal(nav.backgroundReader, null);
+});
+
+test('replacement and history restoration publish titles without a deferred push', () => {
+  const {nav, document} = shellFixture();
+  nav.mount(new URL(origin + readerPath + '?id=first&title=First'));
+  assert.equal(document.title, 'First');
+  nav.replace(readerPath + '?id=second&title=Second', {});
+  assert.equal(document.title, 'Second');
+  nav.replace(readerPath + '?id=third&title=Third', {});
+  assert.equal(document.title, 'Third');
+  nav.unmount(false);
+  assert.equal(document.title, 'Search');
+});
+
 test('replacement revision preserves a Reader opened synchronously during disposal', () => {
   const {nav, document, input} = shellFixture();
   const first = nav.mount(new URL(origin + readerPath + '?id=first&nav=token&return=%2Fsearch%2F'));
