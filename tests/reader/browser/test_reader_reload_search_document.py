@@ -12,7 +12,7 @@ import threading
 import unittest
 from urllib.parse import urlencode, urlsplit
 
-from playwright.sync_api import sync_playwright
+from playwright.sync_api import expect, sync_playwright
 from tests.search.browser.test_paging_recovery import FETCH_SCRIPT
 
 
@@ -168,7 +168,8 @@ class ReaderReloadSearchDocumentCases:
         reader_url = self.page.url
         self.page.reload(wait_until='domcontentloaded')  # The one user Reader reload.
         self.page.locator('.reader-text').wait_for(state='visible')
-        self.assertIn('Reader history forward content.', self.page.locator('.reader-text').inner_text())
+        # Visibility can precede the first streamed text block.
+        expect(self.page.locator('.reader-text')).to_contain_text('Reader history forward content.')
         self.assertEqual(self.page.locator('iframe.reader-overlay').count(), 0)
         return reader_url
 
