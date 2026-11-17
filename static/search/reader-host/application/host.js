@@ -73,13 +73,16 @@
     /** @param {URL} url @param {boolean} [addHistory] */
     function openReaderOverlay(url, addHistory = true) {
       if (deps.hashRoute) addHistory = addHistory !== false;
-      revision++;
+      const owner = ++revision;
       if (addHistory && !position.scroll) {
         const saved = deps.captureScroll();
         position.setScroll(saved);
         snapshot = deps.saveSnapshot(saved?.viewKey || deps.getViewKey());
       }
-      overlay = navigation.mount(url);
+      const mounted = navigation.mount(url, addHistory);
+      if (revision !== owner) return;
+      overlay = mounted;
+      if (!overlay) return;
       uiState = "base";
       closing = false;
       if (addHistory) navigation.remember(url, /** @type {object} */ (position.scroll));

@@ -222,10 +222,12 @@ process.stdout.write(stripBundledScripts(readFileSync('static/index.html','utf8'
           duringReplace='second', stale='second', next='第二本.pdf - VoiceOfML Reader',
           dismissed='搜索原始标题', closed='搜索原始标题'))
 
-    def test_filename_is_set_before_reader_history_entry(self):
+    def test_connected_host_precedes_history_and_filename_follows_it(self):
         result = self.page.evaluate('''() => {
           const before=document.title, original=history.pushState, seen=[];
-          history.pushState=function(...args){seen.push({title:document.title,url:String(args[2])});return original.apply(this,args)};
+          history.pushState=function(...args){seen.push({title:document.title,url:String(args[2]),
+            connected:readerHost.overlay?.isConnected,
+            shaded:document.body.classList.contains('reader-overlay-open')});return original.apply(this,args)};
           try {
             navigateToReader('/search/static/reader.html?id=sample&ext=html&title=bb_204.html');
             const title=document.title, share=location.href;
@@ -234,9 +236,82 @@ process.stdout.write(stripBundledScripts(readFileSync('static/index.html','utf8'
           } finally {history.pushState=original}
         }''')
         self.assertEqual(result['title'], 'bb_204.html')
-        self.assertEqual(result['seen'][0]['title'], 'bb_204.html')
+        self.assertEqual(result['seen'][0]['title'], result['before'])
+        self.assertTrue(result['seen'][0]['connected'])
+        self.assertTrue(result['seen'][0]['shaded'])
         self.assertIn('title=bb_204.html', result['share'])
         self.assertEqual(result['restored'], result['before'])
+
+    def test_search_history_entry_keeps_its_title_across_reader_back_and_forward(self):
+        if self.fixture.browser.browser_type.name != 'chromium':
+            self.skipTest('CDP history entry titles require Chromium')
+        cdp = self.page.context.new_cdp_session(self.page)
+        def current_entry():
+            state = cdp.send('Page.getNavigationHistory')
+            return state['entries'][state['currentIndex']]
+        original = current_entry()
+        title = self.page.title()
+        self.page.evaluate('''() => {
+          const path = location.pathname.startsWith('/search/') ? '/search/static/reader.html' : '/static/reader.html';
+          navigateToReader(path + '?id=history-title&ext=txt&title=Book');
+        }''')
+        self.page.wait_for_function("readerHost.overlay?.contentDocument?.body?.textContent === 'reader'")
+        self.assertEqual(self.page.title(), 'Book')
+        search = next(entry for entry in cdp.send('Page.getNavigationHistory')['entries'] if entry['id'] == original['id'])
+        self.assertEqual(search['title'], title)
+        self.page.evaluate('''() => handleReaderMessage({origin:location.origin,source:readerHost.overlay.contentWindow,
+          data:{type:'voice-reader-close'}})''')
+        self.page.wait_for_function('!readerHost.overlay')
+        self.assertEqual(current_entry()['id'], original['id'])
+        self.assertEqual(current_entry()['title'], title)
+        self.assertEqual(self.page.title(), title)
+        self.page.evaluate('history.forward()')
+        self.page.wait_for_function("readerHost.overlay?.contentDocument?.body?.textContent === 'reader'")
+        self.assertEqual(self.page.title(), 'Book')
+        self.page.evaluate('history.back()')
+        self.page.wait_for_function('!readerHost.overlay')
+        self.assertEqual(current_entry()['id'], original['id'])
+        self.assertEqual(current_entry()['title'], title)
+        cdp.detach()
+
+    def test_open_yields_to_newer_reader_mounted_during_disposal(self):
+        result = self.page.evaluate('''() => {
+          const path = location.pathname.startsWith('/search/') ? '/search/static/reader.html' : '/static/reader.html';
+          const search = document.title;
+          navigateToReader(path + '?id=first&title=First');
+          readerHost.overlay.contentWindow.addEventListener('voice-reader-dispose', () => {
+            navigateToReader(path + '?id=newest&title=Newest');
+          });
+          navigateToReader(path + '?id=stale&title=Stale');
+          const result = {title:document.title,id:new URL(readerHost.overlay.src).searchParams.get('id'),
+            historyId:new URL(history.state.readerUrl).searchParams.get('id'),connected:readerHost.overlay.isConnected,
+            count:document.querySelectorAll('iframe.reader-overlay').length};
+          closeReaderOverlay();
+          return {...result,restored:document.title === search};
+        }''')
+        self.assertEqual(result, dict(title='Newest', id='newest', historyId='newest', connected=True, count=1, restored=True))
+
+    def test_close_during_disposal_cancels_open_without_orphan_or_history_push(self):
+        result = self.page.evaluate('''() => {
+          const path = location.pathname.startsWith('/search/') ? '/search/static/reader.html' : '/static/reader.html';
+          const title = document.title;
+          const background = Array.from(document.body.children).map(element => ({element,
+            inert:element.hasAttribute('inert'),hidden:element.getAttribute('aria-hidden')}));
+          navigateToReader(path + '?id=first&title=First');
+          const first = readerHost.overlay, url = location.href, state = JSON.stringify(history.state), length = history.length;
+          let closed = false;
+          first.contentWindow.addEventListener('voice-reader-dispose', () => { closed = closeReaderOverlay(); });
+          navigateToReader(path + '?id=cancelled&title=Cancelled');
+          return {closed,hostEmpty:readerHost.overlay===null,firstRemoved:!first.isConnected,
+            frames:document.querySelectorAll('iframe.reader-overlay').length,
+            openings:document.querySelectorAll('.reader-overlay-opening').length,
+            historyUnchanged:location.href===url && JSON.stringify(history.state)===state && history.length===length,
+            backgroundRestored:background.every(({element,inert,hidden}) => element.hasAttribute('inert')===inert &&
+              element.getAttribute('aria-hidden')===hidden),
+            unshaded:!document.body.classList.contains('reader-overlay-open'),titleRestored:document.title===title};
+        }''')
+        self.assertEqual(result, dict(closed=True, hostEmpty=True, firstRemoved=True, frames=0, openings=0,
+            historyUnchanged=True, backgroundRestored=True, unshaded=True, titleRestored=True))
 
     def test_older_embedded_reader_still_refreshes_host_title_on_load(self):
         # This is a title compatibility test, not a service-worker cache test.
@@ -274,13 +349,16 @@ process.stdout.write(stripBundledScripts(readFileSync('static/index.html','utf8'
           window.dispatchEvent(new MessageEvent('message',{origin:location.origin,source:frame.contentWindow,
             data:{type:'voice-reader-title',title:'后台迟到标题'}}));
           const late=document.title;navigateToReader(url);const reopened=document.title;
+          const reused=readerHost.overlay===frame, freshNav=history.state.readerUrl!==frame.src;
           readerNavigation.disposeBackground();closeReaderOverlay();
-          return {playing,parked,late,reopened};
+          return {playing,parked,late,reopened,reused,freshNav};
         }''')
         self.assertEqual(result['playing'], '朗读中.txt - VoiceOfML Reader')
         self.assertEqual(result['parked'], 'VoiceOfML Search')
         self.assertEqual(result['late'], 'VoiceOfML Search')
         self.assertEqual(result['reopened'], result['playing'])
+        self.assertTrue(result['reused'])
+        self.assertTrue(result['freshNav'])
 
     def test_foreground_opened_from_parked_reader_keeps_search_title(self):
         self.page.evaluate('navigateToReader("/search/static/reader.html?id=first-speech&ext=txt")')

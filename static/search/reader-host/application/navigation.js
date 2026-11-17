@@ -58,14 +58,20 @@
     /** @type {string | null} */
     let searchTitle = null;
     let titleDismissed = false;
+    // A fresh object identifies each mount, even when reusing a parked frame.
+    /** @type {{frame: HTMLIFrameElement; url: string; title: string; deferred: boolean} | null} */
+    let titleMount = null;
     function restoreTitle() {
       if (searchTitle !== null) document.title = searchTitle;
-      searchTitle = null;
     }
     /** @param {HTMLIFrameElement} target @param {unknown} title */
     function showTitle(target, title) {
       if (frame !== target || titleDismissed || typeof title !== "string" || !title.trim()) return;
       target.title = title;
+      if (titleMount?.frame === target) {
+        titleMount.title = title;
+        if (titleMount.deferred) return;
+      }
       if (document.title === title) return;
       document.title = title;
     }
@@ -239,6 +245,7 @@
     }
     /** @param {URL} url @param {object} returnScroll @param {boolean} [replace] */
     function remember(url, returnScroll, replace = false) {
+      const pending = titleMount;
       const share = new URL(url.href);
       share.searchParams.delete("return");
       share.searchParams.delete("nav");
@@ -257,6 +264,12 @@
         "",
         share.href
       );
+      // Publish only after history succeeds, and only for the mount it owned.
+      // A parked iframe may still have an older nav/return URL in its src.
+      if (pending && titleMount === pending && frame === pending.frame && pending.url === url.href) {
+        pending.deferred = false;
+        showTitle(pending.frame, pending.title);
+      }
     }
     /** @param {HTMLIFrameElement} current */
     function shade(current) {
@@ -275,18 +288,23 @@
           return state;
         });
     }
-    /** @param {URL} url */
-    function mount(url) {
-      revision++;
+    /** @param {URL} url @param {boolean} [deferTitle] @returns {HTMLIFrameElement | null} */
+    function mount(url, deferTitle = false) {
+      let owner = ++revision;
       const key = bookKey(url.href);
       if (parked && key && parked.key === key) {
         // The same book: show the Reader that kept reading, at its reading position.
-        if (frame && frame !== parked.frame) unmount(false);
+        if (frame && frame !== parked.frame) {
+          owner++;
+          unmount(false);
+          if (revision !== owner) return frame;
+        }
         const { frame: kept } = /** @type {NonNullable<ReturnType<typeof releaseParked>>} */ (releaseParked());
         returnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
         frame = kept;
         searchTitle = document.title;
         titleDismissed = false;
+        titleMount = { frame: kept, url: url.href, title: "", deferred: deferTitle };
         try { showTitle(kept, kept.contentDocument?.title); } catch (_) {}
         kept.classList.remove("reader-overlay-parked");
         kept.style.removeProperty("opacity");
@@ -294,16 +312,23 @@
         kept.removeAttribute("inert");
         kept.removeAttribute("aria-hidden");
         shade(kept);
+        if (revision !== owner) return frame;
         kept.focus();
+        if (revision !== owner) return frame;
         // Show the sentence being read (not the "回到原位置" toggle of the panel button).
         try { /** @type {Window} */ (kept.contentWindow).CCRDSpeech?.reveal?.(); } catch (_) {}
-        return kept;
+        return frame;
       }
       // A foreground Reader that is reading aloud becomes the background
       // Reader. A different book's background speech is left running until
       // the new Reader starts its own reading or the listener stops it.
-      if (frame) unmount(true);
+      if (frame) {
+        owner++;
+        unmount(true);
+        if (revision !== owner) return frame;
+      }
       if (parked && !speech(parked.frame)?.active) disposeParked();
+      if (revision !== owner) return frame;
       searchTitle = document.title;
       titleDismissed = false;
       const next = document.createElement("iframe");
@@ -313,8 +338,7 @@
       next.classList.add("reader-overlay-pending");
       returnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
       frame = next;
-      // The initial filename is known at the search click. Publish it before
-      // creating the history entry, instead of waiting for the iframe lookup.
+      titleMount = { frame: next, url: url.href, title: "", deferred: deferTitle };
       showTitle(next, initialTitle(url));
       opening = document.createElement("div");
       opening.className = "reader-overlay-opening";
@@ -357,9 +381,11 @@
         }
       );
       document.body.append(next, opening);
+      if (revision !== owner) return frame;
       back.focus();
+      if (revision !== owner) return frame;
       shade(next);
-      return next;
+      return frame;
     }
     /** @param {string} raw */
     function showCloseRecovery(raw) {
@@ -408,10 +434,14 @@
     }
     // `keepSpeech` parks a Reader that is reading aloud instead of disposing it.
     function unmount(keepSpeech = true) {
-      if (!frame) return null;
+      // A close during disposal must also cancel the mount awaiting that disposal.
       revision++;
+      if (!frame) return null;
       titleDismissed = true;
+      // Reapply after Back: the browser also stores a title on each entry.
       restoreTitle();
+      searchTitle = null;
+      titleMount = null;
       const target = frame;
       const keep = keepSpeech && !target.classList.contains("reader-overlay-pending") && speech(target)?.active;
       // Release ownership before lifecycle callbacks can synchronously reenter.
@@ -443,7 +473,9 @@
       const expected = revision + 1;
       const focus = unmount(bookKey(next.href) !== bookKey(current.href));
       if (revision !== expected) return frame;
+      const mounted = revision + 1;
       mount(next);
+      if (revision !== mounted) return frame;
       returnFocus = focus;
       return frame;
     }
