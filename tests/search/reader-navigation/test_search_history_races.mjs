@@ -183,7 +183,7 @@ test('prefetch abort reentry cannot clear the replacement group', () => {
 
 test('online first page prefetch starts pages two and three and path-only reuses the group', () => {
   const requests = [];
-  const c = fixture(['prefetchSearchPages'], {searchPrefetchAbortController:null,
+  const c = fixture(['getSearchPageMetadata', 'prefetchSearchPages'], {searchPrefetchAbortController:null,
     STATE:{_loadedPage:1,total:301,pageSize:100,_pageCache:{},results:[{}]},
     document:{hidden:false},navigator:{onLine:true},searchPageMetadata:new WeakMap(),
     getSearchViewKey:() => 'same-view',stableSearchStringify:JSON.stringify,
