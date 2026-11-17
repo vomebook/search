@@ -741,7 +741,10 @@ test("Pages test jobs materialize pinned data before consumers and preserve inde
     assert.match(source, /run: npm run data:prepare/);
     assert.ok(source.indexOf("run: npm run data:prepare") < source.indexOf(job === "github-search" ? "name: Check source" : "name: Check staged PDF"));
   }
-  assert.doesNotMatch(readerWorkflow, /paths-ignore:/);
+  const push = readerWorkflow.split('  push:\n')[1].split(/\n[^ \n]/, 1)[0];
+  assert.match(push, /^    branches: \["main"\]$/m);
+  // No path filter: even metadata-only and arbitrary production changes trigger.
+  assert.doesNotMatch(push, /^    paths(?:-ignore)?:/m);
   assert.match(readerWorkflow, /node --test tests\/search\/data\/test_search_generation_fetch\.mjs/);
   assert.equal(JSON.parse(fs.readFileSync("package.json", "utf8")).scripts["data:prepare"], "node scripts/data/prepare_test_data.mjs");
   assert.match(fs.readFileSync(".gitignore", "utf8"), /^\/data\/$/m);

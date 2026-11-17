@@ -22,7 +22,9 @@ FILES = ('backend-coverage-debt.json', 'strict-inventory-debt.json')
 
 
 def shell(name):
-    text = WORKFLOW.read_text().split('  huggingface-search:\n', 1)[1]
+    job = 'hf-capture' if name == 'Capture approved Hugging Face main' else 'huggingface-search'
+    text = WORKFLOW.read_text().split('  ' + job + ':\n', 1)[1]
+    text = re.split(r'\n  [a-zA-Z0-9_-]+:\s*\n', text, maxsplit=1)[0]
     block = text.split('      - name: ' + name + '\n', 1)[1]
     block = block.split('      - name:', 1)[0].split('      - uses:', 1)[0]
     return '\n'.join(line[10:] for line in block.split('        run: |\n', 1)[1].splitlines()) + '\n'
@@ -66,7 +68,7 @@ class HistoryShellTests(unittest.TestCase):
         self.anchor = self.git('rev-parse', 'HEAD')
         self.git('commit', '--allow-empty', '-qm', 'captured')
         self.revision = self.git('rev-parse', 'HEAD')
-        self.env.update(FAKE_REPO=str(self.source), FAKE_REV=self.revision)
+        self.env.update(FAKE_REPO=str(self.source), FAKE_REV=self.revision, CAPTURED_REVISION=self.revision)
         # Substitute fixture pins only in private copies of the actual scripts and lock.
         (self.work / 'scripts').mkdir()
         (self.work / '.github/quality-baselines').mkdir(parents=True)
@@ -144,7 +146,7 @@ if [[ "${BAD_HASH:-0}" == 1 ]]; then printf x >> "$output"; fi
     def assert_checkout_success(self, result):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(self.output.read_text(), 'revision=' + self.revision + '\n')
-        self.assertEqual(self.calls(), ['ls-remote', 'clone', 'lfs pull', 'lfs fsck'])
+        self.assertEqual(self.calls(), ['clone', 'lfs pull', 'lfs fsck'])
         self.assertEqual(subprocess.check_output(['/usr/bin/git', '-C', str(self.work / 'huggingface-search'), 'rev-parse', 'HEAD'], text=True).strip(), self.revision)
 
     def curl_calls(self, files=FILES):
@@ -157,6 +159,43 @@ if [[ "${BAD_HASH:-0}" == 1 ]]; then printf x >> "$output"; fi
         for name in FILES:
             self.assertEqual((self.runtime / 'hf-quality-baseline' / name).read_bytes(), (self.source / name).read_bytes())
 
+    def test_capture_and_shard_snapshot(self):
+        result = self.run_shell(shell('Capture approved Hugging Face main'))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.calls(), ['ls-remote'])
+        self.assertEqual(self.output.read_text(), 'revision=' + self.revision + '\n')
+        self.git('commit', '--allow-empty', '-qm', 'main moved')
+        self.env['FAKE_REV'] = self.git('rev-parse', 'HEAD')
+        for shard in ('static', 'core', 'loading', 'navigation', 'search'):
+            with self.subTest(shard=shard):
+                shutil.rmtree(self.work / 'huggingface-search', ignore_errors=True)
+                self.log.write_text('')
+                self.output.write_text('')
+                self.assert_checkout_success(self.checkout())
+                self.assert_verify_success(self.verify())
+
+    def test_capture_rejects_unapproved_and_output_failure(self):
+        self.env['FAKE_REV'] = self.anchor
+        result = self.run_shell(shell('Capture approved Hugging Face main'))
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('HF source admission failed', result.stderr)
+        self.assertEqual(self.calls(), ['ls-remote'])
+        self.assertEqual(self.output.read_text(), '')
+        self.env['FAKE_REV'] = self.revision
+        self.env['GITHUB_OUTPUT'] = '/dev/full'
+        result = self.run_shell(shell('Capture approved Hugging Face main'))
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('No space left', result.stderr)
+
+    def test_moved_head_rejects_baseline_before_download(self):
+        self.assert_checkout_success(self.checkout())
+        subprocess.run(['/usr/bin/git', '-C', str(self.work / 'huggingface-search'),
+                        'checkout', '--detach', self.anchor], check=True, capture_output=True)
+        result = self.verify()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('history selection failed', result.stderr)
+        self.assertEqual(self.calls(), ['clone', 'lfs pull', 'lfs fsck'])
+
     def test_new_history_selection_executes_same_workflow(self):
         self.select_pair('new')
         result = self.run_shell(shell('Checkout Hugging Face Search Space'))
@@ -166,14 +205,14 @@ if [[ "${BAD_HASH:-0}" == 1 ]]; then printf x >> "$output"; fi
     def test_filtered_history_preserves_source_admission_and_canonical_quality_lock(self):
         self.select_pair('filtered')
         checkout = shell('Checkout Hugging Face Search Space')
-        self.env['FAKE_REV'] = self.anchor
+        self.env['CAPTURED_REVISION'] = self.anchor
         result = self.run_shell(checkout)
         self.assertNotEqual(result.returncode, 0)
         self.assertIn('HF source admission failed', result.stderr)
-        self.assertEqual(self.calls(), ['ls-remote'])
+        self.assertEqual(self.calls(), [])
         self.assertEqual(self.output.read_text(), '')
         self.assertFalse((self.work / 'huggingface-search').exists())
-        self.env['FAKE_REV'] = self.revision
+        self.env['CAPTURED_REVISION'] = self.revision
         self.log.write_text('')
         self.assert_checkout_success(self.run_shell(checkout))
         lock_path = self.work / '.github/quality-baselines/hf-source.json'
@@ -239,7 +278,7 @@ if [[ "${BAD_HASH:-0}" == 1 ]]; then printf x >> "$output"; fi
                 self.env['FAIL_LFS'] = phase
                 result = self.checkout()
                 self.assertNotEqual(result.returncode, 0)
-                self.assertEqual(self.calls(), ['ls-remote', 'clone', 'lfs pull'] + (['lfs fsck'] if phase == 'fsck' else []))
+                self.assertEqual(self.calls(), ['clone', 'lfs pull'] + (['lfs fsck'] if phase == 'fsck' else []))
                 self.assertEqual(self.output.read_text(), '')
                 # A bypass of the LFS failure must not satisfy the failure contract.
                 bypass = shell('Checkout Hugging Face Search Space').replace('git -C huggingface-search lfs ' + phase, 'git -C huggingface-search lfs ' + phase + ' || true')
@@ -249,20 +288,20 @@ if [[ "${BAD_HASH:-0}" == 1 ]]; then printf x >> "$output"; fi
                 del self.env['FAIL_LFS']
 
     def test_capture_and_output_errors_stop(self):
-        self.env['FAKE_REV'] = 'f' * 40
+        self.env['CAPTURED_REVISION'] = 'f' * 40
         result = self.checkout()
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual(self.output.read_text(), '')
-        self.assertEqual(self.calls(), ['ls-remote'])
+        self.assertEqual(self.calls(), [])
         self.assertIn('HF source admission failed', result.stderr)
         self.assertFalse((self.work / 'huggingface-search').exists())
         self.log.write_text('')
-        self.env['FAKE_REV'] = self.revision
+        self.env['CAPTURED_REVISION'] = self.revision
         self.env['GITHUB_OUTPUT'] = '/dev/full'
         result = self.checkout()
         self.assertNotEqual(result.returncode, 0)
         self.assertIn('No space left', result.stderr)
-        self.assertEqual(self.calls(), ['ls-remote', 'clone', 'lfs pull', 'lfs fsck'])
+        self.assertEqual(self.calls(), ['clone', 'lfs pull', 'lfs fsck'])
 
     def test_unapproved_valid_descendant_stops_before_checkout_lfs_or_execution(self):
         # This capture has valid ancestry and would pass the existing bridge.
@@ -276,7 +315,7 @@ if [[ "${BAD_HASH:-0}" == 1 ]]; then printf x >> "$output"; fi
         def assert_rejected(result):
             self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
             self.assertIn('HF source admission failed', result.stderr)
-            self.assertEqual(self.calls(), ['ls-remote'])
+            self.assertEqual(self.calls(), [])
             self.assertEqual(self.output.read_text(), '')
             self.assertFalse((self.work / 'huggingface-search').exists())
 
@@ -301,7 +340,7 @@ if [[ "${BAD_HASH:-0}" == 1 ]]; then printf x >> "$output"; fi
                     # The descendant really passes history/LFS and reaches execution
                     # when admission is removed or its failure is ignored.
                     self.assertEqual(result.returncode, 0, result.stderr)
-                    self.assertEqual(self.calls(), ['ls-remote', 'clone', 'lfs pull',
+                    self.assertEqual(self.calls(), ['clone', 'lfs pull',
                                                     'lfs fsck', 'source execution'])
                 with self.assertRaises(AssertionError):
                     assert_rejected(result)
@@ -317,7 +356,7 @@ if [[ "${BAD_HASH:-0}" == 1 ]]; then printf x >> "$output"; fi
                 result = self.checkout()
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn('HF source admission failed', result.stderr)
-                self.assertEqual(self.calls(), ['ls-remote'])
+                self.assertEqual(self.calls(), [])
                 self.assertEqual(self.output.read_text(), '')
                 self.assertFalse((self.work / 'huggingface-search').exists())
 
@@ -342,7 +381,7 @@ if [[ "${BAD_HASH:-0}" == 1 ]]; then printf x >> "$output"; fi
         result = self.run_shell(shell('Verify independent Hugging Face quality baseline'))
         self.assertNotEqual(result.returncode, 0)
         self.assertIn('history selection failed', result.stderr)
-        self.assertEqual(self.calls(), ['ls-remote', 'clone', 'lfs pull', 'lfs fsck'])
+        self.assertEqual(self.calls(), ['clone', 'lfs pull', 'lfs fsck'])
 
 
 if __name__ == '__main__':

@@ -15,6 +15,22 @@ from scripts.check_sidebar_payload_regressions import TEST_NAMES, passed
 from scripts.verify_hf_quality_baseline import REQUIRED, validate_baselines
 
 
+def shard_condition(shard):
+    return "${{ !cancelled() && steps.setup-complete.outputs.ready == 'true' && matrix.shard == '" + shard + "' }}"
+
+
+def assert_required_shard(test, job, step, shard):
+    marker = ('      - name: Mark setup complete\n'
+              '        id: setup-complete\n'
+              '        run: echo \'ready=true\' >> "$GITHUB_OUTPUT"\n')
+    test.assertEqual(job.count(marker), 1)
+    test.assertLess(job.index(marker), job.index('      - name: ' + step + '\n'))
+    block = job.split('      - name: ' + step + '\n', 1)[1].split('      - name:', 1)[0]
+    test.assertEqual(re.findall(r'^        if: (.+)$', block, re.M), [shard_condition(shard)])
+    test.assertNotIn('continue-on-error:', block)
+    return block
+
+
 class ReaderWorkflowParallelTests(unittest.TestCase):
     def test_hf_coverage_interpreter_and_native_are_scoped(self):
         workflow = (Path(__file__).resolve().parents[2] / '.github/workflows/reader-refactor.yml').read_text()
@@ -31,6 +47,7 @@ class ReaderWorkflowParallelTests(unittest.TestCase):
         self.assertIn('indexes._native_decode_postings is native.decode_postings', quality)
         self.assertIn('sys.version_info[:3] == (3, 15, 2)', quality)
         self.assertIn('sys.version_info[:3] == (3, 12, 3)', quality)
+        assert_required_shard(self, hf, 'Check backend coverage and quality inventory', 'static')
         self.assert_hf_backend_invocations(quality)
 
     def assert_hf_backend_invocations(self, quality):
@@ -56,6 +73,24 @@ class ReaderWorkflowParallelTests(unittest.TestCase):
         self.assertIn(calls[2], scoped)
         self.assertNotIn('run_hf_quality_with_verified_baseline.py', scoped)
         self.assertNotIn('check_search_words_mutation.py', scoped)
+
+    def test_quality_shard_rejects_skips_and_setup_bypasses(self):
+        workflow = (Path(__file__).resolve().parents[2] / '.github/workflows/reader-refactor.yml').read_text()
+        hf = workflow.split('  huggingface-search:\n', 1)[1]
+        name = 'Check backend coverage and quality inventory'
+        assert_required_shard(self, hf, name, 'static')
+        prefix = '      - name: ' + name + '\n        if: '
+        condition = shard_condition('static')
+        for changed in (
+            hf.replace(prefix + condition, prefix + '${{ false }}', 1),
+            hf.replace(prefix + condition, prefix + condition + ' && false', 1),
+            hf.replace(prefix + condition, prefix + condition + '\n        continue-on-error: true', 1),
+            hf.replace("run: echo 'ready=true'", "run: echo 'ready=false'", 1),
+            hf.replace('        id: setup-complete\n', '        id: disabled-setup\n', 1),
+        ):
+            with self.subTest(changed=changed[:100]), self.assertRaises((AssertionError, ValueError)):
+                self.assertNotEqual(changed, hf)
+                assert_required_shard(self, changed, name, 'static')
 
     def test_hf_backend_contract_rejects_interpreter_and_selection_mutations(self):
         workflow = (Path(__file__).resolve().parents[2] / '.github/workflows/reader-refactor.yml').read_text()
@@ -121,7 +156,9 @@ class ReaderWorkflowParallelTests(unittest.TestCase):
                 self.assertLess(job.index(runner), job.index(following))
         self.assertNotIn('path: node_modules', hf)
         self.assertNotIn('continue-on-error:', hf)
-        self.assertNotIn('if:', hf)
+        self.assertNotIn('\n    if:', hf.split('    steps:\n', 1)[0])
+        self.assertIn("matrix:\n        shard: [static, core, loading, navigation, search]", hf)
+        self.assertIn('fail-fast: false', hf)
 
 
 class HfCheckoutCiTests(unittest.TestCase):
@@ -131,8 +168,7 @@ class HfCheckoutCiTests(unittest.TestCase):
         step = hf.split('      - name: Checkout Hugging Face Search Space\n', 1)[1].split('      - name:', 1)[0]
         commands = (
             'set -euo pipefail',
-            'refs=$(git ls-remote --exit-code --heads "$url" refs/heads/main)',
-            'revision=${BASH_REMATCH[1]}',
+            'revision="$CAPTURED_REVISION"',
             'python3 -I -B scripts/verify_hf_source_revision.py "$revision"',
             'GIT_LFS_SKIP_SMUDGE=1 git clone --single-branch --branch main --no-checkout "$url" huggingface-search',
             'GIT_LFS_SKIP_SMUDGE=1 git -C huggingface-search checkout --detach "$revision"',
@@ -153,8 +189,15 @@ class HfCheckoutCiTests(unittest.TestCase):
             self.assertLess(hf.index(admission), hf.index(later))
         self.assertNotIn('if:', step)
         self.assertNotIn('|| true', step)
-        self.assertIn('[[ "$refs" =~ ^([0-9a-f]{40})[[:space:]]+refs/heads/main$ ]]', step)
-        self.assertLess(step.index('git ls-remote'), step.index('git clone'))
+        capture = workflow.split('  hf-capture:\n', 1)[1].split('  huggingface-search:\n', 1)[0]
+        self.assertIn('refs=$(git ls-remote --exit-code --heads "$url" refs/heads/main)', capture)
+        self.assertIn('[[ "$refs" =~ ^([0-9a-f]{40})[[:space:]]+refs/heads/main$ ]]', capture)
+        self.assertIn('revision=${BASH_REMATCH[1]}', capture)
+        self.assertIn('python3 -I -B scripts/verify_hf_source_revision.py "$revision"', capture)
+        self.assertIn('revision: ${{ steps.capture.outputs.revision }}', capture)
+        self.assertIn('needs: hf-capture', hf)
+        self.assertIn('CAPTURED_REVISION: ${{ needs.hf-capture.outputs.revision }}', step)
+        self.assertNotIn('git ls-remote', step)
         self.assertLess(step.index('checkout --detach'), step.index('scripts/select_hf_history.py'))
         self.assertLess(step.index('scripts/select_hf_history.py'), step.index('lfs pull'))
         self.assertNotIn('continue-on-error:', step)
@@ -289,11 +332,15 @@ class HfHistoryBridgeTests(unittest.TestCase):
         self.assertLess(step.index('curl --fail'), step.index('verify_hf_quality_baseline.py'))
         self.assertNotIn('continue-on-error:', step)
         self.assertNotIn('|| true', step)
+        bridge_step = hf.split('      - name: Test Hugging Face history bridge\n', 1)[1].split('      - name:', 1)[0]
+        self.assertEqual(re.findall(r'^        if: (.+)$', bridge_step, re.M), ["${{ matrix.shard == 'static' }}"])
+        self.assertNotIn('continue-on-error:', bridge_step)
+        self.assertIn('tests.gates.test_hf_quality_baseline tests.gates.test_hf_history_shell', bridge_step)
+        self.assertLess(hf.index('Test Hugging Face history bridge'), hf.index('Checkout Hugging Face Search Space'))
         self.assertLess(hf.index('Verify independent Hugging Face quality baseline'), hf.index('Install Python dependencies'))
         self.assertLess(hf.index('Verify independent Hugging Face quality baseline'), hf.index('Install npm dependencies'))
         self.assertLess(hf.index('Verify independent Hugging Face quality baseline'), hf.index('Check source and exercise static gates'))
         before = hf.split('      - name: Verify independent Hugging Face quality baseline\n', 1)[0]
-        self.assertIn('tests.gates.test_hf_quality_baseline tests.gates.test_hf_history_shell', before)
         allowed = {'Test Hugging Face history bridge', 'Checkout Hugging Face Search Space'}
         self.assertEqual(set(re.findall(r'^      - name: (.+)$', before, re.M)), allowed)
         self.assertEqual(before.count('      - uses:'), 1)
@@ -303,7 +350,7 @@ class HfHistoryBridgeTests(unittest.TestCase):
 class DependencyLayoutCiTests(unittest.TestCase):
     def test_static_and_audit_dependencies_keep_distinct_pinned_install_paths(self):
         root = Path(__file__).resolve().parents[2]
-        self.assertEqual((root / "config/dependencies/static-check.txt").read_text().splitlines(), ["ruff==0.17.5"])
+        self.assertEqual((root / "config/dependencies/static-check.txt").read_text().splitlines(), ["ruff==0.17.5", "PyYAML==6.0.3"])
         audit = (root / ".github/workflows/dependency-audit.yml").read_text()
         self.assertIn('"config/dependencies/**"', audit)
         self.assertIn('python -m pip install -r config/dependencies/audit.txt', audit)
@@ -367,12 +414,14 @@ class PagesSearchBenchmarkCiTests(unittest.TestCase):
         workflow = (root / '.github/workflows/reader-refactor.yml').read_text()
         github = workflow.split('  github-search:\n', 1)[1].split('  firefox-staged-pdf:\n', 1)[0]
         step = ('      - name: Test offline Pages search benchmark\n'
+                '        if: ' + shard_condition('search') + '\n'
                 '        run: node --test tests/performance/test_benchmark_local_search.mjs\n')
         self.assertEqual(workflow.count(step), 1)
         self.assertIn(step, github)
         job_header = github.split('    steps:\n', 1)[0]
         benchmark_step = github.split('      - name: Test offline Pages search benchmark\n', 1)[1].split('      - name:', 1)[0]
-        self.assertEqual(benchmark_step, '        run: node --test tests/performance/test_benchmark_local_search.mjs\n')
+        self.assertEqual(benchmark_step, '        if: ' + shard_condition('search') + '\n        run: node --test tests/performance/test_benchmark_local_search.mjs\n')
+        assert_required_shard(self, github, 'Test offline Pages search benchmark', 'search')
         for option in ('if:', 'continue-on-error:', 'defaults:'):
             self.assertNotIn(option, job_header)
 
@@ -734,7 +783,7 @@ class HfSearchProjectionCiTests(unittest.TestCase):
                  '          node scripts/reader/check_reader_v3_mutations.mjs\n'
                  '          python3 -B tests/reader/pdf-v3/test_reader_v3_browser.py --browser chromium\n'
                  '          python3 -B tests/reader/pdf-v3/test_reader_v3_browser.py --browser firefox\n')
-        step = '      - name: Reader v3 gates\n{}        run: |\n' + gates
+        step = '      - name: Reader v3 gates\n        if: ' + shard_condition('core') + '\n{}        run: |\n' + gates
 
         def registered(text):
             self.assertNotIn('\n  defaults:', text)
@@ -743,9 +792,10 @@ class HfSearchProjectionCiTests(unittest.TestCase):
             self.assertEqual(text.count('      - name: Reader v3 gates\n'), 2)
             for job, directory in ((github, ''), (hf, '        working-directory: huggingface-search\n')):
                 self.assertNotIn('\n    defaults:', job)
-                self.assertNotIn('\n    if:', job)
+                self.assertNotIn('\n    if:', job.split('    steps:\n', 1)[0])
                 self.assertNotIn('\n    continue-on-error:', job)
-                expected = step.format(directory)
+                assert_required_shard(self, job, 'Reader v3 gates', 'core')
+                expected = step.replace('{}', directory)
                 self.assertEqual(job.count(expected), 1)
                 after = job.split(expected, 1)[1]
                 self.assertTrue(after.startswith('      - name: '))
@@ -762,8 +812,8 @@ class HfSearchProjectionCiTests(unittest.TestCase):
                              '      - name: Reader v3 gates\n        if: false\n', 1),
             workflow.replace('      - name: Reader v3 gates\n',
                              '      - name: Reader v3 gates\n        continue-on-error: true\n', 1),
-            workflow.replace('      - name: Reader v3 gates\n        working-directory: huggingface-search\n',
-                             '      - name: Reader v3 gates\n        working-directory: .\n', 1),
+            workflow.replace('      - name: Reader v3 gates\n        if: ' + shard_condition('core') + '\n        working-directory: huggingface-search\n',
+                             '      - name: Reader v3 gates\n        if: ' + shard_condition('core') + '\n        working-directory: .\n', 1),
         ]
         for changed in mutations:
             with self.subTest(changed=changed[:100]):
@@ -791,7 +841,8 @@ class HfSearchProjectionCiTests(unittest.TestCase):
         for job in (github, hf):
             self.assertEqual(job.splitlines().count(gate), 1)
             step = job[:job.index(gate)].rsplit('      - name:', 1)[1]
-            self.assertNotIn('if:', step)
+            self.assertEqual(re.findall(r'^        if: (.+)$', step, re.M), [shard_condition('core')])
+            assert_required_shard(self, job, 'Run chapter-search unit tests', 'core')
             self.assertNotIn('continue-on-error:', step)
         self.assertNotIn('node scripts/check_pdf_book_client_coverage.mjs', workflow)
         for gate in ('check_pdf_text_store_coverage.mjs', 'check_pdf_text_store_mutations.mjs'):

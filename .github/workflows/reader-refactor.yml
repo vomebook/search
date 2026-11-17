@@ -7,12 +7,22 @@ on:
   push:
     branches: ["main"]
 
+permissions:
+  contents: read
+  actions: read
+
 concurrency:
-  group: reader-refactor-sites
-  cancel-in-progress: true
+  # Do not cancel a running workflow; GitHub may replace an older pending run.
+  group: reader-refactor-sites-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   github-search:
+    name: github-search (${{ matrix.shard }})
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [static, core, loading, navigation, search]
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
@@ -92,7 +102,11 @@ jobs:
             "https://huggingface.co/spaces/VoiceOfML/Search/resolve/$revision/static/sw.js" \
             --output "$HF_SW_SOURCE"
           test -s "$HF_SW_SOURCE"
+      - name: Mark setup complete
+        id: setup-complete
+        run: echo 'ready=true' >> "$GITHUB_OUTPUT"
       - name: Check source and exercise static gates
+        if: ${{ !cancelled() && steps.setup-complete.outputs.ready == 'true' && matrix.shard == 'static' }}
         run: |
           npm run check:static
           npx --no-install pyright --project pyrightconfig.strict.json
@@ -102,12 +116,14 @@ jobs:
           python -B scripts/ci/run_static_gate_shards.py --project github
           python -B -m unittest -v tests.seo.test_seo_catalog
       - name: Reader v3 gates
+        if: ${{ !cancelled() && steps.setup-complete.outputs.ready == 'true' && matrix.shard == 'core' }}
         run: |
           node scripts/reader/check_reader_v3_coverage.mjs
           node scripts/reader/check_reader_v3_mutations.mjs
           python3 -B tests/reader/pdf-v3/test_reader_v3_browser.py --browser chromium
           python3 -B tests/reader/pdf-v3/test_reader_v3_browser.py --browser firefox
       - name: Run chapter-search unit tests
+        if: ${{ !cancelled() && steps.setup-complete.outputs.ready == 'true' && matrix.shard == 'core' }}
         run: |
           node tests/reader/core/test_reader_architecture.js
           node tests/reader/core/test_reader_regression.js
@@ -173,6 +189,7 @@ jobs:
           PDF_TEXT_STORE_TEST_BROWSER=firefox python3 -B tests/reader/pdf-search/test_pdf_text_store_browser.py
           node tests/reader/security/test_reader_css_sanitizer.mjs
       - name: Run Reader request and PDF loading regressions
+        if: ${{ !cancelled() && steps.setup-complete.outputs.ready == 'true' && matrix.shard == 'loading' }}
         run: |
           node scripts/reader/check_request_manager_coverage.mjs
           node scripts/reader/check_pdf_network_coverage.mjs
@@ -182,6 +199,7 @@ jobs:
           node tests/reader/pdf-network/test_reader_pdf_first_page_worker.mjs
           python3 -B -m unittest -v tests.reader.browser.test_reader_pdf_first_page tests.reader.browser.test_reader_pdf_history_race tests.reader.browser.test_reader_engine_preload tests.reader.browser.test_reader_pdf_loading tests.reader.browser.test_reader_pdf_followup tests.reader.browser.test_reader_close_traffic tests.reader.browser.test_reader_navigation_host
       - name: Check DjVu-only streams and image memory eviction
+        if: ${{ !cancelled() && steps.setup-complete.outputs.ready == 'true' && matrix.shard == 'loading' }}
         run: |
           node tests/reader/djvu/test_reader_djvu_only.mjs
           node tests/reader/djvu/test_reader_djvu_png.mjs
@@ -195,8 +213,10 @@ jobs:
           python3 -B -m unittest -v tests.performance.test_reader_djvu_benchmark tests.reader.browser.test_reader_djvu_range_browser
           node tests/reader/images/test_reader_image_memory.mjs
       - name: Run multi-format preparation and navigation gates
+        if: ${{ !cancelled() && steps.setup-complete.outputs.ready == 'true' && matrix.shard == 'navigation' }}
         run: python3 -B -m unittest -v tests.reader.browser.test_reader_format_pipeline tests.performance.test_reader_toc_latency tests.reader.browser.test_reader_close_responsiveness tests.reader.browser.test_reader_accessibility_browser tests.reader.browser.test_reader_formats tests.reader.browser.test_reader_conversions tests.reader.browser.test_reader_navigation
       - name: Check TOC landing ownership and cancellation
+        if: ${{ !cancelled() && steps.setup-complete.outputs.ready == 'true' && matrix.shard == 'navigation' }}
         run: |
           node tests/reader/chapters/test_reader_feynman_toc_reviewed.mjs
           python3 -B -m unittest -v \
@@ -206,8 +226,10 @@ jobs:
             tests.reader.browser.test_reader_toc_navigation.TocNavigationTests.test_landing_releases_on_reader_scroll \
             tests.reader.browser.test_reader_toc_navigation.TocNavigationTests.test_merged_chm_missing_toc_anchors_use_unique_in_book_links
       - name: Run search accessibility keyboard gates
+        if: ${{ !cancelled() && steps.setup-complete.outputs.ready == 'true' && matrix.shard == 'search' }}
         run: python3 -B -m unittest -v tests.search.browser.test_search_accessibility_browser tests.search.browser.test_sidebar_keyboard tests.search.browser.test_search_session_browser
       - name: Check search and Reader history ownership
+        if: ${{ !cancelled() && steps.setup-complete.outputs.ready == 'true' && matrix.shard == 'search' }}
         run: |
           node --test tests/search/session/test_search_session_contract.js tests/search/reader-navigation/test_search_history_races.mjs
           python3 -B -m unittest -v tests.reader.browser.test_reader_reload_search_document
@@ -216,24 +238,30 @@ jobs:
           SEARCH_SESSION_BROWSER=chromium python3 -B -m unittest -v tests.search.browser.test_session_transaction_browser
           SEARCH_SESSION_BROWSER=firefox python3 -B -m unittest -v tests.search.browser.test_session_transaction_browser
       - name: Check search position persistence and pagination recovery
+        if: ${{ !cancelled() && steps.setup-complete.outputs.ready == 'true' && matrix.shard == 'search' }}
         run: python3 -B -m unittest -v tests.search.browser.test_prefetch_pipeline tests.search.browser.test_search_positions
       - name: Check random reader pools and UI responsiveness
+        if: ${{ !cancelled() && steps.setup-complete.outputs.ready == 'true' && matrix.shard == 'search' }}
         run: |
           node tests/search/worker/test_worker_text.js
           node tests/search/worker/test_worker_contract.js
           node --test tests/search/worker/test_app_legacy_worker_boundary.mjs
           python3 -B -m unittest -v tests.reader.browser.test_converted_reader_responsiveness tests.search.browser.test_browser_smoke tests.search.browser.test_browser_sidebar_reorder tests.search.browser.test_browser_sidebar_reorder_discovery
       - name: Check initial payload routing in both browsers
+        if: ${{ !cancelled() && steps.setup-complete.outputs.ready == 'true' && matrix.shard == 'search' }}
         run: |
           SIDEBAR_PAYLOAD_TEST_BROWSER=chromium python3 -B scripts/check_sidebar_payload_regressions.py
           SIDEBAR_PAYLOAD_TEST_BROWSER=firefox python3 -B scripts/check_sidebar_payload_regressions.py
       - name: Check static dependency contracts
+        if: ${{ !cancelled() && steps.setup-complete.outputs.ready == 'true' && matrix.shard == 'static' }}
         run: node tests/gates/test_static_contract.js
       - name: Check Firefox footer counter geometry
+        if: ${{ !cancelled() && steps.setup-complete.outputs.ready == 'true' && matrix.shard == 'search' }}
         env:
           SEARCH_POSITION_BROWSER: firefox
         run: python3 -B -m unittest -v tests.search.browser.test_position_controls.PositionControlTests.test_footer_multi_digit_display_and_editor_do_not_overlap_total
       - name: Check warmed Reader shell reuse
+        if: ${{ !cancelled() && steps.setup-complete.outputs.ready == 'true' && matrix.shard == 'search' }}
         run: |
           node tests/service_worker/test_service_worker.js
           python3 -B -m unittest -v tests.service_worker.test_service_worker_integration.ServiceWorkerIntegrationTest.test_warmed_reader_shell_does_not_wait_for_slow_revalidation
@@ -241,30 +269,37 @@ jobs:
           python3 -B -m unittest -v tests.service_worker.test_service_worker_integration.ServiceWorkerIntegrationTest.test_first_install_rewarms_shell_after_delayed_controller_claim
           python3 -B -m unittest -v tests.service_worker.test_service_worker_integration.ServiceWorkerIntegrationTest.test_offline_cache_misses_reject_as_network_errors_and_cached_data_survives
       - name: Run Reader flow and cleanup regressions
+        if: ${{ !cancelled() && steps.setup-complete.outputs.ready == 'true' && matrix.shard == 'navigation' }}
         run: python3 -B -m unittest -v tests.reader.browser.test_reader_ebook_flow tests.performance.test_reader_toc_latency
       - name: Preserve Reader local history and bookmarks
+        if: ${{ !cancelled() && steps.setup-complete.outputs.ready == 'true' && matrix.shard == 'navigation' }}
         run: |
           node tests/reader/core/test_reader_store_channel.js
           python3 -B -m unittest -v tests.reader.browser.test_reader_store_preservation \
             tests.performance.test_reader_performance.ReaderPerformanceTest.test_reader_store_preserves_old_history_and_keeps_current_bookmarks
           READER_STORE_TEST_BROWSER=firefox python3 -B -m unittest -v tests.reader.browser.test_reader_store_preservation
       - name: Run chapter-bundle browser gate
+        if: ${{ !cancelled() && steps.setup-complete.outputs.ready == 'true' && matrix.shard == 'core' }}
         run: |
           node scripts/reader/check_reader_core_coverage.mjs
           node --test tests/reader/core/test_reader_bindings_boundary.mjs tests/reader/pdf-network/test_reader_pdf_engine_range_boundary.mjs tests/reader/pdf-v3/test_page_window_strict_helpers.mjs
           python3 -B -m unittest -v tests.reader.browser.test_reader_scroll_anchor_browser
           python3 -B -m unittest -v tests.reader.browser.test_reader_optimizations
       - name: Run chapter-search browser gate
+        if: ${{ !cancelled() && steps.setup-complete.outputs.ready == 'true' && matrix.shard == 'navigation' }}
         run: python3 -B -m unittest -v -k chapter_search tests.reader.browser.test_reader_refactor
       - name: Check DOM-search source contracts in Chromium and Firefox
+        if: ${{ !cancelled() && steps.setup-complete.outputs.ready == 'true' && matrix.shard == 'core' }}
         run: |
           python3 -B -m unittest -v tests.gates.test_reader_dom_search_gate
           python3 -B scripts/reader/check_reader_dom_search_contracts.py
       - name: Run PDF theme browser gate
+        if: ${{ !cancelled() && steps.setup-complete.outputs.ready == 'true' && matrix.shard == 'navigation' }}
         run: |
           python3 -B -m unittest -v -k test_pdf_page tests.reader.browser.test_reader_style
           python3 -B -m unittest -v tests.reader.browser.test_reader_style.ReaderStyleTests.test_page_inversion_remembers_explicit_choice_and_fits_sidebar
       - name: Check compact mobile panel and high-density pages
+        if: ${{ !cancelled() && steps.setup-complete.outputs.ready == 'true' && matrix.shard == 'navigation' }}
         run: |
           python3 -B -m unittest -v \
             tests.reader.browser.test_reader_style.ReaderStyleTests.test_mobile_panel_is_compact_and_folder_scrolls_with_directory \
@@ -285,6 +320,7 @@ jobs:
             tests.performance.test_reader_performance.ReaderPerformanceTest.test_late_pdf_outline_reconciles_reading_panel_without_losing_selected_tab \
             tests.performance.test_reader_performance.ReaderPerformanceTest.test_high_density_mobile_pdf_uses_backing_scale_without_distortion
       - name: Run Reader core, security and search data unit tests
+        if: ${{ !cancelled() && steps.setup-complete.outputs.ready == 'true' && matrix.shard == 'core' }}
         run: |
           node tests/reader/core/test_reader_models.js
           node tests/reader/core/test_reader_runtime.js
@@ -298,6 +334,7 @@ jobs:
           node tests/search/data/test_corpus_oracle.js
           node tests/search/data/test_data_integrity.js
       - name: Check Reader request timeout in Chromium
+        if: ${{ !cancelled() && steps.setup-complete.outputs.ready == 'true' && matrix.shard == 'loading' }}
         run: |
           python3 -B - <<'PY'
           import sys
@@ -309,8 +346,10 @@ jobs:
               sys.exit(1)
           PY
       - name: Test offline Pages search benchmark
+        if: ${{ !cancelled() && steps.setup-complete.outputs.ready == 'true' && matrix.shard == 'search' }}
         run: node --test tests/performance/test_benchmark_local_search.mjs
       - name: Check GitHub search paging and snapshot contracts
+        if: ${{ !cancelled() && steps.setup-complete.outputs.ready == 'true' && matrix.shard == 'search' }}
         env:
           SEARCH_TEST_PROJECT: github-Search
           SEARCH_TEST_ROOT: ${{ github.workspace }}
@@ -322,10 +361,13 @@ jobs:
           node tests/performance/test_snapshot_budget.js
           node tests/performance/test_next_page_latency.js
       - name: Run remaining Reader and search browser regressions
+        if: ${{ !cancelled() && steps.setup-complete.outputs.ready == 'true' && matrix.shard == 'search' }}
         run: python3 -B -m unittest -v tests.reader.browser.test_reader_layout tests.reader.browser.test_reader_lifecycle tests.reader.browser.test_reader_djvu_engine_bootstrap tests.reader.browser.test_reader_speech tests.search.browser.test_recent_search_pages tests.search.browser.test_segmented_scroll tests.search.browser.test_download_lifecycle tests.search.browser.test_api_integration tests.search.browser.test_paging_recovery tests.search.browser.test_position_window tests.search.browser.test_scroll_stability
       - name: Run full Reader refactor suite
+        if: ${{ !cancelled() && steps.setup-complete.outputs.ready == 'true' && matrix.shard == 'navigation' }}
         run: python3 -B -m unittest -v tests.reader.browser.test_reader_refactor
       - name: Check Reader JavaScript syntax
+        if: ${{ !cancelled() && steps.setup-complete.outputs.ready == 'true' && matrix.shard == 'static' }}
         run: |
           node --check static/reader.js
           node --check static/reader/search/workers/reader-chapter-search-worker.mjs
@@ -402,23 +444,48 @@ jobs:
           READER_TEST_BROWSER: firefox
         run: python3 -B -m unittest -v tests.reader.browser.test_reader_pdf_first_page tests.reader.browser.test_reader_pdf_history_race
 
-  huggingface-search:
+  hf-capture:
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
-    env:
-      READER_TEST_TIMEOUT_MS: "60000"
+    outputs:
+      revision: ${{ steps.capture.outputs.revision }}
     steps:
       - uses: actions/checkout@v7
-      - name: Test Hugging Face history bridge
-        run: python3 -B -m unittest -v tests.gates.test_hf_quality_baseline tests.gates.test_hf_history_shell tests.gates.test_hf_sealed_baseline tests.gates.test_hf_source_revision
-      - name: Checkout Hugging Face Search Space
-        id: hf-checkout
+      - name: Capture approved Hugging Face main
+        id: capture
         run: |
           set -euo pipefail
           url=https://huggingface.co/spaces/VoiceOfML/Search
           refs=$(git ls-remote --exit-code --heads "$url" refs/heads/main)
           [[ "$refs" =~ ^([0-9a-f]{40})[[:space:]]+refs/heads/main$ ]]
           revision=${BASH_REMATCH[1]}
+          python3 -I -B scripts/verify_hf_source_revision.py "$revision"
+          echo "revision=$revision" >> "$GITHUB_OUTPUT"
+
+  huggingface-search:
+    name: huggingface-search (${{ matrix.shard }})
+    needs: hf-capture
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [static, core, loading, navigation, search]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      READER_TEST_TIMEOUT_MS: "60000"
+    steps:
+      - uses: actions/checkout@v7
+      # This trusted pre-check remains before HF checkout and dependency setup.
+      - name: Test Hugging Face history bridge
+        if: ${{ matrix.shard == 'static' }}
+        run: python3 -B -m unittest -v tests.gates.test_hf_quality_baseline tests.gates.test_hf_history_shell tests.gates.test_hf_sealed_baseline tests.gates.test_hf_source_revision
+      - name: Checkout Hugging Face Search Space
+        id: hf-checkout
+        env:
+          CAPTURED_REVISION: ${{ needs.hf-capture.outputs.revision }}
+        run: |
+          set -euo pipefail
+          url=https://huggingface.co/spaces/VoiceOfML/Search
+          revision="$CAPTURED_REVISION"
           # Admit the complete captured commit before checkout, LFS or HF execution.
           # The final changed HF candidate needs a reviewed committed pin update.
           python3 -I -B scripts/verify_hf_source_revision.py "$revision"
@@ -514,7 +581,31 @@ jobs:
             # the same complete data/backend/browser gates below.
             echo "Captured HF revision uses checkout data"
           fi
+      - name: Build native search index for other shards
+        if: ${{ matrix.shard != 'static' }}
+        working-directory: huggingface-search
+        run: python -B scripts/build/build_search_index_native.py --output-dir .
+      - name: Install Playwright system dependencies
+        timeout-minutes: 15
+        working-directory: huggingface-search
+        run: python -m playwright install-deps chromium firefox
+      - name: Install Playwright browsers
+        timeout-minutes: 10
+        working-directory: huggingface-search
+        run: python -m playwright install chromium firefox
+      - name: Install pinned Foliate runtime
+        timeout-minutes: 10
+        working-directory: huggingface-search
+        run: node scripts/build/fetch_foliate_reader.mjs static/foliate-reader
+      - name: Install pinned Reader vendors
+        timeout-minutes: 5
+        working-directory: huggingface-search
+        run: node scripts/build/copy_reader_vendor.mjs static/vendor --foliate-output static/foliate-reader/vendor
+      - name: Mark setup complete
+        id: setup-complete
+        run: echo 'ready=true' >> "$GITHUB_OUTPUT"
       - name: Check source and exercise static gates
+        if: ${{ !cancelled() && steps.setup-complete.outputs.ready == 'true' && matrix.shard == 'static' }}
         working-directory: huggingface-search
         run: |
           npm run check:static
@@ -525,6 +616,7 @@ jobs:
           python -B scripts/check_test_inventory.py --project hf --reader-workflow ../.github/workflows/reader-refactor.yml
           python -B scripts/ci/run_static_gate_shards.py --project hf
       - name: Check backend coverage and quality inventory
+        if: ${{ !cancelled() && steps.setup-complete.outputs.ready == 'true' && matrix.shard == 'static' }}
         working-directory: huggingface-search
         env:
           CAPTURED_HF_REVISION: ${{ steps.hf-checkout.outputs.revision }}
@@ -603,23 +695,8 @@ jobs:
           python -B scripts/check_search_words_mutation.py --module search_bootstrap
           python -B scripts/check_search_words_mutation.py --module search_browse
           python -B scripts/check_search_words_mutation.py --module reader_archive
-      - name: Install Playwright system dependencies
-        timeout-minutes: 15
-        working-directory: huggingface-search
-        run: python -m playwright install-deps chromium firefox
-      - name: Install Playwright browsers
-        timeout-minutes: 10
-        working-directory: huggingface-search
-        run: python -m playwright install chromium firefox
-      - name: Install pinned Foliate runtime
-        timeout-minutes: 10
-        working-directory: huggingface-search
-        run: node scripts/build/fetch_foliate_reader.mjs static/foliate-reader
-      - name: Install pinned Reader vendors
-        timeout-minutes: 5
-        working-directory: huggingface-search
-        run: node scripts/build/copy_reader_vendor.mjs static/vendor --foliate-output static/foliate-reader/vendor
       - name: Reader v3 gates
+        if: ${{ !cancelled() && steps.setup-complete.outputs.ready == 'true' && matrix.shard == 'core' }}
         working-directory: huggingface-search
         run: |
           node scripts/reader/check_reader_v3_coverage.mjs
@@ -627,6 +704,7 @@ jobs:
           python3 -B tests/reader/pdf-v3/test_reader_v3_browser.py --browser chromium
           python3 -B tests/reader/pdf-v3/test_reader_v3_browser.py --browser firefox
       - name: Run chapter-search unit tests
+        if: ${{ !cancelled() && steps.setup-complete.outputs.ready == 'true' && matrix.shard == 'core' }}
         working-directory: huggingface-search
         run: |
           node tests/reader/core/test_reader_architecture.js
@@ -694,6 +772,7 @@ jobs:
           node tests/search/build/test_service_worker_cache_version.mjs
           node tests/reader/images/test_reader_jxl_progressive.mjs
       - name: Run Reader request and PDF loading regressions
+        if: ${{ !cancelled() && steps.setup-complete.outputs.ready == 'true' && matrix.shard == 'loading' }}
         working-directory: huggingface-search
         run: |
           node scripts/reader/check_request_manager_coverage.mjs
@@ -705,6 +784,7 @@ jobs:
           python3 -B -m unittest -v tests.reader.browser.test_reader_timeout
           python3 -B -m unittest -v tests.reader.browser.test_reader_pdf_first_page tests.reader.browser.test_reader_pdf_history_race tests.reader.browser.test_reader_engine_preload tests.reader.browser.test_reader_pdf_loading tests.reader.browser.test_reader_pdf_followup tests.reader.browser.test_reader_close_traffic tests.reader.browser.test_reader_navigation_host
       - name: Check DjVu-only streams and image memory eviction
+        if: ${{ !cancelled() && steps.setup-complete.outputs.ready == 'true' && matrix.shard == 'loading' }}
         working-directory: huggingface-search
         run: |
           node tests/reader/djvu/test_reader_djvu_only.mjs
@@ -720,9 +800,11 @@ jobs:
           node tests/reader/images/test_reader_image_memory.mjs
           python3 -B -m unittest -v tests.reader.browser.test_reader_pdf_hybrid
       - name: Run multi-format preparation and navigation gates
+        if: ${{ !cancelled() && steps.setup-complete.outputs.ready == 'true' && matrix.shard == 'navigation' }}
         working-directory: huggingface-search
         run: python3 -B -m unittest -v tests.reader.browser.test_reader_format_pipeline tests.performance.test_reader_toc_latency tests.reader.browser.test_reader_close_responsiveness tests.reader.browser.test_reader_accessibility_browser tests.reader.browser.test_reader_formats tests.reader.browser.test_reader_conversions tests.reader.browser.test_reader_navigation
       - name: Check TOC landing ownership and cancellation
+        if: ${{ !cancelled() && steps.setup-complete.outputs.ready == 'true' && matrix.shard == 'navigation' }}
         working-directory: huggingface-search
         run: |
           node tests/reader/chapters/test_reader_feynman_toc_reviewed.mjs
@@ -732,9 +814,11 @@ jobs:
             tests.reader.browser.test_reader_toc_navigation.TocNavigationTests.test_landing_holds_while_chapters_above_keep_growing \
             tests.reader.browser.test_reader_toc_navigation.TocNavigationTests.test_landing_releases_on_reader_scroll
       - name: Run search accessibility keyboard gates
+        if: ${{ !cancelled() && steps.setup-complete.outputs.ready == 'true' && matrix.shard == 'search' }}
         working-directory: huggingface-search
         run: python3 -B -m unittest -v tests.search.browser.test_search_accessibility_browser tests.search.browser.test_sidebar_keyboard tests.search.browser.test_search_session_browser
       - name: Check search and Reader history ownership
+        if: ${{ !cancelled() && steps.setup-complete.outputs.ready == 'true' && matrix.shard == 'search' }}
         working-directory: huggingface-search
         run: |
           node --test tests/search/session/test_search_session_contract.js tests/search/reader-navigation/test_search_history_races.mjs
@@ -745,14 +829,17 @@ jobs:
           SEARCH_SESSION_BROWSER=chromium python3 -B -m unittest -v tests.search.browser.test_session_transaction_browser
           SEARCH_SESSION_BROWSER=firefox python3 -B -m unittest -v tests.search.browser.test_session_transaction_browser
       - name: Check static dependency contracts
+        if: ${{ !cancelled() && steps.setup-complete.outputs.ready == 'true' && matrix.shard == 'static' }}
         working-directory: huggingface-search
         run: python3 -B -m unittest -v tests.gates.test_static_contract
       - name: Check Firefox footer counter geometry
+        if: ${{ !cancelled() && steps.setup-complete.outputs.ready == 'true' && matrix.shard == 'search' }}
         working-directory: huggingface-search
         env:
           SEARCH_POSITION_BROWSER: firefox
         run: python3 -B -m unittest -v tests.search.browser.test_position_controls.PositionControlTests.test_footer_multi_digit_display_and_editor_do_not_overlap_total
       - name: Run chapter-bundle browser gate
+        if: ${{ !cancelled() && steps.setup-complete.outputs.ready == 'true' && matrix.shard == 'core' }}
         working-directory: huggingface-search
         run: |
           node scripts/reader/check_reader_core_coverage.mjs
@@ -760,20 +847,24 @@ jobs:
           python3 -B -m unittest -v tests.reader.browser.test_reader_scroll_anchor_browser
           python3 -B -m unittest -v tests.reader.browser.test_reader_optimizations
       - name: Run chapter-search browser gate
+        if: ${{ !cancelled() && steps.setup-complete.outputs.ready == 'true' && matrix.shard == 'navigation' }}
         working-directory: huggingface-search
         run: python3 -B -m unittest -v -k chapter_search tests.reader.browser.test_reader_refactor
       - name: Check DOM-search source contracts in Chromium and Firefox
+        if: ${{ !cancelled() && steps.setup-complete.outputs.ready == 'true' && matrix.shard == 'core' }}
         working-directory: huggingface-search
         run: |
           python3 -B -m unittest -v tests.gates.test_reader_dom_search_gate
           python3 -B scripts/reader/check_reader_dom_search_contracts.py
       - name: Run PDF theme browser gate
+        if: ${{ !cancelled() && steps.setup-complete.outputs.ready == 'true' && matrix.shard == 'navigation' }}
         working-directory: huggingface-search
         run: |
           python3 -B -m unittest -v -k test_pdf_page tests.reader.browser.test_reader_style
           python3 -B -m unittest -v tests.reader.browser.test_reader_style.ReaderStyleTests.test_page_inversion_remembers_explicit_choice_and_fits_sidebar
           python3 -B -m unittest -v tests.reader.browser.test_reader_pdf_hybrid.DirectPdfPolicyTests.test_legacy_pdf_theme_and_inversion_stay_direct_without_page_images
       - name: Check compact mobile panel and high-density pages
+        if: ${{ !cancelled() && steps.setup-complete.outputs.ready == 'true' && matrix.shard == 'navigation' }}
         working-directory: huggingface-search
         run: |
           python3 -B -m unittest -v \
@@ -795,6 +886,7 @@ jobs:
             tests.performance.test_reader_performance.ReaderPerformanceTest.test_late_pdf_outline_reconciles_reading_panel_without_losing_selected_tab \
             tests.performance.test_reader_performance.ReaderPerformanceTest.test_high_density_mobile_pdf_uses_backing_scale_without_distortion
       - name: Run Reader proxy cancellation and cached-range gate
+        if: ${{ !cancelled() && steps.setup-complete.outputs.ready == 'true' && matrix.shard == 'loading' }}
         working-directory: huggingface-search
         run: |
           timeout 120s python3 -B - <<'PY'
@@ -811,9 +903,11 @@ jobs:
               sys.exit(1)
           PY
       - name: Run Reader upstream ownership gate
+        if: ${{ !cancelled() && steps.setup-complete.outputs.ready == 'true' && matrix.shard == 'loading' }}
         working-directory: huggingface-search
         run: timeout 120s python3 -B -m unittest -v tests.proxy.test_async_proxy tests.reader.backend.test_reader_range_flights tests.proxy.test_proxy_ownership tests.proxy.test_proxy_streams_contract tests.backend.test_coverage_safety tests.gates.test_lifespan_coverage_slice tests.reader.backend.test_reader_index_warming tests.search.backend.test_search_execution tests.search.browser.test_browser.BrowserInteractionTests.test_directory_tree_preview_stays_usable_during_slow_contents tests.search.browser.test_browser.BrowserInteractionTests.test_reader_back_closes_overlay_without_reloading_search
       - name: Run Reader core, security and search data unit tests
+        if: ${{ !cancelled() && steps.setup-complete.outputs.ready == 'true' && matrix.shard == 'core' }}
         working-directory: huggingface-search
         run: |
           node tests/reader/core/test_reader_models.js
@@ -828,6 +922,7 @@ jobs:
           node tests/service_worker/test_service_worker.js
           node tests/service_worker/test_service_worker_pruning.js
       - name: Check Hugging Face search paging and snapshot contracts
+        if: ${{ !cancelled() && steps.setup-complete.outputs.ready == 'true' && matrix.shard == 'search' }}
         env:
           SEARCH_TEST_PROJECT: huggingface-Search
           SEARCH_TEST_ROOT: ${{ github.workspace }}/huggingface-search
@@ -839,6 +934,7 @@ jobs:
           node tests/performance/test_snapshot_budget.js
           node tests/performance/test_next_page_latency.js
       - name: Run real backend and browser integration
+        if: ${{ !cancelled() && steps.setup-complete.outputs.ready == 'true' && matrix.shard == 'loading' }}
         working-directory: huggingface-search
         run: |
           python3 -B - <<'PY'
@@ -851,6 +947,7 @@ jobs:
               sys.exit(1)
           PY
       - name: Run additional Hugging Face search and Reader regressions
+        if: ${{ !cancelled() && steps.setup-complete.outputs.ready == 'true' && matrix.shard == 'navigation' }}
         working-directory: huggingface-search
         run: |
           python3 -B - <<'PY'
@@ -881,13 +978,148 @@ jobs:
               sys.exit(1)
           PY
       - name: Run remaining Reader and search browser regressions
+        if: ${{ !cancelled() && steps.setup-complete.outputs.ready == 'true' && matrix.shard == 'search' }}
         working-directory: huggingface-search
         run: python3 -B -m unittest -v tests.search.backend.test_search_filters_mutation_contract tests.data.test_generated_data_oracle tests.reader.browser.test_reader_layout tests.reader.browser.test_reader_lifecycle tests.reader.browser.test_reader_djvu_engine_bootstrap tests.reader.browser.test_reader_speech tests.search.browser.test_download_lifecycle tests.search.browser.test_mixed_folder_browser tests.search.browser.test_recent_search_pages tests.search.browser.test_scroll_stability tests.search.browser.test_paging_recovery tests.search.browser.test_position_window
       - name: Run full Reader refactor suite
+        if: ${{ !cancelled() && steps.setup-complete.outputs.ready == 'true' && matrix.shard == 'navigation' }}
         working-directory: huggingface-search
         run: python3 -B -m unittest -v tests.reader.browser.test_reader_refactor
       - name: Check Reader JavaScript syntax
+        if: ${{ !cancelled() && steps.setup-complete.outputs.ready == 'true' && matrix.shard == 'static' }}
         working-directory: huggingface-search
         run: |
           node --check static/reader.js
           node --check static/reader/search/workers/reader-chapter-search-worker.mjs
+
+  summary:
+    if: ${{ always() }}
+    needs: [github-search, firefox-staged-pdf, hf-capture, huggingface-search]
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Report and enforce all groups
+        env:
+          GITHUB_RESULT: ${{ needs.github-search.result }}
+          FIREFOX_RESULT: ${{ needs.firefox-staged-pdf.result }}
+          CAPTURE_RESULT: ${{ needs.hf-capture.result }}
+          HF_RESULT: ${{ needs.huggingface-search.result }}
+          GH_TOKEN: ${{ github.token }}
+          API_URL: ${{ github.api_url }}
+          REPOSITORY: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+          REPORT_PATH: ${{ runner.temp }}/reader-workflow-report.md
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import sys
+          import urllib.request
+
+          groups = {
+              'github-search': os.environ['GITHUB_RESULT'],
+              'firefox-staged-pdf': os.environ['FIREFOX_RESULT'],
+              'hf-capture': os.environ['CAPTURE_RESULT'],
+              'huggingface-search': os.environ['HF_RESULT'],
+          }
+          # Keep this explicit manifest synchronized with the matrix business steps.
+          # Contract tests must compare it with the workflow whenever steps change.
+          common_core = (
+              'Reader v3 gates', 'Run chapter-search unit tests',
+              'Run chapter-bundle browser gate', 'Check DOM-search source contracts in Chromium and Firefox',
+              'Run Reader core, security and search data unit tests',
+          )
+          business = {
+              'github-search': {
+                  'static': ('Check source and exercise static gates', 'Check static dependency contracts', 'Check Reader JavaScript syntax'),
+                  'core': common_core,
+                  'loading': ('Run Reader request and PDF loading regressions', 'Check DjVu-only streams and image memory eviction', 'Check Reader request timeout in Chromium'),
+                  'navigation': ('Run multi-format preparation and navigation gates', 'Check TOC landing ownership and cancellation', 'Run Reader flow and cleanup regressions', 'Preserve Reader local history and bookmarks', 'Run chapter-search browser gate', 'Run PDF theme browser gate', 'Check compact mobile panel and high-density pages', 'Run full Reader refactor suite'),
+                  'search': ('Run search accessibility keyboard gates', 'Check search and Reader history ownership', 'Check search position persistence and pagination recovery', 'Check random reader pools and UI responsiveness', 'Check initial payload routing in both browsers', 'Check Firefox footer counter geometry', 'Check warmed Reader shell reuse', 'Test offline Pages search benchmark', 'Check GitHub search paging and snapshot contracts', 'Run remaining Reader and search browser regressions'),
+              },
+              'huggingface-search': {
+                  'static': ('Test Hugging Face history bridge', 'Check source and exercise static gates', 'Check backend coverage and quality inventory', 'Check static dependency contracts', 'Check Reader JavaScript syntax'),
+                  'core': common_core,
+                  'loading': ('Run Reader request and PDF loading regressions', 'Check DjVu-only streams and image memory eviction', 'Run Reader proxy cancellation and cached-range gate', 'Run Reader upstream ownership gate', 'Run real backend and browser integration'),
+                  'navigation': ('Run multi-format preparation and navigation gates', 'Check TOC landing ownership and cancellation', 'Run chapter-search browser gate', 'Run PDF theme browser gate', 'Check compact mobile panel and high-density pages', 'Run additional Hugging Face search and Reader regressions', 'Run full Reader refactor suite'),
+                  'search': ('Run search accessibility keyboard gates', 'Check search and Reader history ownership', 'Check Firefox footer counter geometry', 'Check Hugging Face search paging and snapshot contracts', 'Run remaining Reader and search browser regressions'),
+              },
+          }
+          expected = {f'{group} ({shard})': ('Mark setup complete', *names)
+                      for group, shards in business.items() for shard, names in shards.items()}
+          lines = ['## Reader workflow results', '', '| Group | Result |', '| --- | --- |']
+          lines.extend(f'| {name} | {result} |' for name, result in groups.items())
+          lines.extend(['', '| Matrix job | Attempt | Result | Failed, skipped, or incomplete steps |', '| --- | --- | --- | --- |'])
+          failed = any(result != 'success' for result in groups.values())
+          jobs = {}
+          error = None
+          try:
+              base = (f"{os.environ['API_URL']}/repos/{os.environ['REPOSITORY']}/actions/runs/"
+                      f"{os.environ['RUN_ID']}/attempts")
+              for attempt in range(1, int(os.environ['RUN_ATTEMPT']) + 1):
+                  page = 1
+                  while True:
+                      request = urllib.request.Request(
+                          f'{base}/{attempt}/jobs?per_page=100&page={page}',
+                          headers={'Authorization': 'Bearer ' + os.environ['GH_TOKEN'],
+                                   'Accept': 'application/vnd.github+json',
+                                   'X-GitHub-Api-Version': '2022-11-28'},
+                      )
+                      with urllib.request.urlopen(request, timeout=30) as response:
+                          data = json.load(response)
+                      batch = data['jobs']
+                      if not isinstance(batch, list):
+                          raise ValueError('jobs API returned a non-list')
+                      for job in batch:
+                          if job.get('name') in expected:
+                              jobs.setdefault((attempt, job['name']), []).append(job)
+                      if len(batch) < 100:
+                          break
+                      page += 1
+          except Exception as exc:
+              error = f'{type(exc).__name__}: {exc}'
+              failed = True
+          def cell(value):
+              return str(value).replace('|', '&#124;').replace('\n', ' ').replace('\r', ' ')
+          for name in sorted(expected):
+              attempts = [attempt for attempt, job_name in jobs if job_name == name]
+              attempt = max(attempts) if attempts else None
+              matches = jobs.get((attempt, name), [])
+              if len(matches) != 1:
+                  lines.append(f'| {cell(name)} | {cell(attempt or "—")} | missing or duplicate ({len(matches)}) | — |')
+                  failed = True
+                  continue
+              job = matches[0]
+              result = job.get('conclusion') or job.get('status') or 'unknown'
+              steps = job.get('steps')
+              if not isinstance(steps, list) or not steps:
+                  lines.append(f'| {cell(name)} | {attempt} | {cell(result)} | missing step data |')
+                  failed = True
+                  continue
+              bad_steps = [f"{step.get('name', '?')}: {step.get('conclusion') or step.get('status') or 'unknown'}"
+                           for step in steps if step.get('conclusion') != 'success']
+              for required in expected[name]:
+                  matches = [step for step in steps if step.get('name') == required]
+                  if len(matches) != 1 or matches[0].get('conclusion') != 'success':
+                      observed = matches[0].get('conclusion') or matches[0].get('status') or 'unknown' if len(matches) == 1 else f'missing or duplicate ({len(matches)})'
+                      bad_steps.append(f'REQUIRED {required}: {observed}')
+                      failed = True
+              lines.append(f"| {cell(name)} | {attempt} | {cell(result)} | {cell('; '.join(bad_steps) or '—')} |")
+              if result != 'success' or any(step.get('conclusion') not in ('success', 'skipped') for step in steps):
+                  failed = True
+          if error:
+              lines.extend(['', f'Data incomplete — Jobs API error: {cell(error)}'])
+          report = '\n'.join(lines) + '\n'
+          with open(os.environ['REPORT_PATH'], 'w', encoding='utf-8') as output:
+              output.write(report)
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a', encoding='utf-8') as summary:
+              summary.write(report)
+          sys.exit(1 if failed else 0)
+          PY
+      - name: Upload Reader workflow report
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: reader-workflow-report-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/reader-workflow-report.md
+          if-no-files-found: error
