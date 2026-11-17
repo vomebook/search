@@ -2334,12 +2334,12 @@ class ReaderPerformanceTest(unittest.TestCase):
                 self.assertEqual(self.page.evaluate("""() => [window.__readerImage.onload,
                   window.__readerImage.onerror, window.__readerImage.getAttribute('src')]"""),
                                  [None, None, None])
-                self.assertEqual(len(proxy_requests), 1)
+                self.assertEqual(len(proxy_requests), 2)
                 self.assertEqual(urllib.parse.parse_qs(urllib.parse.urlsplit(proxy_requests[0]).query)["url"], [source])
                 self.assertEqual(direct_requests, [])
 
-                # Image errors have no automatic retry or in-page retry button.
-                # A manual browser reload must recover through the same proxy.
+                # After one automatic retry fails, manual reload must recover
+                # through the same proxy without a direct dataset request.
                 self.assertEqual(self.page.locator("#reader-engine-retry").count(), 0)
                 failed_url = self.page.url
                 proxy_available = True
@@ -2353,7 +2353,7 @@ class ReaderPerformanceTest(unittest.TestCase):
                 self.assertEqual(self.page.locator("#status").text_content(), "图片")
                 self.assertEqual(self.page.locator(".reader-error, .reader-loading-indicator").count(), 0)
                 self.assertEqual(self.page.url, failed_url)
-                self.assertEqual(proxy_requests, [proxy_requests[0]] * 2)
+                self.assertEqual(proxy_requests, [proxy_requests[0]] * 3)
                 self.page.evaluate("window.dispatchEvent(new PageTransitionEvent('pagehide', {persisted:false}))")
                 self.assertEqual(self.page.locator("html").get_attribute("data-reader-phase"), "disposed")
                 self.assertEqual(direct_requests, [])

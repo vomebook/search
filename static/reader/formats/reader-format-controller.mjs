@@ -202,7 +202,9 @@ export function createReaderFormatController(readerContext) {
         readerContext.assertReaderActive();
         const original = readerContext.resolvedReaderData?.original_extension;
         const originalExtension = typeof original === "string" ? original.toLowerCase() : "";
-        if (readerContext.capability.mode !== "image-pages" || !readerContext.validSource(readerContext.downloadUrl) ||
+        const mode = readerContext.capability.mode;
+        if ((mode !== "image-pages" && (mode !== "image" || readerContext.sourceUrl === readerContext.downloadUrl)) ||
+            !readerContext.validSource(readerContext.downloadUrl) ||
             !["jpg", "jpeg", "png", "gif", "bmp", "webp"].includes(originalExtension)) throw error;
         for (const cleanup of [...readerContext.readerResources]) {
           if (prepareResources.has(cleanup)) continue;

@@ -54,6 +54,25 @@ try {
     assert.equal(f.requests.length, 0);
   }
   {
+    const f = fixture();
+    const pending = f.loader.load(f.image, "https://assets.test/converted.webp", f.signal.signal, performance.now() + 500);
+    f.image.onerror();
+    await Promise.resolve();
+    assert.equal(f.image.src, "https://assets.test/converted.webp");
+    f.image.complete = true; f.image.naturalWidth = 1; f.image.onload();
+    assert.equal(await pending, f.image);
+    assert.equal(f.callbacks.size, 0);
+  }
+  {
+    const f = fixture();
+    const pending = f.loader.load(f.image, "https://assets.test/converted.webp", f.signal.signal, performance.now() + 500);
+    f.image.onerror();
+    await Promise.resolve();
+    f.image.onerror();
+    await assert.rejects(pending, /image load failed/);
+    assert.equal(f.callbacks.size, 0);
+  }
+  {
     const f = fixture(); f.setMode("http-error");
     await assert.rejects(f.loader.load(f.image, "https://assets.test/image.png", f.signal.signal,
       performance.now() + 1), {status: 503});
