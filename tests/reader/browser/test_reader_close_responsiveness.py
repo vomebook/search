@@ -45,7 +45,7 @@ class ReaderCloseResponsivenessTests(unittest.TestCase):
         self.page.locator('iframe.reader-overlay').wait_for(state='detached')
         self.assertEqual(self.page.title(), original)
 
-    def test_html_filename_preserves_search_history_before_embedded_reader_loads(self):
+    def test_html_filename_titles_search_history_before_embedded_reader_loads(self):
         self.page.set_viewport_size({'width':390,'height':844})
         source = 'https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/bb_204.html'
         self.page.route('**/api/reader-content**', lambda route: route.fulfill(content_type='text/html',
@@ -57,7 +57,7 @@ class ReaderCloseResponsivenessTests(unittest.TestCase):
           history.pushState=function(...args){atPush=document.title;return native.apply(this,args)};
           try{navigateToReader(url);return {atPush,title:document.title}}finally{history.pushState=native}
         }''',url)
-        self.assertEqual(state, dict(atPush=original,title='bb_204.html'))
+        self.assertEqual(state, dict(atPush='bb_204.html',title='bb_204.html'))
         frame=self.page.frame_locator('iframe.reader-overlay')
         frame.locator('html[data-reader-phase="ready"]').wait_for()
         self.page.wait_for_function("()=>document.title==='bb_204.html'")

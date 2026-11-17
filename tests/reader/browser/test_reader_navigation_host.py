@@ -222,7 +222,7 @@ process.stdout.write(stripBundledScripts(readFileSync('static/index.html','utf8'
           duringReplace='second', stale='second', next='第二本.pdf - VoiceOfML Reader',
           dismissed='搜索原始标题', closed='搜索原始标题'))
 
-    def test_filename_is_set_after_reader_history_entry_without_waiting_for_load(self):
+    def test_filename_is_set_before_reader_history_entry(self):
         result = self.page.evaluate('''() => {
           const before=document.title, original=history.pushState, seen=[];
           history.pushState=function(...args){seen.push({title:document.title,url:String(args[2])});return original.apply(this,args)};
@@ -234,44 +234,9 @@ process.stdout.write(stripBundledScripts(readFileSync('static/index.html','utf8'
           } finally {history.pushState=original}
         }''')
         self.assertEqual(result['title'], 'bb_204.html')
-        self.assertEqual(result['seen'][0]['title'], result['before'])
+        self.assertEqual(result['seen'][0]['title'], 'bb_204.html')
         self.assertIn('title=bb_204.html', result['share'])
         self.assertEqual(result['restored'], result['before'])
-
-    def test_native_history_title_survives_close_back_forward_and_reopen(self):
-        if self.fixture.browser.browser_type.name != 'chromium':
-            self.skipTest('Native history title inspection requires Chromium CDP')
-        cdp = self.fixture.context.new_cdp_session(self.page)
-        original = self.page.title()
-        search_url = self.page.url
-        path = '/search/static/reader.html'
-        self.page.route('**/static/reader.html?**', lambda route: route.fulfill(
-            content_type='text/html', body='''<title>Book.pdf</title><button id="back"
-              onclick="parent.postMessage({type:'voice-reader-close'},location.origin)">Back</button>'''))
-
-        def assert_search_title():
-            entries = cdp.send('Page.getNavigationHistory')['entries']
-            self.assertEqual([entry['title'] for entry in entries if entry['url'] == search_url], [original])
-
-        for close_action in ('button', 'back'):
-            self.page.evaluate('url => navigateToReader(url)', path + '?ext=pdf&title=Book.pdf')
-            self.page.wait_for_function("document.title === 'Book.pdf'")
-            assert_search_title()
-            if close_action == 'button':
-                self.page.frame_locator('.reader-overlay').locator('#back').click()
-            else:
-                self.page.evaluate('history.back()')
-            self.page.locator('.reader-overlay').wait_for(state='detached')
-            self.assertEqual(self.page.title(), original)
-            assert_search_title()
-            self.page.evaluate('history.forward()')
-            self.page.wait_for_function("document.title === 'Book.pdf'")
-            assert_search_title()
-            self.page.frame_locator('.reader-overlay').locator('#back').click()
-            self.page.locator('.reader-overlay').wait_for(state='detached')
-            self.assertEqual(self.page.title(), original)
-            assert_search_title()
-        cdp.detach()
 
     def test_older_embedded_reader_still_refreshes_host_title_on_load(self):
         # This is a title compatibility test, not a service-worker cache test.
