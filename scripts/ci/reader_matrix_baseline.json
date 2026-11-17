@@ -1,0 +1,995 @@
+{
+  "baseline_commit": "2a7436bf",
+  "baseline_workflow_sha256": "03bc625cb66d6c19010602be7c3c9504d1cb5647d15928405db20f82c24735ba",
+  "policy_notes": [
+    "Business fields and run hashes derive from git show 2a7436bf:.github/workflows/reader-refactor.yml.",
+    "Shard assignment and ordered setup allowlist are explicitly reviewed against the matrix workflow.",
+    "HF checkout now consumes hf-capture revision; native index build added for non-static shards.",
+    "Summary and hf-capture are explicitly fixed in full; Firefox job is preserved.",
+    "Candidate adds setup marker and summary manifest; HF pre-check and native build are reordered before marker; historical business steps and shard assignments unchanged."
+  ],
+  "job_ids": [
+    "github-search",
+    "firefox-staged-pdf",
+    "hf-capture",
+    "huggingface-search",
+    "summary"
+  ],
+  "fixed_jobs": {
+    "firefox-staged-pdf": {
+      "runs-on": "ubuntu-24.04",
+      "timeout-minutes": 30,
+      "env": {
+        "READER_TEST_TIMEOUT_MS": "15000"
+      },
+      "steps": [
+        {
+          "uses": "actions/checkout@v7"
+        },
+        {
+          "uses": "actions/setup-python@v7",
+          "with": {
+            "python-version": "3.15.2"
+          }
+        },
+        {
+          "uses": "actions/setup-node@v7",
+          "with": {
+            "node-version": "26.13.1"
+          }
+        },
+        {
+          "name": "Identify runner distribution",
+          "id": "distro",
+          "run": "echo \"version=$(. /etc/os-release; echo \"$ID-$VERSION_ID\")\" >> \"$GITHUB_OUTPUT\""
+        },
+        {
+          "name": "Cache pip downloads",
+          "uses": "actions/cache@v5",
+          "with": {
+            "path": "~/.cache/pip",
+            "key": "pip-${{ runner.os }}-${{ runner.arch }}-py315-${{ hashFiles('config/dependencies/static-check.txt') }}-pw1.63.0-pillow12.3.0-pypdf6.21.4-${{ github.job }}"
+          }
+        },
+        {
+          "name": "Cache npm downloads",
+          "uses": "actions/cache@v5",
+          "with": {
+            "path": "~/.npm",
+            "key": "npm-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('package-lock.json') }}-${{ github.job }}"
+          }
+        },
+        {
+          "name": "Cache Playwright browsers",
+          "uses": "actions/cache@v5",
+          "with": {
+            "path": "~/.cache/ms-playwright",
+            "key": "playwright-${{ runner.os }}-${{ runner.arch }}-${{ steps.distro.outputs.version }}-1.63.0-firefox"
+          }
+        },
+        {
+          "name": "Configure official Ubuntu mirrors",
+          "run": "set -euo pipefail\nif python3 -B scripts/ci/ci_ubuntu_mirror.py; then\n  tmp=$(sudo mktemp -d /etc/apt/.ci-mirrors.XXXXXX)\n  trap 'sudo rm -rf -- \"$tmp\"' EXIT\n  sudo install -o root -g root -m 0644 /dev/null \"$tmp/mirrors\"\n  printf '%s\\n' 'https://archive.ubuntu.com/ubuntu/ priority:1' 'https://security.ubuntu.com/ubuntu/ priority:2' | sudo tee \"$tmp/mirrors\" >/dev/null\n  sudo mv -f -- \"$tmp/mirrors\" /etc/apt/apt-mirrors.txt\nelse\n  echo \"::warning::Unrecognized runner mirror configuration; keeping default mirrors\"\nfi\n"
+        },
+        {
+          "name": "Install Python dependencies",
+          "timeout-minutes": 10,
+          "run": "python -m pip install playwright==1.63.0 Pillow==12.3.0 pypdf==6.21.4 -r config/dependencies/static-check.txt"
+        },
+        {
+          "name": "Install npm dependencies",
+          "timeout-minutes": 10,
+          "run": "npm ci --ignore-scripts --no-audit --no-fund"
+        },
+        {
+          "name": "Install qpdf",
+          "timeout-minutes": 10,
+          "run": "sudo apt-get update && sudo apt-get install -y qpdf"
+        },
+        {
+          "name": "Install Playwright system dependencies",
+          "timeout-minutes": 15,
+          "run": "python -m playwright install-deps firefox"
+        },
+        {
+          "name": "Install Playwright browsers",
+          "timeout-minutes": 10,
+          "run": "python -m playwright install firefox"
+        },
+        {
+          "name": "Install pinned Foliate runtime",
+          "timeout-minutes": 10,
+          "run": "node scripts/build/fetch_foliate_reader.mjs static/foliate-reader"
+        },
+        {
+          "name": "Install pinned Reader vendors",
+          "timeout-minutes": 5,
+          "run": "node scripts/build/copy_reader_vendor.mjs static/vendor --foliate-output static/foliate-reader/vendor"
+        },
+        {
+          "name": "Materialize pinned Pages test data and independent Reader sidecar",
+          "timeout-minutes": 10,
+          "run": "npm run data:prepare"
+        },
+        {
+          "name": "Check staged PDF opening in Firefox",
+          "env": {
+            "READER_TEST_BROWSER": "firefox"
+          },
+          "run": "python3 -B -m unittest -v tests.reader.browser.test_reader_pdf_first_page tests.reader.browser.test_reader_pdf_history_race"
+        }
+      ]
+    },
+    "hf-capture": {
+      "runs-on": "ubuntu-24.04",
+      "outputs": {
+        "revision": "${{ steps.capture.outputs.revision }}"
+      },
+      "steps": [
+        {
+          "uses": "actions/checkout@v7"
+        },
+        {
+          "name": "Capture approved Hugging Face main",
+          "id": "capture",
+          "run": "set -euo pipefail\nurl=https://huggingface.co/spaces/VoiceOfML/Search\nrefs=$(git ls-remote --exit-code --heads \"$url\" refs/heads/main)\n[[ \"$refs\" =~ ^([0-9a-f]{40})[[:space:]]+refs/heads/main$ ]]\nrevision=${BASH_REMATCH[1]}\npython3 -I -B scripts/verify_hf_source_revision.py \"$revision\"\necho \"revision=$revision\" >> \"$GITHUB_OUTPUT\"\n"
+        }
+      ]
+    },
+    "summary": {
+      "if": "${{ always() }}",
+      "needs": [
+        "github-search",
+        "firefox-staged-pdf",
+        "hf-capture",
+        "huggingface-search"
+      ],
+      "runs-on": "ubuntu-24.04",
+      "steps": [
+        {
+          "name": "Report and enforce all groups",
+          "env": {
+            "GITHUB_RESULT": "${{ needs.github-search.result }}",
+            "FIREFOX_RESULT": "${{ needs.firefox-staged-pdf.result }}",
+            "CAPTURE_RESULT": "${{ needs.hf-capture.result }}",
+            "HF_RESULT": "${{ needs.huggingface-search.result }}",
+            "GH_TOKEN": "${{ github.token }}",
+            "API_URL": "${{ github.api_url }}",
+            "REPOSITORY": "${{ github.repository }}",
+            "RUN_ID": "${{ github.run_id }}",
+            "RUN_ATTEMPT": "${{ github.run_attempt }}",
+            "REPORT_PATH": "${{ runner.temp }}/reader-workflow-report.md"
+          },
+          "run": "python3 - <<'PY'\nimport json\nimport os\nimport sys\nimport urllib.request\n\ngroups = {\n    'github-search': os.environ['GITHUB_RESULT'],\n    'firefox-staged-pdf': os.environ['FIREFOX_RESULT'],\n    'hf-capture': os.environ['CAPTURE_RESULT'],\n    'huggingface-search': os.environ['HF_RESULT'],\n}\n# Keep this explicit manifest synchronized with the matrix business steps.\n# Contract tests must compare it with the workflow whenever steps change.\ncommon_core = (\n    'Reader v3 gates', 'Run chapter-search unit tests',\n    'Run chapter-bundle browser gate', 'Check DOM-search source contracts in Chromium and Firefox',\n    'Run Reader core, security and search data unit tests',\n)\nbusiness = {\n    'github-search': {\n        'static': ('Check source and exercise static gates', 'Check static dependency contracts', 'Check Reader JavaScript syntax'),\n        'core': common_core,\n        'loading': ('Run Reader request and PDF loading regressions', 'Check DjVu-only streams and image memory eviction', 'Check Reader request timeout in Chromium'),\n        'navigation': ('Run multi-format preparation and navigation gates', 'Check TOC landing ownership and cancellation', 'Run Reader flow and cleanup regressions', 'Preserve Reader local history and bookmarks', 'Run chapter-search browser gate', 'Run PDF theme browser gate', 'Check compact mobile panel and high-density pages', 'Run full Reader refactor suite'),\n        'search': ('Run search accessibility keyboard gates', 'Check search and Reader history ownership', 'Check search position persistence and pagination recovery', 'Check random reader pools and UI responsiveness', 'Check initial payload routing in both browsers', 'Check Firefox footer counter geometry', 'Check warmed Reader shell reuse', 'Test offline Pages search benchmark', 'Check GitHub search paging and snapshot contracts', 'Run remaining Reader and search browser regressions'),\n    },\n    'huggingface-search': {\n        'static': ('Test Hugging Face history bridge', 'Check source and exercise static gates', 'Check backend coverage and quality inventory', 'Check static dependency contracts', 'Check Reader JavaScript syntax'),\n        'core': common_core,\n        'loading': ('Run Reader request and PDF loading regressions', 'Check DjVu-only streams and image memory eviction', 'Run Reader proxy cancellation and cached-range gate', 'Run Reader upstream ownership gate', 'Run real backend and browser integration'),\n        'navigation': ('Run multi-format preparation and navigation gates', 'Check TOC landing ownership and cancellation', 'Run chapter-search browser gate', 'Run PDF theme browser gate', 'Check compact mobile panel and high-density pages', 'Run additional Hugging Face search and Reader regressions', 'Run full Reader refactor suite'),\n        'search': ('Run search accessibility keyboard gates', 'Check search and Reader history ownership', 'Check Firefox footer counter geometry', 'Check Hugging Face search paging and snapshot contracts', 'Run remaining Reader and search browser regressions'),\n    },\n}\nexpected = {f'{group} ({shard})': ('Mark setup complete', *names)\n            for group, shards in business.items() for shard, names in shards.items()}\nlines = ['## Reader workflow results', '', '| Group | Result |', '| --- | --- |']\nlines.extend(f'| {name} | {result} |' for name, result in groups.items())\nlines.extend(['', '| Matrix job | Attempt | Result | Failed, skipped, or incomplete steps |', '| --- | --- | --- | --- |'])\nfailed = any(result != 'success' for result in groups.values())\njobs = {}\nerror = None\ntry:\n    base = (f\"{os.environ['API_URL']}/repos/{os.environ['REPOSITORY']}/actions/runs/\"\n            f\"{os.environ['RUN_ID']}/attempts\")\n    for attempt in range(1, int(os.environ['RUN_ATTEMPT']) + 1):\n        page = 1\n        while True:\n            request = urllib.request.Request(\n                f'{base}/{attempt}/jobs?per_page=100&page={page}',\n                headers={'Authorization': 'Bearer ' + os.environ['GH_TOKEN'],\n                         'Accept': 'application/vnd.github+json',\n                         'X-GitHub-Api-Version': '2022-11-28'},\n            )\n            with urllib.request.urlopen(request, timeout=30) as response:\n                data = json.load(response)\n            batch = data['jobs']\n            if not isinstance(batch, list):\n                raise ValueError('jobs API returned a non-list')\n            for job in batch:\n                if job.get('name') in expected:\n                    jobs.setdefault((attempt, job['name']), []).append(job)\n            if len(batch) < 100:\n                break\n            page += 1\nexcept Exception as exc:\n    error = f'{type(exc).__name__}: {exc}'\n    failed = True\ndef cell(value):\n    return str(value).replace('|', '&#124;').replace('\\n', ' ').replace('\\r', ' ')\nfor name in sorted(expected):\n    attempts = [attempt for attempt, job_name in jobs if job_name == name]\n    attempt = max(attempts) if attempts else None\n    matches = jobs.get((attempt, name), [])\n    if len(matches) != 1:\n        lines.append(f'| {cell(name)} | {cell(attempt or \"—\")} | missing or duplicate ({len(matches)}) | — |')\n        failed = True\n        continue\n    job = matches[0]\n    result = job.get('conclusion') or job.get('status') or 'unknown'\n    steps = job.get('steps')\n    if not isinstance(steps, list) or not steps:\n        lines.append(f'| {cell(name)} | {attempt} | {cell(result)} | missing step data |')\n        failed = True\n        continue\n    bad_steps = [f\"{step.get('name', '?')}: {step.get('conclusion') or step.get('status') or 'unknown'}\"\n                 for step in steps if step.get('conclusion') != 'success']\n    for required in expected[name]:\n        matches = [step for step in steps if step.get('name') == required]\n        if len(matches) != 1 or matches[0].get('conclusion') != 'success':\n            observed = matches[0].get('conclusion') or matches[0].get('status') or 'unknown' if len(matches) == 1 else f'missing or duplicate ({len(matches)})'\n            bad_steps.append(f'REQUIRED {required}: {observed}')\n            failed = True\n    lines.append(f\"| {cell(name)} | {attempt} | {cell(result)} | {cell('; '.join(bad_steps) or '—')} |\")\n    if result != 'success' or any(step.get('conclusion') not in ('success', 'skipped') for step in steps):\n        failed = True\nif error:\n    lines.extend(['', f'Data incomplete — Jobs API error: {cell(error)}'])\nreport = '\\n'.join(lines) + '\\n'\nwith open(os.environ['REPORT_PATH'], 'w', encoding='utf-8') as output:\n    output.write(report)\nwith open(os.environ['GITHUB_STEP_SUMMARY'], 'a', encoding='utf-8') as summary:\n    summary.write(report)\nsys.exit(1 if failed else 0)\nPY\n"
+        },
+        {
+          "name": "Upload Reader workflow report",
+          "if": "${{ always() }}",
+          "uses": "actions/upload-artifact@v4",
+          "with": {
+            "name": "reader-workflow-report-${{ github.run_attempt }}",
+            "path": "${{ runner.temp }}/reader-workflow-report.md",
+            "if-no-files-found": "error"
+          }
+        }
+      ]
+    }
+  },
+  "matrix_jobs": {
+    "github-search": {
+      "job_sha256": "399f57672c390037ea6c3fdd8d52e3efa54d6b10a5c85ec9c2a4a6aef2a1d49c",
+      "steps": [
+        {
+          "label": "actions/checkout@v7",
+          "setup": {
+            "uses": "actions/checkout@v7"
+          }
+        },
+        {
+          "label": "actions/setup-python@v7",
+          "setup": {
+            "uses": "actions/setup-python@v7",
+            "with": {
+              "python-version": "3.15.2"
+            }
+          }
+        },
+        {
+          "label": "actions/setup-node@v7",
+          "setup": {
+            "uses": "actions/setup-node@v7",
+            "with": {
+              "node-version": "26.13.1"
+            }
+          }
+        },
+        {
+          "label": "Identify runner distribution",
+          "setup": {
+            "name": "Identify runner distribution",
+            "id": "distro",
+            "run": "echo \"version=$(. /etc/os-release; echo \"$ID-$VERSION_ID\")\" >> \"$GITHUB_OUTPUT\""
+          }
+        },
+        {
+          "label": "Cache pip downloads",
+          "setup": {
+            "name": "Cache pip downloads",
+            "uses": "actions/cache@v5",
+            "with": {
+              "path": "~/.cache/pip",
+              "key": "pip-${{ runner.os }}-${{ runner.arch }}-py315-${{ hashFiles('config/dependencies/static-check.txt') }}-pw1.63.0-pillow12.3.0-pypdf6.21.4-${{ github.job }}"
+            }
+          }
+        },
+        {
+          "label": "Cache npm downloads",
+          "setup": {
+            "name": "Cache npm downloads",
+            "uses": "actions/cache@v5",
+            "with": {
+              "path": "~/.npm",
+              "key": "npm-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('package-lock.json') }}-${{ github.job }}"
+            }
+          }
+        },
+        {
+          "label": "Cache Playwright browsers",
+          "setup": {
+            "name": "Cache Playwright browsers",
+            "uses": "actions/cache@v5",
+            "with": {
+              "path": "~/.cache/ms-playwright",
+              "key": "playwright-${{ runner.os }}-${{ runner.arch }}-${{ steps.distro.outputs.version }}-1.63.0-chromium-firefox"
+            }
+          }
+        },
+        {
+          "label": "Configure official Ubuntu mirrors",
+          "setup": {
+            "name": "Configure official Ubuntu mirrors",
+            "run": "set -euo pipefail\nif python3 -B scripts/ci/ci_ubuntu_mirror.py; then\n  tmp=$(sudo mktemp -d /etc/apt/.ci-mirrors.XXXXXX)\n  trap 'sudo rm -rf -- \"$tmp\"' EXIT\n  sudo install -o root -g root -m 0644 /dev/null \"$tmp/mirrors\"\n  printf '%s\\n' 'https://archive.ubuntu.com/ubuntu/ priority:1' 'https://security.ubuntu.com/ubuntu/ priority:2' | sudo tee \"$tmp/mirrors\" >/dev/null\n  sudo mv -f -- \"$tmp/mirrors\" /etc/apt/apt-mirrors.txt\nelse\n  echo \"::warning::Unrecognized runner mirror configuration; keeping default mirrors\"\nfi\n"
+          }
+        },
+        {
+          "label": "Install Python dependencies",
+          "setup": {
+            "name": "Install Python dependencies",
+            "timeout-minutes": 10,
+            "run": "python -m pip install playwright==1.63.0 Pillow==12.3.0 pypdf==6.21.4 -r config/dependencies/static-check.txt"
+          }
+        },
+        {
+          "label": "Install npm dependencies",
+          "setup": {
+            "name": "Install npm dependencies",
+            "timeout-minutes": 10,
+            "run": "npm ci --ignore-scripts --no-audit --no-fund"
+          }
+        },
+        {
+          "label": "Install qpdf",
+          "setup": {
+            "name": "Install qpdf",
+            "timeout-minutes": 10,
+            "run": "sudo apt-get update && sudo apt-get install -y qpdf"
+          }
+        },
+        {
+          "label": "Install Playwright system dependencies",
+          "setup": {
+            "name": "Install Playwright system dependencies",
+            "timeout-minutes": 15,
+            "run": "python -m playwright install-deps chromium firefox"
+          }
+        },
+        {
+          "label": "Install Playwright browsers",
+          "setup": {
+            "name": "Install Playwright browsers",
+            "timeout-minutes": 10,
+            "run": "python -m playwright install chromium firefox"
+          }
+        },
+        {
+          "label": "Install pinned Foliate runtime",
+          "setup": {
+            "name": "Install pinned Foliate runtime",
+            "timeout-minutes": 10,
+            "run": "node scripts/build/fetch_foliate_reader.mjs static/foliate-reader"
+          }
+        },
+        {
+          "label": "Install pinned Reader vendors",
+          "setup": {
+            "name": "Install pinned Reader vendors",
+            "timeout-minutes": 5,
+            "run": "node scripts/build/copy_reader_vendor.mjs static/vendor --foliate-output static/foliate-reader/vendor"
+          }
+        },
+        {
+          "label": "Materialize pinned Pages test data and independent Reader sidecar",
+          "setup": {
+            "name": "Materialize pinned Pages test data and independent Reader sidecar",
+            "timeout-minutes": 10,
+            "run": "npm run data:prepare"
+          }
+        },
+        {
+          "label": "Fetch reviewed HF worker for cross-site cache tests",
+          "setup": {
+            "name": "Fetch reviewed HF worker for cross-site cache tests",
+            "timeout-minutes": 2,
+            "run": "set -euo pipefail\nrevision=$(python3 -I -B -c 'import json; print(json.load(open(\".github/hf-source-revision.json\"))[\"revision\"])')\npython3 -I -B scripts/verify_hf_source_revision.py \"$revision\"\nHF_SW_SOURCE=\"$RUNNER_TEMP/hf-service-worker/sw.js\"\nprintf 'HF_SW_SOURCE=%s\\n' \"$HF_SW_SOURCE\" >> \"$GITHUB_ENV\"\nmkdir -p \"$(dirname \"$HF_SW_SOURCE\")\"\ncurl --fail --location --silent --show-error --max-time 60 \\\n  \"https://huggingface.co/spaces/VoiceOfML/Search/resolve/$revision/static/sw.js\" \\\n  --output \"$HF_SW_SOURCE\"\ntest -s \"$HF_SW_SOURCE\"\n"
+          }
+        },
+        {
+          "label": "Mark setup complete",
+          "setup": {
+            "name": "Mark setup complete",
+            "id": "setup-complete",
+            "run": "echo 'ready=true' >> \"$GITHUB_OUTPUT\""
+          }
+        },
+        {
+          "fields": {
+            "name": "Check source and exercise static gates"
+          },
+          "run_sha256": "37f61dfa2cbd8e3e9f572547202460bdcd46340bf9e436c91b242612fe36b05a",
+          "shard": "static"
+        },
+        {
+          "fields": {
+            "name": "Reader v3 gates"
+          },
+          "run_sha256": "255bca0b9a3bcffa1f773b01416a4bb9843377ff67415be767c9f6b588fd2191",
+          "shard": "core"
+        },
+        {
+          "fields": {
+            "name": "Run chapter-search unit tests"
+          },
+          "run_sha256": "cb72e395bba4479acdcaaa57cd2745a9046de2598a5386b63da07a5d599263ed",
+          "shard": "core"
+        },
+        {
+          "fields": {
+            "name": "Run Reader request and PDF loading regressions"
+          },
+          "run_sha256": "58f91b925aa0b2ecf550118df3b7322a47db204d3f9d88a1b48272c5b1f3d292",
+          "shard": "loading"
+        },
+        {
+          "fields": {
+            "name": "Check DjVu-only streams and image memory eviction"
+          },
+          "run_sha256": "c0f9109e556a7ed3a3afd57c171e53bc2c4e0d56afeac5e123408f64c649dc56",
+          "shard": "loading"
+        },
+        {
+          "fields": {
+            "name": "Run multi-format preparation and navigation gates"
+          },
+          "run_sha256": "83fa8f6f5551ea2e1ecca03500c1a12addbb366cc31afaf2c4668e9bf22a1df8",
+          "shard": "navigation"
+        },
+        {
+          "fields": {
+            "name": "Check TOC landing ownership and cancellation"
+          },
+          "run_sha256": "d4311726f2857736d5736580fc52c0fd3c95c95dffce1a3e463aa98b2f9ab351",
+          "shard": "navigation"
+        },
+        {
+          "fields": {
+            "name": "Run search accessibility keyboard gates"
+          },
+          "run_sha256": "2b08eb8b502433c5c8930a773fe4e6e2286ee4167fab27f5bdefb12044130d7b",
+          "shard": "search"
+        },
+        {
+          "fields": {
+            "name": "Check search and Reader history ownership"
+          },
+          "run_sha256": "cbf7daa3c18cafa544d96669fab8c59f39acf6d3a2d2e208fca91c8cc66c7119",
+          "shard": "search"
+        },
+        {
+          "fields": {
+            "name": "Check search position persistence and pagination recovery"
+          },
+          "run_sha256": "938d3cf8ba654cd5aa0173076442387a12890697e0096199ed48fd6de2c0d088",
+          "shard": "search"
+        },
+        {
+          "fields": {
+            "name": "Check random reader pools and UI responsiveness"
+          },
+          "run_sha256": "f3e33677728d90ed7e84fe16242d78c514e10e483366232916b3d6e2a04d64d8",
+          "shard": "search"
+        },
+        {
+          "fields": {
+            "name": "Check initial payload routing in both browsers"
+          },
+          "run_sha256": "9e069ff09f87ccf82dd183554cdfa222d61ed17212ca5ef5841579bb1c0e9d9b",
+          "shard": "search"
+        },
+        {
+          "fields": {
+            "name": "Check static dependency contracts"
+          },
+          "run_sha256": "3410069e6b830d0e48def5b2389b63980f76675b0e8d665b195bc275f0b74d92",
+          "shard": "static"
+        },
+        {
+          "fields": {
+            "name": "Check Firefox footer counter geometry",
+            "env": {
+              "SEARCH_POSITION_BROWSER": "firefox"
+            }
+          },
+          "run_sha256": "ae110c6dacfae3828832fb1077583db90f4211908d79bb3467bfc7ed42201f6d",
+          "shard": "search"
+        },
+        {
+          "fields": {
+            "name": "Check warmed Reader shell reuse"
+          },
+          "run_sha256": "ff744b172c76ac64e7ed3ddd4caffb1e443956bedf2a37a7e5c52ec529755f24",
+          "shard": "search"
+        },
+        {
+          "fields": {
+            "name": "Run Reader flow and cleanup regressions"
+          },
+          "run_sha256": "c0f92227f1d8fb0dc3bc4f23ed993058685525b31ad6196c1cb3b12b8d1561bd",
+          "shard": "navigation"
+        },
+        {
+          "fields": {
+            "name": "Preserve Reader local history and bookmarks"
+          },
+          "run_sha256": "04e4247e05744039bc3c1911e370ae413b07ad48037684c5f31912c72f623666",
+          "shard": "navigation"
+        },
+        {
+          "fields": {
+            "name": "Run chapter-bundle browser gate"
+          },
+          "run_sha256": "dbfa37170eebc8f388273323136224302f23fceb4531a632a43d13f1fcfe6084",
+          "shard": "core"
+        },
+        {
+          "fields": {
+            "name": "Run chapter-search browser gate"
+          },
+          "run_sha256": "87ef30fb3b6895fb96f66fca29edc06851781e2aff74451d8e5c18dff2d6a530",
+          "shard": "navigation"
+        },
+        {
+          "fields": {
+            "name": "Check DOM-search source contracts in Chromium and Firefox"
+          },
+          "run_sha256": "cef605bc113ff4b0b319230a3eb3ca34a8a28e8ef3aafed1b6d3579aeb667939",
+          "shard": "core"
+        },
+        {
+          "fields": {
+            "name": "Run PDF theme browser gate"
+          },
+          "run_sha256": "4b30c0616ec97a9db4bf80065bd1f9c20e5e6bbc7fdec8ad41e8e4b3432b9aaa",
+          "shard": "navigation"
+        },
+        {
+          "fields": {
+            "name": "Check compact mobile panel and high-density pages"
+          },
+          "run_sha256": "b37a5caf1bcd02ae00f6f32a038e70b5149e4d955d858d12ef70e8acd21a40bb",
+          "shard": "navigation"
+        },
+        {
+          "fields": {
+            "name": "Run Reader core, security and search data unit tests"
+          },
+          "run_sha256": "8eac63c64624507bd202d38c74d29f9dacb9dd5b207d7b1e4741758064991805",
+          "shard": "core"
+        },
+        {
+          "fields": {
+            "name": "Check Reader request timeout in Chromium"
+          },
+          "run_sha256": "2ed84b14129437f3c7fce3f1c2803fb1751378f5c3de46d135613ebc001d51d2",
+          "shard": "loading"
+        },
+        {
+          "fields": {
+            "name": "Test offline Pages search benchmark"
+          },
+          "run_sha256": "5bda6354676b52c852757e5e66e01a0386730f162af04f2247bcb35b9cce140a",
+          "shard": "search"
+        },
+        {
+          "fields": {
+            "name": "Check GitHub search paging and snapshot contracts",
+            "env": {
+              "SEARCH_TEST_PROJECT": "github-Search",
+              "SEARCH_TEST_ROOT": "${{ github.workspace }}"
+            }
+          },
+          "run_sha256": "5c33e1186da9a5483c2ddaba07de1e1c7078eb43b65bdeb751e5650997c312c2",
+          "shard": "search"
+        },
+        {
+          "fields": {
+            "name": "Run remaining Reader and search browser regressions"
+          },
+          "run_sha256": "4a313efc3a1ad422f4ca4bb572d0b5aa39d9ba2095773fc75111944ba57d8e02",
+          "shard": "search"
+        },
+        {
+          "fields": {
+            "name": "Run full Reader refactor suite"
+          },
+          "run_sha256": "36899065fbc2f97913aab3c7aac5292117409810121cd592e9533a8475753518",
+          "shard": "navigation"
+        },
+        {
+          "fields": {
+            "name": "Check Reader JavaScript syntax"
+          },
+          "run_sha256": "32c48cbae6a828a3e87f0909f3d545e1776b7e75297a44e873b886aa9316203b",
+          "shard": "static"
+        }
+      ]
+    },
+    "huggingface-search": {
+      "job_sha256": "9ad36296b684c92d7bed3075c1fe3aed411e9cf04d03ccee25cc3954e5e9493e",
+      "steps": [
+        {
+          "label": "actions/checkout@v7",
+          "setup": {
+            "uses": "actions/checkout@v7"
+          }
+        },
+        {
+          "fields": {
+            "name": "Test Hugging Face history bridge"
+          },
+          "run_sha256": "a9186caa85b150d0e76f31d2155f1dd5967a31a30009f4ddf3ffdb75092298a5",
+          "shard": "static"
+        },
+        {
+          "label": "Checkout Hugging Face Search Space",
+          "setup": {
+            "name": "Checkout Hugging Face Search Space",
+            "id": "hf-checkout",
+            "env": {
+              "CAPTURED_REVISION": "${{ needs.hf-capture.outputs.revision }}"
+            },
+            "run": "set -euo pipefail\nurl=https://huggingface.co/spaces/VoiceOfML/Search\nrevision=\"$CAPTURED_REVISION\"\n# Admit the complete captured commit before checkout, LFS or HF execution.\n# The final changed HF candidate needs a reviewed committed pin update.\npython3 -I -B scripts/verify_hf_source_revision.py \"$revision\"\n# Fetch only main and materialize its captured exact commit. Hub's\n# multi-branch pack negotiation can fail before a checkout exists.\nGIT_LFS_SKIP_SMUDGE=1 git clone --single-branch --branch main --no-checkout \"$url\" huggingface-search\nGIT_LFS_SKIP_SMUDGE=1 git -C huggingface-search checkout --detach \"$revision\"\ntest \"$(git -C huggingface-search rev-parse HEAD)\" = \"$revision\"\npython3 -B scripts/select_hf_history.py huggingface-search \"$revision\" >/dev/null\ngit -C huggingface-search lfs pull\ngit -C huggingface-search lfs fsck\necho \"revision=$revision\" >> \"$GITHUB_OUTPUT\"\n"
+          }
+        },
+        {
+          "label": "Verify independent Hugging Face quality baseline",
+          "setup": {
+            "name": "Verify independent Hugging Face quality baseline",
+            "env": {
+              "CAPTURED_HF_REVISION": "${{ steps.hf-checkout.outputs.revision }}"
+            },
+            "run": "set -euo pipefail\nmkdir -p \"$RUNNER_TEMP/hf-quality-baseline\"\nbaseline_revision=$(python3 -B scripts/select_hf_history.py huggingface-search \"$CAPTURED_HF_REVISION\")\nfor file in backend-coverage-debt.json strict-inventory-debt.json; do\n  curl --fail --location --silent --show-error \\\n    \"https://huggingface.co/spaces/VoiceOfML/Search/resolve/$baseline_revision/$file\" \\\n    --output \"$RUNNER_TEMP/hf-quality-baseline/$file\"\ndone\npython3 -B scripts/verify_hf_quality_baseline.py \"$RUNNER_TEMP/hf-quality-baseline\" \"$baseline_revision\"\n"
+          }
+        },
+        {
+          "label": "actions/setup-python@v7",
+          "setup": {
+            "uses": "actions/setup-python@v7",
+            "id": "coverage-python",
+            "with": {
+              "python-version": "3.12.3"
+            }
+          }
+        },
+        {
+          "label": "actions/setup-python@v7",
+          "setup": {
+            "uses": "actions/setup-python@v7",
+            "with": {
+              "python-version": "3.15.2"
+            }
+          }
+        },
+        {
+          "label": "actions/setup-node@v7",
+          "setup": {
+            "uses": "actions/setup-node@v7",
+            "with": {
+              "node-version": "26.13.1"
+            }
+          }
+        },
+        {
+          "label": "Identify runner distribution",
+          "setup": {
+            "name": "Identify runner distribution",
+            "id": "distro",
+            "run": "echo \"version=$(. /etc/os-release; echo \"$ID-$VERSION_ID\")\" >> \"$GITHUB_OUTPUT\""
+          }
+        },
+        {
+          "label": "Cache pip downloads",
+          "setup": {
+            "name": "Cache pip downloads",
+            "uses": "actions/cache@v5",
+            "with": {
+              "path": "~/.cache/pip",
+              "key": "hf-pip-${{ runner.os }}-${{ runner.arch }}-py315-${{ hashFiles('huggingface-search/requirements.txt', 'huggingface-search/config/dependencies/static-check.txt') }}-pw1.63.0-pillow12.3.0-httpx0.28.1"
+            }
+          }
+        },
+        {
+          "label": "Cache npm downloads",
+          "setup": {
+            "name": "Cache npm downloads",
+            "uses": "actions/cache@v5",
+            "with": {
+              "path": "~/.npm",
+              "key": "hf-npm-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('huggingface-search/package-lock.json') }}"
+            }
+          }
+        },
+        {
+          "label": "Cache Playwright browsers",
+          "setup": {
+            "name": "Cache Playwright browsers",
+            "uses": "actions/cache@v5",
+            "with": {
+              "path": "~/.cache/ms-playwright",
+              "key": "hf-playwright-${{ runner.os }}-${{ runner.arch }}-${{ steps.distro.outputs.version }}-1.63.0-chromium-firefox"
+            }
+          }
+        },
+        {
+          "label": "Configure official Ubuntu mirrors",
+          "setup": {
+            "name": "Configure official Ubuntu mirrors",
+            "run": "set -euo pipefail\nif python3 -B scripts/ci/ci_ubuntu_mirror.py; then\n  tmp=$(sudo mktemp -d /etc/apt/.ci-mirrors.XXXXXX)\n  trap 'sudo rm -rf -- \"$tmp\"' EXIT\n  sudo install -o root -g root -m 0644 /dev/null \"$tmp/mirrors\"\n  printf '%s\\n' 'https://archive.ubuntu.com/ubuntu/ priority:1' 'https://security.ubuntu.com/ubuntu/ priority:2' | sudo tee \"$tmp/mirrors\" >/dev/null\n  sudo mv -f -- \"$tmp/mirrors\" /etc/apt/apt-mirrors.txt\nelse\n  echo \"::warning::Unrecognized runner mirror configuration; keeping default mirrors\"\nfi\n"
+          }
+        },
+        {
+          "label": "Install Python dependencies",
+          "setup": {
+            "name": "Install Python dependencies",
+            "timeout-minutes": 10,
+            "working-directory": "huggingface-search",
+            "run": "python -m pip install -r requirements.txt -r config/dependencies/static-check.txt playwright==1.63.0 Pillow==12.3.0 httpx==0.28.1"
+          }
+        },
+        {
+          "label": "Install isolated coverage dependencies",
+          "setup": {
+            "name": "Install isolated coverage dependencies",
+            "timeout-minutes": 10,
+            "working-directory": "huggingface-search",
+            "env": {
+              "COVERAGE_PYTHON": "${{ steps.coverage-python.outputs.python-path }}"
+            },
+            "run": "set -euo pipefail\n\"$COVERAGE_PYTHON\" -m venv \"$RUNNER_TEMP/hf-coverage-venv\"\n\"$RUNNER_TEMP/hf-coverage-venv/bin/python\" -m pip install -r requirements.txt -r config/dependencies/static-check.txt playwright==1.63.0 Pillow==12.3.0 httpx==0.28.1\n"
+          }
+        },
+        {
+          "label": "Install npm dependencies",
+          "setup": {
+            "name": "Install npm dependencies",
+            "timeout-minutes": 10,
+            "working-directory": "huggingface-search",
+            "run": "npm ci --ignore-scripts --no-audit --no-fund"
+          }
+        },
+        {
+          "label": "Prepare Hugging Face data when supported by the captured revision",
+          "setup": {
+            "name": "Prepare Hugging Face data when supported by the captured revision",
+            "timeout-minutes": 10,
+            "working-directory": "huggingface-search",
+            "run": "set -euo pipefail\nprepare=$(node -p 'Object.hasOwn(require(\"./package.json\").scripts || {}, \"data:prepare\")')\nif [[ \"$prepare\" == true ]]; then\n  npm run data:prepare\nelse\n  # Older revisions keep their LFS-verified checkout data and run\n  # the same complete data/backend/browser gates below.\n  echo \"Captured HF revision uses checkout data\"\nfi\n"
+          }
+        },
+        {
+          "label": "Build native search index for other shards",
+          "setup": {
+            "name": "Build native search index for other shards",
+            "if": "${{ matrix.shard != 'static' }}",
+            "working-directory": "huggingface-search",
+            "run": "python -B scripts/build/build_search_index_native.py --output-dir ."
+          }
+        },
+        {
+          "label": "Install Playwright system dependencies",
+          "setup": {
+            "name": "Install Playwright system dependencies",
+            "timeout-minutes": 15,
+            "working-directory": "huggingface-search",
+            "run": "python -m playwright install-deps chromium firefox"
+          }
+        },
+        {
+          "label": "Install Playwright browsers",
+          "setup": {
+            "name": "Install Playwright browsers",
+            "timeout-minutes": 10,
+            "working-directory": "huggingface-search",
+            "run": "python -m playwright install chromium firefox"
+          }
+        },
+        {
+          "label": "Install pinned Foliate runtime",
+          "setup": {
+            "name": "Install pinned Foliate runtime",
+            "timeout-minutes": 10,
+            "working-directory": "huggingface-search",
+            "run": "node scripts/build/fetch_foliate_reader.mjs static/foliate-reader"
+          }
+        },
+        {
+          "label": "Install pinned Reader vendors",
+          "setup": {
+            "name": "Install pinned Reader vendors",
+            "timeout-minutes": 5,
+            "working-directory": "huggingface-search",
+            "run": "node scripts/build/copy_reader_vendor.mjs static/vendor --foliate-output static/foliate-reader/vendor"
+          }
+        },
+        {
+          "label": "Mark setup complete",
+          "setup": {
+            "name": "Mark setup complete",
+            "id": "setup-complete",
+            "run": "echo 'ready=true' >> \"$GITHUB_OUTPUT\""
+          }
+        },
+        {
+          "fields": {
+            "name": "Check source and exercise static gates",
+            "working-directory": "huggingface-search"
+          },
+          "run_sha256": "78b70e2abedcb22d072f837c75434fb113d2bfd29bdcb0904c1f99ded66f9e7d",
+          "shard": "static"
+        },
+        {
+          "fields": {
+            "name": "Check backend coverage and quality inventory",
+            "working-directory": "huggingface-search",
+            "env": {
+              "CAPTURED_HF_REVISION": "${{ steps.hf-checkout.outputs.revision }}"
+            }
+          },
+          "run_sha256": "d4d13782cc3aa49388fb01d91ca7d3130916b499a73ac28083ac3faa46f114cb",
+          "shard": "static"
+        },
+        {
+          "fields": {
+            "name": "Reader v3 gates",
+            "working-directory": "huggingface-search"
+          },
+          "run_sha256": "255bca0b9a3bcffa1f773b01416a4bb9843377ff67415be767c9f6b588fd2191",
+          "shard": "core"
+        },
+        {
+          "fields": {
+            "name": "Run chapter-search unit tests",
+            "working-directory": "huggingface-search"
+          },
+          "run_sha256": "0dd3bb4210487ad3369494352251bc162c069ab26fb832b885c5e9971b49a813",
+          "shard": "core"
+        },
+        {
+          "fields": {
+            "name": "Run Reader request and PDF loading regressions",
+            "working-directory": "huggingface-search"
+          },
+          "run_sha256": "b752f8bf2b7c8886fdf948e4d275259ef6ceb85a68266366b78503a406156408",
+          "shard": "loading"
+        },
+        {
+          "fields": {
+            "name": "Check DjVu-only streams and image memory eviction",
+            "working-directory": "huggingface-search"
+          },
+          "run_sha256": "f3d77411acd0676dbbbbd8718a69c7b145fedb79417570d0d387376ee5d5fe5a",
+          "shard": "loading"
+        },
+        {
+          "fields": {
+            "name": "Run multi-format preparation and navigation gates",
+            "working-directory": "huggingface-search"
+          },
+          "run_sha256": "83fa8f6f5551ea2e1ecca03500c1a12addbb366cc31afaf2c4668e9bf22a1df8",
+          "shard": "navigation"
+        },
+        {
+          "fields": {
+            "name": "Check TOC landing ownership and cancellation",
+            "working-directory": "huggingface-search"
+          },
+          "run_sha256": "a5a4a94953970abcbda3f05a5b06bf9a2487d64467bb01363ebc32a5267926a4",
+          "shard": "navigation"
+        },
+        {
+          "fields": {
+            "name": "Run search accessibility keyboard gates",
+            "working-directory": "huggingface-search"
+          },
+          "run_sha256": "2b08eb8b502433c5c8930a773fe4e6e2286ee4167fab27f5bdefb12044130d7b",
+          "shard": "search"
+        },
+        {
+          "fields": {
+            "name": "Check search and Reader history ownership",
+            "working-directory": "huggingface-search"
+          },
+          "run_sha256": "ed76e62ded85df31669793d07d978f908b2d451a8520ad2c8cb8c3f95b7bea9a",
+          "shard": "search"
+        },
+        {
+          "fields": {
+            "name": "Check static dependency contracts",
+            "working-directory": "huggingface-search"
+          },
+          "run_sha256": "232836d385b9e564400984d01d1852b0dc689c3ee6022250d1f52a8224124c72",
+          "shard": "static"
+        },
+        {
+          "fields": {
+            "name": "Check Firefox footer counter geometry",
+            "working-directory": "huggingface-search",
+            "env": {
+              "SEARCH_POSITION_BROWSER": "firefox"
+            }
+          },
+          "run_sha256": "ae110c6dacfae3828832fb1077583db90f4211908d79bb3467bfc7ed42201f6d",
+          "shard": "search"
+        },
+        {
+          "fields": {
+            "name": "Run chapter-bundle browser gate",
+            "working-directory": "huggingface-search"
+          },
+          "run_sha256": "dbfa37170eebc8f388273323136224302f23fceb4531a632a43d13f1fcfe6084",
+          "shard": "core"
+        },
+        {
+          "fields": {
+            "name": "Run chapter-search browser gate",
+            "working-directory": "huggingface-search"
+          },
+          "run_sha256": "87ef30fb3b6895fb96f66fca29edc06851781e2aff74451d8e5c18dff2d6a530",
+          "shard": "navigation"
+        },
+        {
+          "fields": {
+            "name": "Check DOM-search source contracts in Chromium and Firefox",
+            "working-directory": "huggingface-search"
+          },
+          "run_sha256": "cef605bc113ff4b0b319230a3eb3ca34a8a28e8ef3aafed1b6d3579aeb667939",
+          "shard": "core"
+        },
+        {
+          "fields": {
+            "name": "Run PDF theme browser gate",
+            "working-directory": "huggingface-search"
+          },
+          "run_sha256": "0bec45ad8a8d13d1fdb496e98197a3965754f847c056903bdf2ee38b3b63962b",
+          "shard": "navigation"
+        },
+        {
+          "fields": {
+            "name": "Check compact mobile panel and high-density pages",
+            "working-directory": "huggingface-search"
+          },
+          "run_sha256": "b37a5caf1bcd02ae00f6f32a038e70b5149e4d955d858d12ef70e8acd21a40bb",
+          "shard": "navigation"
+        },
+        {
+          "fields": {
+            "name": "Run Reader proxy cancellation and cached-range gate",
+            "working-directory": "huggingface-search"
+          },
+          "run_sha256": "8a3b446a13b6b7e005d95a9a27d4c84a83c3f1e0e95f671bf2573ba81a9398d2",
+          "shard": "loading"
+        },
+        {
+          "fields": {
+            "name": "Run Reader upstream ownership gate",
+            "working-directory": "huggingface-search"
+          },
+          "run_sha256": "61080adce363ca59a435c06794af477b420b161828d27cb21dbc1716a2973afd",
+          "shard": "loading"
+        },
+        {
+          "fields": {
+            "name": "Run Reader core, security and search data unit tests",
+            "working-directory": "huggingface-search"
+          },
+          "run_sha256": "569e8f71c3917fc0370f77a0dd325335c5ef8a21236c2205088d3edaa662475d",
+          "shard": "core"
+        },
+        {
+          "fields": {
+            "name": "Check Hugging Face search paging and snapshot contracts",
+            "env": {
+              "SEARCH_TEST_PROJECT": "huggingface-Search",
+              "SEARCH_TEST_ROOT": "${{ github.workspace }}/huggingface-search"
+            }
+          },
+          "run_sha256": "5c33e1186da9a5483c2ddaba07de1e1c7078eb43b65bdeb751e5650997c312c2",
+          "shard": "search"
+        },
+        {
+          "fields": {
+            "name": "Run real backend and browser integration",
+            "working-directory": "huggingface-search"
+          },
+          "run_sha256": "ca455c4902d30ef1d19e4e25bc8a0ff29c69c15e78c67b7de734347ce288def5",
+          "shard": "loading"
+        },
+        {
+          "fields": {
+            "name": "Run additional Hugging Face search and Reader regressions",
+            "working-directory": "huggingface-search"
+          },
+          "run_sha256": "791eb362ac66c69854b8117d25937966a5af7402183dce548ff71a3f2a04fc9b",
+          "shard": "navigation"
+        },
+        {
+          "fields": {
+            "name": "Run remaining Reader and search browser regressions",
+            "working-directory": "huggingface-search"
+          },
+          "run_sha256": "930e18e631ac747857d31ef5b2dd1d585ab4dd782743de6c824955cd72802f4c",
+          "shard": "search"
+        },
+        {
+          "fields": {
+            "name": "Run full Reader refactor suite",
+            "working-directory": "huggingface-search"
+          },
+          "run_sha256": "36899065fbc2f97913aab3c7aac5292117409810121cd592e9533a8475753518",
+          "shard": "navigation"
+        },
+        {
+          "fields": {
+            "name": "Check Reader JavaScript syntax",
+            "working-directory": "huggingface-search"
+          },
+          "run_sha256": "32c48cbae6a828a3e87f0909f3d545e1776b7e75297a44e873b886aa9316203b",
+          "shard": "static"
+        }
+      ]
+    }
+  },
+  "workflow_settings": {
+    "name": "Reader Refactor Tests",
+    "on": {
+      "workflow_dispatch": null,
+      "schedule": [
+        {
+          "cron": "17 2 * * *"
+        }
+      ],
+      "push": {
+        "branches": [
+          "main"
+        ]
+      }
+    },
+    "permissions": {
+      "contents": "read",
+      "actions": "read"
+    },
+    "concurrency": {
+      "group": "reader-refactor-sites-${{ github.event_name }}-${{ github.ref }}",
+      "cancel-in-progress": false
+    }
+  }
+}

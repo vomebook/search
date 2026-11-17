@@ -26,6 +26,10 @@
       "kind": "direct",
       "source": ".github/workflows/reader-refactor.yml"
     },
+    "tests/gates/test_reader_matrix_contract.py": {
+      "kind": "direct",
+      "source": ".github/workflows/static.yml"
+    },
     "tests/gates/test_static_checks.py": {
       "kind": "manifest",
       "source": "tests/gates/static_gate_ids.github.json"
