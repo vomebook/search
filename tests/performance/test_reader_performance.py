@@ -745,7 +745,7 @@ class ReaderPerformanceTest(unittest.TestCase):
         self.assertFalse(page.locator(".reader-loading-indicator").count())
         context.close()
 
-    def test_converted_pdf_pages_reject_invalid_manifest_and_missing_first_page(self):
+    def test_converted_pdf_pages_reject_invalid_manifests(self):
         cases = [
             ("old-v1", {"version": 1, "kind": "pdf-pages", "pages": [{"page": 1, "path": f"objects/aa/{'a' * 64}/pages/page-000001.webp"}]}),
             ("bad-manifest", {"version": 2, "kind": "pdf-pages", "page_count": 0}),
@@ -755,18 +755,75 @@ class ReaderPerformanceTest(unittest.TestCase):
         ]
         for name, manifest in cases:
             with self.subTest(case=name):
-                context = self.browser.new_context(viewport={"width": 390, "height": 844})
+                context = self.browser.new_context(viewport={"width": 390, "height": 844}, service_workers="block")
+                self.addCleanup(context.close)
                 page = context.new_page()
-                source = "https://huggingface.co/buckets/vomebook/pdf-pages-v2/resolve/objects/aa/" + "a" * 64 + "/1234567890abcdef/page-manifest.json"
+                path = "objects/aa/" + "a" * 64 + "/1234567890abcdef/page-manifest.json"
+                source = "https://huggingface.co/buckets/vomebook/pdf-pages-v2/resolve/" + path
+                seen = []
+                unexpected = []
+                def block_external(route):
+                    url = urllib.parse.urlsplit(route.request.url)
+                    if url.netloc == urllib.parse.urlsplit(self.origin).netloc:
+                        route.continue_()
+                    else:
+                        unexpected.append(route.request.url)
+                        route.abort()
+                def serve_manifest(route):
+                    request = route.request
+                    params = urllib.parse.parse_qs(urllib.parse.urlsplit(request.url).query)
+                    if request.method == "OPTIONS":
+                        route.fulfill(status=204, headers={"Access-Control-Allow-Origin": "*", "Access-Control-Allow-Methods": "GET, OPTIONS", "Access-Control-Allow-Headers": "*"})
+                    elif request.method == "GET" and params == {"path": [path]}:
+                        seen.append(params["path"][0])
+                        route.fulfill(status=200, content_type="application/json", body=json.dumps(manifest), headers={"Access-Control-Allow-Origin": "*"})
+                    else:
+                        unexpected.append(request.url)
+                        route.abort()
+                page.route("**/*", block_external)
                 page.route("**/static/reader/core/reader-store.js", lambda route: route.fulfill(status=200, content_type="text/javascript", body=STORE_SCRIPT))
-                page.route("https://voiceofml-search.hf.space/api/reader-content**", lambda route, _request, manifest=manifest: route.fulfill(status=200, content_type="application/json", body=json.dumps(manifest)))
-                page.route("https://huggingface.co/buckets/vomebook/pdf-pages-v2/resolve/objects/aa/**", lambda route: route.fulfill(status=404, body=b""))
+                page.route(source, lambda route: route.fulfill(status=404, body=b"", headers={"Access-Control-Allow-Origin": "*"}))
+                page.route("https://voiceofml-search.hf.space/api/reader-bucket-resource?**", serve_manifest)
                 page.goto(f"{self.origin}/search/static/reader.html?url={urllib.parse.quote(source, safe='')}&ext=pdf-pages&title=Converted", wait_until="domcontentloaded")
                 page.locator(".reader-error").wait_for(timeout=10000)
-                self.assertTrue(page.locator(".reader-error").text_content().strip())
+                self.assertTrue(seen, "the invalid manifest must be served by the bucket proxy mock")
+                self.assertIn("PDF_MANIFEST_INVALID", page.locator(".reader-error").inner_text())
                 self.assertEqual(page.locator("#status").text_content(), "无法打开")
                 self.assertFalse(page.locator(".reader-loading-indicator").count())
+                self.assertEqual(page.locator(".reader-page img, .reader-page canvas").count(), 0)
+                self.assertEqual(unexpected, [])
                 context.close()
+
+    def test_invalid_direct_pdf_manifest_does_not_retry_through_proxy(self):
+        context = self.browser.new_context(viewport={"width": 390, "height": 844}, service_workers="block")
+        self.addCleanup(context.close)
+        page = context.new_page()
+        path = "objects/aa/" + "a" * 64 + "/1234567890abcdef/page-manifest.json"
+        source = "https://huggingface.co/buckets/vomebook/pdf-pages-v2/resolve/" + path
+        direct = []
+        unexpected = []
+        def block_external(route):
+            url = urllib.parse.urlsplit(route.request.url)
+            if url.netloc == urllib.parse.urlsplit(self.origin).netloc:
+                route.continue_()
+            else:
+                unexpected.append(route.request.url)
+                route.abort()
+        def serve_direct(route):
+            direct.append(route.request.method)
+            route.fulfill(status=200, content_type="application/json",
+                          body=json.dumps({"version": 1, "kind": "pdf-pages", "pages": []}),
+                          headers={"Access-Control-Allow-Origin": "*"})
+        page.route("**/*", block_external)
+        page.route(source, serve_direct)
+        page.goto(f"{self.origin}/search/static/reader.html?url={urllib.parse.quote(source, safe='')}&ext=pdf-pages&title=Converted", wait_until="domcontentloaded")
+        page.locator(".reader-error").wait_for(timeout=10000)
+        self.assertEqual(direct, ["GET"])
+        self.assertIn("PDF_MANIFEST_INVALID", page.locator(".reader-error").inner_text())
+        self.assertEqual(page.locator("#status").text_content(), "无法打开")
+        self.assertEqual(page.locator(".reader-page img, .reader-page canvas").count(), 0)
+        self.assertEqual(unexpected, [], "no proxy fallback or other unexpected external request")
+        context.close()
 
     def test_djvu_legacy_stream_is_rejected_without_page_images(self):
         context = self.browser.new_context(viewport={"width": 390, "height": 844})
