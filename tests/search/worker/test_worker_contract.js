@@ -402,9 +402,9 @@ test("native Foliate books are eligible for repository-scoped random reading", a
 });
 test("local random reading includes all native formats, but no conversion-only files", async () => {
   const native = ["pdf", "djvu", "epub", "mobi", "azw", "azw3", "fb2", "fbz", "html", "htm",
-    "txt", "md", "markdown", "vcf", "ini", "jpg", "jpeg", "png", "gif", "bmp", "tif", "tiff",
+    "txt", "md", "markdown", "vcf", "ini", "jpg", "jpeg", "png", "gif", "bmp",
     "webp", "mp3", "mp4", "wav", "m4a", "flac", "mov", "mpga", "wma", "ape", "amr", "swf"];
-  const input = native.concat(["caj", "kdh", "ps", "docx"]).map((extension, i) => ({
+  const input = native.concat(["caj", "kdh", "ps", "docx", "tif", "tiff"]).map((extension, i) => ({
     ...records[0], File: "book" + i, Extension: extension.toUpperCase(),
   }));
   const {worker, metadata} = await loaded(input);

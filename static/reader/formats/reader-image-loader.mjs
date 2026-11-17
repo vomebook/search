@@ -30,7 +30,7 @@ export function createReaderImageLoader({assertActive, abortError, trackResource
       if (settled) return;
       timeout = setTimeout(() => finish(new DOMException("Reader image stalled", "TimeoutError")), timeoutMs);
       image.onload = () => finish();
-      image.onerror = () => finish(new Error("image load failed"));
+      image.onerror = () => finish(Object.assign(new Error("image load failed"), {code: "READER_IMAGE_LOAD"}));
       if (image.src !== new URL(target, location.href).href) image.src = target;
       if (image.complete && image.naturalWidth) finish();
     }));
@@ -45,6 +45,11 @@ export function createReaderImageLoader({assertActive, abortError, trackResource
     } catch (error) {
       assertActive();
       signal?.throwIfAborted();
+      // Retry the same proxied image once after a load error, including converted
+      // TIFF pages. Never retry local blobs or aborted reader sessions.
+      if (network && typeof error === "object" && error !== null && "code" in error &&
+          error.code === "READER_IMAGE_LOAD" && performance.now() < deadline && navigator.onLine)
+        return wait(image, target, Math.min(15000, remaining()), signal);
       if (!network || typeof error !== "object" || error === null || !("name" in error) ||
           error.name !== "TimeoutError" || !navigator.onLine) throw error;
     }

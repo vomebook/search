@@ -103,7 +103,7 @@ const DIRECTORY_INDEX_MAX = 4;
 const NATIVE_READER_EXTENSIONS = new Set([
   "pdf", "djvu", "epub", "mobi", "azw", "azw3", "fb2", "fbz", "html", "htm",
   "txt", "md", "markdown", "vcf", "ini", "jpg", "jpeg", "png", "gif", "bmp",
-  "tif", "tiff", "webp", "mp3", "mp4", "wav", "m4a", "flac", "mov", "mpga",
+  "webp", "mp3", "mp4", "wav", "m4a", "flac", "mov", "mpga",
   "wma", "ape", "amr", "swf"
 ]);
 

@@ -108,13 +108,13 @@ test("dynamic lifecycle code remains uncoerced and is narrowed by the controller
 });
 
 test("image fallback only accepts a string original extension", async () => {
-  for (const [original, shouldRender] of [[null, false], [hostile, false], ["JpG", true]]) {
+  for (const [original, shouldRender, mode, sameSource] of [[null, false, "image-pages", false], [hostile, false, "image-pages", false], ["JpG", true, "image-pages", false], ["jpg", true, "image", false], ["jpg", false, "image", true], ["tiff", false, "image", false]]) {
     const f = fixture({ url: "https://example.test/pages" });
     const error = new Error("page loading failed");
     let rendered = false, failure;
     Object.assign(f.context, {
-      readerId: "", sourceUrl: "https://example.test/pages", downloadUrl: "https://example.test/book.jpg",
-      capability: { mode: "image-pages" }, resolvedReaderData: { original_extension: original },
+      readerId: "", sourceUrl: sameSource ? "https://example.test/book.jpg" : "https://example.test/pages", downloadUrl: "https://example.test/book.jpg",
+      capability: { mode }, resolvedReaderData: { original_extension: original },
       readerRuntime: { currentGeneration: () => 0, negotiate: capability => capability, update() {} },
       measurePdf: promise => promise, resolveReaderSource: async () => {}, syncCapabilityControls() {},
       downloadButton: {}, documentState: { title: "book" }, readerDownloadUrl: () => "download",
