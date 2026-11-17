@@ -16,6 +16,65 @@ from scripts.verify_hf_quality_baseline import REQUIRED, validate_baselines
 
 
 class ReaderWorkflowParallelTests(unittest.TestCase):
+    def test_hf_coverage_interpreter_and_native_are_scoped(self):
+        workflow = (Path(__file__).resolve().parents[2] / '.github/workflows/reader-refactor.yml').read_text()
+        hf = workflow.split('  huggingface-search:\n', 1)[1]
+        setup = hf.split('      - name: Identify runner distribution', 1)[0]
+        self.assertLess(setup.index('python-version: "3.12.3"'), setup.index('python-version: "3.15.2"'))
+        self.assertIn('id: coverage-python', setup)
+        self.assertIn('${{ steps.coverage-python.outputs.python-path }}', hf)
+        self.assertIn('"$COVERAGE_PYTHON" -m venv "$RUNNER_TEMP/hf-coverage-venv"', hf)
+        quality = hf.split('      - name: Check backend coverage and quality inventory\n', 1)[1].split('      - name:', 1)[0]
+        self.assertIn('scripts/build/build_search_index_native.py --output-dir .', quality)
+        self.assertIn('"$coverage_python" -B scripts/build/build_search_index_native.py --output-dir "$native_dir"', quality)
+        self.assertIn("Path(native.__file__).resolve().parent == Path(os.environ['PYTHONPATH']).resolve()", quality)
+        self.assertIn('indexes._native_decode_postings is native.decode_postings', quality)
+        self.assertIn('sys.version_info[:3] == (3, 15, 2)', quality)
+        self.assertIn('sys.version_info[:3] == (3, 12, 3)', quality)
+        self.assert_hf_backend_invocations(quality)
+
+    def assert_hf_backend_invocations(self, quality):
+        selection = re.search(r'          backend_tests=\(\n(.*?)\n          \)\n', quality, re.S)
+        self.assertIsNotNone(selection)
+        modules = selection.group(1).replace('\\', ' ').split()
+        self.assertTrue(modules)
+        self.assertEqual(len(modules), len(set(modules)))
+        # Pin the pre-existing ordered selection; both invocations must use it whole.
+        self.assertEqual(hashlib.sha256('\n'.join(modules).encode()).hexdigest(),
+                         '3ab114371912ee9283b205d15cb6b6288d8a1a081aef0b20daaec871ecc3c090')
+        self.assertIn('quality_python=$(command -v python)', quality)
+        calls = ('          "$quality_python" -B -m unittest -q "${backend_tests[@]}"\n',
+                 '          COVERAGE_FILE="$RUNNER_TEMP/backend-coverage" "$coverage_python" -B -m coverage run --branch --source=backend,app -m unittest -q "${backend_tests[@]}"\n',
+                 '          COVERAGE_FILE="$RUNNER_TEMP/backend-coverage" "$coverage_python" -B -m coverage json -o "$RUNNER_TEMP/backend-coverage.json"\n')
+        for call in calls:
+            self.assertEqual(quality.count(call), 1)
+        self.assertLessEqual(selection.end(), quality.index(calls[0]))
+        self.assertLess(quality.index(calls[0]), quality.index('          (\n', selection.end()))
+        scoped = quality.split('          (\n', 1)[1].split('          )\n', 1)[0]
+        self.assertIn('export PATH="$RUNNER_TEMP/hf-coverage-venv/bin:$PATH" PYTHONPATH="$native_dir"', scoped)
+        self.assertIn(calls[1], scoped)
+        self.assertIn(calls[2], scoped)
+        self.assertNotIn('run_hf_quality_with_verified_baseline.py', scoped)
+        self.assertNotIn('check_search_words_mutation.py', scoped)
+
+    def test_hf_backend_contract_rejects_interpreter_and_selection_mutations(self):
+        workflow = (Path(__file__).resolve().parents[2] / '.github/workflows/reader-refactor.yml').read_text()
+        quality = workflow.split('      - name: Check backend coverage and quality inventory\n', 1)[1].split('      - name:', 1)[0]
+        self.assert_hf_backend_invocations(quality)
+        mutations = (
+            ('tests.backend.test_api_contract ', ''),
+            ('tests.backend.test_api_contract tests.search.backend.test_cache_and_malformed', 'tests.search.backend.test_cache_and_malformed tests.backend.test_api_contract'),
+            ('"$coverage_python" -B -m coverage run', 'python -B -m coverage run'),
+            ('"$coverage_python" -B -m coverage json', 'python -B -m coverage json'),
+            ('"$quality_python" -B -m unittest -q "${backend_tests[@]}"', 'true'),
+            ('"$quality_python" -B -m unittest -q "${backend_tests[@]}"', '"$quality_python" -B -m unittest -q "${backend_tests[@]:1}"'),
+            ('-m coverage run --branch --source=backend,app -m unittest -q "${backend_tests[@]}"', '-m coverage run --branch --source=backend,app -m unittest -q "${backend_tests[@]:1}"'),
+        )
+        for old, new in mutations:
+            with self.subTest(mutation=new), self.assertRaises(AssertionError):
+                self.assertIn(old, quality)
+                self.assert_hf_backend_invocations(quality.replace(old, new, 1))
+
     def test_firefox_job_is_independent_and_keeps_the_exact_gate(self):
         workflow = (Path(__file__).resolve().parents[2] / '.github/workflows/reader-refactor.yml').read_text()
         github = workflow.split('  github-search:\n', 1)[1].split('  firefox-staged-pdf:\n', 1)[0]
@@ -369,8 +428,7 @@ class HfSearchProjectionCiTests(unittest.TestCase):
     def test_reader_compression_safety_is_in_backend_coverage_gate(self):
         workflow = (Path(__file__).resolve().parents[2] / '.github/workflows/reader-refactor.yml').read_text()
         self.assertEqual(workflow.count('tests.reader.backend.test_reader_compression_safety'), 1)
-        selection = re.search(r'python -B -m coverage run --branch --source=backend,app -m unittest -q \\\n'
-                              r'(.*?)\n\s+COVERAGE_FILE=', workflow, re.S)
+        selection = re.search(r'backend_tests=\(\n(.*?)\n\s+\)', workflow, re.S)
         self.assertIsNotNone(selection)
         self.assertIn('tests.reader.backend.test_reader_compression_safety', selection.group(1))
 
@@ -386,7 +444,7 @@ class HfSearchProjectionCiTests(unittest.TestCase):
 
     def test_reader_archive_contract_and_mutations_are_required(self):
         workflow = (Path(__file__).resolve().parents[2] / '.github/workflows/reader-refactor.yml').read_text()
-        start = workflow.index('coverage run --branch --source=backend,app')
+        start = workflow.index('backend_tests=(')
         end = workflow.index('coverage json', start)
         modules = workflow[start:end].replace(chr(92), ' ').split()
         for module in ('tests.reader.backend.test_reader_archive_contract',
@@ -420,16 +478,14 @@ class HfSearchProjectionCiTests(unittest.TestCase):
 
     def test_grouped_search_order_cache_runs_in_backend_coverage(self):
         workflow = (Path(__file__).resolve().parents[2] / '.github/workflows/reader-refactor.yml').read_text()
-        selection = re.search(r'python -B -m coverage run --branch --source=backend,app -m unittest -q \\\n'
-                              r'(.*?)\n\s+COVERAGE_FILE=', workflow, re.S)
+        selection = re.search(r'backend_tests=\(\n(.*?)\n\s+\)', workflow, re.S)
         self.assertIsNotNone(selection)
         self.assertEqual(selection.group(1).split().count('tests.search.backend.test_search_order_cache'), 1)
         self.assertNotIn('tests.test_search_order_cache', selection.group(1).split())
 
     def test_grouped_folder_tree_contracts_and_mutation_gate_are_required(self):
         workflow = (Path(__file__).resolve().parents[2] / '.github/workflows/reader-refactor.yml').read_text()
-        selection = re.search(r'python -B -m coverage run --branch --source=backend,app -m unittest -q \\\n'
-                              r'(.*?)\n\s+COVERAGE_FILE=', workflow, re.S)
+        selection = re.search(r'backend_tests=\(\n(.*?)\n\s+\)', workflow, re.S)
         self.assertIsNotNone(selection)
         for module in ('tests.search.backend.test_folder_tree_contract',
                        'tests.search.backend.test_folder_tree_mutation_contract'):
@@ -438,8 +494,7 @@ class HfSearchProjectionCiTests(unittest.TestCase):
 
     def test_grouped_search_behaviors_are_in_backend_coverage(self):
         workflow = (Path(__file__).resolve().parents[2] / '.github/workflows/reader-refactor.yml').read_text()
-        selection = re.search(r'python -B -m coverage run --branch --source=backend,app -m unittest -q \\\n'
-                              r'(.*?)\n\s+COVERAGE_FILE=', workflow, re.S)
+        selection = re.search(r'backend_tests=\(\n(.*?)\n\s+\)', workflow, re.S)
         self.assertIsNotNone(selection)
         modules = selection.group(1).split()
         for module in ('tests.search.backend.test_search_behavior', 'tests.search.backend.test_search'):
@@ -449,8 +504,7 @@ class HfSearchProjectionCiTests(unittest.TestCase):
 
     def test_grouped_search_execution_runs_in_coverage_and_responsiveness(self):
         workflow = (Path(__file__).resolve().parents[2] / '.github/workflows/reader-refactor.yml').read_text()
-        selection = re.search(r'python -B -m coverage run --branch --source=backend,app -m unittest -q \\\n'
-                              r'(.*?)\n\s+COVERAGE_FILE=', workflow, re.S)
+        selection = re.search(r'backend_tests=\(\n(.*?)\n\s+\)', workflow, re.S)
         self.assertIsNotNone(selection)
         module = 'tests.search.backend.test_search_execution'
         self.assertEqual(selection.group(1).split().count(module), 1)
@@ -462,8 +516,7 @@ class HfSearchProjectionCiTests(unittest.TestCase):
 
     def test_grouped_search_words_and_matching_gates_are_required(self):
         workflow = (Path(__file__).resolve().parents[2] / '.github/workflows/reader-refactor.yml').read_text()
-        selection = re.search(r'python -B -m coverage run --branch --source=backend,app -m unittest -q \\\n'
-                              r'(.*?)\n\s+COVERAGE_FILE=', workflow, re.S)
+        selection = re.search(r'backend_tests=\(\n(.*?)\n\s+\)', workflow, re.S)
         self.assertIsNotNone(selection)
         self.assertEqual(selection.group(1).split().count('tests.search.backend.test_search_words_contract'), 1)
         self.assertNotIn('tests.test_search_words_contract', selection.group(1).split())
@@ -472,8 +525,7 @@ class HfSearchProjectionCiTests(unittest.TestCase):
 
     def test_grouped_backend_cache_contracts_and_mutation_gate_are_required(self):
         workflow = (Path(__file__).resolve().parents[2] / '.github/workflows/reader-refactor.yml').read_text()
-        selection = re.search(r'python -B -m coverage run --branch --source=backend,app -m unittest -q \\\n'
-                              r'(.*?)\n\s+COVERAGE_FILE=', workflow, re.S)
+        selection = re.search(r'backend_tests=\(\n(.*?)\n\s+\)', workflow, re.S)
         self.assertIsNotNone(selection)
         for module in ('tests.search.backend.test_cache_and_malformed',
                        'tests.search.backend.test_cache_core_contract'):
@@ -482,16 +534,14 @@ class HfSearchProjectionCiTests(unittest.TestCase):
 
     def test_grouped_record_metadata_contract_and_mutation_gate_are_required(self):
         workflow = (Path(__file__).resolve().parents[2] / '.github/workflows/reader-refactor.yml').read_text()
-        selection = re.search(r'python -B -m coverage run --branch --source=backend,app -m unittest -q \\\n'
-                              r'(.*?)\n\s+COVERAGE_FILE=', workflow, re.S)
+        selection = re.search(r'backend_tests=\(\n(.*?)\n\s+\)', workflow, re.S)
         self.assertIsNotNone(selection)
         self.assertEqual(selection.group(1).split().count('tests.search.backend.test_record_metadata_contract'), 1)
         self.assertEqual(workflow.count('scripts/check_search_words_mutation.py --module record_metadata'), 1)
 
     def test_grouped_native_index_contract_and_mutation_gate_are_required(self):
         workflow = (Path(__file__).resolve().parents[2] / '.github/workflows/reader-refactor.yml').read_text()
-        selection = re.search(r'python -B -m coverage run --branch --source=backend,app -m unittest -q \\\n'
-                              r'(.*?)\n\s+COVERAGE_FILE=', workflow, re.S)
+        selection = re.search(r'backend_tests=\(\n(.*?)\n\s+\)', workflow, re.S)
         self.assertIsNotNone(selection)
         self.assertEqual(selection.group(1).split().count('tests.search.backend.test_native_search_indexes'), 1)
         self.assertEqual(selection.group(1).split().count('tests.performance.test_exact_search_performance'), 1)
@@ -499,8 +549,7 @@ class HfSearchProjectionCiTests(unittest.TestCase):
 
     def test_grouped_reader_index_contracts_retain_all_gates(self):
         workflow = (Path(__file__).resolve().parents[2] / '.github/workflows/reader-refactor.yml').read_text()
-        selection = re.search(r'python -B -m coverage run --branch --source=backend,app -m unittest -q \\\n'
-                              r'(.*?)\n\s+COVERAGE_FILE=', workflow, re.S)
+        selection = re.search(r'backend_tests=\(\n(.*?)\n\s+\)', workflow, re.S)
         self.assertIsNotNone(selection)
         for module in ('tests.reader.backend.test_reader_index_contract', 'tests.reader.backend.test_reader_index_warming'):
             self.assertEqual(selection.group(1).split().count(module), 1)
@@ -511,16 +560,14 @@ class HfSearchProjectionCiTests(unittest.TestCase):
 
     def test_grouped_reader_identity_contract_and_mutation_gate_are_required(self):
         workflow = (Path(__file__).resolve().parents[2] / '.github/workflows/reader-refactor.yml').read_text()
-        selection = re.search(r'python -B -m coverage run --branch --source=backend,app -m unittest -q \\\n'
-                              r'(.*?)\n\s+COVERAGE_FILE=', workflow, re.S)
+        selection = re.search(r'backend_tests=\(\n(.*?)\n\s+\)', workflow, re.S)
         self.assertIsNotNone(selection)
         self.assertEqual(selection.group(1).split().count('tests.reader.backend.test_reader_identity_contract'), 1)
         self.assertEqual(workflow.count('scripts/check_search_words_mutation.py --module reader_identity'), 1)
 
     def test_grouped_proxy_contracts_retain_all_gates(self):
         workflow = (Path(__file__).resolve().parents[2] / '.github/workflows/reader-refactor.yml').read_text()
-        selection = re.search(r'python -B -m coverage run --branch --source=backend,app -m unittest -q \\\n'
-                              r'(.*?)\n\s+COVERAGE_FILE=', workflow, re.S)
+        selection = re.search(r'backend_tests=\(\n(.*?)\n\s+\)', workflow, re.S)
         self.assertIsNotNone(selection)
         modules = ('tests.proxy.test_proxy_ownership', 'tests.proxy.test_proxy_streams_contract')
         responsiveness = [line for line in workflow.splitlines() if line.strip().startswith('run: timeout 120s ')]
@@ -532,8 +579,7 @@ class HfSearchProjectionCiTests(unittest.TestCase):
 
     def test_grouped_data_format_contracts_and_mutation_gate_are_required(self):
         workflow = (Path(__file__).resolve().parents[2] / '.github/workflows/reader-refactor.yml').read_text()
-        selection = re.search(r'python -B -m coverage run --branch --source=backend,app -m unittest -q \\\n'
-                              r'(.*?)\n\s+COVERAGE_FILE=', workflow, re.S)
+        selection = re.search(r'backend_tests=\(\n(.*?)\n\s+\)', workflow, re.S)
         self.assertIsNotNone(selection)
         for module in ('tests.data.test_data_decoding', 'tests.data.test_data_formats_contract'):
             self.assertEqual(selection.group(1).split().count(module), 1)
