@@ -977,6 +977,78 @@ process.stdout.write(stripBundledScripts(readFileSync('static/index.html','utf8'
         self.assertFalse(self.page.evaluate('readerClosing'))
         self.assertEqual(self.page.locator('.reader-overlay-opening a').count(), 0)
 
+    def test_pending_watchdog_late_frame_and_back_preserve_history(self):
+        held = []
+        self.page.unroute('**/static/reader.html?**')
+        self.page.route('**/static/reader.html?**', lambda route: held.append(route))
+        self.page.locator('#search-input').focus()
+        before = self.page.evaluate('''() => {
+          history.replaceState({...history.state, foreignSearch:{keep:1}}, '', location.href);
+          return {url:location.href, state:history.state, rows:STATE.results.map(getResultStableId)};
+        }''')
+        with self.page.expect_request('**/static/reader.html?**'):
+            self.page.evaluate('''() => {
+              const path=new URL(document.querySelector('script[src*="search/reader-host/application/navigation.js"]').src)
+                .pathname.replace('search/reader-host/application/navigation.js','reader.html');
+              navigateToReader(path+'?ext=txt&title=Pending');
+              history.replaceState({...history.state, foreignReader:{keep:2}}, '', location.href);
+              const back=history.back.bind(history);
+              window.__releaseBack=()=>{history.back=back;back();};
+              window.__backCalls=0; window.__historyWrites=0;
+              history.back=()=>{__backCalls++;};
+              for (const name of ['pushState','replaceState']) {
+                const original=history[name].bind(history);
+                history[name]=(...args)=>{__historyWrites++;return original(...args);};
+              }
+              window.__returnSnapshot=readerReturnSnapshot;
+            }''')
+        opening = self.page.locator('.reader-overlay-opening')
+        opening.wait_for(state='visible')
+        self.assertEqual(len(held), 1)
+        pending = self.page.evaluate('({url:location.href,state:history.state})')
+        opening.locator('button').click()
+        recovery = self.page.get_by_role('link', name='直接打开搜索页')
+        recovery.wait_for(state='visible', timeout=3000)
+        self.assertFalse(recovery.evaluate('link => !!link.closest("[inert]")'))
+        self.assertEqual(self.page.evaluate('[__backCalls,__historyWrites]'), [1, 0])
+        self.assertTrue(self.page.evaluate('readerClosing && readerReturnSnapshot === __returnSnapshot'))
+        self.assertEqual(self.page.evaluate('({url:location.href,state:history.state})'), pending)
+        held.pop().fulfill(content_type='text/html', body='<body>late reader shell</body>')
+        frame = self.page.frame_locator('.reader-overlay').locator('body')
+        frame.wait_for()
+        self.page.evaluate('''() => {
+          window.__shellDelivered = new Promise(resolve => {
+            window.addEventListener('message', function done(event) {
+              if (event.source === readerHost.overlay.contentWindow && event.data?.type === 'voice-reader-shell') {
+                window.removeEventListener('message', done); resolve();
+              }
+            });
+          });
+        }''')
+        frame.evaluate('() => window.parent.postMessage({type:"voice-reader-shell"},location.origin)')
+        self.page.evaluate('() => window.__shellDelivered')
+        self.assertTrue(recovery.is_visible())
+        self.assertEqual(self.page.evaluate('[__backCalls,__historyWrites]'), [1, 0])
+        self.assertTrue(self.page.evaluate('readerClosing && readerReturnSnapshot === __returnSnapshot'))
+        opened = self.page.evaluate('({url:location.href,state:history.state,length:history.length})')
+        self.assertEqual({k: opened[k] for k in pending}, pending)
+        self.page.evaluate('__releaseBack()')
+        self.page.locator('.reader-overlay').wait_for(state='detached')
+        self.assertEqual(self.page.url, before['url'])
+        self.assertEqual(self.page.evaluate('history.state'), before['state'])
+        self.assertEqual(self.page.evaluate('STATE.results.map(getResultStableId)'), before['rows'])
+        self.assertEqual(self.page.evaluate('document.activeElement.id'), 'search-input')
+        self.assertEqual(self.page.locator('.reader-overlay-opening').count(), 0)
+        self.page.unroute('**/static/reader.html?**')
+        self.page.route('**/static/reader.html?**', lambda route: route.fulfill(
+            content_type='text/html', body='<body>reader</body>'))
+        self.page.evaluate('history.forward()')
+        self.page.frame_locator('.reader-overlay').locator('body').wait_for()
+        self.assertEqual(self.page.evaluate('({url:location.href,state:history.state,length:history.length})'), opened)
+        self.assertEqual(self.page.evaluate('readerHost.overlay.src'), opened['state']['readerUrl'])
+        self.assertFalse(self.page.evaluate('readerClosing'))
+        self.assertEqual(self.page.locator('.reader-overlay-opening a').count(), 0)
+
     def test_watchdog_recovery_rejects_foreign_and_non_search_targets(self):
         self.page.evaluate('''() => {
           const path=new URL(document.querySelector('script[src*="search/reader-host/application/navigation.js"]').src)

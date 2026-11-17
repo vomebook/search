@@ -105,7 +105,7 @@ function createFixture(source, root) {
   for (const file of ["domain/paging-policy.js", "application/paging-controller.js"]) {
     vm.runInContext(fs.readFileSync(path.join(root, "static/search/results", file), "utf8"), context);
   }
-  install(source,context,["readPagingView"]);
+  install(source,context,["getSearchPageMetadata","readPagingView"]);
   context.pagingController = context.VoiceOfMLPagingController.create({
     policy: context.VoiceOfMLPagingPolicy,
     clock: {now:()=>clock, setTimeout:context.setTimeout, clearTimeout:context.clearTimeout},
