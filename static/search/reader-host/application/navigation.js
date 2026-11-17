@@ -60,7 +60,6 @@
     let titleDismissed = false;
     function restoreTitle() {
       if (searchTitle !== null) document.title = searchTitle;
-      searchTitle = null;
     }
     /** @param {HTMLIFrameElement} target @param {unknown} title */
     function showTitle(target, title) {
@@ -313,8 +312,8 @@
       next.classList.add("reader-overlay-pending");
       returnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
       frame = next;
-      // The initial filename is known at the search click. Publish it before
-      // creating the history entry, instead of waiting for the iframe lookup.
+      // The host creates the Reader history entry first, so publishing the
+      // known filename cannot overwrite the search entry's browser title.
       showTitle(next, initialTitle(url));
       opening = document.createElement("div");
       opening.className = "reader-overlay-opening";
@@ -411,7 +410,10 @@
       if (!frame) return null;
       revision++;
       titleDismissed = true;
+      // Reapply after Back, even if the DOM title is already correct: browsers
+      // also store a separate title on each history entry.
       restoreTitle();
+      searchTitle = null;
       const target = frame;
       const keep = keepSpeech && !target.classList.contains("reader-overlay-pending") && speech(target)?.active;
       // Release ownership before lifecycle callbacks can synchronously reenter.

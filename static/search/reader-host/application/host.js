@@ -79,10 +79,11 @@
         position.setScroll(saved);
         snapshot = deps.saveSnapshot(saved?.viewKey || deps.getViewKey());
       }
+      // Preserve the search entry's browser title before publishing the book title.
+      if (addHistory) navigation.remember(url, /** @type {object} */ (position.scroll));
       overlay = navigation.mount(url);
       uiState = "base";
       closing = false;
-      if (addHistory) navigation.remember(url, /** @type {object} */ (position.scroll));
     }
     function reconcileSearchDestination() {
       if ((deps.hashRoute ? location.pathname !== "/search/" : location.pathname.split("/").filter(Boolean).length > 1) || history.state?.voiceReaderOverlay) return;
