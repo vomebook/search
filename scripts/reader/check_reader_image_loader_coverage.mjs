@@ -2,7 +2,7 @@ import {spawnSync} from 'node:child_process';
 import {hasPassingTapContracts} from '../check_tap_contracts.mjs';
 
 // Node 26/V8, this module only, under the synthetic contracts below.
-const minimum = [100, 87.18, 91.67];
+const minimum = [100, 89.36, 91.67];
 const result = spawnSync(process.execPath, [
   '--test', '--test-concurrency=1', '--test-reporter=tap', '--experimental-test-coverage',
   '--test-coverage-include=**/static/reader/formats/reader-image-loader.mjs',

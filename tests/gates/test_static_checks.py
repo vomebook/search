@@ -2293,9 +2293,9 @@ class StaticGateTests(unittest.TestCase):
         self.assertEqual(original.count('reader-image-loader\\.mjs'), 1)
         gate.write_text(original.replace('reader-image-loader\\.mjs', 'missing-image-loader\\.mjs'))
         self.assert_check(self.run_check(*check), False, 'exactly one source row')
-        for thresholds in ('[100.01, 87.18, 91.67]', '[100, 87.19, 91.67]', '[100, 87.18, 91.68]'):
-            self.assertIn('[100, 87.18, 91.67]', original)
-            gate.write_text(original.replace('[100, 87.18, 91.67]', thresholds))
+        for thresholds in ('[100.01, 89.36, 91.67]', '[100, 89.37, 91.67]', '[100, 89.36, 91.68]'):
+            self.assertIn('[100, 89.36, 91.67]', original)
+            gate.write_text(original.replace('[100, 89.36, 91.67]', thresholds))
             self.assert_check(self.run_check(*check), False, 'Reader image loader requires named contracts')
 
     def test_pdf_prefetch_contract_gate_fails_closed(self):
