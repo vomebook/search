@@ -189,7 +189,7 @@ class PdfLoadingTests(unittest.TestCase):
         def record_engine(route):
             response = route.fetch()
             code = response.text()
-            needle = 'task = pdfjs.getDocument({...options, rangeChunkSize:chunkSize, range:transport});'
+            needle = 'task = engine.getDocument({...options, rangeChunkSize:chunkSize, range:transport});'
             self.assertEqual(code.count(needle), 1)
             route.fulfill(response=response, body=code.replace(needle,
                 'window.__actualPdfChunk = chunkSize; ' + needle))
