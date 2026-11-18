@@ -87,6 +87,23 @@ try {
     stale.requestDataRange(start,start+chunk);cancelled.abort(new DOMException('closed','AbortError'));
     await new Promise(resolve=>setTimeout(resolve,30));
     assert.equal(requests.length,before);assert.deepEqual(stale.received,[]);await discard.destroy();
+
+    const closing=new AbortController(), errors=[];
+    const promoted=await openPdfRangeTask(pdfjs,{url:options.url,rangeChunkSize:262144},{
+      signal:closing.signal,readBytes,limit:total,rangeCache:null,initial:Promise.resolve(initial),boundedMetadata:true,
+      onError:error=>errors.push(error)});
+    try {
+      const pending=(await promoted.promise).range;
+      pending.requestDataRange(start,start+chunk);
+      // Promotion moves the batch from a timer to a queued microtask. Abort
+      // before it executes; cancelling only the timer is no longer enough.
+      promoted.prioritizeRange({begin:start+1,end:start+2});
+      closing.abort(new DOMException('closed before promoted batch','AbortError'));
+      await turn();
+      assert.equal(requests.length,before);
+      assert.deepEqual(pending.received,[]);
+      assert.deepEqual(errors,[]);
+    } finally {await promoted.destroy();}
   }
 
   // Source identity and framing remain mandatory on a bridged response.
@@ -109,6 +126,68 @@ try {
     await new Promise(resolve=>setTimeout(resolve,40));
     assert.equal(errors.length,1,kind);assert.deepEqual(transport.received,[],kind);
     assert.match(errors[0].message,kind==='changed'?/PDF_SOURCE_CHANGED/:/PDF_RANGE_INVALID/);await opened.destroy();
+  }
+
+  // A bootstrap supplied without a tail may add one bounded lookahead. If
+  // that speculative request fails, PDF.js still gets its exact demand range.
+  for (const hintFails of [false,true]) {
+    const source=Uint8Array.from({length:20},(_,i)=>i), requests=[];
+    const outcome=Promise.withResolvers();
+    class ObservedTransport extends Transport {
+      onDataRange(begin,bytes) {
+        super.onDataRange(begin,bytes);
+        outcome.resolve(this.received);
+      }
+    }
+    globalThis.fetch=async (_url,init)=>{
+      const range=new Headers(init.headers).get('Range');requests.push(range);
+      if (range==='bytes=12-19') return hintFails ? new Response(null,{status:503}) : rangeResponse(source,12,20);
+      assert.equal(range,'bytes=16-19');
+      return rangeResponse(source,16,20);
+    };
+    const opened=await openPdfRangeTask({...pdfjs,PDFDataRangeTransport:ObservedTransport},options,{
+      signal:new AbortController().signal,readBytes,limit:source.length,rangeCache:null,
+      initial:Promise.resolve({bytes:source.slice(0,4),total:source.length,etag:'"A"'}),
+      onError:outcome.reject});
+    try {
+      const {range}=await opened.promise;
+      assert.deepEqual(requests,['bytes=12-19']);
+      range.requestDataRange(16,20);
+      assert.deepEqual(await outcome.promise,[{begin:16,bytes:[16,17,18,19]}]);
+      assert.deepEqual(requests,hintFails ? ['bytes=12-19','bytes=16-19'] : ['bytes=12-19']);
+    } finally {await opened.destroy();}
+  }
+
+  // Pages must also reuse the bounded opening chunk, but not stale bytes
+  // from a speculative response whose source has changed.
+  for (const prefixChanged of [false,true]) {
+    const chunk=64, source=Uint8Array.from({length:640},(_,i)=>i%251), requests=[];
+    source.set(new TextEncoder().encode('%PDF-1.7\n1 0 obj\n<< /Length 200 >>\nstream\n'));
+    const outcome=Promise.withResolvers();
+    class OpeningTransport extends Transport {
+      onDataRange(begin,bytes) {
+        super.onDataRange(begin,bytes);
+        outcome.resolve(this.received);
+      }
+    }
+    globalThis.fetch=async (_url,init)=>{
+      const range=new Headers(init.headers).get('Range');requests.push(range);
+      if (range==='bytes=64-127') return rangeResponse(source,64,128,prefixChanged? '"B"':'"A"');
+      assert.equal(range,'bytes=80-87');
+      return rangeResponse(source,80,88);
+    };
+    const opened=await openPdfRangeTask({...pdfjs,PDFDataRangeTransport:OpeningTransport},
+      {...options,rangeChunkSize:chunk},{signal:new AbortController().signal,readBytes,limit:source.length,rangeCache:null,
+        initial:Promise.resolve({bytes:source.slice(0,chunk),total:source.length,etag:'"A"',
+          tail:{begin:512,end:640,read:async()=>null,onFailure(){}}}),
+        canPrefetchOpening:()=>true,onError:outcome.reject});
+    try {
+      const {range}=await opened.promise;
+      assert.deepEqual(requests,['bytes=64-127']);
+      range.requestDataRange(80,88);
+      assert.deepEqual(await outcome.promise,[{begin:80,bytes:[...source.slice(80,88)]}]);
+      assert.deepEqual(requests,prefixChanged ? ['bytes=64-127','bytes=80-87'] : ['bytes=64-127']);
+    } finally {await opened.destroy();}
   }
 
   // Large-flat PDFs get one bounded, version-checked tail lookahead for the
@@ -136,6 +215,65 @@ try {
         row.cancelInitial();
       }
     } finally {if(nativeNavigator)Object.defineProperty(globalThis,'navigator',nativeNavigator);else delete globalThis.navigator;}
+  }
+
+  // Join the verified bytes across the two tail hints, or retry the whole
+  // original demand if either hint fails before it can supply its slice.
+  for (const failedHint of [null,'extendedTail','tail']) {
+    const total=8*1024*1024, chunk=128, split=total-2*chunk, extendedBegin=split-3*chunk;
+    const begin=split-3, end=split+5, requests=[], errors=[];
+    const hintedRequests=[[0,chunk],[split,total],[extendedBegin,split]];
+    // The page-first header qualifies for an extended tail; only the small
+    // requested slices of the virtual source are materialized.
+    const header=new TextEncoder().encode('%PDF-1.7\n1 0 obj\n<</Type/Page/Contents 2 0 R/Parent 3232 0 R/Resources 7 0 R>>\nendobj\n');
+    const sourceBytes=(from,to)=>Uint8Array.from({length:to-from},(_,i)=>1+(from+i)%251);
+    const releaseHint=Promise.withResolvers(), outcome=Promise.withResolvers();
+    class ObservedTransport extends Transport {
+      onDataRange(begin,bytes) {
+        super.onDataRange(begin,bytes);
+        outcome.resolve();
+      }
+    }
+    globalThis.fetch=async (_url,init)=>{
+      const [,from,last]=/^bytes=(\d+)-(\d+)$/.exec(new Headers(init.headers).get('Range')).map(Number);
+      const to=last+1;requests.push([from,to]);
+      let body=sourceBytes(from,to);
+      if(from===0)body.set(header);
+      if((failedHint==='extendedTail' && from===extendedBegin && to===split) ||
+         (failedHint==='tail' && from===split && to===total)) {
+        await releaseHint.promise;
+        body=body.subarray(0,1); // Shorter than even the demanded subrange.
+      }
+      return new Response(body,{status:206,headers:{'Content-Range':`bytes ${from}-${last}/${total}`,ETag:'"A"'}});
+    };
+    const rangeOptions={...options,rangeChunkSize:chunk};
+    const hooks={signal:new AbortController().signal,readBytes,limit:total,rangeCache:null,canPrefetchFirstPage:()=>true};
+    const initial=await preparePdfInitialRange(rangeOptions,hooks);
+    let opened;
+    try {
+      for(const hint of ['extendedTail','tail']) {
+        assert.ok(initial[hint],hint);
+        if(hint!==failedHint)assert.ok(await initial[hint].promise,hint);
+      }
+      opened=await openPdfRangeTask({...pdfjs,PDFDataRangeTransport:ObservedTransport},rangeOptions,{
+        ...hooks,initial:Promise.resolve(initial),onError:error=>{errors.push(error);outcome.reject(error);}});
+      const {range}=await opened.promise;
+      range.requestDataRange(begin,end);
+      if(failedHint) {
+        await turn();
+        assert.deepEqual(range.received,[],'no partial delivery while one hint is pending');
+        assert.deepEqual(requests,hintedRequests,'no fallback before the hint fails');
+        releaseHint.resolve();
+        assert.equal(await initial[failedHint].promise,null,failedHint);
+      }
+      await outcome.promise;await turn();
+      assert.deepEqual(range.received,[{begin,bytes:[...sourceBytes(begin,end)]}]);
+      assert.deepEqual(requests,failedHint ? [...hintedRequests,[begin,end]] : hintedRequests);
+      assert.deepEqual(errors,[]);
+    } finally {
+      releaseHint.resolve();
+      if(opened)await opened.destroy();else initial.cancelInitial();
+    }
   }
 
   // A malformed extended tail can never be published or cached as valid.
@@ -494,6 +632,33 @@ try {
     owner.abort(new DOMException('caller closed','AbortError'));
     await assert.rejects(reading,{name:'AbortError'});await turn();
     assert.equal(cancelled,true);assert.equal(calls,1);policy.dispose();
+  }
+  // A consumer may cancel its stream directly without aborting its caller.
+  // Wait until an upstream read is pending so this cannot pass at admission.
+  for (const reason of [undefined,new Error('PDF.js no longer needs this range')]) {
+    const started=Promise.withResolvers(), owner=new AbortController();
+    let calls=0,cancellations=0,upstreamSignal;
+    const body=new ReadableStream({pull(){started.resolve();return new Promise(()=>{});},
+      cancel(){cancellations++;}},{highWaterMark:0});
+    globalThis.fetch=async (_input,init)=>{
+      calls++;upstreamSignal=init.signal;
+      return new Response(body,{status:206,headers:{ETag:'"A"','Content-Range':'bytes 0-3/4'}});
+    };
+    const policy=createPdfFetchPolicy();policy.add(['/book.pdf']);
+    const response=await fetch('/book.pdf',{headers:{Range:'bytes=0-3'},signal:owner.signal});
+    const reader=response.body.getReader();
+    try {
+      const reading=reader.read();await started.promise;
+      await reader.cancel(reason);
+      assert.deepEqual(await reading,{value:undefined,done:true});
+      await turn();
+      assert.equal(cancellations,1);assert.equal(body.locked,false);
+      assert.equal(calls,1);assert.equal(policy.queuedAdmissions,0);
+      assert.equal(owner.signal.aborted,false);
+      assert.equal(upstreamSignal.aborted,true);
+      if (reason) assert.equal(upstreamSignal.reason,reason);
+      else assert.equal(upstreamSignal.reason.name,'AbortError');
+    } finally {reader.releaseLock();policy.dispose();}
   }
   console.log('PDF network contracts: cache identity, safe revalidation and live cancellation passed');
 } finally {
