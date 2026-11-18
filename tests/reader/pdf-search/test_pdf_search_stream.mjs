@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import {getEventListeners} from 'node:events';
 import {test} from 'node:test';
 import {readPdfSearchBytes,readPdfSearchText} from '../../../static/reader/search/reader-pdf-search-stream.mjs';
 const stream=chunks=>new ReadableStream({start(controller){for(const chunk of chunks)controller.enqueue(chunk);controller.close();}});
@@ -17,6 +18,24 @@ test('exact binary sizes and decoded size limits are enforced',async()=>{
  await assert.rejects(readPdfSearchBytes(stream([data]),signal(),5,3),/READER_RESOURCE_LIMIT/);
  await assert.rejects(readPdfSearchBytes(stream([data]),signal(),5,10),/PDF_OCR_SIZE_MISMATCH/);
  await assert.rejects(readPdfSearchText(stream([data]),signal(),3),/READER_RESOURCE_LIMIT/);
+
+ const utf8=new TextEncoder().encode('手机');
+ const chunks=[utf8.subarray(0,3),utf8.subarray(3)];
+ const owner=new AbortController();
+ const complete=readPdfSearchText(stream(chunks),owner.signal,6);
+ assert.equal(getEventListeners(owner.signal,'abort').length,1);
+ assert.equal(await complete,'手机');
+ assert.deepEqual(getEventListeners(owner.signal,'abort'),[]);
+
+ // Each chunk is below the limit, but together they exceed it after a prefix was buffered.
+ for(const read of [body=>readPdfSearchText(body,signal(),5),body=>readPdfSearchBytes(body,signal(),6,5)]){
+  let cancelled=0;
+  // Keep the source cancellable until the consumer explicitly reads past both chunks.
+  const body=new ReadableStream({start(controller){for(const chunk of chunks)controller.enqueue(chunk);},
+   pull(controller){controller.close();},cancel(){cancelled++;}},{highWaterMark:0});
+  await assert.rejects(read(body),/READER_RESOURCE_LIMIT/,'must not return the buffered prefix');
+  assert.equal(cancelled,1);assert.equal(body.locked,false);
+ }
 });
 test('abort pending read cancels the source and releases the reader',async()=>{
  let cancelled=0,ready;const waiting=new Promise(resolve=>{ready=resolve;});
