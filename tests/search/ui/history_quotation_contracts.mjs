@@ -43,7 +43,7 @@ function historyFixture() {
     b.dataset = kind === 'del' ? {del: row.dataset.query} : {};
     b.matches = selector => selector === '.history-' + kind;
     b.closest = selector => selector === '.history-item' ? row : selector.includes('.history-' + kind) ? b : null;
-    b.focus = () => { c.document.activeElement = b; }; return b;
+    b.focus = options => { c.document.activeElement = b; b.focusOptions = options; }; return b;
   }
   dropdown.contains = el => !!el && rows.includes(el.row);
   dropdown.querySelectorAll = selector => selector === '.history-item' ? rows : rows.map(row => row.text);
@@ -133,6 +133,21 @@ test('history keyboard, delete focus, native activation, clear and submission ow
   const clear = {closest: selector => selector === '.history-clear-all' ? clear : null};
   f.dropdown.fire('click', {target: clear, detail: 0});
   assert.deepEqual(plain(c.getHistory()), []); assert.equal(f.dropdown.style.display, 'none'); assert.equal(c.document.activeElement, f.input);
+});
+
+test('history arrow navigation lets the browser scroll the focused entry into view', () => {
+  const f = historyFixture(), {c} = f;
+  c.saveHistory(Array.from({length: 20}, (_, i) => 'query ' + i));
+  f.input.focus();
+  for (let i = 0; i < f.rows.length; i++) {
+    const event = f.key('ArrowDown', c.document.activeElement);
+    assert.equal(event.prevented, true);
+    assert.equal(c.document.activeElement, f.rows[i].text);
+    assert.notEqual(f.rows[i].text.focusOptions?.preventScroll, true, 'focus must scroll entries in the overflow menu into view');
+  }
+  f.key('ArrowUp', c.document.activeElement);
+  assert.equal(c.document.activeElement, f.rows[18].text);
+  assert.notEqual(f.rows[18].text.focusOptions?.preventScroll, true);
 });
 
 test('history preserves listener order, live IME guards, hover/blur delay and long-press cancellation', async () => {

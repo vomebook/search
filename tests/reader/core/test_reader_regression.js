@@ -475,3 +475,64 @@ require('node:test')('Markdown restores saved positions without overriding expli
     if (expected === bookmark.scrollTop) assert.strictEqual(globalThis.location.searchParams.has('bookmark'), false)
   }
 })
+
+require('node:test')('Reader speech uses the visible PDF page and does not require a chapter search index', async (t) => {
+  const { createReaderSpeech } = await import('../../../static/reader/ui/reader-speech.mjs')
+  const keys = ['window', 'document', 'NodeFilter', 'CCRDSpeech', 'sessionStorage', 'localStorage']
+  const previous = keys.map(key => [key, Object.getOwnPropertyDescriptor(globalThis, key)])
+  t.after(() => {
+    for (const [key, descriptor] of previous) {
+      if (descriptor) Object.defineProperty(globalThis, key, descriptor)
+      else delete globalThis[key]
+    }
+  })
+  const published = []
+  Object.assign(globalThis, {
+    window: Object.assign(new EventTarget(), { name: '' }),
+    document: Object.assign(new EventTarget(), { querySelector: () => null }),
+    NodeFilter: { SHOW_TEXT: 4 },
+    CCRDSpeech: { previewClosed() {}, previewLoaded: value => published.push(value.adapter) }
+  })
+  for (const key of ['sessionStorage', 'localStorage'])
+    Object.defineProperty(globalThis, key, { configurable: true, value: { removeItem() {} } })
+  const rect = { top: 0, bottom: 20, height: 20 }
+  const textElement = (data, dataset = {}) => ({ dataset, getBoundingClientRect: () => rect, ownerDocument: {
+    createTreeWalker() {
+      let read = false
+      return { nextNode() { if (read) return null; read = true; return { data, length: data.length } } }
+    },
+    createRange: () => ({ setStart() {}, setEnd() {}, getClientRects: () => [rect], getBoundingClientRect: () => rect })
+  } })
+  const pdfText = textElement('Visible PDF text.')
+  const pdfPage = { dataset: { page: '8', textReady: '1' }, querySelector: () => pdfText }
+  const chapter = textElement('Second chapter text.', { chapter: '2' })
+  const viewport = Object.assign(new EventTarget(), { getBoundingClientRect: () => ({ top: 0, bottom: 800 }) })
+  let phase
+  const context = {
+    capability: { mode: 'pdf' }, sourceUrl: 'fixture', viewport,
+    content: { querySelector: selector => selector.includes('data-page="8"') ? pdfPage : null },
+    documentState: { page: 26, pageCount: 40 }, pageAtMarker: () => pdfPage,
+    readerRuntime: { events: { on: (_, callback) => { phase = callback } } }
+  }
+  createReaderSpeech(context).installReaderSpeech()
+  phase({ phase: 'ready' })
+  await new Promise(setImmediate)
+  assert.strictEqual(published.length, 1, 'a stale saved page must not hide speech on the visible page')
+  const pdf = published[0]
+  assert.strictEqual(pdf.base, 7)
+  assert.strictEqual(pdf.partAt(await pdf.locateTop()).unit, 8)
+
+  const loads = []
+  Object.assign(context, { capability: { mode: 'epub-chapters' }, chapterSearchConfiguration: null,
+    chapterManifestLoader: Object.assign(async index => { loads.push(index); return textElement('First chapter text.') }, { count: 2 }),
+    content: { querySelector: selector => selector.includes('data-chapter="2"') ? chapter : null,
+      querySelectorAll: () => [chapter] } })
+  phase({ phase: 'ready' })
+  assert.strictEqual(published.length, 2, 'a chapter manifest alone is sufficient for speech')
+  const epub = published[1]
+  const part = epub.partAt(await epub.locateTop())
+  assert.strictEqual(part.unit, 1)
+  assert.strictEqual(part.raw, 'Second chapter text.')
+  assert.deepStrictEqual(loads, [1], 'translate player units to one-based Reader chapter indices')
+  phase({ phase: 'disposed' })
+})

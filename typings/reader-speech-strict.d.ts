@@ -8,8 +8,7 @@ export interface SpeechContext {
   epubBook: { sections: FoliateSection[] } | null;
   foliateSectionRoot(article: Element): Element | ShadowRoot;
   foliateSectionLoader: ((index: number) => Promise<unknown>) | null;
-  chapterSearchConfiguration: { chapters: { index: number }[] } | null;
-  chapterManifestLoader: ((index: number) => Promise<HTMLElement | null>) | null;
+  chapterManifestLoader: (((index: number) => Promise<HTMLElement | null>) & { count: number }) | null;
   documentState: { pageCount: number; page: number };
   ocrManifestUrl: string; pdfOcrManifest: object | null;
   pdfDocument: { getPage(page: number): Promise<PdfPage> } | null;

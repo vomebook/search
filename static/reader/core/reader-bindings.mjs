@@ -827,11 +827,11 @@ export function createReaderBindings(readerContext) {
   }
 
   function bindProgressActions() {
+    let seekChanged = false;
     const startSeeking = () => {
       if (readerContext.progressSeeking) return;
-      readerContext.beginReaderNavigation();
       readerContext.progressSeeking = true;
-      readerContext.previousProgressState = readerContext.captureProgressState();
+      seekChanged = false;
     };
     const finishSeeking = () => {
       if (!readerContext.progressSeeking) return;
@@ -854,7 +854,9 @@ export function createReaderBindings(readerContext) {
     readerContext.progressRange.addEventListener("input", () => {
       readerContext.progressPercent.textContent = `${Number(readerContext.progressRange.value).toFixed(1)}%`;
       readerContext.progressRange.setAttribute("aria-valuetext", readerContext.progressPercent.textContent);
-      readerContext.seekProgress(readerContext.progressRange.value, true);
+      // A key or pointer press may leave the value unchanged. Snapshot only on input.
+      readerContext.seekProgress(readerContext.progressRange.value, readerContext.progressSeeking && seekChanged);
+      seekChanged = true;
     });
     for (const type of ["pointerup", "pointercancel"])
       readerContext.progressRange.addEventListener(type, finishSeeking);

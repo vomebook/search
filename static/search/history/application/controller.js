@@ -78,7 +78,7 @@
           const next = event.key === 'ArrowDown' ? index + 1 : index - 1;
           event.preventDefault(); event.stopPropagation();
           if (next < 0) searchInput.focus({ preventScroll: true });
-          else buttons[Math.min(next, buttons.length - 1)]?.focus({ preventScroll: true });
+          else buttons[Math.min(next, buttons.length - 1)]?.focus();
         }
       });
       /** @param {Event} event */

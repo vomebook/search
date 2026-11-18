@@ -86,7 +86,7 @@ export function createReaderSpeech(readerContext) {
   function foliateSections() {
     return (readerContext.epubBook?.sections || []).filter((section) => section.linear !== "no");
   }
-  function chapterList() { return readerContext.chapterSearchConfiguration?.chapters || []; }
+  function chapterCount() { return readerContext.chapterManifestLoader?.count || 0; }
   function pageCount() { return Number(readerContext.documentState?.pageCount) || 0; }
 
   function hasText() {
@@ -126,13 +126,15 @@ export function createReaderSpeech(readerContext) {
       };
     }
     if (current === "epub-chapters") {
-      const chapters = chapterList();
+      // Valid chapter manifests have consecutive 1-based indices. Reading
+      // their text doesn't require the optional full-text search index.
+      const loader = readerContext.chapterManifestLoader;
       /** @param {number} index */
-      const root = (index) => readerContext.content.querySelector(`.reader-epub-chapter[data-chapter="${chapters[index]?.index}"]`);
+      const root = (index) => readerContext.content.querySelector(`.reader-epub-chapter[data-chapter="${index + 1}"]`);
       return {
-        units: chapters.length, first: 0, root,
-        load: async (index) => rootText(root(index) || await readerContext.chapterManifestLoader?.(chapters[index].index)),
-        locate: (index) => readerContext.chapterManifestLoader?.(chapters[index].index)
+        units: chapterCount(), first: 0, root,
+        load: async (index) => rootText(root(index) || await loader?.(index + 1)),
+        locate: (index) => loader?.(index + 1)
       };
     }
     if (current === "pdf" || current === "pdf-pages") {
@@ -373,12 +375,16 @@ export function createReaderSpeech(readerContext) {
         .find((node) => node.getBoundingClientRect().bottom > box.top + 8);
       unit = article ? Number(/** @type {HTMLElement} */ (article).dataset.section) : 0;
     } else if (current === "epub-chapters") {
-      const chapters = chapterList();
       const article = [...readerContext.content.querySelectorAll(".reader-epub-chapter[data-chapter]")]
         .find((node) => node.getBoundingClientRect().bottom > box.top + 8);
-      unit = article ? Math.max(0, chapters.findIndex((chapter) => String(chapter.index) === /** @type {HTMLElement} */ (article).dataset.chapter)) : 0;
+      const chapter = Number(/** @type {HTMLElement | undefined} */ (article)?.dataset.chapter);
+      unit = Number.isInteger(chapter) && chapter >= 1 && chapter <= info.units ? chapter - 1 : 0;
     } else if (info.page) {
-      unit = Math.max(1, Number(readerContext.pageAtMarker?.()) || Number(readerContext.documentState?.page) || 1);
+      // The marker returns a page element; the saved page can lag behind it.
+      const marker = Number(readerContext.pageAtMarker?.()?.dataset.page);
+      const page = Number.isInteger(marker) && marker >= info.first && marker < info.units
+        ? marker : Number(readerContext.documentState?.page) || info.first;
+      unit = Math.max(info.first, Math.min(info.units - 1, page));
     }
     const root = info.root(unit);
     if (!root) return { unit, offset: 0 };

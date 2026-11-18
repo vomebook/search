@@ -116,6 +116,21 @@ test('result actions retain current Reader asset, clipboard failures and shared 
   assert.equal(f.toasts.at(-1), '复制失败');
 });
 
+test('single and bulk copy report an unavailable clipboard or synchronous failure', async () => {
+  const f = fixture(), {c, DOM, click} = f;
+  const button = node({action: 'copy', link: 'copy-me'});
+  button.closest = selector => selector === '[data-action]' ? button : null;
+  c.selectedIndices = {0: true};
+  for (const clipboard of [undefined, {writeText() { throw new Error('disabled'); }}]) {
+    c.navigator.clipboard = clipboard;
+    f.toasts.length = 0;
+    await click(DOM.resultsList, button);
+    await click(DOM.multiCopyLinks, DOM.multiCopyLinks);
+    assert.deepEqual(f.toasts, ['复制失败', '复制失败']);
+    assert.deepEqual(f.copied, []);
+  }
+});
+
 test('breadcrumb keyboard respects IME and native controls; route merges query and sidebar dataset differs by site', async () => {
   const f = fixture(), {c, DOM, click} = f;
   let activated = 0;
