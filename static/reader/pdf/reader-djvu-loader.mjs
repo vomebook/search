@@ -107,83 +107,92 @@ export async function openNativeDjvu(context) {
   // Historical OCR is retained only under the already-established full-source
   // SHA-256 check below. Until the bytes can be independently authenticated,
   // never substitute OCR from an unverified metadata claim.
-  if (!context.ocrManifestUrl) {
-    /** @type {DjvuRange | undefined} */
-    let range;
-    /** @type {ReturnType<typeof createDjvuWorkerAdapter> | undefined} */
-    let documentWorker;
-    const stopBootstrap=new AbortController();
-    const abortBootstrap=()=>{stopBootstrap.abort(signal.reason);documentWorker?.close(signal.reason);};
-    signal.addEventListener('abort',abortBootstrap,{once:true});
-    if (signal.aborted) abortBootstrap();
-    // Preparing the decoder needs no source bytes. Only begin Range I/O once
-    // revision resolution succeeds, even if decoder preparation fails first.
-    let rangeAuthorized = false;
-    /** @type {import('./reader-djvu-worker.mjs').DjvuRangeReader} */
-    const deferredRange = {get total(){return rangeAuthorized ? (range?.total ?? 0) : 0}, get failure(){return range?.failure},
-      read:(offset,length)=>requireRange(rangeAuthorized ? range : undefined).read(offset,length), close:()=>range?.close()};
-    const prepareFailure = {error: /** @type {unknown} */ (null)};
-    const preparing=Promise.resolve().then(()=>{
-      stopBootstrap.signal.throwIfAborted();
-      documentWorker=createDjvuWorkerAdapter(workerUrl,{cacheBytes,rangeReader:deferredRange});
-      return documentWorker.prepare(stopBootstrap.signal);
-    }).catch(error=>{
-      prepareFailure.error = error;
-      throw prepareFailure;
-    });
-    preparing.catch(()=>{});
-    let resolved;
-    try {
-      resolved = await resolving;
-      signal.throwIfAborted();
-    } catch (error) {
-      stopBootstrap.abort(error);
-      signal.removeEventListener('abort',abortBootstrap);
-      documentWorker?.close(error);
-      throw error;
-    }
-    const stopOutline=new AbortController();
-    const abortOutline=()=>stopOutline.abort(signal.reason);
-    signal.addEventListener('abort',abortOutline,{once:true});
-    if(signal.aborted)abortOutline();
-    const outlineFallback=()=>openFullOutline(context,resolved,requireRange(range),stopOutline.signal,cacheBytes);
-    /** @type {typeof fetch} */
-    const fetchResponse=(url,options)=>context.fetchWithReaderTimeout(
-      typeof url === 'string' ? url : url instanceof URL ? url.href : url.url,context.READER_PROXY_TIMEOUT_MS,options);
-    try {
-      const rangeUrl=context.readerContentUrl(resolved.href);
-      const opening=openDjvuRange({signal:stopBootstrap.signal,fetchResponse,url:rangeUrl,
-        readBytes:(response,limit)=>VoiceOfMLReaderSecurity.readBytes(response,limit),
-        timeoutMs:context.READER_PROXY_TIMEOUT_MS}).then(value=>{range=value;return value;});
-
-      await Promise.all([opening,preparing]);
-      rangeAuthorized = true;
-      const document=await openDjvuDocument({workerUrl,rangeReader:range,preparedWorker:documentWorker,
-        signal,outlineFallback,cacheBytes,cachePages:2});
-      // Until the transport has authenticated all slices as one immutable
-      // object, do not claim to have locally computed a whole-file digest.
-      context.trackReaderResource(()=>{stopOutline.abort();stopBootstrap.abort();
-        signal.removeEventListener('abort',abortOutline);signal.removeEventListener('abort',abortBootstrap);document.destroy();});
-      context.assertReaderActive();
-      return document;
-    } catch (error) {
-      stopOutline.abort();stopBootstrap.abort();signal.removeEventListener('abort',abortOutline);
-      signal.removeEventListener('abort',abortBootstrap);documentWorker?.close();
-      const transportFailure=range?.failure;
-      range?.close();
-      // Engine setup cannot authorize a full-source fallback. Only a Range
-      // capability failure or an unsupported lazy open may do so.
-      if (error === prepareFailure) throw prepareFailure.error;
-      if (signal.aborted) throw error;
-      if (!rangeAuthorized && (!isErrorDetail(error) || error.code !== 'DJVU_RANGE_UNSUPPORTED')) throw error;
-      // Only an explicit lack of Range support or an unsupported lazy index
-      // may use the previous full-original path. Network errors, mismatches,
-      // corruption and security failures remain errors, not silent success.
-      requireSupportedFallback(transportFailure,error);
-      return openFullNative(context,resolved,signal,cacheBytes);
-    }
-  }
+  if (!context.ocrManifestUrl) return openRangedNative(context,resolving,signal,cacheBytes);
   return openFullNative(context,await resolving,signal,cacheBytes);
+}
+
+/** @param {unknown} error @param {unknown} prepareFailure @param {boolean} rangeAuthorized
+ * @param {AbortSignal} signal @param {unknown} transportFailure */
+function checkNativeFallback(error, prepareFailure, rangeAuthorized, signal, transportFailure) {
+  if (error === prepareFailure) {
+    const failure = /** @type {{error: unknown}} */ (prepareFailure);
+    throw failure.error;
+  }
+  if (signal.aborted) throw error;
+  if (!rangeAuthorized && (!isErrorDetail(error) || error.code !== 'DJVU_RANGE_UNSUPPORTED')) throw error;
+  requireSupportedFallback(transportFailure,error);
+}
+
+/** @param {DjvuContext} context @param {Promise<URL>} resolving @param {AbortSignal} signal @param {number} cacheBytes */
+async function openRangedNative(context,resolving,signal,cacheBytes) {
+  /** @type {DjvuRange | undefined} */
+  let range;
+  /** @type {ReturnType<typeof createDjvuWorkerAdapter> | undefined} */
+  let documentWorker;
+  const stopBootstrap=new AbortController();
+  const abortBootstrap=()=>{stopBootstrap.abort(signal.reason);documentWorker?.close(signal.reason);};
+  signal.addEventListener('abort',abortBootstrap,{once:true});
+  if (signal.aborted) abortBootstrap();
+  // Preparing the decoder needs no source bytes. Only begin Range I/O once
+  // revision resolution succeeds, even if decoder preparation fails first.
+  let rangeAuthorized = false;
+  /** @type {import('./reader-djvu-worker.mjs').DjvuRangeReader} */
+  const deferredRange = {get total(){return rangeAuthorized ? (range?.total ?? 0) : 0}, get failure(){return range?.failure},
+    read:(offset,length)=>requireRange(rangeAuthorized ? range : undefined).read(offset,length), close:()=>range?.close()};
+  const prepareFailure = {error: /** @type {unknown} */ (null)};
+  const preparing=Promise.resolve().then(()=>{
+    stopBootstrap.signal.throwIfAborted();
+    documentWorker=createDjvuWorkerAdapter(workerUrl,{cacheBytes,rangeReader:deferredRange});
+    return documentWorker.prepare(stopBootstrap.signal);
+  }).catch(error=>{
+    prepareFailure.error = error;
+    throw prepareFailure;
+  });
+  preparing.catch(()=>{});
+  let resolved;
+  try {
+    resolved = await resolving;
+    signal.throwIfAborted();
+  } catch (error) {
+    stopBootstrap.abort(error);
+    signal.removeEventListener('abort',abortBootstrap);
+    documentWorker?.close(error);
+    throw error;
+  }
+  const stopOutline=new AbortController();
+  const abortOutline=()=>stopOutline.abort(signal.reason);
+  signal.addEventListener('abort',abortOutline,{once:true});
+  if(signal.aborted)abortOutline();
+  const outlineFallback=()=>openFullOutline(context,resolved,requireRange(range),stopOutline.signal,cacheBytes);
+  /** @type {typeof fetch} */
+  const fetchResponse=(url,options)=>context.fetchWithReaderTimeout(
+    typeof url === 'string' ? url : url instanceof URL ? url.href : url.url,context.READER_PROXY_TIMEOUT_MS,options);
+  try {
+    const rangeUrl=context.readerContentUrl(resolved.href);
+    const opening=openDjvuRange({signal:stopBootstrap.signal,fetchResponse,url:rangeUrl,
+      readBytes:(response,limit)=>VoiceOfMLReaderSecurity.readBytes(response,limit),
+      timeoutMs:context.READER_PROXY_TIMEOUT_MS}).then(value=>{range=value;return value;});
+
+    await Promise.all([opening,preparing]);
+    rangeAuthorized = true;
+    const document=await openDjvuDocument({workerUrl,rangeReader:range,preparedWorker:documentWorker,
+      signal,outlineFallback,cacheBytes,cachePages:2});
+    // Until the transport has authenticated all slices as one immutable
+    // object, do not claim to have locally computed a whole-file digest.
+    context.trackReaderResource(()=>{stopOutline.abort();stopBootstrap.abort();
+      signal.removeEventListener('abort',abortOutline);signal.removeEventListener('abort',abortBootstrap);document.destroy();});
+    context.assertReaderActive();
+    return document;
+  } catch (error) {
+    stopOutline.abort();stopBootstrap.abort();signal.removeEventListener('abort',abortOutline);
+    signal.removeEventListener('abort',abortBootstrap);documentWorker?.close();
+    const transportFailure=range?.failure;
+    range?.close();
+    // Engine setup cannot authorize a full-source fallback. Only a Range
+    // capability failure or an unsupported lazy open may do so.
+    checkNativeFallback(error,prepareFailure,rangeAuthorized,signal,transportFailure);
+    return openFullNative(context,resolved,signal,cacheBytes);
+  }
 }
 
 /** @param {DjvuContext} context @param {DjvuManifest} manifest @param {Promise<unknown>} pageMapPromise */
