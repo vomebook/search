@@ -1,5 +1,5 @@
 import {spawnSync} from 'node:child_process';
-import {hasPassingTapContracts} from '../check_tap_contracts.mjs';
+import {hasCompleteFlatTapReport, hasPassingTapContracts} from '../check_tap_contracts.mjs';
 
 // Node 26/V8, the lifecycle module only under synthetic contracts; excludes host.
 const minimum = [100, 97.47, 100];
@@ -34,10 +34,7 @@ const lines = text.split(/\r?\n/);
 if (result.status !== 0 || rows.length !== 1 || rows[0].some((value, index) => value < minimum[index]) ||
     !hasPassingTapContracts(text, required) ||
     ['# start of coverage report', '# end of coverage report'].some(marker => lines.filter(line => line === marker).length !== 1) ||
-    lines.filter(line => /^# duration_ms \d+(?:\.\d+)?$/.test(line)).length !== 1 ||
-    !['1..11', '# tests 11', '# pass 11', '# fail 0', '# cancelled 0'].every(summary =>
-      lines.filter(line => line === summary).length === 1) ||
-    ['# tests ', '# pass ', '# fail ', '# cancelled '].some(prefix => lines.filter(line => line.startsWith(prefix)).length !== 1)) {
+    !hasCompleteFlatTapReport(text)) {
   console.error('Reader lifecycle requires named contracts and exactly one source row above each minimum');
   process.exitCode = 1;
 }

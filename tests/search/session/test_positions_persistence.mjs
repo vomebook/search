@@ -6,18 +6,24 @@ import {test} from 'node:test';
 import {indexedDB, IDBKeyRange} from 'fake-indexeddb';
 import {APP_DEPENDENCIES, stripBundledScripts} from '../../../scripts/build/compose_app.mjs';
 import {createRequire} from 'node:module';
+import {installPrecachePaths, shellScriptPaths} from '../../support/shell_assets.mjs';
 
-test('positions modules are composed once and synchronized across shell, resources and worker', () => {
+test('positions modules are composed once and synchronized across shell, resources and worker', async () => {
   const read = name => readFileSync(new URL('../../../' + name, import.meta.url), 'utf8');
   const html = read('static/index.html'), worker = read('static/sw.js');
   const resources = createRequire(import.meta.url)('../../../static/reader-resources.js');
+  const staticBase = '/search/static/';
+  const scripts = shellScriptPaths(html, staticBase);
+  const bundled = shellScriptPaths(stripBundledScripts(html), staticBase);
+  const precache = await installPrecachePaths(worker, resources, staticBase);
+  assert.equal(scripts.filter(path => path === 'app.js').length, 1);
   for (const name of ['search/positions/domain/policy.js', 'search/positions/infrastructure/indexed-db.js',
     'search/positions/application/persistence.js', 'search/positions/application/restoration.js']) {
     assert.equal(APP_DEPENDENCIES.filter(path => path === name).length, 1);
-    assert.equal(html.split(name).length - 1, 1);
-    assert.ok(html.indexOf(name) < html.lastIndexOf('app.js'));
-    assert.equal(stripBundledScripts(html).includes(name), false);
-    assert.equal(worker.split(name).length - 1, 1);
+    assert.equal(scripts.filter(path => path === name).length, 1, name);
+    assert.ok(scripts.indexOf(name) < scripts.indexOf('app.js'), name);
+    assert.ok(!bundled.includes(name), name);
+    assert.equal(precache.filter(path => path === name).length, 1, name);
     for (const site of ['github', 'hf']) assert.equal(resources.buildFiles(site).filter(path => path === name).length, 1);
   }
 });

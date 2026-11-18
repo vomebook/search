@@ -23,6 +23,12 @@ class ReaderDomSearchGateTests(unittest.TestCase):
         stderr = '\n'.join(tests + ['', '----------------------------------------------------------------------',
                                      'Ran 8 tests in 0.123s', '', 'OK']) + '\n'
         self.assertTrue(GATE.valid_output(stdout, stderr, 'chromium', digest))
+        extra = f'test_extra ({GATE.TEST_MODULE}.ReaderDomSearchContracts.test_extra) ... ok\n'
+        expanded = extra + stderr.replace('Ran 8 tests', 'Ran 9 tests')
+        extra_marker = f'DOM_SEARCH_CONTRACT_COMPLETED chromium extraContract {digest}\n'
+        self.assertTrue(GATE.valid_output(stdout + extra_marker, expanded, 'chromium', digest))
+        self.assertFalse(GATE.valid_output(stdout, expanded, 'chromium', digest))
+        self.assertFalse(GATE.valid_output(stdout + extra_marker, stderr, 'chromium', digest))
         changes = [
             (stdout.replace(markers[0] + '\n', ''), stderr),
             (stdout + markers[0] + '\n', stderr),

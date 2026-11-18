@@ -11,5 +11,5 @@ python -B scripts/check_test_inventory.py --project github
 python -B scripts/ci/run_static_gate_shards.py --project github
 python -B -m unittest -v tests.gates.test_ci_ubuntu_mirror
 python -B scripts/ci/reader_matrix_contract.py
-python -B -m unittest -v tests.gates.test_reader_matrix_contract
+python -B -m unittest -v tests.gates.test_reader_matrix_contract tests.gates.test_unittest_suite_runner
 node tests/reader/pdf-v3/test_dataset_primary_policy.mjs

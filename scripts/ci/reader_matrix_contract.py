@@ -24,7 +24,7 @@ WORKFLOW = ROOT / '.github/workflows/reader-refactor.yml'
 ORIGINAL = Path(__file__).with_name('reader_matrix_original_2a7436bf.yml')
 ORIGINAL_COMMIT = '2a7436bfd0f3f97f26edc18326558cdaee13bacb'
 ORIGINAL_SHA256 = '03bc625cb66d6c19010602be7c3c9504d1cb5647d15928405db20f82c24735ba'
-POLICY_SHA256 = '3ac946ec52191313d531d4327f746b1096d95b488c68f70a772b9606c13874c4'
+POLICY_SHA256 = '71be3a7f5e71366b3ba35df8457f7238c80c66e68e9344f8133971dfb65f92c0'
 JOBS = ('github-search', 'huggingface-search')
 SHARDS = ['static', 'core', 'loading', 'navigation', 'search']
 _SHARD = re.compile(r"\$\{\{\s*!cancelled\(\)\s*&&\s*steps\.setup-complete\.outputs\.ready\s*==\s*'true'\s*&&\s*matrix\.shard\s*==\s*'([a-z0-9-]+)'\s*\}\}")
@@ -95,6 +95,145 @@ def business_record(step, shard):
             'run_sha256': hashlib.sha256(step['run'].encode()).hexdigest(), 'shard': shard}
 
 
+# Only argv-only invocations use this representation. Shell programs (with
+# pipes, redirects, substitutions or quoting) keep their exact reviewed bytes.
+_UNQUOTED_ARGV = re.compile(r'[A-Za-z0-9._/=-]+(?:[ \t]+[A-Za-z0-9._/=-]+)*')
+
+
+def simple_commands(run):
+    """Parse the restricted shell subset used by these unittest recipes."""
+    commands = []
+    # Shell removes a continuation, rather than inserting a separator.
+    for line in run.replace('\\\n', '').split('\n'):
+        line = line.strip(' \t')
+        if line:
+            require(_UNQUOTED_ARGV.fullmatch(line), 'unsupported unittest shell syntax')
+            commands.append(tuple(line.split()))
+    return tuple(commands)
+
+
+def unittest_command(modules, required, *, hf=False, prefix=()):
+    script = 'scripts/ci/run_unittest_suite.py'
+    args = tuple(word for case in required for word in ('--require', case))
+    return (*prefix, 'python3', '-B', ('../' if hf else '') + script, *args, *modules)
+
+
+def unittest_recipe():
+    timeout = 'tests.reader.browser.test_reader_timeout'
+    backend = 'tests.reader.backend.test_reader_backend'
+    ocr = 'tests.reader.backend.test_reader_ocr_validation'
+    integration = 'tests.backend.test_real_integration'
+    ebook = 'tests.reader.browser.test_reader_ebook_flow'
+    store = 'tests.reader.browser.test_reader_store_preservation'
+    prefetch = 'tests.search.browser.test_prefetch_pipeline'
+    wildcard = 'tests.search.backend.test_wildcard_index_oracle'
+    store_upgrade = store + '.ReaderStorePreservationTests.test_v1_and_v2_upgrade_preserves_raw_history_bookmarks_and_unknown_store'
+    return {
+        'Check Reader request timeout in Chromium': (unittest_command((timeout,), tuple(
+            timeout + '.ReaderTimeoutTests.' + name for name in (
+                'test_txt_timeout_before_headers_shows_failure', 'test_txt_timeout_after_headers_shows_failure',
+                'test_id_resolution_timeout_shows_failure'))),),
+        'Run Reader proxy cancellation and cached-range gate': (unittest_command((backend, ocr), (
+            backend + '.ReaderBackendTests.test_cached_range_finishes_when_disconnect_probe_swallows_cancellation',
+            ocr + '.ReaderOcrRouteTests.test_cancelled_subscriber_does_not_cancel_shared_ocr_parse',
+        ), hf=True, prefix=('timeout', '120s')),),
+        'Run real backend and browser integration': (unittest_command((integration,), tuple(
+            integration + '.RealDataIntegrationTests.' + name for name in (
+                'test_03_page_two_matches_independently_decoded_compact_slice',
+                'test_20_browser_initial_injected_payload_is_visible_without_api_mock',
+                'test_21_browser_query_posts_to_real_api_and_dom_matches_response',
+                'test_99_graceful_shutdown_has_no_resource_leak_warnings')), hf=True),),
+        'Run additional Hugging Face search and Reader regressions': (
+            unittest_command((
+                'tests.performance.test_folder_projection_performance', 'tests.performance.test_random_reader_performance',
+                'tests.reader.browser.test_reader_accessibility', ebook, store, prefetch,
+                'tests.search.browser.test_search_positions', wildcard,
+            ), (
+                ebook + '.EbookFlowTests.test_native_first_chapter_reads_packaged_styles_in_parallel_and_keeps_cascade',
+                store_upgrade, prefetch + '.PrefetchPipelineTests.test_three_page_lookahead_joins_foreground_and_retains_later_pages',
+                wildcard + '.WildcardIndexOracleTests.test_generated_index_is_exact_for_metadata_fields',
+            ), hf=True),
+            unittest_command((store,), (
+                store_upgrade, store + '.ReaderStorePreservationTests.test_incompatible_upgrade_rolls_back_all_new_indexes_and_bookmark_store',
+            ), hf=True, prefix=('READER_STORE_TEST_BROWSER=firefox',)),
+        ),
+    }
+
+
+UNITTEST_RUNS = unittest_recipe()
+
+
+def backend_selection(run):
+    """Return the literal backend module list and its unchanged shell envelope."""
+    matches = list(re.finditer(r'^backend_tests=\(\n(.*?)^\)[ \t]*\n', run, re.M | re.S))
+    require(len(matches) == 1, 'expected one backend test array')
+    match = matches[0]
+    selection = match[1].replace('\\\n', '')
+    require(re.fullmatch(r'[A-Za-z0-9_. \t\n]+', selection), 'unsupported backend test array syntax')
+    names = tuple(selection.split())
+    require(names and len(names) == len(set(names)) and
+            all(re.fullmatch(r'tests(?:\.[a-zA-Z_][a-zA-Z_0-9]*)+', name) for name in names),
+            'invalid backend test selection')
+    return names, run[:match.start(1)] + run[match.end(1):]
+
+
+def execution_policy(job, records, historical_steps):
+    """Apply reviewed CI optimizations without rewriting the historical evidence."""
+    original = {step['name']: step for step in historical_steps if 'name' in step}
+    by_name = {r['fields']['name']: r for r in records if 'fields' in r}
+    full = 'Run full Reader refactor suite'
+    chapter = 'Run chapter-search browser gate'
+    require(by_name[full]['shard'] == by_name[chapter]['shard'] == 'navigation' and
+            original[full]['run'] == 'python3 -B -m unittest -v tests.reader.browser.test_reader_refactor' and
+            original[chapter]['run'] == 'python3 -B -m unittest -v -k chapter_search tests.reader.browser.test_reader_refactor' and
+            {k: v for k, v in by_name[full]['fields'].items() if k != 'name'} ==
+            {k: v for k, v in by_name[chapter]['fields'].items() if k != 'name'},
+            f'{job}: chapter-search subset differs from the full suite')
+    adjusted = []
+    browser_setup = {'Cache Playwright browsers', 'Install Playwright system dependencies', 'Install Playwright browsers'}
+    for record in records:
+        if 'setup' in record:
+            setup = record['setup']
+            name = setup.get('name')
+            condition = None
+            if name in browser_setup:
+                condition = "${{ matrix.shard != 'static' }}"
+            if job == 'github-search' and name == 'Install qpdf':
+                condition = "${{ matrix.shard == 'loading' }}"
+            if job == 'huggingface-search' and (name == 'Install isolated coverage dependencies' or
+                                                setup.get('id') == 'coverage-python'):
+                condition = "${{ matrix.shard == 'static' }}"
+            if condition is not None:
+                require('if' not in setup, f'{job}: setup condition already exists')
+                record = {**record, 'setup': {**setup, 'if': condition}}
+        name = record.get('fields', {}).get('name')
+        if name == chapter:
+            continue
+        if job == 'github-search' and name == 'Run Reader flow and cleanup regressions':
+            earlier = 'Run multi-format preparation and navigation gates'
+            toc = 'tests.performance.test_reader_toc_latency'
+            require(by_name[earlier]['shard'] == record['shard'] == 'navigation' and
+                    toc in original[earlier]['run'].split(), 'Pages TOC suite must remain in navigation')
+            run = original[name]['run']
+            require(run.endswith(' ' + toc), 'unexpected duplicate TOC invocation')
+            record = {**record, 'argv': simple_commands(run.removesuffix(' ' + toc))}
+        if name in UNITTEST_RUNS:
+            record = {**record, 'argv': UNITTEST_RUNS[name]}
+        if job == 'huggingface-search' and name == 'Check backend coverage and quality inventory':
+            record = {**record, 'backend_selection': backend_selection(original[name]['run'])}
+        if job == 'github-search' and name == 'Check warmed Reader shell reuse':
+            node, *lines = original[name]['run'].splitlines()
+            prefix = 'python3 -B -m unittest -v '
+            require(len(lines) == 4 and all(line.startswith(prefix) for line in lines),
+                    'unexpected Service Worker test invocations')
+            arguments = [line.removeprefix(prefix) for line in lines]
+            require(len(set(arguments)) == 4 and all(' ' not in value for value in arguments),
+                    'invalid Service Worker test selection')
+            record = {**record, 'argv': (tuple(node.split()), (*prefix.split(), *arguments))}
+        adjusted.append(record)
+    return adjusted
+
+
 def verify_policy(contract, original_bytes):
     """Authenticate policy and derive every classified business step from history."""
     require(digest(contract) == POLICY_SHA256, 'reviewed policy fingerprint mismatch')
@@ -121,6 +260,7 @@ def verify_policy(contract, original_bytes):
         setup_labels = [r['label'] for r in contract['matrix_jobs'][job]['steps'] if 'setup' in r]
         for name in names:
             require(name in seen or name in setup_labels, f'{job}: historical step missing: {name}')
+    return original
 
 
 def summary_manifest(summary):
@@ -155,7 +295,7 @@ def summary_manifest(summary):
 def validate(workflow, contract, original_bytes=None):
     if original_bytes is None:
         original_bytes = ORIGINAL.read_bytes()
-    verify_policy(contract, original_bytes)
+    historical = verify_policy(contract, original_bytes)['jobs']
     require({k: v for k, v in workflow.items() if k != 'jobs'} == contract['workflow_settings'], 'workflow settings changed')
     jobs = workflow.get('jobs')
     require(isinstance(jobs, dict) and set(jobs) == set(contract['job_ids']), 'unexpected workflow jobs')
@@ -174,10 +314,11 @@ def validate(workflow, contract, original_bytes=None):
         strategy = job.get('strategy')
         require(isinstance(strategy, dict) and strategy.get('fail-fast') is False and strategy.get('matrix') == {'shard': SHARDS}, f'{name}: invalid matrix')
         steps = job.get('steps')
-        require(isinstance(steps, list) and len(steps) == len(policy['steps']), f'{name}: missing or extra steps')
+        expected_steps = execution_policy(name, policy['steps'], historical[name]['steps'])
+        require(isinstance(steps, list) and len(steps) == len(expected_steps), f'{name}: missing or extra steps')
         seen = set()
         by_shard = {shard: [] for shard in SHARDS}
-        for step, expected in zip(steps, policy['steps']):
+        for step, expected in zip(steps, expected_steps):
             require(isinstance(step, dict), f'{name}: invalid step')
             if 'setup' in expected:
                 require(step == expected['setup'], f"{name}: setup changed: {expected['label']}")
@@ -194,7 +335,21 @@ def validate(workflow, contract, original_bytes=None):
             require(shard == expected['shard'], f"{name}: invalid shard for {expected['fields']['name']}")
             original = {k: v for k, v in step.items() if k != 'if'}
             actual = business_record(original, shard)
-            require(actual == expected, f"{name}: business step changed: {expected['fields']['name']}")
+            if 'argv' in expected:
+                # Keep the same execution fields and compare shell argv where
+                # we can parse it exactly, without accepting shell operators.
+                matches = all(actual[key] == expected[key] for key in ('fields', 'shard'))
+                matches = matches and simple_commands(original['run']) == expected['argv']
+            elif 'backend_selection' in expected:
+                names, envelope = backend_selection(original['run'])
+                required, expected_envelope = expected['backend_selection']
+                required_set = set(required)
+                matches = (actual['fields'] == expected['fields'] and actual['shard'] == expected['shard'] and
+                           envelope == expected_envelope and
+                           tuple(name for name in names if name in required_set) == required)
+            else:
+                matches = actual == expected
+            require(matches, f"{name}: business step changed: {expected['fields']['name']}")
             require(actual['fields']['name'] not in seen, f'{name}: duplicate step')
             seen.add(actual['fields']['name'])
             by_shard[shard].append(actual['fields']['name'])

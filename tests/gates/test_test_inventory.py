@@ -5,7 +5,9 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import call, patch
 
+from scripts import check_test_inventory
 from scripts.check_test_inventory import validate
 
 
@@ -67,7 +69,28 @@ class TestInventoryTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'no tests found'):
             self.check()
 
+    def test_shared_evidence_is_preprocessed_once_per_validation(self):
+        (self.root / 'tests/test_other.py').write_text('')
+        self.doc['tests']['tests/test_other.py'] = {'kind': 'direct', 'source': 'scripts/gate.py'}
+        self.save()
+        evidence = self.root / 'scripts/gate.py'
+        text = 'tests.test_example tests/test_other.py\n'
+        evidence.write_text(text)
+        with (patch.object(Path, 'read_text', autospec=True, side_effect=Path.read_text) as read,
+              patch.object(check_test_inventory, 'uncomment', wraps=check_test_inventory.uncomment) as uncomment):
+            self.check()
+            self.assertEqual(read.call_args_list.count(call(evidence, encoding='utf-8')), 1)
+            uncomment.assert_called_once_with(text)
+
+        evidence.write_text('tests.test_example tests/test_other.py_extra\n')
+        with self.assertRaisesRegex(ValueError, 'does not reference tests/test_other.py'):
+            self.check()
+        (self.root / 'tests/test_other.py').unlink()
+        with self.assertRaisesRegex(ValueError, r"stale=\['tests/test_other\.py'\]"):
+            self.check()
+
     def test_missing_or_comment_only_evidence_fails(self):
+        self.check()
         (self.root / 'scripts/gate.py').write_text('# tests.test_example\n')
         with self.assertRaisesRegex(ValueError, 'does not reference'):
             self.check()
@@ -76,18 +99,36 @@ class TestInventoryTests(unittest.TestCase):
             self.check()
 
     def test_side_effect_import_accounts_for_helper_and_missing_import_fails(self):
-        (self.root / 'tests/test_helper.mjs').write_text('')
         importer = self.root / 'tests/test_runner.mjs'
-        importer.write_text("import './test_helper.mjs';\n")
+        first_import = "import './test_helper.mjs';\n"
+        second_import = "import './test_other.mjs';\n"
+        importer.write_text(first_import + second_import)
         (self.root / 'scripts/gate.py').write_text(
             'MODULES = "tests.test_example tests/test_runner.mjs"\n')
         self.doc['tests']['tests/test_runner.mjs'] = {'kind': 'script', 'source': 'scripts/gate.py'}
-        self.doc['tests']['tests/test_helper.mjs'] = {'kind': 'helper', 'source': 'tests/test_runner.mjs'}
+        for path in ('tests/test_helper.mjs', 'tests/test_other.mjs'):
+            (self.root / path).write_text('')
+            self.doc['tests'][path] = {'kind': 'helper', 'source': 'tests/test_runner.mjs'}
         self.save()
-        self.check()
-        importer.write_text('')
-        with self.assertRaisesRegex(ValueError, 'helper importer missing'):
+        with patch.object(Path, 'read_text', autospec=True, side_effect=Path.read_text) as read:
             self.check()
+            self.assertEqual(read.call_args_list.count(call(importer, encoding='utf-8')), 1)
+        for text in ('  # ' + second_import, ''):
+            importer.write_text(first_import + text)
+            with self.assertRaisesRegex(ValueError, 'helper importer missing: tests/test_other.mjs'):
+                self.check()
+
+    def test_manifest_evidence_is_revalidated(self):
+        self.doc['tests']['tests/test_example.py'] = {'kind': 'manifest', 'source': 'manifest.json'}
+        self.save()
+        manifest = self.root / 'manifest.json'
+        manifest.write_text(json.dumps({'module': 'tests.test_example', 'groups': ['example']}))
+        self.check()
+        for data in ({'module': 'tests.test_example', 'groups': []},
+                     {'module': 'tests.test_other', 'groups': ['example']}):
+            manifest.write_text(json.dumps(data))
+            with self.assertRaisesRegex(ValueError, 'invalid frozen-manifest evidence'):
+                self.check()
 
     def test_missing_tests_package_marker_fails(self):
         (self.root / 'tests/__init__.py').unlink()
@@ -128,18 +169,35 @@ if signal.getsignal(signal.SIGALRM) is not sentinel or not 1 <= remaining <= 30:
 
     def test_hf_external_workflow_must_reference_case_when_supplied(self):
         self.doc['project'] = 'hf'
-        self.doc['tests']['tests/test_example.py'] = {'kind': 'direct', 'source': '@reader-workflow'}
+        entry = {'kind': 'direct', 'source': '@reader-workflow'}
+        self.doc['tests']['tests/test_example.py'] = entry
+        self.doc['tests']['tests/test_other.py'] = entry
+        (self.root / 'tests/test_other.py').write_text('')
         self.save()
         workflow = self.root / 'workflow.yml'
-        workflow.write_text('  huggingface-search:\n    # tests.test_example\n')
-        with self.assertRaisesRegex(ValueError, 'does not reference'):
+
+        def check_workflow():
             validate(self.root, inventory=self.inventory, project='hf', external_workflow=workflow)
-        workflow.write_text('  github-search:\n    run: python -m unittest tests.test_example\n'
-                            '  huggingface-search:\n    run: echo no-tests\n')
-        with self.assertRaisesRegex(ValueError, 'does not reference'):
-            validate(self.root, inventory=self.inventory, project='hf', external_workflow=workflow)
-        workflow.write_text('  huggingface-search:\n    run: python -m unittest tests.test_example\n')
-        validate(self.root, inventory=self.inventory, project='hf', external_workflow=workflow)
+
+        workflow.write_text('  huggingface-search:\n    run: python -m unittest tests.test_example tests.test_other\n')
+        with (patch.object(Path, 'read_text', autospec=True, side_effect=Path.read_text) as read,
+              patch.object(check_test_inventory, 'uncomment', wraps=check_test_inventory.uncomment) as uncomment):
+            check_workflow()
+            self.assertEqual(read.call_args_list.count(call(workflow, encoding='utf-8')), 1)
+            uncomment.assert_called_once()
+
+        workflow.write_text('  github-search:\n    run: python -m unittest tests.test_other\n'
+                            '  huggingface-search:\n    run: python -m unittest tests.test_example\n'
+                            '    # tests.test_other\n'
+                            '  next-job:\n    run: python -m unittest tests.test_other\n')
+        with self.assertRaisesRegex(ValueError, 'does not reference tests/test_other.py'):
+            check_workflow()
+        workflow.write_text('  github-search:\n    run: python -m unittest tests.test_example tests.test_other\n')
+        with self.assertRaisesRegex(ValueError, 'missing HF job'):
+            check_workflow()
+        workflow.unlink()
+        with self.assertRaises(FileNotFoundError):
+            check_workflow()
 
 
 if __name__ == '__main__':

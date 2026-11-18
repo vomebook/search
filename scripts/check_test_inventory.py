@@ -9,6 +9,7 @@ and are not parsed as a shell or workflow program.
 from __future__ import annotations
 
 import argparse
+from functools import cache
 import json
 from pathlib import Path, PurePosixPath
 import re
@@ -76,6 +77,22 @@ def validate(root, inventory=INVENTORY, project=PROJECT, external_workflow=None)
                            if isinstance(entry, dict))
     if project == 'hf' and external_workflow is not None and external_sources == 0:
         raise ValueError('HF inventory has no external workflow evidence')
+    # Evidence is shared by entries, but never by separate validations.
+    @cache
+    def read_evidence(file):
+        return file.read_text(encoding='utf-8')
+
+    @cache
+    def literal_evidence(file):
+        return uncomment(read_evidence(file))
+
+    @cache
+    def helper_sources():
+        return tuple((file.relative_to(root).as_posix(), literal_evidence(file))
+                     for file in (root / 'tests').rglob('*')
+                     if file.is_file() and file.suffix in {'.js', '.mjs'})
+
+    hf_job = None
     for path, entry in doc['tests'].items():
         clean_path(path, 'tests')
         if not isinstance(entry, dict) or entry.get('kind') not in KINDS:
@@ -93,12 +110,13 @@ def validate(root, inventory=INVENTORY, project=PROJECT, external_workflow=None)
                 raise ValueError(f'invalid external workflow evidence: {path}')
             if external_workflow is None:
                 continue  # Local HF checkout has no GitHub workflow; CI supplies it.
-            workflow = external_workflow.read_text(encoding='utf-8')
-            if workflow.count('  huggingface-search:\n') != 1:
-                raise ValueError('external workflow missing HF job')
-            hf_job = workflow.split('  huggingface-search:\n', 1)[1]
-            hf_job = re.split(r'\n  [A-Za-z0-9_-]+:\s*\n', hf_job, maxsplit=1)[0]
-            if not referenced(path, uncomment(hf_job)):
+            if hf_job is None:
+                workflow = read_evidence(external_workflow)
+                if workflow.count('  huggingface-search:\n') != 1:
+                    raise ValueError('external workflow missing HF job')
+                hf_job = workflow.split('  huggingface-search:\n', 1)[1]
+                hf_job = uncomment(re.split(r'\n  [A-Za-z0-9_-]+:\s*\n', hf_job, maxsplit=1)[0])
+            if not referenced(path, hf_job):
                 raise ValueError(f'external workflow HF job does not reference {path}')
             continue
         if set(entry) != {'kind', 'source'}:
@@ -108,33 +126,28 @@ def validate(root, inventory=INVENTORY, project=PROJECT, external_workflow=None)
         evidence = root / source
         if not evidence.is_file() or evidence.is_symlink():
             raise ValueError(f'missing evidence file for {path}: {source}')
-        text = uncomment(evidence.read_text(encoding='utf-8'))
         if kind == 'manifest':
-            data = json.loads(evidence.read_text(encoding='utf-8'))
+            data = json.loads(read_evidence(evidence))
             module = path[:-3].replace('/', '.') if path.endswith('.py') else None
             if not module or data.get('module') != module or not data.get('groups'):
                 raise ValueError(f'invalid frozen-manifest evidence for {path}')
         elif kind == 'helper':
-            if not source.startswith('tests/') or not referenced(source, refs_for_helper(root, path)):
+            read_evidence(evidence)  # A declared importer still has to be readable UTF-8.
+            if not source.startswith('tests/') or not referenced(source, refs_for_helper(path, helper_sources())):
                 raise ValueError(f'helper importer missing: {path}')
-        elif not referenced(path, text):
+        elif not referenced(path, literal_evidence(evidence)):
             raise ValueError(f'evidence does not reference {path}: {source}')
     evidence = ('external workflow references unchecked' if external_sources and external_workflow is None
                 else 'references checked')
     print(f'{project} CI test inventory: {len(actual)} files accounted for; {evidence}; not proof of execution')
 
 
-def refs_for_helper(root, path):
+def refs_for_helper(path, sources):
     """Return importer paths that literally require the candidate's basename."""
     stem = PurePosixPath(path).stem
-    importers = []
-    for file in (root / 'tests').rglob('*'):
-        if not file.is_file() or file.suffix not in {'.js', '.mjs'}:
-            continue
-        text = uncomment(file.read_text(encoding='utf-8'))
-        if re.search(r'(?:require\(\s*|from\s+|import\s+)[\"\'][^\"\']*/' + re.escape(stem) + r'(?:\.(?:js|mjs))?[\"\']', text):
-            importers.append(file.relative_to(root).as_posix())
-    return '\n'.join(importers)
+    pattern = re.compile(r'(?:require\(\s*|from\s+|import\s+)[\"\'][^\"\']*/' + re.escape(stem)
+                         + r'(?:\.(?:js|mjs))?[\"\']')
+    return '\n'.join(importer for importer, text in sources if pattern.search(text))
 
 
 def main():

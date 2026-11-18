@@ -157,7 +157,7 @@ jobs:
       - name: Check content-addressed PDF opening
         timeout-minutes: 30
         run: |
-          READER_BUILT_SITE="$GITHUB_WORKSPACE/_site" READER_BUILT_PROJECT=github python3 -B -m unittest -v \
+          READER_BUILT_SITE="$GITHUB_WORKSPACE/_site" READER_BUILT_PROJECT=github python3 -B scripts/ci/run_unittest_suite.py \
             tests.reader.browser.test_reader_pdf_first_page.PdfFirstPageTests.test_first_page_reused_and_wrong_count_corrected \
             tests.reader.browser.test_reader_pdf_first_page.PdfFirstPageTests.test_nested_tree_first_page_does_not_wait_for_other_pages \
             tests.reader.browser.test_reader_pdf_first_page.PdfFirstPageTests.test_incremental_linearized_preview_uses_current_first_page \

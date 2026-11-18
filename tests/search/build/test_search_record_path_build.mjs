@@ -1,108 +1,62 @@
-import assert from "node:assert/strict";
-import {readFileSync} from "node:fs";
-import {createRequire} from "node:module";
-import {APP_DEPENDENCIES, stripBundledScripts} from "../../../scripts/build/compose_app.mjs";
+import assert from 'node:assert/strict';
+import {readFileSync} from 'node:fs';
+import {createRequire} from 'node:module';
+import {APP_DEPENDENCIES, stripBundledScripts} from '../../../scripts/build/compose_app.mjs';
+import {installPrecachePaths, shellScriptPaths} from '../../support/shell_assets.mjs';
 
-const resources = createRequire(import.meta.url)("../../../static/reader-resources.js");
-const html = readFileSync("static/index.html", "utf8");
-const worker = readFileSync("static/sw.js", "utf8");
-const moduleName = "search/catalog/domain/record-path.js";
-const highlightName = "search/results/presentation/highlight.js";
-const cacheName = "search/requests/infrastructure/response-cache.js";
-const typesName = "search/catalog/domain/file-types.js";
-const validationName = "search/requests/domain/response-validation.js";
-const identityName = "search/results/domain/result-identity.js";
-const folderSelectionName = "search/sidebar/domain/folder-selection.js";
-const heightIndexName = "search/results/virtual/domain/height-index.js";
-const canonicalName = "search/shared/domain/stable-stringify.js";
-const viewKeyName = "search/positions/domain/view-key.js";
-const recoveryName = "search/results/domain/recovery.js";
-const windowPageName = "search/results/window/domain/page.js";
-const sidebarName = "search/sidebar/presentation/markup.js";
-assert.equal(APP_DEPENDENCIES.filter(name => name === moduleName).length, 1);
-assert.equal((html.match(/<script src="[^"\n]*search\/catalog\/domain\/record-path\.js"><\/script>/g) || []).length, 1);
-assert.ok(html.indexOf(moduleName) < html.lastIndexOf("app.js"));
-const bundled = stripBundledScripts(html);
-assert.doesNotMatch(bundled, /<script src="[^"\n]*search\/catalog\/domain\/record-path\.js"/);
-assert.equal((bundled.match(/<script\s+src=/g) || []).length, 1, "bundled shell must contain only the application script");
-assert.equal(APP_DEPENDENCIES.filter(name => name === highlightName).length, 1);
-assert.equal((html.match(/<script src="[^"\n]*search\/results\/presentation\/highlight\.js"><\/script>/g) || []).length, 1);
-assert.ok(html.indexOf(highlightName) < html.lastIndexOf("app.js"));
-assert.doesNotMatch(bundled, /<script src="[^"\n]*search\/results\/presentation\/highlight\.js"/);
-assert.equal(APP_DEPENDENCIES.filter(name => name === cacheName).length, 1);
-assert.equal((html.match(/<script src="[^"\n]*search\/requests\/infrastructure\/response-cache\.js"><\/script>/g) || []).length, 1);
-assert.ok(html.indexOf(cacheName) < html.lastIndexOf("app.js"));
-assert.doesNotMatch(bundled, /<script src="[^"\n]*search\/requests\/infrastructure\/response-cache\.js"/);
-assert.equal(APP_DEPENDENCIES.filter(name => name === typesName).length, 1);
-assert.equal((html.match(/<script src="[^"\n]*search\/catalog\/domain\/file-types\.js"><\/script>/g) || []).length, 1);
-assert.ok(html.indexOf(typesName) < html.lastIndexOf("app.js"));
-assert.doesNotMatch(bundled, /<script src="[^"\n]*search\/catalog\/domain\/file-types\.js"/);
-assert.equal(APP_DEPENDENCIES.filter(name => name === validationName).length, 1);
-assert.equal((html.match(/<script src="[^"\n]*search\/requests\/domain\/response-validation\.js"><\/script>/g) || []).length, 1);
-assert.ok(html.indexOf(validationName) < html.lastIndexOf("app.js"));
-assert.doesNotMatch(bundled, /<script src="[^"\n]*search\/requests\/domain\/response-validation\.js"/);
-assert.equal(APP_DEPENDENCIES.filter(name => name === identityName).length, 1);
-assert.equal((html.match(/<script src="[^"\n]*search\/results\/domain\/result-identity\.js"><\/script>/g) || []).length, 1);
-assert.ok(html.indexOf(moduleName) < html.indexOf(identityName) && html.indexOf(identityName) < html.lastIndexOf("app.js"));
-assert.doesNotMatch(bundled, /<script src="[^"\n]*search\/results\/domain\/result-identity\.js"/);
-assert.equal(APP_DEPENDENCIES.filter(name => name === folderSelectionName).length, 1);
-assert.equal(APP_DEPENDENCIES.filter(name => name === heightIndexName).length, 1);
-assert.equal(APP_DEPENDENCIES.filter(name => name === canonicalName).length, 1);
-assert.equal(APP_DEPENDENCIES.filter(name => name === viewKeyName).length, 1);
-assert.equal(APP_DEPENDENCIES.filter(name => name === recoveryName).length, 1);
-assert.equal(APP_DEPENDENCIES.filter(name => name === windowPageName).length, 1, "window page must be composed once");
-assert.equal(APP_DEPENDENCIES.filter(name => name === sidebarName).length, 1);
-assert.equal(APP_DEPENDENCIES.at(-1), "search/sidebar/application/directory.js");
-for (const name of ["search/sidebar/infrastructure/scroll.js", "search/sidebar/presentation/directory.js", "search/sidebar/application/directory.js"]) assert.ok(APP_DEPENDENCIES.includes(name));
-assert.ok(APP_DEPENDENCIES.indexOf(sidebarName) < APP_DEPENDENCIES.indexOf("search/sidebar/application/filters.js"));
-assert.equal((html.match(/<script src="[^"\n]*search\/sidebar\/domain\/folder-selection\.js"><\/script>/g) || []).length, 1);
-assert.ok(html.indexOf(identityName) < html.indexOf(folderSelectionName) && html.indexOf(folderSelectionName) < html.lastIndexOf("app.js"));
-assert.doesNotMatch(bundled, /<script src="[^"\n]*search\/sidebar\/domain\/folder-selection\.js"/);
-assert.equal((html.match(/<script src="[^"\n]*search\/results\/virtual\/domain\/height-index\.js"><\/script>/g) || []).length, 1);
-assert.ok(html.indexOf(folderSelectionName) < html.indexOf(heightIndexName) && html.indexOf(heightIndexName) < html.lastIndexOf("app.js"));
-assert.doesNotMatch(bundled, /<script src="[^"\n]*search\/results\/virtual\/domain\/height-index\.js"/);
-assert.equal((html.match(/<script src="[^"\n]*search\/shared\/domain\/stable-stringify\.js"><\/script>/g) || []).length, 1);
-assert.ok(html.indexOf(heightIndexName) < html.indexOf(canonicalName) && html.indexOf(canonicalName) < html.lastIndexOf("app.js"));
-assert.doesNotMatch(bundled, /<script src="[^"\n]*search\/shared\/domain\/stable-stringify\.js"/);
-assert.equal((html.match(/<script src="[^"\n]*search\/positions\/domain\/view-key\.js"><\/script>/g) || []).length, 1);
-assert.ok(html.indexOf(canonicalName) < html.indexOf(viewKeyName) && html.indexOf(viewKeyName) < html.lastIndexOf("app.js"));
-assert.doesNotMatch(bundled, /<script src="[^"\n]*search\/positions\/domain\/view-key\.js"/);
-assert.equal((html.match(/<script src="[^"\n]*search\/results\/domain\/recovery\.js"><\/script>/g) || []).length, 1);
-assert.ok(html.indexOf(viewKeyName) < html.indexOf(recoveryName) && html.indexOf(recoveryName) < html.lastIndexOf("app.js"));
-assert.doesNotMatch(bundled, /<script src="[^"\n]*search\/results\/domain\/recovery\.js"/);
-assert.equal((html.match(/<script src="[^"\n]*search\/results\/window\/domain\/page\.js"><\/script>/g) || []).length, 1, "window page source script must be present once");
-assert.ok(html.indexOf(recoveryName) < html.indexOf(windowPageName) && html.indexOf(windowPageName) < html.lastIndexOf("app.js"));
-assert.doesNotMatch(bundled, /<script src="[^"\n]*search\/results\/window\/domain\/page\.js"/);
-assert.equal((html.match(/<script src="[^"\n]*search\/sidebar\/presentation\/markup\.js"><\/script>/g) || []).length, 1);
-assert.ok(html.indexOf(windowPageName) < html.indexOf(sidebarName) && html.indexOf(sidebarName) < html.lastIndexOf("app.js"));
-assert.doesNotMatch(bundled, /<script src="[^"\n]*search\/sidebar\/presentation\/markup\.js"/);
-for (const project of ["github", "hf"]) {
-  assert.equal(resources.buildFiles(project).filter(name => name === moduleName).length, 1);
-  assert.equal(resources.buildFiles(project).filter(name => name === highlightName).length, 1);
-  assert.equal(resources.buildFiles(project).filter(name => name === cacheName).length, 1);
-  assert.equal(resources.buildFiles(project).filter(name => name === typesName).length, 1);
-  assert.equal(resources.buildFiles(project).filter(name => name === validationName).length, 1);
-  assert.equal(resources.buildFiles(project).filter(name => name === identityName).length, 1);
-  assert.equal(resources.buildFiles(project).filter(name => name === folderSelectionName).length, 1);
-  assert.equal(resources.buildFiles(project).filter(name => name === heightIndexName).length, 1);
-  assert.equal(resources.buildFiles(project).filter(name => name === canonicalName).length, 1);
-  assert.equal(resources.buildFiles(project).filter(name => name === viewKeyName).length, 1);
-  assert.equal(resources.buildFiles(project).filter(name => name === recoveryName).length, 1);
-  assert.equal(resources.buildFiles(project).filter(name => name === windowPageName).length, 1, "window page must be a build dependency");
-  assert.equal(resources.buildFiles(project).filter(name => name === sidebarName).length, 1);
+const resources = createRequire(import.meta.url)('../../../static/reader-resources.js');
+const html = readFileSync('static/index.html', 'utf8');
+const worker = readFileSync('static/sw.js', 'utf8');
+const staticBase = '/search/static/';
+const required = [
+  'search/catalog/domain/record-path.js',
+  'search/results/presentation/highlight.js',
+  'search/requests/infrastructure/response-cache.js',
+  'search/catalog/domain/file-types.js',
+  'search/requests/domain/response-validation.js',
+  'search/results/domain/result-identity.js',
+  'search/sidebar/domain/folder-selection.js',
+  'search/results/virtual/domain/height-index.js',
+  'search/shared/domain/stable-stringify.js',
+  'search/positions/domain/view-key.js',
+  'search/results/domain/recovery.js',
+  'search/results/window/domain/page.js',
+  'search/sidebar/presentation/markup.js',
+];
+const windowPage = 'search/results/window/domain/page.js';
+const appScripts = [...APP_DEPENDENCIES, 'app.js'];
+const scripts = shellScriptPaths(html, staticBase, {ordered: appScripts});
+const bundled = shellScriptPaths(stripBundledScripts(html), staticBase, {ordered: ['app.js']});
+const precache = await installPrecachePaths(worker, resources, staticBase);
+const count = (files, target) => files.filter(file => file === target).length;
+assert.deepEqual(bundled, ['app.js'], 'bundled shell must contain only the application script');
+assert.equal(count(scripts, 'app.js'), 1);
+assert.equal(count(precache, 'app.js'), 1);
+// The development shell need not mirror the full bundle order, but every
+// composed classic dependency must load once and execute before the host.
+assert.equal(new Set(appScripts).size, appScripts.length, 'application composition must not duplicate scripts');
+for (const name of APP_DEPENDENCIES) {
+  const message = name === windowPage ? 'window page source script must be present once' : `${name} must load once`;
+  assert.equal(count(scripts, name), 1, message);
+  assert.ok(scripts.indexOf(name) < scripts.indexOf('app.js'), `${name} must load before app.js`);
 }
-assert.match(worker, /["']\/(?:search\/)?static\/app\.js["']/);
-assert.doesNotMatch(worker, /["']\/(?:search\/)?static\/search\/catalog\/domain\/record-path\.js["']/);
-assert.doesNotMatch(worker, /["']\/(?:search\/)?static\/search\/results\/presentation\/highlight\.js["']/);
-assert.doesNotMatch(worker, /["']\/(?:search\/)?static\/search\/requests\/infrastructure\/response-cache\.js["']/);
-assert.doesNotMatch(worker, /["']\/(?:search\/)?static\/search\/catalog\/domain\/file-types\.js["']/);
-assert.doesNotMatch(worker, /["']\/(?:search\/)?static\/search\/requests\/domain\/response-validation\.js["']/);
-assert.doesNotMatch(worker, /["']\/(?:search\/)?static\/search\/results\/domain\/result-identity\.js["']/);
-assert.doesNotMatch(worker, /["']\/(?:search\/)?static\/search\/sidebar\/domain\/folder-selection\.js["']/);
-assert.doesNotMatch(worker, /["']\/(?:search\/)?static\/search\/results\/virtual\/domain\/height-index\.js["']/);
-assert.doesNotMatch(worker, /["']\/(?:search\/)?static\/search\/shared\/domain\/stable-stringify\.js["']/);
-assert.doesNotMatch(worker, /["']\/(?:search\/)?static\/search\/positions\/domain\/view-key\.js["']/);
-assert.doesNotMatch(worker, /["']\/(?:search\/)?static\/search\/results\/domain\/recovery\.js["']/);
-assert.doesNotMatch(worker, /["']\/(?:search\/)?static\/search\/results\/window\/domain\/page\.js["']/);
-assert.doesNotMatch(worker, /["']\/(?:search\/)?static\/search\/sidebar\/presentation\/markup\.js["']/);
-console.log("record path source and bundled shell/SW contracts preserved");
+for (const name of required) {
+  assert.equal(count(APP_DEPENDENCIES, name), 1, `${name} must be composed once`);
+  assert.ok(!precache.includes(name), `${name} must not be individually precached`);
+  for (const project of ['github', 'hf']) {
+    assert.equal(count(resources.buildFiles(project), name), 1,
+      name === windowPage ? 'window page must be a build dependency' : `${name} missing or duplicated in ${project}`);
+  }
+}
+// The identity and window helpers consume the modules preceding them.
+const ordered = [required[0], ...required.slice(5)];
+for (let i = 1; i < ordered.length; i++) {
+  assert.ok(scripts.indexOf(ordered[i - 1]) < scripts.indexOf(ordered[i]), `${ordered[i - 1]} must precede ${ordered[i]}`);
+}
+const sidebarMarkup = required.at(-1);
+assert.ok(APP_DEPENDENCIES.indexOf(sidebarMarkup) < APP_DEPENDENCIES.indexOf('search/sidebar/application/filters.js'));
+const directoryFiles = ['search/sidebar/infrastructure/scroll.js', 'search/sidebar/presentation/directory.js',
+  'search/sidebar/application/directory.js'];
+assert.ok(directoryFiles.every(name => APP_DEPENDENCIES.includes(name)));
+assert.equal(APP_DEPENDENCIES.at(-1), directoryFiles.at(-1));
+console.log('record path source and bundled shell/SW contracts preserved');

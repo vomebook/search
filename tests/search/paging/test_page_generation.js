@@ -274,7 +274,8 @@ for (const {name: project, root} of searchTestProjects()) {
     const document = new EventTarget(), frames = new Map();
     let top = 0, frame = 0, demand = 0;
     const c = vm.createContext({window: new EventTarget(), document, DOM, VSCROLL, RESULT_SCROLL_SEGMENT_HEIGHT: 1000,
-      updateScrollTrack() {}, updateScrollThumb() {}, getResultScrollTop: () => top, setResultScrollTop: value => {top = value;},
+      updateScrollTrack() {}, updateScrollThumb() {}, getResultScrollTop: () => top,
+      setResultScrollTop(value, restoreWindow) {top = value; if (restoreWindow) c.renderVisible();},
       getVirtualTotalHeight: () => 1000, renderVisible() {if (!VSCROLL.isDraggingThumb) demand++;},
       requestAnimationFrame(fn) {frames.set(++frame, fn); return frame;}, cancelAnimationFrame: id => frames.delete(id),
       consumeDeferredSearchAppend: () => false, maybeLoadNextPage() {}});

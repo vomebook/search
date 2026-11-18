@@ -4,6 +4,7 @@ import vm from 'node:vm';
 import test from 'node:test';
 import {createRequire} from 'node:module';
 import {APP_DEPENDENCIES, stripBundledScripts} from '../../../scripts/build/compose_app.mjs';
+import {installPrecachePaths, shellScriptPaths} from '../../support/shell_assets.mjs';
 
 const names = ['search/shell/presentation/view.js', 'search/shell/application/controller.js'];
 const app = fs.readFileSync('static/app.js', 'utf8');
@@ -65,16 +66,23 @@ function fixture() {
   return {c, events, nodes, frames, messages, document, DOM, main, mainControl, leftControl, rightControl, element};
 }
 
-test('shell modules are registered once in source, bundle, offline, resources and strict projects', () => {
+test('shell modules are registered once in source, bundle, offline, resources and strict projects', async () => {
   const html = fs.readFileSync('static/index.html', 'utf8');
+  const worker = fs.readFileSync('static/sw.js', 'utf8');
   const resources = createRequire(import.meta.url)('../../../static/reader-resources.js');
+  const staticBase = space ? '/static/' : '/search/static/';
+  const scripts = shellScriptPaths(html, staticBase);
+  const bundled = shellScriptPaths(stripBundledScripts(html), staticBase);
+  const precache = await installPrecachePaths(worker, resources, staticBase);
+  assert.equal(scripts.filter(path => path === 'app.js').length, 1);
+  assert.equal(bundled.filter(path => path === 'app.js').length, 1);
   for (const name of names) {
     assert.equal(APP_DEPENDENCIES.filter(item => item === name).length, 1);
-    assert.equal(html.split(name).length - 1, 1);
-    assert.ok(html.indexOf(name) < html.lastIndexOf('app.js'));
-    assert.ok(!stripBundledScripts(html).includes(name));
+    assert.equal(scripts.filter(path => path === name).length, 1, name);
+    assert.ok(scripts.indexOf(name) < scripts.indexOf('app.js'), `${name} must precede app.js`);
+    assert.ok(!bundled.includes(name), `${name} must not load separately after bundling`);
     for (const project of ['github', 'hf']) assert.equal(resources.buildFiles(project).filter(item => item === name).length, 1);
-    assert.equal(fs.readFileSync('static/sw.js', 'utf8').split('/static/' + name).length - 1, 1);
+    assert.equal(precache.filter(path => path === name).length, 1, name);
     for (const project of ['check', 'strict', 'search-exact']) {
       const files = JSON.parse(fs.readFileSync(`config/types/jsconfig.${project}.json`, 'utf8')).files;
       assert.ok(files.includes('../../static/' + name));

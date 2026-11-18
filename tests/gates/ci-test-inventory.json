@@ -50,6 +50,10 @@
       "kind": "direct",
       "source": ".github/workflows/reader-refactor.yml"
     },
+    "tests/gates/test_unittest_suite_runner.py": {
+      "kind": "script",
+      "source": "scripts/ci/check_pages_source.sh"
+    },
     "tests/live/test_live_smoke.js": {
       "kind": "excluded",
       "reason": "Live network smoke test depends on deployed services."

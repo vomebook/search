@@ -507,6 +507,9 @@ class BrowserBehaviorTest(unittest.TestCase):
 
     def test_virtual_scroll_settles_after_jumps_and_preserves_append(self):
         self.load()
+        # Force the long text to wrap on every runner, so estimated appended
+        # rows differ substantially from their actual height at thumb release.
+        self.page.add_style_tag(content=".result-path, .result-title { letter-spacing: 5px; }")
         result = self.page.evaluate("""async () => {
             const repeat = (value, count) => Array(count).fill(value).join("");
             STATE.results = Array.from({length: 800}, (_, index) => ({
@@ -621,6 +624,11 @@ class BrowserBehaviorTest(unittest.TestCase):
             const dragDomCount = DOM.resultsList.querySelectorAll(".result-item").length;
             document.dispatchEvent(new MouseEvent("mouseup", {bubbles: true}));
             const scrollTopAfterMouseUp = container.scrollTop;
+            let maxReleaseJump = Math.abs(scrollTopAfterMouseUp - scrollTopAfterDragFrame);
+            for (let frame = 0; frame < 5; frame++) {
+                await new Promise(requestAnimationFrame);
+                maxReleaseJump = Math.max(maxReleaseJump, Math.abs(container.scrollTop - scrollTopAfterDragFrame));
+            }
             return {
                 samples,
                 trackTopStable: trackTopBeforeScroll === DOM.scrollTrack.style.top,
@@ -637,7 +645,7 @@ class BrowserBehaviorTest(unittest.TestCase):
                 readsAfterWidthChange: repeatedReads,
                 scrollTopBeforeDragFrame,
                 scrollTopAfterDragFrame,
-                scrollTopAfterMouseUp,
+                maxReleaseJump,
                 clientHeight: container.clientHeight,
                 dragHitIndex,
                 dragDomCount,
@@ -660,7 +668,7 @@ class BrowserBehaviorTest(unittest.TestCase):
         self.assertGreater(result["scrollTopAfterDragFrame"], result["scrollTopBeforeDragFrame"])
         self.assertIsNotNone(result["dragHitIndex"])
         self.assertLess(result["dragDomCount"], 50)
-        self.assertLess(abs(result["scrollTopAfterMouseUp"] - result["scrollTopAfterDragFrame"]), result["clientHeight"])
+        self.assertLess(result["maxReleaseJump"], result["clientHeight"])
         self.assertFalse(result["draggingAfterMouseUp"])
         self.assertEqual(self.page_errors, [])
 

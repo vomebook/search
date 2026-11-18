@@ -1,5 +1,5 @@
 import {spawnSync} from 'node:child_process';
-import {hasPassingTapContracts} from '../check_tap_contracts.mjs';
+import {hasCompleteFlatTapReport, hasPassingTapContracts} from '../check_tap_contracts.mjs';
 
 const minimum = [98.13, 87.50, 100];
 const names = ['resource paths use the real contract and reject JSON coercion', 'manifest preview null partition', 'page map null entry',
@@ -27,12 +27,9 @@ const markers = scripts.every(([path, marker]) => {
   const index = lines.indexOf(`# Subtest: ${path}`), preceding = lines[index - 1] || '';
   return preceding === `# ${marker}` || preceding.startsWith(`# ${marker} `);
 });
-const summaries = ['1..14', '# tests 14', '# pass 14', '# fail 0', '# cancelled 0', '# skipped 0', '# todo 0',
-  '# start of coverage report', '# end of coverage report'];
+const coverageMarkers = ['# start of coverage report', '# end of coverage report'];
 if (result.status !== 0 || !hasPassingTapContracts(text, [...names.map(name => ({name})), ...scripts.map(([name]) => ({name}))]) ||
-    !markers || summaries.some(s => lines.filter(line => line === s).length !== 1) ||
-    ['# tests ', '# pass ', '# fail ', '# cancelled ', '# skipped ', '# todo '].some(prefix => lines.filter(line => line.startsWith(prefix)).length !== 1) ||
-    lines.filter(line => /^# duration_ms \d+(?:\.\d+)?$/.test(line)).length !== 1 ||
+    !markers || !hasCompleteFlatTapReport(text) || coverageMarkers.some(s => lines.filter(line => line === s).length !== 1) ||
     rows.length !== 1 || rows[0].some((value, i) => value < minimum[i])) {
   console.error('reader-v3 coverage requires named contracts, completion markers, summaries and one coverage row');
   process.exitCode = 1;

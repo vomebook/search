@@ -1,5 +1,5 @@
 import {spawnSync} from 'node:child_process';
-import {hasPassingTapContracts} from '../check_tap_contracts.mjs';
+import {hasCompleteFlatTapReport, hasPassingTapContracts} from '../check_tap_contracts.mjs';
 
 // These are seven pre-existing file-level Node scripts, not seven unit cases
 // or a claim of coverage over the complete DjVu implementation.
@@ -19,7 +19,6 @@ if (result.stdout) process.stdout.write(result.stdout);
 if (result.stderr) process.stderr.write(result.stderr);
 if (result.error) throw result.error;
 const lines = (result.stdout || '').split(/\r?\n/);
-const summaries = ['1..7', '# tests 7', '# pass 7', '# fail 0', '# cancelled 0', '# skipped 0', '# todo 0'];
 const complete = contracts.every(([name, marker]) => {
   const subtest = `# Subtest: tests/reader/djvu/test_reader_djvu_${name}.mjs`;
   const index = lines.indexOf(subtest);
@@ -38,7 +37,6 @@ if (boundary.stderr) process.stderr.write(boundary.stderr);
 if (boundary.error) throw boundary.error;
 const boundaryName = 'reads reject invalid lengths and offsets without dispatching new windows';
 const boundaryLines = (boundary.stdout || '').split(/\r?\n/);
-const boundarySummaries = ['1..3', '# tests 3', '# pass 3', '# fail 0', '# cancelled 0', '# skipped 0', '# todo 0'];
 const boundaryRequired = [{name: 'tests/reader/djvu/test_reader_djvu_range.mjs',
   marker: 'DjVu range bounds, identity, retries, caching and cancellation passed'}, {name: boundaryName},
   {name:'Content-Range decimal coordinates are bounded and identity-pinned'}];
@@ -47,10 +45,7 @@ const coverageRows = boundaryLines.flatMap(line => {
   return match ? [match.slice(1).map(Number)] : [];
 });
 const boundaryComplete = boundary.status === 0 && hasPassingTapContracts(boundary.stdout || '', boundaryRequired) &&
-  boundarySummaries.every(summary => boundaryLines.filter(line => line === summary).length === 1) &&
-  ['# tests ', '# pass ', '# fail ', '# cancelled ', '# skipped ', '# todo '].every(prefix =>
-    boundaryLines.filter(line => line.startsWith(prefix)).length === 1) &&
-  boundaryLines.filter(line => /^# duration_ms \d+(?:\.\d+)?$/.test(line)).length === 1 &&
+  hasCompleteFlatTapReport(boundary.stdout || '') &&
   ['# start of coverage report', '# end of coverage report'].every(marker => boundaryLines.filter(line => line === marker).length === 1) &&
   coverageRows.length === 1 && coverageRows[0].every((value, index) => value >= minimum[index]);
 // Independently gate the actual adapter's typed worker/message boundary. This
@@ -69,13 +64,9 @@ const workerRows = workerLines.flatMap(line => {
   const match = /^\s*#\s*reader-djvu-worker\.mjs\s*\|\s*(\d+(?:\.\d+)?)\s*\|\s*(\d+(?:\.\d+)?)\s*\|\s*(\d+(?:\.\d+)?)\s*\|/.exec(line);
   return match ? [match.slice(1).map(Number)] : [];
 });
-const workerSummaries = ['1..1', '# tests 1', '# pass 1', '# fail 0', '# cancelled 0', '# skipped 0', '# todo 0'];
 const workerComplete = worker.status === 0 && hasPassingTapContracts(worker.stdout || '', [{name: workerName,
   marker:'DjVu Worker bounds, errors, timeout, cancellation and geometry checks passed'}]) &&
-  workerSummaries.every(summary => workerLines.filter(line => line === summary).length === 1) &&
-  ['# tests ', '# pass ', '# fail ', '# cancelled ', '# skipped ', '# todo '].every(prefix =>
-    workerLines.filter(line => line.startsWith(prefix)).length === 1) &&
-  workerLines.filter(line => /^# duration_ms \d+(?:\.\d+)?$/.test(line)).length === 1 &&
+  hasCompleteFlatTapReport(worker.stdout || '') &&
   ['# start of coverage report', '# end of coverage report'].every(marker => workerLines.filter(line => line === marker).length === 1) &&
   workerRows.length === 1 && workerRows[0].every((value, index) => value >= workerMinimum[index]);
 // Gate the scheduler separately: this measures only queue/cache behavior, not
@@ -94,13 +85,9 @@ const schedulerRows = schedulerLines.flatMap(line => {
   const match = /^\s*#\s*reader-djvu-scheduler\.mjs\s*\|\s*(\d+(?:\.\d+)?)\s*\|\s*(\d+(?:\.\d+)?)\s*\|\s*(\d+(?:\.\d+)?)\s*\|/.exec(line);
   return match ? [match.slice(1).map(Number)] : [];
 });
-const schedulerSummaries = ['1..1', '# tests 1', '# pass 1', '# fail 0', '# cancelled 0', '# skipped 0', '# todo 0'];
 const schedulerComplete = scheduler.status === 0 && hasPassingTapContracts(scheduler.stdout || '', [{name: schedulerName,
   marker:'DjVu scheduler cancellation, ordering, deduplication, LRU and closure passed'}]) &&
-  schedulerSummaries.every(summary => schedulerLines.filter(line => line === summary).length === 1) &&
-  ['# tests ', '# pass ', '# fail ', '# cancelled ', '# skipped ', '# todo '].every(prefix =>
-    schedulerLines.filter(line => line.startsWith(prefix)).length === 1) &&
-  schedulerLines.filter(line => /^# duration_ms \d+(?:\.\d+)?$/.test(line)).length === 1 &&
+  hasCompleteFlatTapReport(scheduler.stdout || '') &&
   ['# start of coverage report', '# end of coverage report'].every(marker => schedulerLines.filter(line => line === marker).length === 1) &&
   schedulerRows.length === 1 && schedulerRows[0].every((value, index) => value >= schedulerMinimum[index]);
 // The PDF-shaped document adapter has its own geometry/outline/render gate.
@@ -120,10 +107,7 @@ const adapterRows = adapterLines.flatMap(line => {
 });
 const adapterComplete = adapter.status === 0 && hasPassingTapContracts(adapter.stdout || '', [{name: workerName,
   marker:'DjVu Worker bounds, errors, timeout, cancellation and geometry checks passed'}]) &&
-  workerSummaries.every(summary => adapterLines.filter(line => line === summary).length === 1) &&
-  ['# tests ', '# pass ', '# fail ', '# cancelled ', '# skipped ', '# todo '].every(prefix =>
-    adapterLines.filter(line => line.startsWith(prefix)).length === 1) &&
-  adapterLines.filter(line => /^# duration_ms \d+(?:\.\d+)?$/.test(line)).length === 1 &&
+  hasCompleteFlatTapReport(adapter.stdout || '') &&
   ['# start of coverage report', '# end of coverage report'].every(marker => adapterLines.filter(line => line === marker).length === 1) &&
   adapterRows.length === 1 && adapterRows[0].every((value, index) => value >= adapterMinimum[index]);
 // Exact per-module source identity guard: real rejection on malformed inputs
@@ -144,10 +128,7 @@ const identityRows = identityLines.flatMap(line => {
 });
 const identityComplete = identity.status === 0 && hasPassingTapContracts(identity.stdout || '', [{name: identityName,
   marker:'DjVu dataset source size, hash, cancellation and map-failure guards passed'}]) &&
-  workerSummaries.every(summary => identityLines.filter(line => line === summary).length === 1) &&
-  ['# tests ', '# pass ', '# fail ', '# cancelled ', '# skipped ', '# todo '].every(prefix =>
-    identityLines.filter(line => line.startsWith(prefix)).length === 1) &&
-  identityLines.filter(line => /^# duration_ms \d+(?:\.\d+)?$/.test(line)).length === 1 &&
+  hasCompleteFlatTapReport(identity.stdout || '') &&
   ['# start of coverage report', '# end of coverage report'].every(marker => identityLines.filter(line => line === marker).length === 1) &&
   identityRows.length === 1 && identityRows[0].every((value, index) => value >= identityMinimum[index]);
 // Loader-only coverage combines its two existing real source/range scripts;
@@ -169,20 +150,13 @@ const loaderRows = loaderLines.flatMap(line => {
   const match = /^\s*#\s*reader-djvu-loader\.mjs\s*\|\s*(\d+(?:\.\d+)?)\s*\|\s*(\d+(?:\.\d+)?)\s*\|\s*(\d+(?:\.\d+)?)\s*\|/.exec(line);
   return match ? [match.slice(1).map(Number)] : [];
 });
-const loaderSummaries = ['1..2', '# tests 2', '# pass 2', '# fail 0', '# cancelled 0', '# skipped 0', '# todo 0'];
 const loaderComplete = loader.status === 0 && hasPassingTapContracts(loader.stdout || '', loaderRequired) &&
-  loaderSummaries.every(summary => loaderLines.filter(line => line === summary).length === 1) &&
-  ['# tests ', '# pass ', '# fail ', '# cancelled ', '# skipped ', '# todo '].every(prefix =>
-    loaderLines.filter(line => line.startsWith(prefix)).length === 1) &&
-  loaderLines.filter(line => /^# duration_ms \d+(?:\.\d+)?$/.test(line)).length === 1 &&
+  hasCompleteFlatTapReport(loader.stdout || '') &&
   ['# start of coverage report', '# end of coverage report'].every(marker => loaderLines.filter(line => line === marker).length === 1) &&
   loaderRows.length === 1 && loaderRows[0].every((value, index) => value >= loaderMinimum[index]);
 if (result.status !== 0 || !complete || !hasPassingTapContracts(result.stdout || '', required) ||
     !boundaryComplete || !workerComplete || !schedulerComplete || !adapterComplete || !identityComplete || !loaderComplete ||
-    !summaries.every(summary => lines.filter(line => line === summary).length === 1) ||
-    ['# tests ', '# pass ', '# fail ', '# cancelled ', '# skipped ', '# todo '].some(prefix =>
-      lines.filter(line => line.startsWith(prefix)).length !== 1) ||
-    lines.filter(line => /^# duration_ms \d+(?:\.\d+)?$/.test(line)).length !== 1) {
+    !hasCompleteFlatTapReport(result.stdout || '')) {
   console.error('DjVu contracts require seven named scripts, completion markers and zero skipped/TODO');
   process.exitCode = 1;
 }

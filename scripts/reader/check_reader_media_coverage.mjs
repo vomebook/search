@@ -1,5 +1,5 @@
 import {spawnSync} from 'node:child_process';
-import {hasPassingTapContracts} from '../check_tap_contracts.mjs';
+import {hasCompleteFlatTapReport, hasPassingTapContracts} from '../check_tap_contracts.mjs';
 
 // Node 26/V8: only this media-format source under synthetic host/DOM contracts.
 const minimum = [100, 100, 100];
@@ -36,16 +36,12 @@ const rows = lines.flatMap(line => {
   return match ? [match.slice(1).map(Number)] : [];
 });
 if (result.status !== 0 || rows.length !== 1 || rows[0].some((value, index) => value < minimum[index]) ||
-    !hasPassingTapContracts(text, required) ||
-    ['# start of coverage report', '# end of coverage report'].some(marker => lines.filter(line => line === marker).length !== 1) ||
-    lines.filter(line => /^# duration_ms \d+(?:\.\d+)?$/.test(line)).length !== 1 ||
-    !['1..16', '# tests 16', '# pass 16', '# fail 0', '# cancelled 0'].every(summary =>
-      lines.filter(line => line === summary).length === 1) ||
-    ['# tests ', '# pass ', '# fail ', '# cancelled '].some(prefix => lines.filter(line => line.startsWith(prefix)).length !== 1)) {
+    !hasCompleteFlatTapReport(text) || !hasPassingTapContracts(text, required) ||
+    ['# start of coverage report', '# end of coverage report'].some(marker => lines.filter(line => line === marker).length !== 1)) {
   console.error('Reader media requires named contracts and exactly one source row above each minimum');
   process.exitCode = 1;
 } else {
-  // Keep these independent of the fixed TAP and coverage counts above.
+  // Keep these independent of the TAP and coverage checks above.
   for (const args of [
     ['--test', '--test-concurrency=1', '--test-reporter=tap', 'tests/reader/copy_reader_vendor.test.mjs', 'tests/reader/test_foliate_proxy.mjs'],
     ['tests/reader/media/test_ruffle_closure.mjs'],

@@ -26,18 +26,22 @@ def valid_output(stdout, stderr, browser, digest):
     """Require exactly one success per named test and matching browser marker."""
     if browser not in ('chromium', 'firefox') or not re.fullmatch(r'[0-9a-f]{64}', digest):
         return False
-    markers = [line for line in stdout.splitlines() if line.startswith('DOM_SEARCH_CONTRACT_COMPLETED')]
-    expected_markers = {f'DOM_SEARCH_CONTRACT_COMPLETED {browser} {contract} {digest}'
-                        for contract in CONTRACTS.values()}
-    if len(markers) != len(expected_markers) or set(markers) != expected_markers or stdout.splitlines() != markers:
+    markers = stdout.splitlines()
+    pattern = rf'DOM_SEARCH_CONTRACT_COMPLETED {browser} ([A-Za-z][A-Za-z0-9_]*) {digest}'
+    matches = [re.fullmatch(pattern, line) for line in markers]
+    if any(match is None for match in matches):
+        return False
+    completed = {match[1] for match in matches if match is not None}
+    if len(completed) != len(markers) or not set(CONTRACTS.values()) <= completed:
         return False
     lines = stderr.splitlines()
     expected_tests = {f'{name} ({TEST_MODULE}.ReaderDomSearchContracts.{name}) ... ok' for name in CONTRACTS}
-    found = [line for line in lines if line.startswith('test_')]
-    if len(found) != len(expected_tests) or set(found) != expected_tests:
+    passed_test = re.compile(rf'(test_\w+) \({re.escape(TEST_MODULE)}\.ReaderDomSearchContracts\.\1\) \.\.\. ok')
+    found = [line for line in lines if passed_test.fullmatch(line)]
+    if len(found) != len(set(found)) or len(found) != len(completed) or not expected_tests <= set(found):
         return False
-    summaries = [line for line in lines if re.fullmatch(r'Ran 8 tests in \d+(?:\.\d+)?s', line)]
-    allowed = expected_tests | {'', '-' * 70, 'OK'} | set(summaries)
+    summaries = [line for line in lines if re.fullmatch(rf'Ran {len(found)} tests in \d+(?:\.\d+)?s', line)]
+    allowed = set(found) | {'', '-' * 70, 'OK'} | set(summaries)
     return (len(summaries) == 1 and lines.count('OK') == 1 and all(line in allowed for line in lines))
 
 
@@ -50,7 +54,8 @@ def run_browser(browser, digest):
     sys.stderr.write(result.stderr)
     if result.returncode or not valid_output(result.stdout, result.stderr, browser, digest):
         raise SystemExit(f'DOM-search browser contracts incomplete: {browser}')
-    print(f'DOM-search browser contracts: {browser} 8/8, zero skipped, source SHA-256 {digest}', flush=True)
+    print(f'DOM-search browser contracts: {browser}, {len(result.stdout.splitlines())} passed, '
+          f'zero skipped, source SHA-256 {digest}', flush=True)
 
 
 def main():

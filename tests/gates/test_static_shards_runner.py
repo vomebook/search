@@ -219,6 +219,41 @@ class ShardRunnerTests(unittest.TestCase):
         groups[1] = groups[0]
         with self.assertRaises(ValueError): runner.validate('shard_fixture', groups)
 
+    def test_reject_dispatch_hooks_across_mro(self):
+        from unittest.mock import patch
+        groups = self.fixture(
+            'import unittest\nclass Leading: pass\nclass Trailing: pass\n'
+            'class C(Leading, unittest.TestCase, Trailing):\n'
+            ' def test_a(self): pass\n def test_b(self): pass\n def test_c(self): pass\n')
+        runner.validate('shard_fixture', groups)
+        fixture = sys.modules['shard_fixture']
+
+        def noop(self, *args):
+            pass
+
+        for base in (fixture.C, fixture.Leading, fixture.Trailing):
+            for hook in ('_callTestMethod', '_callSetUp', '_callTearDown', '_callCleanup', 'doCleanups'):
+                with self.subTest(base=base.__name__, hook=hook), patch.object(base, hook, noop, create=True):
+                    with self.assertRaisesRegex(ValueError, 'custom case or class hook unsupported'):
+                        runner.validate('shard_fixture', groups)
+
+    def test_worker_cli_rejects_noop_test_dispatch(self):
+        import json, os, subprocess
+        groups = self.fixture(
+            'import unittest\nclass C(unittest.TestCase):\n'
+            ' def _callTestMethod(self, method): pass\n'
+            ' def test_a(self): self.fail("must not pass")\n'
+            ' def test_b(self): pass\n def test_c(self): pass\n')
+        result_path = self.directory / 'result.json'
+        completed = subprocess.run(
+            [sys.executable, '-B', str(runner.ROOT / 'scripts/ci/run_static_gate_shards.py'),
+             '--worker', 'shard_fixture', json.dumps(groups), '0', str(result_path)],
+            cwd=runner.ROOT, env=dict(os.environ, PYTHONPATH=self.tmp.name),
+            capture_output=True, text=True, timeout=5)
+        self.assertEqual(completed.returncode, 2, completed.stderr)
+        self.assertIn('custom case or class hook unsupported', completed.stderr)
+        self.assertFalse(result_path.exists())
+
     def test_reject_load_tests(self):
         groups = self.fixture('import unittest\ndef load_tests(*args): return unittest.TestSuite()\n')
         with self.assertRaises(ValueError): runner.validate('shard_fixture', groups)

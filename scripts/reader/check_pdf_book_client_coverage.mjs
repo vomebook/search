@@ -1,6 +1,6 @@
 // Node 26/V8: the PDF book-search client under synthetic Worker contracts only.
 import {spawnSync} from 'node:child_process';
-import {hasPassingTapContracts} from '../check_tap_contracts.mjs';
+import {hasCompleteFlatTapReport, hasPassingTapContracts} from '../check_tap_contracts.mjs';
 
 const minimum=[100,100,100];
 const required=[
@@ -35,9 +35,7 @@ const rows=lines.flatMap(line=>{
 if(result.status!==0||lines[0]!=='TAP version 13'||rows.length!==1||rows[0].some((value,index)=>value<minimum[index])||
     !hasPassingTapContracts(text,required)||
     ['# start of coverage report','# end of coverage report'].some(marker=>lines.filter(line=>line===marker).length!==1)||
-    lines.filter(line=>/^# duration_ms \d+(?:\.\d+)?$/.test(line)).length!==1||
-    !['1..13','# tests 13','# pass 13','# fail 0','# cancelled 0'].every(summary=>lines.filter(line=>line===summary).length===1)||
-    ['# tests ','# pass ','# fail ','# cancelled '].some(prefix=>lines.filter(line=>line.startsWith(prefix)).length!==1)){
+    !hasCompleteFlatTapReport(text)){
   console.error('PDF book-search client requires named contracts and exactly one source row above each minimum');
   process.exitCode=1;
 }

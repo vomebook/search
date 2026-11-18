@@ -52,12 +52,13 @@ def validate(module_name, groups):
     cls = next(iter(classes))
     if cls.__module__ != module_name:
         raise ValueError('foreign case class')
-    # Check the entire inheritance chain, not just the concrete class.
+    # Check all custom bases, including mixins after TestCase in the MRO.
     hooks = ('__init__', 'run', '__call__', 'id', 'setUpClass', 'tearDownClass',
-             'doClassCleanups', 'addClassCleanup', 'countTestCases', 'debug', 'defaultTestResult')
+             'doClassCleanups', 'addClassCleanup', 'countTestCases', 'debug', 'defaultTestResult',
+             '_callTestMethod', '_callSetUp', '_callTearDown', '_callCleanup', 'doCleanups')
     for base in cls.__mro__:
-        if base in (unittest.TestCase, object):
-            break
+        if base is unittest.TestCase or base is object:
+            continue
         if any(n in base.__dict__ for n in hooks):
             raise ValueError('custom case or class hook unsupported')
     # Validate each fully qualified name using the same loader used by workers.

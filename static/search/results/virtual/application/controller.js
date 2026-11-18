@@ -83,7 +83,8 @@ function renderVisible() {
   const instantVelocity = Math.abs(scrollTop - previousScrollTop) / elapsed;
   VSCROLL.scrollVelocity = VSCROLL.scrollVelocity * 0.7 + instantVelocity * 0.3;
   VSCROLL.lastScrollTime = now;
-  const extraScreens = VSCROLL.isDraggingThumb ? 0 : Math.min(3, Math.floor(VSCROLL.scrollVelocity / 1.5));
+  const tightWindow = VSCROLL.isDraggingThumb || !!VSCROLL.dragMetrics;
+  const extraScreens = tightWindow ? 0 : Math.min(3, Math.floor(VSCROLL.scrollVelocity / 1.5));
   const baseOverscanPx = overscanItems * (est || 60);
   const velocityOverscanPx = extraScreens * viewH;
   ensureHeightTree();
@@ -99,10 +100,10 @@ function renderVisible() {
   updateCurrentResultPosition();
   if (!deps.pendingEntrance() && !needsLayout
       && VSCROLL.renderStart <= safeStart && VSCROLL.renderEnd >= safeEnd) return false;
-  const beforePx = VSCROLL.isDraggingThumb
+  const beforePx = tightWindow
     ? viewH * 0.35
     : baseOverscanPx * (scrollingDown ? 1 : 2) + (scrollingDown ? 0 : velocityOverscanPx);
-  const afterPx = VSCROLL.isDraggingThumb
+  const afterPx = tightWindow
     ? viewH * 0.35
     : baseOverscanPx * (scrollingDown ? 2 : 1) + (scrollingDown ? velocityOverscanPx : 0);
   let start = findVirtualIndex(Math.max(0, scrollTop - beforePx));

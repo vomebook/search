@@ -51,14 +51,24 @@ class ReaderWorkflowParallelTests(unittest.TestCase):
         self.assert_hf_backend_invocations(quality)
 
     def assert_hf_backend_invocations(self, quality):
-        selection = re.search(r'          backend_tests=\(\n(.*?)\n          \)\n', quality, re.S)
-        self.assertIsNotNone(selection)
-        modules = selection.group(1).replace('\\', ' ').split()
-        self.assertTrue(modules)
-        self.assertEqual(len(modules), len(set(modules)))
-        # Pin the pre-existing ordered selection; both invocations must use it whole.
-        self.assertEqual(hashlib.sha256('\n'.join(modules).encode()).hexdigest(),
-                         '3ab114371912ee9283b205d15cb6b6288d8a1a081aef0b20daaec871ecc3c090')
+        def backend_selection(text):
+            matches = list(re.finditer(r'^[ \t]*backend_tests=\(\n(.*?)^[ \t]*\)[ \t]*\n', text, re.M | re.S))
+            self.assertEqual(len(matches), 1, 'expected one backend test array')
+            selection = matches[0]
+            names = selection.group(1).replace('\\\n', '').split()
+            self.assertTrue(names)
+            self.assertTrue(all(re.fullmatch(r'tests(?:\.[a-zA-Z_][a-zA-Z_0-9]*)+', name) for name in names))
+            self.assertEqual(len(names), len(set(names)))
+            return selection, names
+
+        selection, modules = backend_selection(quality)
+        root = Path(__file__).resolve().parents[2]
+        historical = (root / 'scripts/ci/reader_matrix_original_2a7436bf.yml').read_text(encoding='utf-8')
+        _, required = backend_selection(historical)
+        # The frozen workflow already has independent provenance validation.
+        # Preserve the ordered required selection without hashing its layout
+        # or forcing a second update when a legitimate module is added.
+        self.assertEqual([module for module in modules if module in set(required)], required)
         self.assertIn('quality_python=$(command -v python)', quality)
         calls = ('          "$quality_python" -B -m unittest -q "${backend_tests[@]}"\n',
                  '          COVERAGE_FILE="$RUNNER_TEMP/backend-coverage" "$coverage_python" -B -m coverage run --branch --source=backend,app -m unittest -q "${backend_tests[@]}"\n',
@@ -96,8 +106,12 @@ class ReaderWorkflowParallelTests(unittest.TestCase):
         workflow = (Path(__file__).resolve().parents[2] / '.github/workflows/reader-refactor.yml').read_text()
         quality = workflow.split('      - name: Check backend coverage and quality inventory\n', 1)[1].split('      - name:', 1)[0]
         self.assert_hf_backend_invocations(quality)
+        added = quality.replace('tests.backend.test_api_contract ', 'tests.backend.test_api_contract tests.backend.test_added ', 1)
+        self.assertNotEqual(added, quality)
+        self.assert_hf_backend_invocations(added)
         mutations = (
             ('tests.backend.test_api_contract ', ''),
+            ('tests.backend.test_api_contract ', 'tests.backend.test_api_contract tests.backend.test_api_contract '),
             ('tests.backend.test_api_contract tests.search.backend.test_cache_and_malformed', 'tests.search.backend.test_cache_and_malformed tests.backend.test_api_contract'),
             ('"$coverage_python" -B -m coverage run', 'python -B -m coverage run'),
             ('"$coverage_python" -B -m coverage json', 'python -B -m coverage json'),
@@ -145,7 +159,8 @@ class ReaderWorkflowParallelTests(unittest.TestCase):
             self.assertIn('runs-on: ubuntu-24.04', job)
             mirror = 'python3 -B scripts/ci/ci_ubuntu_mirror.py'
             self.assertLess(job.index(mirror), job.index('playwright install-deps'))
-            self.assertIn('name: Install Playwright system dependencies\n        timeout-minutes: 15', job)
+            scope = "        if: ${{ matrix.shard != 'static' }}\n" if job != firefox else ''
+            self.assertIn('name: Install Playwright system dependencies\n' + scope + '        timeout-minutes: 15', job)
         for job, project, following in ((github, 'github', 'python -B -m unittest -v tests.seo.test_seo_catalog'),
                                         (hf, 'hf', None)):
             runner = f'python -B scripts/ci/run_static_gate_shards.py --project {project}'
@@ -387,8 +402,10 @@ class CrossSiteSearchContractsCiTests(unittest.TestCase):
             self.assertNotIn('working-directory:', step)
         integration = hf.split('      - name: Run real backend and browser integration\n', 1)[1].split('      - name:', 1)[0]
         for required in ('working-directory: huggingface-search',
-                         "loadTestsFromName('tests.backend.test_real_integration')",
-                         'not result.wasSuccessful()', 'result.testsRun != 13', 'result.skipped', 'sys.exit(1)'):
+                         'python3 -B ../scripts/ci/run_unittest_suite.py',
+                         '            tests.backend.test_real_integration\n',
+                         'test_21_browser_query_posts_to_real_api_and_dom_matches_response',
+                         'test_99_graceful_shutdown_has_no_resource_leak_warnings'):
             self.assertIn(required, integration)
         self.assertNotIn('continue-on-error:', integration)
 
@@ -436,9 +453,12 @@ class AdditionalSuitesCiTests(unittest.TestCase):
         github = workflow.split('  github-search:\n', 1)[1].split('  firefox-staged-pdf:\n', 1)[0]
         hf = workflow.split('  huggingface-search:\n', 1)[1]
         timeout = github.split('      - name: Check Reader request timeout in Chromium\n', 1)[1].split('      - name:', 1)[0]
-        for required in ("loadTestsFromName('tests.reader.browser.test_reader_timeout')",
-                         'not result.wasSuccessful()', 'result.testsRun != 3', 'result.skipped', 'sys.exit(1)'):
+        for required in ('python3 -B scripts/ci/run_unittest_suite.py',
+                         '            tests.reader.browser.test_reader_timeout\n',
+                         'test_txt_timeout_before_headers_shows_failure', 'test_txt_timeout_after_headers_shows_failure',
+                         'test_id_resolution_timeout_shows_failure'):
             self.assertIn(required, timeout)
+        self.assertEqual(timeout.count('--require '), 3)
         worker = github.split('      - name: Check warmed Reader shell reuse\n', 1)[1].split('      - name:', 1)[0]
         offline = 'tests.service_worker.test_service_worker_integration.ServiceWorkerIntegrationTest.test_offline_cache_misses_reject_as_network_errors_and_cached_data_survives'
         self.assertEqual(worker.count(offline), 1)
@@ -457,10 +477,12 @@ class AdditionalSuitesCiTests(unittest.TestCase):
                          'tests.search.browser.test_prefetch_pipeline',
                          'tests.search.browser.test_search_positions',
                          'tests.search.backend.test_wildcard_index_oracle',
-                         'result.testsRun != 68', 'READER_STORE_TEST_BROWSER=firefox', 'result.testsRun != 12'):
+                         'READER_STORE_TEST_BROWSER=firefox python3 -B ../scripts/ci/run_unittest_suite.py',
+                         'test_native_first_chapter_reads_packaged_styles_in_parallel_and_keeps_cascade',
+                         'test_incompatible_upgrade_rolls_back_all_new_indexes_and_bookmark_store'):
             self.assertIn(required, additional)
-        self.assertEqual(additional.count('result.skipped'), 2)
-        self.assertEqual(additional.count('sys.exit(1)'), 2)
+        self.assertEqual(additional.count('python3 -B ../scripts/ci/run_unittest_suite.py'), 2)
+        self.assertNotIn('result.testsRun', additional)
         self.assertNotIn('continue-on-error:', timeout)
         self.assertNotIn('continue-on-error:', additional)
 

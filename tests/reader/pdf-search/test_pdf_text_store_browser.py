@@ -21,7 +21,7 @@ class PdfTextStoreBrowserTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.server = ThreadingHTTPServer(('127.0.0.1', 0), partial(Handler, directory=str(ROOT)))
-        cls.server_thread = threading.Thread(target=cls.server.serve_forever, daemon=True)
+        cls.server_thread = threading.Thread(target=cls.server.serve_forever, kwargs={"poll_interval": 0.02}, daemon=True)
         cls.server_thread.start()
         cls.addClassCleanup(cls.server.server_close)
         cls.addClassCleanup(cls.server_thread.join, timeout=5)

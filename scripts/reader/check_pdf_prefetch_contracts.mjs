@@ -1,5 +1,5 @@
 import {spawnSync} from 'node:child_process';
-import {hasPassingTapContracts} from '../check_tap_contracts.mjs';
+import {hasCompleteFlatTapReport, hasPassingTapContracts} from '../check_tap_contracts.mjs';
 
 const required = [
   'missing OCR manifest reports no concentrated text',
@@ -18,13 +18,8 @@ const result = spawnSync(process.execPath, ['--test', '--test-isolation=none', '
 if (result.stdout) process.stdout.write(result.stdout);
 if (result.stderr) process.stderr.write(result.stderr);
 if (result.error) console.error(result.error);
-const lines = (result.stdout || '').split(/\r?\n/);
-const summaries = ['1..8', '# tests 8', '# pass 8', '# fail 0', '# cancelled 0', '# skipped 0', '# todo 0'];
-if (result.status !== 0 || result.error || lines[0] !== 'TAP version 13' || !hasPassingTapContracts(result.stdout || '', required) ||
-    !summaries.every(line => lines.filter(item => item === line).length === 1) ||
-    ['# tests ', '# pass ', '# fail ', '# cancelled ', '# skipped ', '# todo '].some(prefix =>
-      lines.filter(line => line.startsWith(prefix)).length !== 1) ||
-    lines.filter(line => /^1\.\.\d+/.test(line)).length !== 1) {
+const text = result.stdout || '';
+if (result.status !== 0 || result.error || !hasPassingTapContracts(text, required) || !hasCompleteFlatTapReport(text)) {
   console.error('PDF prefetch requires eight passing named contracts and complete TAP summary');
   process.exitCode = 1;
 }

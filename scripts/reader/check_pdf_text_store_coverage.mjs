@@ -1,6 +1,6 @@
 // Node 26/V8: synthetic IndexedDB contracts for the PDF text store only.
 import {spawnSync} from 'node:child_process';
-import {hasPassingTapContracts} from '../check_tap_contracts.mjs';
+import {hasCompleteFlatTapReport, hasPassingTapContracts} from '../check_tap_contracts.mjs';
 
 // Branch coverage can vary slightly with Node/V8 and platform scheduling;
 // this floor leaves a small margin from the measured local 95.16%.
@@ -44,9 +44,7 @@ const rows=lines.flatMap(line=>{
 if(result.status!==0||rows.length!==1||rows[0].some((value,index)=>value<minimum[index])||
     !hasPassingTapContracts(text,required)||
     ['# start of coverage report','# end of coverage report'].some(marker=>lines.filter(line=>line===marker).length!==1)||
-    lines.filter(line=>/^# duration_ms \d+(?:\.\d+)?$/.test(line)).length!==1||
-    !['1..20','# tests 20','# pass 20','# fail 0','# cancelled 0'].every(summary=>lines.filter(line=>line===summary).length===1)||
-    ['# tests ','# pass ','# fail ','# cancelled '].some(prefix=>lines.filter(line=>line.startsWith(prefix)).length!==1)){
+    !hasCompleteFlatTapReport(text)){
   console.error('PDF text-store coverage requires named contracts and exactly one source row above each minimum');
   process.exitCode=1;
 }

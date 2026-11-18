@@ -832,8 +832,8 @@ class StaticGateTests(unittest.TestCase):
         self.assertLess(result.stdout.index(module), result.stdout.index(host), "window page must precede host")
 
     def test_search_window_page_build_contract_fails_closed(self):
-        paths = ["static/index.html", "static/sw.js", "static/reader-resources.js",
-                 "scripts/build/compose_app.mjs", "tests/search/build/test_search_record_path_build.mjs"]
+        paths = ["static/index.html", "static/sw.js", "static/reader-resources.js", "scripts/build/compose_app.mjs",
+                 "tests/support/shell_assets.mjs", "tests/search/build/test_search_record_path_build.mjs"]
         for path in paths:
             target = self.root / path
             target.parent.mkdir(parents=True, exist_ok=True)
@@ -842,11 +842,75 @@ class StaticGateTests(unittest.TestCase):
         self.assert_check(self.run_check(*check), True, "record path source and bundled shell/SW contracts preserved")
         html = self.root / paths[0]
         original_html = html.read_text()
-        line = next(line for line in original_html.splitlines(keepends=True) if "search/results/window/domain/page.js" in line)
-        self.assertEqual(original_html.count(line), 1)
-        html.write_text(original_html.replace(line, ""))
-        self.assert_check(self.run_check(*check), False, "window page source script must be present once")
+        name = 'search/results/window/domain/page.js'
+        static_base = '/search/static/'
+        # Locate executable tags, not identical markup in comments or inert SVGs.
+        locate = r'''
+            import {readFileSync} from 'node:fs';
+            import {shellScriptPaths} from './tests/support/shell_assets.mjs';
+            const html = readFileSync('static/index.html', 'utf8').replace(/\r\n?/g, '\n');
+            // Translate parse5's UTF-16 offsets to Python string indices.
+            const index = offset => Array.from(html.slice(0, offset)).length;
+            const tags = [];
+            shellScriptPaths(html, process.argv[1], {onScript(path, {startOffset, endOffset}) {
+              tags.push([path, index(startOffset), index(endOffset)]);
+            }});
+            console.log(JSON.stringify(tags));
+        '''
+        result = self.run_check('node', '--input-type=module', '-e', locate, static_base)
+        self.assert_check(result, True, '')
+        tags = json.loads(result.stdout)
+
+        def tag_span(path):
+            spans = [(start, end) for src, start, end in tags if src == path]
+            self.assertEqual(len(spans), 1, path)
+            return spans[0]
+
+        def mutate_tags(*replacements):
+            updated = original_html
+            for (start, end), replacement in sorted(replacements, reverse=True):
+                updated = updated[:start] + replacement + updated[end:]
+            html.write_text(updated)
+
+        page_span = tag_span(name)
+        tag = original_html[slice(*page_span)]
+        # Whitespace, a historical comment and SVG src do not change HTML loads.
+        reflow = re.sub(r'^<script\s+', '<script\n  ', tag)
+        comment = '<!-- ' + tag + ' -->'
+        svg = '<svg>' + tag + '</svg>'
+        mutate_tags((page_span, reflow + '\n' + comment + '\n' + svg))
+        self.assert_check(self.run_check(*check), True, 'bundled shell/SW contracts preserved')
+        for replacement in (comment, svg, tag + '\n' + tag):
+            mutate_tags((page_span, replacement))
+            self.assert_check(self.run_check(*check), False, 'window page source script must be present once')
+        app_span = tag_span('app.js')
+        app = original_html[slice(*app_span)]
+        for dependency in (name, 'reader-resources.js'):
+            with self.subTest(dependency=dependency):
+                span = tag_span(dependency)
+                script = original_html[slice(*span)]
+                mutate_tags((span, ''), (app_span, app + '\n' + script))
+                self.assert_check(self.run_check(*check), False, f'{dependency} must load before app.js')
+                mutate_tags((span, script[:7] + ' async' + script[7:]))
+                self.assert_check(self.run_check(*check), False, f'{dependency} must be an ordered classic script')
+        mutate_tags((page_span, tag[:7] + ' defer' + tag[7:]))
+        self.assert_check(self.run_check(*check), False, 'blocking script would execute before a deferred dependency')
+        html.write_text(original_html.replace('<head>', '<head><base href="/wrong/">', 1))
+        self.assert_check(self.run_check(*check), False, 'bundled shell must contain only the application script')
         html.write_text(original_html)
+        worker = self.root / paths[1]
+        original_worker = worker.read_text()
+        worker.write_text(f'// Old precache path: "{static_base}{name}"\n' + original_worker)
+        self.assert_check(self.run_check(*check), True, 'bundled shell/SW contracts preserved')
+        install_entries = 'PRECACHE_URLS.map(revalidatedRequest)'
+        self.assertEqual(original_worker.count(install_entries), 1)
+        # Exercise raw strings as well as Request objects in the cache call.
+        for entry in (json.dumps(static_base + name), json.dumps('./static/' + name),
+                      f'new Request("./static/../static/{name}?v=1#asset")'):
+            with self.subTest(precache=entry):
+                worker.write_text(original_worker.replace(install_entries, f'[...{install_entries}, {entry}]'))
+                self.assert_check(self.run_check(*check), False, 'must not be individually precached')
+        worker.write_text(original_worker)
         compose = self.root / paths[3]
         original_compose = compose.read_text()
         dependency = '"search/results/window/domain/page.js", '
@@ -2299,24 +2363,25 @@ class StaticGateTests(unittest.TestCase):
             shutil.copyfile(ROOT / path, target)
         gate = self.root / paths[1]
         original = gate.read_text()
-        check = ["node", paths[1]]
-        self.assert_check(self.run_check(*check), True, "navigation.js |")
-        # Keep the real subprocess and TAP report but reject its parsed row.
-        anchor = 'const rows = text.split(/\\r?\\n/).flatMap(line => {'
-        self.assertEqual(original.count(anchor), 1)
-        altered = original.replace(anchor, 'const observedRows = text.split(/\\r?\\n/).flatMap(line => {')
-        altered = altered.replace('const required = [', 'const rows = [];\nconst required = [')
-        gate.write_text(altered)
-        self.assert_check(self.run_check(*check), False, 'one source row above each minimum')
-        gate.write_text(original.replace('const required = [', 'const duplicateRows = rows.concat(rows);\nconst required = [')
-                        .replace('rows.length !== 1', 'duplicateRows.length !== 1'))
-        self.assert_check(self.run_check(*check), False, 'one source row above each minimum')
-        # Independent impossible thresholds keep these negative controls valid
-        # when additional meaningful contracts improve actual coverage.
-        for thresholds in ('[100.01, 81.82, 27.27]', '[31.96, 100.01, 27.27]', '[31.96, 81.82, 100.01]'):
-            self.assertIn('[31.96, 81.82, 27.27]', original)
-            gate.write_text(original.replace('[31.96, 81.82, 27.27]', thresholds))
-            self.assert_check(self.run_check(*check), False, 'one source row above each minimum')
+        live = self.run_check('node', paths[1], tap_stdout=True)
+        self.assert_tap_success(live)
+        report = live.stdout
+        module = 'navigation.js'
+        message = 'one source row above each minimum'
+        self.assert_coverage_child_result(gate, original, report, 0, True, module)
+        # Change the report, not the parser, while keeping the child exit status successful.
+        [row] = re.findall(rf'(?m)^#\s+{re.escape(module)}\s*\|[^\n]+\n', report)
+        for case, replacement in (('missing', ''), ('duplicate', row + row),
+                                  ('wrong source', row.replace(module, f'other-{module}', 1))):
+            with self.subTest(row=case):
+                self.assert_coverage_child_result(gate, original, report.replace(row, replacement, 1), 0, False, message)
+        # The shared fixture expects a single-line declaration with spaces around '='.
+        fixture_source = re.sub(r'(?m)^[ \t]*const\s+minimum\s*=\s*\[([^]]+)\]\s*;',
+                                lambda match: f"const minimum = [{' '.join(match[1].split())}];", original)
+        try:
+            self.assert_coverage_threshold_fixture(gate, fixture_source, report, module, message)
+        finally:
+            gate.write_text(original)
 
     def test_reader_image_loader_coverage_gate_fails_closed(self):
         paths = ["static/reader/formats/reader-image-loader.mjs", "scripts/reader/check_reader_image_loader_coverage.mjs",
@@ -2637,8 +2702,9 @@ class StaticGateTests(unittest.TestCase):
             shutil.copyfile(ROOT / path, target)
         coverage = ['node', paths[1]]
         mutation = ['node', paths[2]]
-        message = 'PDF text-store coverage requires named contracts'
-        self.assert_tap_success(self.run_check(*coverage))
+        message = 'PDF text-store coverage requires named contracts and exactly one source row above each minimum'
+        live = self.run_check(*coverage, tap_stdout=True)
+        self.assert_tap_success(live)
         self.assert_check(self.run_check(*mutation), True, '"total":19,"killed":19,"survived":0,"errors":0')
         source = self.root / paths[4]
         original = source.read_text()
@@ -2668,12 +2734,20 @@ class StaticGateTests(unittest.TestCase):
         source.write_text(original)
         gate = self.root / paths[1]
         gate_original = gate.read_text()
-        self.assertEqual(gate_original.count('[100,94.50,89.19]'), 1)
-        for minimum in ('[100.01,94.50,89.19]', '[100,100.01,89.19]', '[100,94.50,100.01]'):
-            gate.write_text(gate_original.replace('[100,94.50,89.19]', minimum))
-            self.assert_check(self.run_check(*coverage), False, message)
-        gate.write_text(gate_original.replace('reader-pdf-text-store\\.mjs', 'missing-pdf-text-store\\.mjs'))
-        self.assert_check(self.run_check(*coverage), False, message)
+        report = live.stdout
+        module = 'reader-pdf-text-store.mjs'
+        self.assert_coverage_child_result(gate, gate_original, report, 0, True, module)
+        [row] = re.findall(rf'(?m)^#\s+{re.escape(module)}\s*\|[^\n]+\n', report)
+        for case, replacement in (('missing', ''), ('duplicate', row + row),
+                                  ('wrong source', row.replace(module, f'other-{module}', 1))):
+            with self.subTest(row=case):
+                self.assert_coverage_child_result(gate, gate_original, report.replace(row, replacement, 1), 0, False, message)
+        fixture_source = re.sub(r'(?m)^[ \t]*const\s+minimum\s*=\s*\[([^]]+)\]\s*;',
+                                lambda match: f"const minimum = [{' '.join(match[1].split())}];", gate_original)
+        try:
+            self.assert_coverage_threshold_fixture(gate, fixture_source, report, module, message)
+        finally:
+            gate.write_text(gate_original)
         # A targeted mutant must not be killed by a different assertion or a
         # syntax error, even if the expected diagnostic is printed elsewhere.
         marker = "    const result=store.put(1,'x').then(value=>{events.push('settled');return value;});\n    assert.equal(await result,false,'synthetic transaction error must fail');"
@@ -2713,8 +2787,9 @@ class StaticGateTests(unittest.TestCase):
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(ROOT / path, target)
         check = ['node', paths[1]]
-        message = 'Reader text requires named contracts and exactly one source row'
-        self.assert_tap_success(self.run_check(*check))
+        message = 'Reader text requires named contracts and exactly one source row above each minimum'
+        live = self.run_check(*check, tap_stdout=True)
+        self.assert_tap_success(live)
         source = self.root / paths[3]
         original = source.read_text()
         name = 'stream rejects an oversized body and cancels its reader'
@@ -2737,15 +2812,20 @@ class StaticGateTests(unittest.TestCase):
         source.write_text(original)
         gate = self.root / paths[1]
         gate_original = gate.read_text()
-        self.assertEqual(gate_original.count('[100, 91.89, 90.91]'), 1)
-        # Keep each injected threshold strictly above this candidate's measured
-        # coverage; these remain independent fail-closed mutations.
-        for minimum in ('[100.01, 91.89, 90.91]', '[100, 100.01, 90.91]', '[100, 91.89, 100.01]'):
-            gate.write_text(gate_original.replace('[100, 91.89, 90.91]', minimum))
-            self.assert_check(self.run_check(*check), False, message)
-        self.assertEqual(gate_original.count('reader-text-format\\.mjs'), 1)
-        gate.write_text(gate_original.replace('reader-text-format\\.mjs', 'missing-text-format\\.mjs'))
-        self.assert_check(self.run_check(*check), False, message)
+        report = live.stdout
+        module = 'reader-text-format.mjs'
+        self.assert_coverage_child_result(gate, gate_original, report, 0, True, module)
+        [row] = re.findall(rf'(?m)^#\s+{re.escape(module)}\s*\|[^\n]+\n', report)
+        for case, replacement in (('missing', ''), ('duplicate', row + row),
+                                  ('wrong source', row.replace(module, f'other-{module}', 1))):
+            with self.subTest(row=case):
+                self.assert_coverage_child_result(gate, gate_original, report.replace(row, replacement, 1), 0, False, message)
+        fixture_source = re.sub(r'(?m)^[ \t]*const\s+minimum\s*=\s*\[([^]]+)\]\s*;',
+                                lambda match: f"const minimum = [{' '.join(match[1].split())}];", gate_original)
+        try:
+            self.assert_coverage_threshold_fixture(gate, fixture_source, report, module, message)
+        finally:
+            gate.write_text(gate_original)
 
     def test_reader_media_coverage_gate_fails_closed(self):
         paths = ['static/reader/formats/reader-media-format.mjs',
@@ -2763,51 +2843,94 @@ class StaticGateTests(unittest.TestCase):
             shutil.copyfile(ROOT / path, target)
         check = ['node', paths[1]]
         message = 'Reader media requires named contracts and exactly one source row'
-        report = self.run_check(*check, timeout=120)
-        self.assert_tap_success(report, multiple_reports=True)
         source = self.root / paths[4]
-        original = source.read_text()
+        added = 'extra passing media test'
+        original = source.read_text() + f'\ntest({added!r}, () => {{ assert.equal(new FakeMedia("audio").tagName, "audio"); }});\n'
+        source.write_text(original)
+        report = self.run_check(*check, timeout=120, tap_stdout=True)
+        self.assert_tap_success(report, multiple_reports=True)
+        primary_report, separator, _ = report.stdout.partition('\nTAP version 13\n')
+        self.assertTrue(separator)
+        self.assertIn(f'# Subtest: {added}\n', primary_report)
+        primary_report += '\n'
+        total = len(re.findall(r'(?m)^ok \d+ - ', primary_report))
+        row = r'^#\s+reader-media-format\.mjs\s*\|[^\n]*'
+
+        # A real console log collides with the summary even though Node's tests pass.
+        source.write_text(original + f'\nconsole.log("pass {total}");\n')
+        forged = self.run_check(*check)
+        self.assert_check(forged, False, message)
+        self.assertEqual(forged.stdout.splitlines().count(f'# pass {total}'), 2)
+
+        # Real runner failures, including a coverage loss with unchanged passing contracts.
         name = 'resource cleanup rejects pending metadata and removes listeners'
-        anchor = "test('" + name + "'"
-        for contract_name in (name, 'stalled proxy retries the proxy instead of the blocked dataset host'):
-            contract_anchor = "test('" + contract_name + "'"
-            self.assertEqual(original.count(contract_anchor), 1)
-            for replacement in ("test('renamed contract'", "test.skip('" + contract_name + "'",
-                                "test.todo('" + contract_name + "'"):
-                source.write_text(original.replace(contract_anchor, replacement))
-                self.assert_check(self.run_check(*check), False, message)
-        for extra in ("test('" + name + "', () => {});", "test.skip('extra skip', () => {});",
-                      "test.todo('extra todo');", 'console.log("skipped 0");', 'console.log("todo 0");',
-                      'console.log("pass 16");', 'console.log("end of coverage report");'):
-            source.write_text(original + '\n' + extra + '\n')
-            self.assert_check(self.run_check(*check), False, message)
-        source.write_text(original.replace(anchor + ', async () => {',
-                                           anchor + ", async () => { throw new Error('injected media failure');"))
+        anchor = f'test({name!r}, async () => {{'
+        self.assertEqual(original.count(anchor), 1)
+        source.write_text(original.replace(anchor, anchor + " throw new Error('injected media failure');"))
         self.assert_check(self.run_check(*check), False, 'injected media failure')
         source.unlink()
         self.assert_check(self.run_check(*check), False, message)
-        source.write_text(original)
-        gate = self.root / paths[1]
-        gate_original = gate.read_text()
-        # Losing unknown-duration retry restoration must fail even with the same contracts passing.
         unknown_duration = '    {restorationReady:true,time:4,duration:Infinity,expected:4},\n'
         self.assertEqual(original.count(unknown_duration), 1)
         source.write_text(original.replace(unknown_duration, ''))
-        regression = self.run_check(*check)
+        regression = self.run_check(*check, tap_stdout=True)
         self.assert_check(regression, False, message)
         self.assert_passing_tap(regression.stdout)
-        primary_report = report.stdout.split('\nTAP version 13\n', 1)[0]
         self.assertEqual(re.findall(r'(?m)^# Subtest: .+$', regression.stdout),
                          re.findall(r'(?m)^# Subtest: .+$', primary_report))
-        self.assertIn('branch coverage', regression.stdout)
-        source.write_text(original)
-        self.assertEqual(gate_original.count('[100, 100, 100]'), 1)
-        for minimum in ('[100.01, 100, 100]', '[100, 100.01, 100]', '[100, 100, 100.01]'):
-            gate.write_text(gate_original.replace('[100, 100, 100]', minimum))
-            self.assert_check(self.run_check(*check), False, message)
-        self.assertEqual(gate_original.count('reader-media-format\\.mjs'), 1)
-        gate.write_text(gate_original.replace('reader-media-format\\.mjs', 'missing-media-format\\.mjs'))
-        self.assert_check(self.run_check(*check), False, message)
+        self.assertIn('branch coverage', regression.stdout + regression.stderr)
+        [baseline_row] = re.findall(row, primary_report, flags=re.M)
+        [regression_row] = re.findall(row, regression.stdout, flags=re.M)
+        self.assertLess(float(regression_row.split('|')[2]), float(baseline_row.split('|')[2]))
+
+        # Replay report-only corruptions with exit status 0 so the parser must reject them.
+        gate = self.root / paths[1]
+        gate_original = gate.read_text()
+
+        def replace_line(pattern, replacement):
+            tap, count = re.subn(pattern + r'\n', lambda _: replacement, primary_report, flags=re.M)
+            self.assertEqual(count, 1, pattern)
+            return tap
+
+        inflated = primary_report.replace(f'\n1..{total}\n# tests {total}\n# suites 0\n# pass {total}\n',
+                                          f'\n1..{total + 1}\n# tests {total + 1}\n# suites 0\n# pass {total + 1}\n')
+        self.assertNotEqual(inflated, primary_report)
+        cases = {
+            'missing plan': replace_line(r'^1\.\.\d+', ''),
+            'missing tests total': replace_line(r'^# tests \d+', ''),
+            'missing pass total': replace_line(r'^# pass \d+', ''),
+            'duplicate plan': primary_report + f'1..{total}\n',
+            'logged plan': primary_report + f'# 1..{total}\n',
+            'logged pass': primary_report + f'# pass {total}\n',
+            'malformed tests line': primary_report + '# tests bogus\n',
+            'mismatched pass total': replace_line(r'^# pass \d+', f'# pass {total - 1}\n'),
+            'inflated but matching totals': inflated,
+            'nonsequential result': replace_line(rf'^ok \d+ - {re.escape(added)}', f'ok {total + 1} - {added}\n'),
+            'failed result': replace_line(rf'^ok \d+ - {re.escape(added)}', f'not ok {total} - {added}\n'),
+            'skip directive': replace_line(rf'^ok \d+ - {re.escape(added)}', f'ok {total} - {added} # SKIP\n'),
+            'todo directive': replace_line(rf'^ok \d+ - {re.escape(added)}', f'ok {total} - {added} # TODO\n'),
+            'missing coverage marker': replace_line(r'^# start of coverage report', ''),
+            'duplicate coverage marker': primary_report + '# end of coverage report\n',
+            'missing source row': replace_line(row, ''),
+            'duplicate source row': primary_report + baseline_row + '\n',
+        }
+        for summary in ('fail', 'cancelled', 'skipped', 'todo'):
+            cases[f'nonzero {summary}'] = replace_line(rf'^# {summary} 0', f'# {summary} 1\n')
+        for summary in ('skipped', 'todo'):
+            cases[f'logged {summary}'] = primary_report + f'# {summary} 0\n'
+        for contract in (name, 'stalled proxy retries the proxy instead of the blocked dataset host'):
+            self.assertEqual(primary_report.count(contract), 2)
+            cases[f'missing {contract}'] = primary_report.replace(contract, 'renamed contract')
+        cases['duplicate required name'] = primary_report.replace(added, name)
+        for index, metric in enumerate(('line', 'branch', 'function')):
+            scores = ['100.00'] * 3
+            scores[index] = '99.99'
+            cases[f'low {metric} coverage'] = replace_line(row, '# reader-media-format.mjs | ' + ' | '.join(scores) + ' |\n')
+        self.assert_coverage_child_result(gate, gate_original, primary_report, 0, True, '')
+        self.assert_coverage_child_result(gate, gate_original, primary_report, 1, False, message)
+        for case, tap in cases.items():
+            with self.subTest(case=case):
+                self.assert_coverage_child_result(gate, gate_original, tap, 0, False, message)
 
     def test_reader_djvu_contract_gate_fails_closed(self):
         for name in ('scripts/reader/check_reader_djvu_contracts.mjs', 'scripts/check_tap_contracts.mjs'):
@@ -2825,10 +2948,43 @@ class StaticGateTests(unittest.TestCase):
                             directory / f'test_reader_djvu_{name}.mjs')
         boundary = directory / 'test_reader_djvu_range_boundaries.mjs'
         shutil.copyfile(ROOT / 'tests/reader/djvu/test_reader_djvu_range_boundaries.mjs', boundary)
-        check = ['node', 'scripts/reader/check_reader_djvu_contracts.mjs']
+        # Only the explicit test scripts change in these live negatives; their
+        # shared Reader dependencies, cwd and environment stay fixed. Capture
+        # successful child results on the clean run, then use that cache read-only.
+        preload = self.root / 'djvu-child-replay.mjs'
+        preload.write_text('''
+import childProcess from 'node:child_process';
+import {createHash} from 'node:crypto';
+import {existsSync, readFileSync, writeFileSync} from 'node:fs';
+import {syncBuiltinESMExports} from 'node:module';
+
+const {spawnSync} = childProcess;
+const cache = new URL('./djvu-child-results.json', import.meta.url);
+const replay = existsSync(cache);
+const results = new Map(replay ? JSON.parse(readFileSync(cache, 'utf8')) : []);
+if (!replay) process.on('exit', code => {
+  if (code === 0) writeFileSync(cache, JSON.stringify([...results]));
+});
+childProcess.spawnSync = (exe, args, options) => {
+  const scripts = args.filter(arg => !arg.startsWith('-'));
+  if (args[0] !== '--test' || !scripts.length || !scripts.every(script =>
+    /^tests[/]reader[/]djvu[/]test_reader_djvu_[a-z_]+[.]mjs$/.test(script) && existsSync(script))) {
+    return spawnSync(exe, args, options);
+  }
+  const inputs = scripts.map(script => createHash('sha256').update(readFileSync(script)).digest('hex'));
+  const key = JSON.stringify([exe, args, options, inputs]);
+  if (replay && results.has(key)) return results.get(key);
+  const result = spawnSync(exe, args, options);
+  if (!replay && result.status === 0 && !result.error) results.set(key, result);
+  return result;
+};
+syncBuiltinESMExports();
+''')
+        check = ['node', '--import', preload.as_uri(), 'scripts/reader/check_reader_djvu_contracts.mjs']
         message = 'DjVu contracts require seven named scripts'
         live = self.run_check(*check, tap_stdout=True)
         self.assert_tap_success(live, multiple_reports=True)
+        self.assertTrue((self.root / 'djvu-child-results.json').is_file())
         worker = directory / 'test_reader_djvu_worker.mjs'
         source = worker.read_text()
         marker = 'DjVu Worker bounds, errors, timeout, cancellation and geometry checks passed'
@@ -3607,11 +3763,19 @@ lifecycle.trackReaderResource(() => {}); lifecycle.isReaderGenerationCurrent("se
             shutil.copyfile(ROOT / name, target)
         production_check = ["node", ROOT / "node_modules/typescript/bin/tsc", "--project", local_config]
         self.assert_check(self.run_check(*production_check), True, "")
-        for name in required:
+        # Block scope keeps the probes independent even in classic scripts.
+        probe_lines = {}
+        for name in sorted(required):
             source = self.root / name
-            source.write_text(source.read_text() + '\n/** @param {string[]} values @returns {string} */ function probe(values) { return values[0]; }\n')
-            self.assert_check(self.run_check(*production_check), False, "TS2322")
-            shutil.copyfile(ROOT / name, source)
+            prefix = source.read_text() + '\n{\n    /** @param {string[]} values @returns {string} */\n'
+            probe_lines[name] = prefix.count("\n") + 1
+            source.write_text(prefix + '    const probe = (values) => { return values[0]; };\n}\n')
+        result = self.run_check(*production_check, "--pretty", "false")
+        self.assert_check(result, False, "")
+        # A diagnostic from another file or from elsewhere in this file cannot satisfy a probe.
+        for name, line in probe_lines.items():
+            with self.subTest(source=name):
+                self.assertRegex(result.stdout, rf"(?m)^{re.escape(name)}\({line},\d+\): error TS2322:")
 
     def test_djvu_worker_cyclomatic_complexity_cap(self):
         # Apply the cap to production source, then prove the command actually

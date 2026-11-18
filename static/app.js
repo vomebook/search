@@ -3822,12 +3822,11 @@ function setupQuickScroll() {
     VSCROLL.renderStart = -1;
     VSCROLL.renderEnd = -1;
     VSCROLL.isDraggingThumb = false;
-    VSCROLL.dragMetrics = null;
     DOM.resultsList.style.minHeight = "";
-    setResultScrollTop(finalScrollTop);
-    // The final viewport may contain unloaded sparse pages even at a fully
-    // loaded tail. Demand them now rather than waiting for another scroll.
-    renderVisible();
+    // Measure and demand pages at the released viewport, but keep the drag's
+    // tight window so offscreen height corrections don't move it on release.
+    try { setResultScrollTop(finalScrollTop, true); }
+    finally { VSCROLL.dragMetrics = null; }
     updateScrollTrack();
   }
   /** @param {MouseEvent} e */

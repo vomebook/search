@@ -124,6 +124,7 @@ export function createReaderMediaFormat(readerContext) {
       // Progress can extend the idle budget, but not the metadata-only deadline.
       deadline ||= setTimeout(() => failMedia("媒体信息加载超时，请重试加载或下载原文件。"), readerContext.READER_PROXY_TIMEOUT_MS);
       idle = setTimeout(() => {
+        if (idle === null || readerContext.readerAbortController.signal.aborted) return;
         if (!retryProxy()) failMedia("媒体信息加载停顿，请重试加载或下载原文件。");
       }, 15000);
     };

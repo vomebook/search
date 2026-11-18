@@ -260,7 +260,7 @@ test("virtual results use bounded buffering", () => {
     .map(file => fs.readFileSync("static/search/results/virtual/" + file, "utf8")).join("\n");
   assert.match(app, /const VSCROLL = VoiceOfMLVirtualHeights\.createState\(\)/);
   assert.match(app, /VoiceOfMLVirtualResults\.create\(VSCROLL,/);
-  assert.match(virtual, /const extraScreens = VSCROLL\.isDraggingThumb \? 0 : Math\.min\(3/);
+  assert.match(virtual, /const extraScreens = tightWindow \? 0 : Math\.min\(3/);
   assert.match(virtual, /const velocityOverscanPx = extraScreens \* viewH/);
   assert.match(app, /const visibleFirst = Math\.floor\(findVirtualIndex\(scrollTop\) \/ size\) \+ 1/);
   assert.match(app, /const direction = VSCROLL\.scrollDirection \|\| 1/);
@@ -287,8 +287,7 @@ test("virtual results use bounded buffering", () => {
   assert.match(app, /templates: VSCROLL\.templateCache/);
   assert.match(app, /function createResultRow\(rec, idx\) \{ return getResultRows\(\)\.createRow\(rec, idx\); \}/);
   assert.match(resultRows, /const cache = deps\.templates/);
-  assert.match(resultRows, /cache\.size > 240\) cache\.delete\(/);
-  assert.match(resultRows, /cache\.keys\(\)\.next\(\)\.value/);
+  // tests/search/ui/result_interactions_contracts.mjs exercises the 240-entry LRU limit and eviction order.
   assert.match(app, /function scheduleVirtualRender/);
   assert.match(app, /scheduleVirtualRender\(\)/);
   assert.match(app, /scheduleVirtualRender\(true\)/);
@@ -302,17 +301,18 @@ test("virtual results use bounded buffering", () => {
   assert.match(virtual, /if \(updateView\) \{[\s\S]*?scheduleVirtualRender\(\);/);
   assert.match(app, /if \(!dragFrame\) dragFrame = requestAnimationFrame\(applyPendingScrollTop\)/);
   assert.match(app, /setResultScrollTop\(pendingScrollTop\);\s*pendingScrollTop = null;\s*renderVisible\(\);/);
-  assert.match(virtual, /VSCROLL\.isDraggingThumb\s*\? viewH \* 0\.35/);
+  assert.match(virtual, /const tightWindow = VSCROLL\.isDraggingThumb \|\| !!VSCROLL\.dragMetrics/);
+  assert.match(virtual, /tightWindow\s*\? viewH \* 0\.35/);
   assert.match(virtual, /if \(!VSCROLL\.isDraggingThumb && measureHeights\(start, end, anchor\)\)/);
   assert.match(app, /VSCROLL\.dragMetrics = null/);
   assert.match(css, /overflow-anchor: none/);
   assert.strictEqual(/function finishDrag\(\)[\s\S]*?measureHeights/.test(app), false);
   assert.match(app, /dragRange = Math\.max\(1, DOM\.scrollTrack\.clientHeight - DOM\.scrollThumb\.clientHeight\)/);
   const release = app.match(/function finishDrag\(\) \{[^]*?^  }/m)?.[0] || '';
-  assert.match(release, /applyPendingScrollTop\(\);[\s\S]*?VSCROLL\.isDraggingThumb = false;[\s\S]*?setResultScrollTop\(finalScrollTop\);[\s\S]*?renderVisible\(\);/);
+  assert.match(release, /applyPendingScrollTop\(\);[\s\S]*?VSCROLL\.isDraggingThumb = false;[\s\S]*?setResultScrollTop\(finalScrollTop, true\);[\s\S]*?VSCROLL\.dragMetrics = null;/);
+  assert.match(virtual, /if \(restoreWindow\) \{[\s\S]*?VSCROLL\.scrollVelocity = 0;\s*\}[\s\S]*?try \{ renderVisible\(\); \}/);
   assert.match(app, /const requestedScrollTop = pendingScrollTop/);
   assert.match(app, /const finalScrollTop = requestedScrollTop === null \? getResultScrollTop\(\) : requestedScrollTop/);
-  assert.match(app, /setResultScrollTop\(finalScrollTop\)/);
   assert.strictEqual(/VSCROLL\.renderStart = -1;\s*VSCROLL\.renderEnd = -1;\s*renderVisible\(\);\s*if \(STATE\._deferredAppendWhileDragging\)/.test(app), false);
   assert.match(virtual, /VSCROLL\.measuredWindowKey === measureKey/);
   assert.match(virtual, /VSCROLL\.measuredRowKeys\[idx\] === rowMeasureKey/);
@@ -561,8 +561,7 @@ test("reader uses original files and lazy PDF canvas rendering", () => {
   assert.match(app, /freshReaderLink: record => getReaderLink\(applyReaderAsset\(/);
   assert.match(app, /recordForRow: row => resultRowRecords\.get\(row\)/);
   assert.match(resultInteractions, /const record = deps\.recordForRow\(actionBtn\.closest\("\.result-item"\)\)/);
-  assert.match(resultInteractions, /if \(record\) actionBtn\.dataset\.readerUrl = deps\.freshReaderLink\(record\)/);
-  assert.match(resultInteractions, /deps\.navigateToReader\(actionBtn\.dataset\.readerUrl\)/);
+  // tests/search/ui/result_interactions_contracts.mjs clicks the result and verifies that it refreshes and opens the current Reader link.
   assert.match(resultInteractions, /const readerLink = browserItem\.dataset\.readerUrl/);
   assert.match(resultInteractions, /deps\.navigateToReader\(readerLink\)/);
   const navigation = fs.readFileSync('static/search/reader-host/application/navigation.js', 'utf8');
@@ -830,7 +829,7 @@ test("Pages cross-site cache gates receive the reviewed HF worker before any sta
   assert.equal((suite.match(/\.\.\/hf-search\/static\/sw\.js/g) || []).length, 1);
   assert.doesNotMatch(suite, /existsSync|test\.skip/);
 });
-test("PDF release gate separates and bounds dependency installation and always runs nine tests", () => {
+test("PDF release gate separates dependencies and requires the named artifact tests to pass", () => {
   const deploy = workflow.slice(workflow.indexOf("\n  deploy:\n"));
   for (const [name, timeout] of [
     ["Install PDF Python dependencies", 10], ["Install qpdf system dependency", 10],
@@ -852,6 +851,7 @@ test("PDF release gate separates and bounds dependency installation and always r
     'test_full_text_search_waits_for_verified_count',
     'test_progress_panel_cannot_add_bookmark_during_validation',
   ].map(name => `tests.reader.browser.test_reader_pdf_first_page.PdfFirstPageTests.${name}`);
+  assert.match(deploy, /READER_BUILT_SITE="\$GITHUB_WORKSPACE\/_site" READER_BUILT_PROJECT=github python3 -B scripts\/ci\/run_unittest_suite\.py/);
   assert.deepStrictEqual(deploy.match(/tests\.reader\.browser\.test_reader_pdf_first_page\.PdfFirstPageTests\.test_\w+/g), pdfChecks);
   assert.ok(deploy.indexOf('name: Check content-addressed PDF opening') < deploy.indexOf('uses: actions/upload-pages-artifact@v5'));
   assert.doesNotMatch(workflow, /continue-on-error:|\bif:/);

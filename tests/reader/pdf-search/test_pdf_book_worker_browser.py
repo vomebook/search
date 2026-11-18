@@ -119,7 +119,7 @@ class PdfBookWorkerBrowserTests(unittest.TestCase):
         cls.server.resources = dict(RESOURCES)
         cls.server.state = None
         cls.server.block_timed_out = threading.Event()
-        cls.server_thread = threading.Thread(target=cls.server.serve_forever, daemon=True)
+        cls.server_thread = threading.Thread(target=cls.server.serve_forever, kwargs={"poll_interval": 0.02}, daemon=True)
         cls.server_thread.start()
         cls.addClassCleanup(cls.server.server_close)
         cls.addClassCleanup(cls.server_thread.join, timeout=5)

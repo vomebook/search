@@ -1,6 +1,6 @@
 // V8 coverage for the extracted chapter matching/pagination core only.
 import {spawnSync} from 'node:child_process';
-import {hasPassingTapContracts} from '../check_tap_contracts.mjs';
+import {hasCompleteFlatTapReport, hasPassingTapContracts} from '../check_tap_contracts.mjs';
 
 const minimum = [100, 96, 100];
 const test = 'tests/reader/chapter-search/test_reader_chapter_search.mjs';
@@ -16,13 +16,9 @@ const rows=lines.flatMap(line=>{
   const match=/^\s*#\s*reader-chapter-search-core\.mjs\s*\|\s*(\d+(?:\.\d+)?)\s*\|\s*(\d+(?:\.\d+)?)\s*\|\s*(\d+(?:\.\d+)?)\s*\|/.exec(line);
   return match?[match.slice(1).map(Number)]:[];
 });
-const summaries=['1..1','# tests 1','# pass 1','# fail 0','# cancelled 0','# skipped 0','# todo 0'];
 if(result.status!==0 || !hasPassingTapContracts(text,[{name:test,marker}]) || rows.length!==1 ||
     rows[0].some((value,index)=>value<minimum[index]) ||
-    !summaries.every(value=>lines.filter(line=>line===value).length===1) ||
-    ['# tests ','# pass ','# fail ','# cancelled ','# skipped ','# todo '].some(prefix=>
-      lines.filter(line=>line.startsWith(prefix)).length!==1) ||
-    lines.filter(line=>/^# duration_ms \d+(?:\.\d+)?$/.test(line)).length!==1 ||
+    !hasCompleteFlatTapReport(text) ||
     ['# start of coverage report','# end of coverage report'].some(value=>lines.filter(line=>line===value).length!==1)) {
   console.error('Chapter search core requires its passing contract and exactly one source row above each minimum');
   process.exitCode=1;

@@ -271,10 +271,13 @@ test("environment proxy, bounded concurrent downloads, bypass and hash failure",
     // Exercise production logic with smaller constants, without a runtime override in production.
     const fastScript = join(dir, "limits.mjs");
     const source = readFileSync(script, "utf8");
+    const retryBackoff = "if (attempt < 3) await delay(1000 * (2 ** attempt), undefined, { signal });";
     assert.match(source, /const DOWNLOAD_DEADLINE_MS = 180000;/);
     assert.match(source, /const MAX_DOWNLOAD_BYTES = 128 \* 1024 \* 1024;/);
+    assert.equal(source.split(retryBackoff).length - 1, 1, "expected exactly one production retry backoff");
     writeFileSync(fastScript, source.replace("const DOWNLOAD_DEADLINE_MS = 180000;", "const DOWNLOAD_DEADLINE_MS = 200;")
-      .replace("const MAX_DOWNLOAD_BYTES = 128 * 1024 * 1024;", "const MAX_DOWNLOAD_BYTES = 1024;"));
+      .replace("const MAX_DOWNLOAD_BYTES = 128 * 1024 * 1024;", "const MAX_DOWNLOAD_BYTES = 1024;")
+      .replace(retryBackoff, retryBackoff.replace("1000", "10")));
     save(resources("example.test"));
     const secretEnv = { ...env, HTTPS_PROXY: `http://proxy-user:proxy-secret@127.0.0.1:${proxy.address().port}` };
     for (const mode of ["declared", "stream", "slow"]) {

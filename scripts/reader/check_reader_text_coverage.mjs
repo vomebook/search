@@ -1,6 +1,6 @@
 // Node 26/V8: only this text-format source under synthetic host/DOM contracts.
 import {spawnSync} from 'node:child_process';
-import {hasPassingTapContracts} from '../check_tap_contracts.mjs';
+import {hasCompleteFlatTapReport, hasPassingTapContracts} from '../check_tap_contracts.mjs';
 
 const minimum = [100, 91.89, 90.91];
 const required = [
@@ -37,9 +37,7 @@ const rows=lines.flatMap(line=>{
 if(result.status!==0||rows.length!==1||rows[0].some((value,index)=>value<minimum[index])||
     !hasPassingTapContracts(text,required)||
     ['# start of coverage report','# end of coverage report'].some(marker=>lines.filter(line=>line===marker).length!==1)||
-    lines.filter(line=>/^# duration_ms \d+(?:\.\d+)?$/.test(line)).length!==1||
-    !['1..15','# tests 15','# pass 15','# fail 0','# cancelled 0'].every(summary=>lines.filter(line=>line===summary).length===1)||
-    ['# tests ','# pass ','# fail ','# cancelled '].some(prefix=>lines.filter(line=>line.startsWith(prefix)).length!==1)){
+    !hasCompleteFlatTapReport(text)){
   console.error('Reader text requires named contracts and exactly one source row above each minimum');
   process.exitCode=1;
 }
