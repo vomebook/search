@@ -108,9 +108,10 @@ class ShardRunnerTests(unittest.TestCase):
         self.assertEqual(hf['project'], 'hf')
         g = {x for group in gh['groups'] for x in group}
         h = {x for group in hf['groups'] for x in group}
-        self.assertEqual(len(g), 145)
-        self.assertEqual(len(h), 145)
-        for added in ('test_search_folder_selection_coverage_gate_fails_closed', 'test_search_folder_selection_declaration_matches_runtime', 'test_search_folder_selection_rejects_wrong_argument_and_return_types',
+        self.assertEqual(len(g), sum(map(len, gh['groups'])), 'duplicate Pages gate IDs')
+        self.assertEqual(len(h), sum(map(len, hf['groups'])), 'duplicate HF gate IDs')
+        self.assertEqual(len(g), len(h), 'cross-site gate inventories diverged')
+        for added in ('test_successful_tap_requires_one_consistent_summary', 'test_search_folder_selection_coverage_gate_fails_closed', 'test_search_folder_selection_declaration_matches_runtime', 'test_search_folder_selection_rejects_wrong_argument_and_return_types',
                       'test_search_height_index_coverage_gate_fails_closed', 'test_search_height_index_declaration_matches_runtime', 'test_search_height_index_rejects_wrong_argument_and_return_types',
                       'test_search_stable_stringify_coverage_gate_fails_closed', 'test_search_stable_stringify_strict_type_contract',
                       'test_search_view_key_coverage_gate_fails_closed', 'test_search_view_key_strict_type_contract',

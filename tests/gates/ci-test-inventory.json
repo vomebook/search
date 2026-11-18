@@ -3,8 +3,8 @@
   "project": "github",
   "tests": {
     "tests/gates/test_ci_ubuntu_mirror.py": {
-      "kind": "direct",
-      "source": ".github/workflows/static.yml"
+      "kind": "script",
+      "source": "scripts/ci/check_pages_source.sh"
     },
     "tests/gates/test_hf_history_shell.py": {
       "kind": "direct",
@@ -27,8 +27,8 @@
       "source": ".github/workflows/reader-refactor.yml"
     },
     "tests/gates/test_reader_matrix_contract.py": {
-      "kind": "direct",
-      "source": ".github/workflows/static.yml"
+      "kind": "script",
+      "source": "scripts/ci/check_pages_source.sh"
     },
     "tests/gates/test_static_checks.py": {
       "kind": "manifest",
@@ -467,8 +467,8 @@
       "source": ".github/workflows/reader-refactor.yml"
     },
     "tests/reader/pdf-v3/test_dataset_primary_policy.mjs": {
-      "kind": "direct",
-      "source": ".github/workflows/static.yml"
+      "kind": "script",
+      "source": "scripts/ci/check_pages_source.sh"
     },
     "tests/reader/pdf-v3/test_page_window_strict_helpers.mjs": {
       "kind": "direct",

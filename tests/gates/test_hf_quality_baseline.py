@@ -400,9 +400,13 @@ class TestInventoryCiTests(unittest.TestCase):
         pages = (root / '.github/workflows/static.yml').read_text()
         github = workflow.split('  github-search:\n', 1)[1].split('  firefox-staged-pdf:\n', 1)[0]
         hf = workflow.split('  huggingface-search:\n', 1)[1]
+        pages_source = pages.split('  source-checks:\n', 1)[1].split('  deploy:\n', 1)[0]
+        self.assertIn('        run: bash scripts/ci/check_pages_source.sh\n', pages_source)
+        self.assertNotIn('continue-on-error:', pages_source)
+        preflight = (root / 'scripts/ci/check_pages_source.sh').read_text()
         for job, project, extra in ((github, 'github', ''),
                                     (hf, 'hf', ' --reader-workflow ../.github/workflows/reader-refactor.yml'),
-                                    (pages, 'github', '')):
+                                    (preflight, 'github', '')):
             self.assertIn('tests.gates.test_package_resolution tests.gates.test_test_inventory', job)
             self.assertIn(f'python -B scripts/check_test_inventory.py --project {project}{extra}\n', job)
             self.assertNotIn('continue-on-error:', job)

@@ -70,6 +70,39 @@ class StaticGateTests(unittest.TestCase):
         if message:
             self.assertIn(message, result.stdout)
 
+    def assert_passing_tap(self, output, *, multiple_reports=False):
+        """Check one Node TAP summary per run, without pinning the test count."""
+        preamble, *reports = re.split(r"(?m)(?=^TAP version 13$)", output)
+        self.assertEqual(preamble, "", output)
+        if multiple_reports:
+            self.assertGreater(len(reports), 1, output)
+        else:
+            self.assertEqual(len(reports), 1, output)
+        for report in reports:
+            summary = re.search(
+                r"(?m)^1\.\.([1-9][0-9]*)\n# tests ([1-9][0-9]*)\n# suites ([0-9]+)\n# pass \2\n"
+                r"# fail 0\n# cancelled 0\n# skipped 0\n# todo 0\n# duration_ms [0-9]+(?:\.[0-9]+)?$", report)
+            self.assertIsNotNone(summary, report)
+            # Count candidates too, so a second, malformed summary cannot be ignored.
+            summary_lines = re.findall(
+                r"(?m)^(?:1\.\..*|# (?:tests|suites|pass|fail|cancelled|skipped|todo|duration_ms)\b.*)$", report)
+            self.assertEqual(summary_lines, summary[0].splitlines(), report)
+            result_line = r"(?m)^( *)(ok|not ok) ([1-9][0-9]*) - (.+)$"
+            self.assertNotRegex(report[summary.end():], result_line)
+            results = re.findall(result_line, report[:summary.start()])
+            self.assertTrue(all(status == "ok" and not re.search(r" # (?:skip|todo)\b", name, re.I)
+                                for _, status, _, name in results), report)
+            # The plan counts top-level results; Node counts nested tests too,
+            # and reports suites separately from tests in its summary.
+            top_level = [int(number) for indent, _, number, _ in results if not indent]
+            self.assertEqual(len(top_level), int(summary[1]), report)
+            self.assertEqual(top_level, list(range(1, len(top_level) + 1)), report)
+            self.assertEqual(len(results), int(summary[2]) + int(summary[3]), report)
+
+    def assert_tap_success(self, result, *, multiple_reports=False):
+        self.assert_check(result, True, "")
+        self.assert_passing_tap(result.stdout, multiple_reports=multiple_reports)
+
     def assert_coverage_threshold_fixture(self, gate, source, report, module, message, minimum='minimum'):
         """Exercise the real gate's row comparison independently of measured coverage."""
         gate_source, count = re.subn(rf'^const {re.escape(minimum)} = \[[^\n]+\];$',
@@ -330,48 +363,15 @@ class StaticGateTests(unittest.TestCase):
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(ROOT / relative, target)
         check = ["node", paths[1]]
-        self.assert_check(self.run_check(*check), True, "controller.js")
+        self.assert_tap_success(self.run_check(*check))
         contract = self.root / paths[3]
         original = contract.read_text()
-        all_names = re.findall(r'^test\("([^"\n]+)"', original, re.M)
-        names = [
-            "shared checks preserve independent cancellation, cached success and expiration",
-            "two active checks bound the queue and abandoned work never starts",
-            "occupied queue starts the next live check only after a slot is released",
-            "check failures report legacy messages and permit a retry",
-            "truthy rejection messages retain their original non-string values",
-            "mutated native lookups retain their existing unchecked failure behavior",
-            "generic signal option is ignored but batch abort owns cancellation",
-            "a stalled response body times out, releases its slot and retries without caching failure",
-            "an abandoned active check cannot evict a successful retry when its body resolves late",
-            "successful check cache retains at most 64 entries in insertion order",
-            "shared downloads retain other owners and restore button feedback",
-            "download failures restore controls and emit the appropriate feedback",
-            "a throwing success toast does not turn a shared launched download into failure",
-            "a throwing triggerDownload still reports failure",
-            "a failed browser handoff does not strand later queued downloads",
-            "handoffs are paced and a cancelled queued handoff never launches",
-            "detailed results distinguish pre-handoff failure, uncertain handoff and cancellation",
-            "detailed shared callers cancel independently and handoff attempts remain paced",
-            "batch retries only definite failures and reports uncertainty",
-            "abort during browser handoff cannot erase the shared uncertain result",
-            "uncertain feedback belongs to each live non-quiet shared subscriber",
-            "single uncertain handoff is retained and a later batch failure is visible but not retried",
-            "retry workers recheck uncertainty when consuming queued items, unlike explicit batches",
-            "legacy launch scheduler preserves pacing, cancellation and recovery after throws",
-            "batch owns two quiet workers, deduplicates in order and cancels queued work",
-            "ledger restore filters records, tolerates storage failure and preserves acknowledgement order",
-        ]
         gate_source = (self.root / paths[1]).read_text()
         required_block = gate_source.split("const required = [", 1)[1].split("].map(name", 1)[0]
-        gate_names = re.findall(r'^  "([^"\n]+)"[,]?$', required_block, re.M)
-        self.assertEqual(len(names), 26)
-        self.assertEqual(len(all_names), 26)
-        self.assertEqual(len(gate_names), 26)
-        self.assertEqual(len(set(all_names)), len(all_names))
+        names = re.findall(r'^  "([^"\n]+)",?$', required_block, re.M)
+        self.assertTrue(names)
+        self.assertCountEqual(re.findall(r'^test\("([^"\n]+)"', original, re.M), names)
         self.assertEqual(len(set(names)), len(names))
-        self.assertEqual(set(gate_names), set(names))
-        self.assertEqual(set(all_names), set(names))
         for name in names:
             anchor = 'test("' + name + '"'
             self.assertEqual(original.count(anchor), 1)
@@ -432,6 +432,22 @@ class StaticGateTests(unittest.TestCase):
             source.write_text(prefix + invalid + "\n")
             self.assert_check(self.run_check(*check), False, expected)
 
+    def test_successful_tap_requires_one_consistent_summary(self):
+        valid = ("TAP version 13\n# Subtest: example\nok 1 - example\n"
+                 "1..1\n# tests 1\n# suites 0\n# pass 1\n# fail 0\n# cancelled 0\n"
+                 "# skipped 0\n# todo 0\n# duration_ms 1.5\n")
+        self.assert_passing_tap(valid)
+        mutations = [("# pass 1", ""), ("# pass 1", "# pass 10"),
+                     ("# tests 1", "# tests 2"), ("1..1", "1..2"),
+                     ("# pass 1", "# pass 1\n# pass 1"), ("# pass 1", "# pass bogus\n# pass 1"),
+                     ("ok 1 - example", "not ok 1 - example")]
+        mutations.extend((f"# {key} 0", f"# {key} 1") for key in ("fail", "cancelled", "skipped", "todo"))
+        for line, replacement in mutations:
+            with self.subTest(line=line, replacement=replacement), self.assertRaises(AssertionError):
+                self.assert_passing_tap(valid.replace(line, replacement))
+        with self.assertRaises(AssertionError):
+            self.assert_passing_tap(valid + valid)
+
     def test_shared_tap_validator_tests_are_required(self):
         paths = ["scripts/check_tap_contracts.mjs", "tests/gates/test_tap_contracts.mjs"]
         for path in paths:
@@ -439,7 +455,13 @@ class StaticGateTests(unittest.TestCase):
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(ROOT / path, target)
         check = ["node", "--test", "--test-reporter=tap", paths[1]]
-        self.assert_check(self.run_check(*check), True, "# pass 3")
+        report = self.run_check(*check)
+        self.assert_tap_success(report)
+        for name in ("requires passing named contracts and matching completion markers",
+                     "rejects absent or nonzero skip and todo summaries",
+                     "rejects duplicate names, directives and incomplete output"):
+            self.assertEqual(report.stdout.splitlines().count(f"# Subtest: {name}"), 1, report.stdout)
+            self.assertRegex(report.stdout, rf"(?m)^# Subtest: {re.escape(name)}\nok [0-9]+ - {re.escape(name)}$")
         helper = self.root / paths[0]
         original = helper.read_text()
         anchor = 'todo[0] === "# todo 0"'
@@ -2200,9 +2222,12 @@ class StaticGateTests(unittest.TestCase):
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(ROOT / path, target)
         check = ["node", paths[1]]
-        self.assert_check(self.run_check(*check), True, "# pass 23")
+        self.assert_tap_success(self.run_check(*check))
         test = self.root / paths[2]
         source = test.read_text()
+        # A new passing case must not require updating the self-test's total.
+        test.write_text(source + "\ntest('additional navigation contract', () => {});\n")
+        self.assert_tap_success(self.run_check(*check))
         for new_name in (
             'replacement revision preserves a Reader opened synchronously during disposal',
             'ordinary replacement carries handoff and focus while releasing background ownership',
@@ -2339,7 +2364,7 @@ class StaticGateTests(unittest.TestCase):
             shutil.copyfile(ROOT / path, target)
         check = ['node', paths[0]]
         message = 'PDF prefetch requires eight passing named contracts'
-        self.assert_check(self.run_check(*check), True, '# pass 8')
+        self.assert_tap_success(self.run_check(*check))
         for path in paths[2:4]:
             source = self.root / path
             original = source.read_text()
@@ -2369,7 +2394,7 @@ class StaticGateTests(unittest.TestCase):
         worker.write_text("throw new Error('worker did not start');\n")
         self.assert_check(self.run_check(*check), False, message)
         worker.write_text(worker_original)
-        self.assert_check(self.run_check(*check), True, '# pass 8')
+        self.assert_tap_success(self.run_check(*check))
         gate = self.root / paths[0]
         gate_original = gate.read_text()
         self.assertEqual(gate_original.count('timeout: 45000'), 1)
@@ -2390,7 +2415,7 @@ class StaticGateTests(unittest.TestCase):
             shutil.copyfile(ROOT / path, target)
         check = ['node', paths[1]]
         message = 'PDF book-search client requires named contracts'
-        self.assert_check(self.run_check(*check), True, '# pass 13')
+        self.assert_tap_success(self.run_check(*check))
         source = self.root / paths[3]
         original = source.read_text()
         for name in ('prefetch reentered from progress cannot interrupt search', 'repeated prefetch replaces prefetch'):
@@ -2400,7 +2425,7 @@ class StaticGateTests(unittest.TestCase):
                 source.write_text(original.replace(anchor, replacement))
                 self.assert_check(self.run_check(*check), False, message)
         source.write_text(original)
-        self.assert_check(self.run_check(*check), True, '# pass 13')
+        self.assert_tap_success(self.run_check(*check))
         client = self.root / paths[0]
         client_original = client.read_text()
         guard = '    if (type === "prefetch" && pending && pending.type !== "prefetch")\n      return Promise.reject(new DOMException("Search in progress", "AbortError"));\n'
@@ -2466,7 +2491,7 @@ class StaticGateTests(unittest.TestCase):
 """))
         coverage, mutation = ['node', paths[6]], ['node', paths[7]]
         report = self.run_check(*coverage)
-        self.assert_check(report, True, '# pass 14')
+        self.assert_tap_success(report)
         self.assert_check(self.run_check(*mutation), True, '"total":7,"killed":7,"survived":0,"errors":0')
         gate, test, source, mutant_gate = (self.root / paths[i] for i in (6, 9, 0, 7))
         gate_original, test_original, source_original, mutant_original = (
@@ -2579,7 +2604,7 @@ class StaticGateTests(unittest.TestCase):
         coverage = ['node', paths[1]]
         mutation = ['node', paths[2]]
         message = 'PDF text-store coverage requires named contracts'
-        self.assert_check(self.run_check(*coverage), True, '# pass 20')
+        self.assert_tap_success(self.run_check(*coverage))
         self.assert_check(self.run_check(*mutation), True, '"total":19,"killed":19,"survived":0,"errors":0')
         source = self.root / paths[4]
         original = source.read_text()
@@ -2655,7 +2680,7 @@ class StaticGateTests(unittest.TestCase):
             shutil.copyfile(ROOT / path, target)
         check = ['node', paths[1]]
         message = 'Reader text requires named contracts and exactly one source row'
-        self.assert_check(self.run_check(*check), True, '# pass 14')
+        self.assert_tap_success(self.run_check(*check))
         source = self.root / paths[3]
         original = source.read_text()
         name = 'stream rejects an oversized body and cancels its reader'
@@ -2696,14 +2721,16 @@ class StaticGateTests(unittest.TestCase):
                  'tests/reader/copy_reader_vendor.test.mjs', 'tests/reader/test_foliate_proxy.mjs',
                  'tests/reader/media/test_ruffle_closure.mjs', 'tests/service_worker/test_ruffle_retention.js',
                  'scripts/build/copy_reader_vendor.mjs', 'scripts/build/fetch_foliate_reader.mjs',
-                 'scripts/build/check_reader_release.mjs', 'static/reader-resources.js', 'static/sw.js']
+                 'scripts/build/check_reader_release.mjs', 'static/reader-resources.js', 'static/sw.js',
+                 'static/reader/core/reader-source.mjs']
         for path in paths:
             target = self.root / path
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(ROOT / path, target)
         check = ['node', paths[1]]
         message = 'Reader media requires named contracts and exactly one source row'
-        self.assert_check(self.run_check(*check, timeout=120), True, '# pass 16')
+        report = self.run_check(*check, timeout=120)
+        self.assert_tap_success(report)
         source = self.root / paths[4]
         original = source.read_text()
         name = 'resource cleanup rejects pending metadata and removes listeners'
@@ -2728,13 +2755,15 @@ class StaticGateTests(unittest.TestCase):
         source.write_text(original)
         gate = self.root / paths[1]
         gate_original = gate.read_text()
-        # Losing unknown-duration retry restoration must fail even with all 16 contracts passing.
+        # Losing unknown-duration retry restoration must fail even with the same contracts passing.
         unknown_duration = '    {restorationReady:true,time:4,duration:Infinity,expected:4},\n'
         self.assertEqual(original.count(unknown_duration), 1)
         source.write_text(original.replace(unknown_duration, ''))
         regression = self.run_check(*check)
         self.assert_check(regression, False, message)
-        self.assertIn('# pass 16', regression.stdout)
+        self.assert_passing_tap(regression.stdout)
+        self.assertEqual(re.findall(r'(?m)^# Subtest: .+$', regression.stdout),
+                         re.findall(r'(?m)^# Subtest: .+$', report.stdout))
         self.assertIn('branch coverage', regression.stdout)
         source.write_text(original)
         self.assertEqual(gate_original.count('[100, 100, 100]'), 1)
@@ -2763,7 +2792,7 @@ class StaticGateTests(unittest.TestCase):
         shutil.copyfile(ROOT / 'tests/reader/djvu/test_reader_djvu_range_boundaries.mjs', boundary)
         check = ['node', 'scripts/reader/check_reader_djvu_contracts.mjs']
         message = 'DjVu contracts require seven named scripts'
-        self.assert_check(self.run_check(*check), True, '# pass 7')
+        self.assert_tap_success(self.run_check(*check), multiple_reports=True)
         worker = directory / 'test_reader_djvu_worker.mjs'
         source = worker.read_text()
         marker = 'DjVu Worker bounds, errors, timeout, cancellation and geometry checks passed'
@@ -2923,7 +2952,7 @@ class StaticGateTests(unittest.TestCase):
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(ROOT / path, target)
         check = ["node", paths[1]]
-        self.assert_check(self.run_check(*check), True, "# pass 9")
+        self.assert_tap_success(self.run_check(*check))
         test = self.root / paths[2]
         source = test.read_text()
         name = 'docx without a converted link is rejected before capability lookup'
@@ -2959,7 +2988,7 @@ class StaticGateTests(unittest.TestCase):
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(ROOT / path, target)
         check = ["node", paths[1]]
-        self.assert_check(self.run_check(*check), True, "# pass 10")
+        self.assert_tap_success(self.run_check(*check))
         test = self.root / paths[2]
         source = test.read_text()
         name = 'membership is captured before subtree filter access mutates the self array'
@@ -2994,7 +3023,7 @@ class StaticGateTests(unittest.TestCase):
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(ROOT / path, target)
         check = ["node", paths[1]]
-        self.assert_check(self.run_check(*check), True, "# pass 7")
+        self.assert_tap_success(self.run_check(*check))
         test = self.root / paths[2]
         source = test.read_text()
         name = 'the current length is re-read after indexed getters mutate it'
