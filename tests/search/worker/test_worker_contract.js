@@ -191,6 +191,47 @@ test("fuzzy search keeps literal fallback and complete fuzzy postings with index
   }
 });
 
+test("exact search borrows its scope without copying or reordering shared indices", async () => {
+  const input = Array.from({length: 500}, (_, i) => ({...records[0],
+    Repo: i % 2 ? "Repo/A" : "Repo/B", File: i === 123 || i === 125 ? "手机" : `other ${i}`,
+    Folder: [String(i)], Size: i + 1}));
+  const {worker} = await loaded(input);
+  const scopeCopies = vm.runInContext(`(() => {
+    let copies = 0;
+    for (const scope of [recordIndices, ...Object.values(repoRecordIndices)]) {
+      Object.defineProperty(scope, "slice", {value(...args) {
+        if (!args.length) copies++;
+        return Array.prototype.slice.apply(this, args);
+      }});
+      Object.freeze(scope);
+    }
+    return () => copies;
+  })()`, worker.context);
+  const params = {q: "手机", exact: true, sort: "name", page: 2, pageSize: 1, anchorId: "Repo/A\x00125/手机.txt"};
+  const reposList = [null, ["Repo/A"]];
+  const cold = [];
+  for (const repos of reposList) {
+    const result = await worker.request("local-search", {...params, repos});
+    assert.strictEqual(result.total, 2);
+    assert.strictEqual(result.anchor_index, 1);
+    assert.deepStrictEqual(result.records, [input[125]]);
+    cold.push(result);
+  }
+  vm.runInContext("buildFulltext(); searchOrderCache.clear();", worker.context);
+  for (const [i, repos] of reposList.entries()) {
+    assert.deepStrictEqual(await worker.request("local-search", {...params, repos}), cold[i]);
+  }
+  assert.strictEqual(scopeCopies(), 0, "selective uncached queries must not clone their complete starting scope");
+  // With no narrowing term and with sorting enabled, the final order still
+  // needs its own array. The frozen global and repository scopes must survive.
+  const sorted = await worker.request("local-search", {q:"*", exact:true, sort:"size", pageSize:1});
+  assert.deepStrictEqual(sorted.records, [input[499]]);
+  for (const repos of [null, ["Repo/A"]]) {
+    const original = await worker.request("local-search", {q:"*", exact:true, repos, pageSize:2});
+    assert.deepStrictEqual(original.records, repos ? [input[1], input[3]] : [input[0], input[1]]);
+  }
+});
+
 test("warm exact preselection bounds work and falls back for uncovered extension and cold indexes", async () => {
   const input = Array.from({length: 500}, (_, i) => ({...records[0],Repo:"Repo/A",
     File:i === 123 ? "手机" : `unrelated ${i}`,Folder:[],Extension:"txt"}));
@@ -1438,6 +1479,52 @@ test("name size and relevance sorting retain stable order", async () => {
   assert.deepStrictEqual(await names({ q: "", sort: "name" }), expectedName);
   assert.deepStrictEqual(await names({ q: "", sort: "size" }), ["beta alpha", "delta", "gamma", "alpha guide", "same", "same", "beta notes", "手。机", "手机资料"]);
   assert.deepStrictEqual(await names({ q: "alpha" }), ["alpha guide", "beta alpha", "gamma"]);
+});
+test("broad relevance ranks by the same field weights without sorting scored objects", async () => {
+  const cases = [
+    ["R", "guide", "pdf", "books"],
+    ["repo.pdf", "guide", "txt", "folder"],
+    ["R", "guide", "txt", "archive.pdf"],
+    ["repo-pdf", "guide", "pdf", "notes-pdf"],
+    ["R", "guide.pdf-index", "txt", "book"],
+    ["ignored", "guide", "txt", "book"],
+  ];
+  const input = Array.from({length: 1800}, (_, i) => {
+    const [Repo, name, Extension, folder] = cases[i % cases.length];
+    return {Repo, File: `${name} ${i}`, Extension, Folder: [folder], Size: i + 1, HasTxt: false};
+  });
+  const {worker} = await loaded(input);
+  vm.runInContext(`{
+    const sort = Array.prototype.sort;
+    Array.prototype.sort = function (...args) {
+      if (typeof this[0]?.score === "number") throw Error("broad query comparison-sorted scored objects");
+      return sort.apply(this, args);
+    };
+  }`, worker.context);
+  for (const [q, re, tokens] of [
+    ["*.pdf", /\.pdf/i, ["pdf"]],
+    ["?*.pdf", /.\.pdf/i, ["pdf"]],
+    ["*.pdf guide*", /\.pdf/i, ["pdf", "guide"]],
+  ]) for (const searchFolders of [true, false]) {
+    const expected = input.flatMap(record => {
+      const fields = [`${record.File}.${record.Extension}`, record.Repo, searchFolders ? record.Folder.join("/") : ""];
+      if (!fields.some(field => re.test(field))) return [];
+      const score = tokens.reduce((sum, token) => sum + fields.reduce((n, field, i) =>
+        n + (field.includes(token) ? [3, 1, 2][i] : 0), 0), 0);
+      return [{record, score}];
+    }).sort((a, b) => b.score - a.score).map(item => item.record);
+    const target = expected[701];
+    const params = {q, exact: true, searchFolders, pageSize: 400,
+      anchorId: `${target.Repo}\0${target.Folder.join("/")}/${target.File}.${target.Extension}`};
+    const actual = [];
+    for (let page = 1; page <= Math.ceil(expected.length / params.pageSize); page++) {
+      const result = await worker.request("local-search", {...params, page});
+      assert.strictEqual(result.total, expected.length);
+      assert.strictEqual(result.anchor_index, 701);
+      actual.push(...result.records);
+    }
+    assert.deepStrictEqual(actual, expected);
+  }
 });
 test("paging reports exact totals and boundaries", async () => {
   const middle = await search({ q: "", page: 2, pageSize: 3 });

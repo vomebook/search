@@ -690,7 +690,7 @@ let {
   loadPdfSearchText, fullSearchPdfMatches
 } = createReaderPdfSearch(readerContext);
 // Native reading (shared player in reader.html); installed once runtime exists.
-const { installReaderSpeech } = createReaderSpeech(readerContext);
+const { installReaderSpeech } = createReaderSpeech(readerContext, () => loadScript("/search/static/tts-client.js"));
 
 /** @type {Array<{at: number, stage: string, page: number, outcome: string, ms: number}>} */
 const pdfPageTimings = [];

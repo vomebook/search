@@ -171,6 +171,7 @@
     "reader.js"
   ]);
   const lazyFiles = new Set([
+    "tts-client.js",
     ...readerComponentFiles,
     "reader/reader-components.mjs",
     "reader/pdf/reader-pdf-text-store.mjs",

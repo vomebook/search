@@ -226,16 +226,25 @@ export function makeFirstPageWorkerSource(source) {
       readerPrefix = pages;
       return pages.map(item => item.ref.toString());
     }
-    handler.on("ReaderGetPagePrefix", function ({limit}) {
+    function readerQueuePrefixWalk(limit, installFirst = false) {
       const previous = readerPrefixWork;
       readerPrefixWork = (async () => {
         if (previous) await previous;
         if (pdfManager.readerValidationCommitted) return null;
         const refs = await readerWalkPagePrefix(limit);
-        return pdfManager.readerValidationCommitted ? null : refs;
+        if (pdfManager.readerValidationCommitted) return null;
+        if (!installFirst) return refs;
+        if (!Array.isArray(refs) || refs.length !== 1) throw new Error("PDF_PREFIX_INVALID");
+        const installed = await readerQueuePrefixInstall(readerPrefix.slice(0, 1));
+        if (installed.refs.length !== 1 || installed.refs[0] !== refs[0]) throw new Error("PDF_PREFIX_INVALID");
+        return installed.refs;
       })();
       return readerPrefixWork;
-    });
+    }
+    handler.on("ReaderGetPagePrefix", ({limit}) => readerQueuePrefixWalk(limit));
+    // Walk and publish the same provisional first page in one worker turn.
+    // Validation must still compare its ref against the authoritative tree.
+    handler.on("ReaderPrepareFirstPage", () => readerQueuePrefixWalk(1, true));
     // This concurrent walk never trusts /Count. Unsupported or corrupt trees
     // fail closed; PDF.js's normal recovery still runs for malformed xrefs.
     async function readerCollectPageTree(catalog) {
@@ -368,11 +377,9 @@ export function makeFirstPageWorkerSource(source) {
       return readerValidation;
     });
     let readerInstallPrefix = null;
-    handler.on("ReaderInstallPagePrefix", function () {
-      if (!readerPrefix) return {refs:[],firstChanged:false};
-      if (pdfManager.readerValidationCommitted) return {refs:[],firstChanged:false};
+    function readerQueuePrefixInstall(installing) {
+      if (!installing?.length || pdfManager.readerValidationCommitted) return {refs:[],firstChanged:false};
       const previous = readerInstallPrefix;
-      const installing = readerPrefix.slice();
       readerInstallPrefix = (async () => {
         if (previous) await previous;
         const map = new Map(installing.map((item,index) => [index,[item.dict,item.ref]]));
@@ -380,7 +387,8 @@ export function makeFirstPageWorkerSource(source) {
         return {refs:installing.map(item => item.ref.toString()), firstChanged:false};
       })();
       return readerInstallPrefix;
-    });
+    }
+    handler.on("ReaderInstallPagePrefix", () => readerQueuePrefixInstall(readerPrefix?.slice()));
     handler.on("GetPage", async function ({
       pageIndex
     }) {`, "validation-message");

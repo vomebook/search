@@ -112,8 +112,9 @@ export function createReaderPdfPageWindow(readerContext) {
    * @param {(page: number) => HTMLElement} createShell
    * @param {number} total
    * @param {number} batchSize
+   * @param {(endPage: number) => void} [onBatchMounted]
    */
-  async function appendShellsBatched(createShell, total, batchSize) {
+  async function appendShellsBatched(createShell, total, batchSize, onBatchMounted) {
     for (let start = 2; start <= total; start += batchSize) {
       readerContext.assertReaderActive();
       const fragment = document.createDocumentFragment();
@@ -126,6 +127,7 @@ export function createReaderPdfPageWindow(readerContext) {
       }
       // Any remaining shells follow the last retained shell in document order.
       readerContext.content.appendChild(fragment);
+      onBatchMounted?.(Math.min(start + batchSize - 1, total));
       await readerContext.waitForReader();
     }
   }
@@ -704,10 +706,8 @@ export function createReaderPdfPageWindow(readerContext) {
           // Prefix identities come from the current catalog, even when an old
           // linearized first-page hint exists after an incremental update.
           const refs = await readerContext.awaitReader(
-            /** @type {NonNullable<import('../../../typings/reader-page-window-strict').PdfPreviewDocument['_transport']>} */ (pdf._transport).messageHandler.sendWithPromise("ReaderGetPagePrefix", {limit:1}), lifetime.signal);
-          const installed = await readerContext.awaitReader(
-            /** @type {NonNullable<import('../../../typings/reader-page-window-strict').PdfPreviewDocument['_transport']>} */ (pdf._transport).messageHandler.sendWithPromise("ReaderInstallPagePrefix", null), lifetime.signal);
-          if (!Array.isArray(refs) || refs.length !== 1 || installed?.refs?.[0] !== refs[0]) throw new Error("PDF_PREFIX_INVALID");
+            /** @type {NonNullable<import('../../../typings/reader-page-window-strict').PdfPreviewDocument['_transport']>} */ (pdf._transport).messageHandler.sendWithPromise("ReaderPrepareFirstPage", null), lifetime.signal);
+          if (!Array.isArray(refs) || refs.length !== 1) throw new Error("PDF_PREFIX_INVALID");
           previewRefs = refs;
           const page = await readerContext.awaitReader(pdf.getPage(1), lifetime.signal);
           const base = page.getViewport({scale:1});
@@ -1132,6 +1132,7 @@ export function createReaderPdfPageWindow(readerContext) {
     readerContext.status.textContent = `${pdf.numPages} 页`;
     await readerContext.getInitialReaderRestoration();
     const initialPage = previewAnchor?.page || readerContext.initialReaderPage(pdf.numPages);
+    const openingNavigation = readerContext.readerRuntime.currentGeneration("navigation");
     let initialRenderGate = true;
     const firstPage = await readerContext.measurePdf(readerContext.awaitReader(pdf.getPage(initialPage)), "page", initialPage);
     readerContext.assertReaderActive();
@@ -1229,18 +1230,23 @@ export function createReaderPdfPageWindow(readerContext) {
       visibleObserver.unobserve(shell);
       pageObserver.unobserve(shell);
     }, firstViewport.height / firstViewport.width, previewPages);
+    const drawWhileBatching = !readerContext.pdfShellWindow && !previewShell && readerContext.extension === "pdf";
+    // The target can paint once its own batch is connected, but restore and
+    // adjacent observers still need the full layout (including near the end).
+    const mounted = drawWhileBatching && initialPage > 1 ? Promise.withResolvers() : null;
     const shellsReady = readerContext.pdfShellsReady = readerContext.pdfShellWindow
-      ? Promise.resolve() : readerContext.appendShellsBatched(createShell, pdf.numPages, 24);
+      ? Promise.resolve() : readerContext.appendShellsBatched(createShell, pdf.numPages, 24, mounted
+        ? endPage => { if (endPage >= initialPage) mounted.resolve(undefined); } : undefined);
     shellsReady.catch(() => {});
-    const drawWhileBatching = !readerContext.pdfShellWindow && !previewShell &&
-      readerContext.extension === "pdf" && initialPage === 1;
     let releaseObservers = !drawWhileBatching;
     try {
       const targetShell = readerContext.pdfShellWindow
         ? readerContext.pdfShellWindow.ensure(initialPage)
-        : drawWhileBatching
+        : drawWhileBatching && initialPage === 1
           ? firstShell
-          : (await shellsReady, readerContext.content.querySelector(`.reader-page[data-page="${initialPage}"]`));
+          : (await (mounted ? Promise.race([mounted.promise, shellsReady]) : shellsReady),
+            readerContext.content.querySelector(`.reader-page[data-page="${initialPage}"]`));
+      readerContext.assertReaderActive();
       if (!targetShell) throw new Error("PDF initial page shell missing");
       (/** @type {HTMLDivElement | null} */ (previewPadding))?.remove();
       if (previewAnchor) {
@@ -1255,9 +1261,12 @@ export function createReaderPdfPageWindow(readerContext) {
         }
       }
       readerContext.markReaderContentReady();
-      if (!previewShell) readerContext.viewport.scrollTop = readerContext.readerPageScrollTop(targetShell);
+      const ownsOpeningPosition = () => !drawWhileBatching ||
+        readerContext.isReaderGenerationCurrent("navigation", openingNavigation);
+      const shouldDraw = ownsOpeningPosition();
+      if (!previewShell && shouldDraw) readerContext.viewport.scrollTop = readerContext.readerPageScrollTop(targetShell);
       try {
-        await readerContext.renderPdfShell(targetShell, false, true);
+        if (shouldDraw) await readerContext.renderPdfShell(targetShell, false, true);
       } catch (error) {
         // A newer visible demand can cancel this now-offscreen canvas without
         // closing the document. Do not swallow an actual render failure.
@@ -1267,9 +1276,12 @@ export function createReaderPdfPageWindow(readerContext) {
       }
       readerContext.markReaderContentReady();
       if (!previewShell && !drawWhileBatching) readerContext.viewport.scrollTop = readerContext.readerPageScrollTop(targetShell);
-      // Do not realign page one after the reader has had a chance to scroll.
       await shellsReady;
       readerContext.assertReaderActive();
+      // A short last mounted slice can clamp the initial scroll. Correct it
+      // once there is enough layout, but never after a newer navigation.
+      if (drawWhileBatching && initialPage > 1 && ownsOpeningPosition())
+        readerContext.viewport.scrollTop = readerContext.readerPageScrollTop(targetShell);
       releaseObservers = true;
     } finally {
       if (releaseObservers && !readerContext.readerAbortController.signal.aborted) releaseInitialRenderGate();

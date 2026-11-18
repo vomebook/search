@@ -111,14 +111,19 @@ export function createReaderNavigation(readerContext) {
         return false;
       const page = VoiceOfMLReader.clampNumber(value, 1, readerContext.documentState.pageCount, 1);
       readerContext.pdfShellWindow?.ensure(page);
-      // The first page is usable before the background shell queue finishes.
-      // Only wait when the requested shell has not been materialized yet.
-      let shell = /** @type {HTMLElement | null} */ (readerContext.content.querySelector(
+      const findShell = () => /** @type {HTMLElement | null} */ (readerContext.content.querySelector(
         `.reader-page[data-page="${page}"]`
       ));
-      if (!shell && (readerContext.capability.mode === "pdf-pages" || readerContext.capability.mode === "image-pages")) {
+      let shell = findShell();
+      const mode = readerContext.capability.mode;
+      // A mounted ordinary PDF page can still be too near the temporary end
+      // to scroll into position. Wait only for missing or unreachable targets.
+      const batchingPdf = mode === "pdf" && !readerContext.pdfShellWindow && !readerContext.documentState.restorationReady;
+      if ((batchingPdf && (!shell ||
+          readerContext.readerPageScrollTop(shell) > readerContext.viewport.scrollHeight - readerContext.viewport.clientHeight + 1)) ||
+          (!shell && (mode === "pdf-pages" || mode === "image-pages"))) {
         await readerContext.pdfShellsReady;
-        shell = /** @type {HTMLElement | null} */ (readerContext.content.querySelector(`.reader-page[data-page="${page}"]`));
+        shell = findShell();
       }
       if (!readerContext.isReaderGenerationCurrent("navigation", generation)) return false;
       if (!shell) return false;

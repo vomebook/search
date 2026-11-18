@@ -489,12 +489,12 @@ class ReaderRefactorTest(unittest.TestCase):
         self.page.route('**/api/reader-bucket-resource?**', asset)
         def hold_shells(route):
             script = route.fetch().text()
-            anchor = 'readerContext.content.appendChild(fragment);\n      await readerContext.waitForReader();'
+            anchor = 'await readerContext.waitForReader();\n    }\n  }'
             self.assertEqual(script.count(anchor), 1)
-            route.fulfill(content_type='text/javascript', body=script.replace(anchor, anchor+'''
+            route.fulfill(content_type='text/javascript', body=script.replace(anchor, '''
               if (readerContext.capability.mode === 'image-pages' && start === 2)
                 await new Promise(resolve=>{window.__releaseImageShells=resolve;});
-            '''))
+            '''+anchor))
         self.page.route('**/static/reader/pdf/reader-pdf-page-window.mjs', hold_shells)
         # Disable the independent low-priority image preload; measure the real
         # image demand/reveal path, not a speculative duplicate request.

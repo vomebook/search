@@ -69,11 +69,12 @@ function ensureStyle(root) {
   target.append(style);
 }
 
-/** @param {import('../../../typings/reader-speech-strict').SpeechContext} readerContext */
-export function createReaderSpeech(readerContext) {
+/** @param {import('../../../typings/reader-speech-strict').SpeechContext} readerContext
+ * @param {() => Promise<void>} loadPlayer */
+export function createReaderSpeech(readerContext, loadPlayer) {
   /** @type {import('../../../typings/reader-speech-strict').SpeechAdapter | null} */
   let adapter = null;
-  let installed = false;
+  let installed = false, disposed = false, loadingPlayer = false;
   /** @type {Array<() => void>} */
   const cleanup = [];
 
@@ -674,6 +675,18 @@ export function createReaderSpeech(readerContext) {
     ensureStyle(document);
   }
 
+  function attachWhenReady() {
+    if (disposed || loadingPlayer || !hasText()) return;
+    if (speech()) return attach();
+    loadingPlayer = true;
+    // Reading is already ready; an optional player must not delay or fail it.
+    void Promise.resolve().then(() => {
+      if (!disposed) return loadPlayer();
+    }).then(() => {
+      if (!disposed) attach();
+    }).catch(() => {}).finally(() => { loadingPlayer = false; });
+  }
+
   function install() {
     if (installed) return;
     installed = true;
@@ -695,8 +708,8 @@ export function createReaderSpeech(readerContext) {
     document.querySelector("#back")?.addEventListener("click", handoff, { capture: true });
     readerContext.readerRuntime.events.on("phase", (detail) => {
       if (!detail || typeof detail !== "object" || !("phase" in detail)) return;
-      if (detail.phase === "ready") attach();
-      else if (detail.phase === "disposed") { speech()?.stop?.(); detach(); }
+      if (detail.phase === "ready") attachWhenReady();
+      else if (detail.phase === "disposed") { disposed = true; speech()?.stop?.(); detach(); }
     });
   }
 

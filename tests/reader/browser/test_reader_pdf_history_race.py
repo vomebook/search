@@ -39,11 +39,11 @@ class PdfHistoryRaceTests(unittest.TestCase):
                     def hold_remaining_shells(route):
                         response = route.fetch()
                         script = response.text()
-                        anchor = 'readerContext.content.appendChild(fragment);\n      await readerContext.waitForReader();'
+                        anchor = 'await readerContext.waitForReader();\n    }\n  }'
                         self.assertEqual(script.count(anchor), 1)
-                        route.fulfill(response=response, body=script.replace(anchor, anchor+'''
+                        route.fulfill(response=response, body=script.replace(anchor, '''
                           if (start === 2) await new Promise(resolve=>{window.__releasePdfShells=resolve;});
-                        '''))
+                        '''+anchor))
 
                     page.route('**/static/reader/pdf/reader-pdf-page-window.mjs*', hold_remaining_shells)
                     self.open(page, source)
@@ -79,6 +79,76 @@ class PdfHistoryRaceTests(unittest.TestCase):
                     page.locator(f'.reader-page[data-page="{expected_page}"] canvas.ready').wait_for(timeout=10000)
                 finally:
                     context.close()
+
+    def test_resume_pdf_paints_target_before_trailing_shell_batches(self):
+        for action, expected in [('resume', 37), ('jump', 12), ('early-jump', 12),
+                                 ('queued-jump', 90), ('queued-jump', 49), ('close', None)]:
+            with self.subTest(action=action), support.range_source(support.sparse_pdf(count=96, stride=32768)) as (source, state, _lock):
+                state['block'].set()
+                with self.browser.new_context(service_workers='block') as context:
+                    page = context.new_page()
+                    page.route('**/static/reader/core/reader-store.js*', lambda route: route.fulfill(
+                        content_type='text/javascript', body='''window.VoiceOfMLReaderStore={
+                          get:async()=>({page:37,pageCount:96,pageOffset:28,zoom:100}),
+                          put:async()=>{window.__progressWritten=true;},list:async()=>[],
+                          listBookmarks:async()=>[],listAllBookmarks:async()=>[]};'''))
+
+                    def hold_batches(route):
+                        response = route.fetch()
+                        script = response.text()
+                        anchor = 'await readerContext.waitForReader();\n    }\n  }'
+                        self.assertEqual(script.count(anchor), 1)
+                        route.fulfill(response=response, body=script.replace(anchor, '''
+                            if (start === 2 || start === 26) await readerContext.awaitReader(new Promise(resolve=>{
+                              (window.__resumeBatches ||= {})[start]=resolve;
+                            }));
+                        '''+anchor))
+
+                    page.route('**/static/reader/pdf/reader-pdf-page-window.mjs*', hold_batches)
+                    self.open(page, source)
+                    page.wait_for_function('()=>!!window.__resumeBatches?.[2]', timeout=10000)
+                    self.assertEqual(page.locator('.reader-page[data-page="37"]').count(), 0)
+                    self.assertEqual(page.locator('.reader-page canvas.ready').count(), 0)
+                    if action == 'close':
+                        page.evaluate('dispatchEvent(new Event("voice-reader-dispose"))')
+                        page.wait_for_function("()=>document.documentElement.dataset.readerPhase==='disposed'")
+                        self.assertFalse(page.evaluate('!!window.__progressWritten || !!window.__resumeBatches?.[26]'))
+                        continue
+                    def jump():
+                        page.locator('#page-number').fill(str(expected))
+                        page.locator('#page-number').dispatch_event('change')
+                        page.locator(f'.reader-page[data-page="{expected}"] canvas.ready').wait_for(timeout=10000)
+
+                    if action == 'early-jump':
+                        jump()
+                    page.evaluate('window.__resumeBatches[2]()')
+                    page.wait_for_function('()=>!!window.__resumeBatches?.[26]', timeout=10000)
+                    self.assertEqual(page.locator('.reader-page[data-page="96"]').count(), 0)
+                    target = page.locator('.reader-page[data-page="37"]')
+                    if action == 'early-jump':
+                        self.assertEqual(target.locator('canvas.ready').count(), 0)
+                    else:
+                        target.locator('canvas.ready').wait_for(timeout=10000)
+                    self.assertEqual(page.locator('.reader-page[data-page="1"] canvas.ready').count(), 0)
+                    self.assertNotEqual(page.locator('html').get_attribute('data-reader-phase'), 'ready')
+                    self.assertFalse(page.evaluate('!!window.__progressWritten'))
+                    if action == 'jump':
+                        jump()
+                    if action == 'queued-jump':
+                        page.locator('#page-number').fill(str(expected))
+                        page.locator('#page-number').dispatch_event('change')
+                        self.assertEqual(page.locator(f'.reader-page[data-page="{expected}"] canvas.ready').count(), 0)
+                    before = page.locator('#viewport').evaluate('node=>node.scrollTop')
+                    page.evaluate('window.__resumeBatches[26]()')
+                    page.wait_for_function("()=>document.documentElement.dataset.readerPhase==='ready'")
+                    self.assertEqual(page.locator('#page-number').input_value(), str(expected))
+                    if action in ('jump', 'early-jump'):
+                        self.assertAlmostEqual(page.locator('#viewport').evaluate('node=>node.scrollTop'), before, delta=3)
+                    else:
+                        final_page = page.locator(f'.reader-page[data-page="{expected}"]')
+                        final_page.locator('canvas.ready').wait_for(timeout=10000)
+                        offset = final_page.evaluate('node=>document.querySelector("#viewport").getBoundingClientRect().top - node.getBoundingClientRect().top')
+                        self.assertAlmostEqual(offset, 28 if action == 'resume' else 0, delta=3)
 
     def suppress_ordinary_worker_handshake(self, page, include_staged=False):
         # Hold the first range until the real ordinary Worker has emitted its

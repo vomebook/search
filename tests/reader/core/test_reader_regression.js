@@ -476,6 +476,52 @@ require('node:test')('Markdown restores saved positions without overriding expli
   }
 })
 
+require('node:test')('optional Reader player skips non-text, handles failure and ignores completion after disposal', async (t) => {
+  const { createReaderSpeech } = await import('../../../static/reader/ui/reader-speech.mjs')
+  const keys = ['window', 'document', 'CCRDSpeech']
+  const previous = keys.map(key => [key, Object.getOwnPropertyDescriptor(globalThis, key)])
+  t.after(() => {
+    for (const [key, descriptor] of previous) {
+      if (descriptor) Object.defineProperty(globalThis, key, descriptor)
+      else delete globalThis[key]
+    }
+  })
+  let probed = 0
+  globalThis.window = new EventTarget()
+  globalThis.document = Object.assign(new EventTarget(), { querySelector: () => { probed++; return null } })
+  delete globalThis.CCRDSpeech
+  let phase, succeed, attempts = 0
+  const context = {
+    capability: { mode: 'image' }, isReaderOverlayFrame: () => true,
+    readerRuntime: { events: { on: (_, callback) => { phase = callback } } }
+  }
+  const reader = createReaderSpeech(context, () => {
+    if (++attempts === 1) throw Error('player unavailable')
+    return new Promise(resolve => { succeed = resolve })
+  })
+  const flush = () => new Promise(setImmediate)
+  reader.installReaderSpeech()
+  phase({ phase: 'ready' })
+  await flush()
+  assert.strictEqual(attempts, 0)
+  context.capability.mode = 'text'
+  phase({ phase: 'ready' })
+  await flush()
+  assert.strictEqual(attempts, 1)
+  assert.strictEqual(reader.readerSpeechAdapter(), null)
+  phase({ phase: 'ready' })
+  phase({ phase: 'ready' })
+  await flush()
+  assert.strictEqual(attempts, 2)
+  phase({ phase: 'disposed' })
+  const before = probed
+  globalThis.CCRDSpeech = { previewClosed() {}, previewLoaded: () => assert.fail('disposed Reader attached speech') }
+  succeed()
+  await flush()
+  assert.strictEqual(probed, before, 'no attachment or DOM access after disposal')
+  assert.strictEqual(reader.readerSpeechAdapter(), null)
+})
+
 require('node:test')('Reader speech uses the visible PDF page and does not require a chapter search index', async (t) => {
   const { createReaderSpeech } = await import('../../../static/reader/ui/reader-speech.mjs')
   const keys = ['window', 'document', 'NodeFilter', 'CCRDSpeech', 'sessionStorage', 'localStorage']
@@ -514,7 +560,7 @@ require('node:test')('Reader speech uses the visible PDF page and does not requi
     documentState: { page: 26, pageCount: 40 }, pageAtMarker: () => pdfPage,
     readerRuntime: { events: { on: (_, callback) => { phase = callback } } }
   }
-  createReaderSpeech(context).installReaderSpeech()
+  createReaderSpeech(context, async () => assert.fail('existing player must be reused')).installReaderSpeech()
   phase({ phase: 'ready' })
   await new Promise(setImmediate)
   assert.strictEqual(published.length, 1, 'a stale saved page must not hide speech on the visible page')

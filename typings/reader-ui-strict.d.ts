@@ -18,7 +18,7 @@ export interface NavigationContext {
   turnViewport(direction: number): void;
   readerLifecycle: { disposed: boolean };
   readerAbortController: AbortController;
-  documentState: { pageCount: number };
+  documentState: { pageCount: number; restorationReady: boolean };
   isReaderGenerationCurrent(kind: string, generation: number): boolean;
   pdfShellWindow: { ensure(page: number): void; schedule(): void } | null;
   content: HTMLElement;

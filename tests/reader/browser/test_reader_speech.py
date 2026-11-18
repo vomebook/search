@@ -3,6 +3,7 @@
 The TTS backend is routed offline (no model/network); playback is muted.
 """
 import json
+import re
 import unittest
 import urllib.parse
 from pathlib import Path
@@ -184,6 +185,34 @@ class ReaderSpeechTest(unittest.TestCase):
     def stop(self, page):
         page.locator("#speech-stop").click()
         self.assertTrue(page.locator("#speech-audio").evaluate("n=>n.paused"))
+
+    def test_reader_ready_before_speech_player_download_finishes(self):
+        held = []
+        player_url = re.compile(r"/static/tts-client(?:\.[a-f0-9]{12})?\.js$")
+        context, page, posts, errors = self.open(
+            "txt", TEXT.encode(), "text/plain; charset=utf-8",
+            setup=lambda page: page.route(player_url, lambda route: held.append(route))
+        )
+        try:
+            wait(page, """() => {
+                const text = document.querySelector('.reader-text');
+                return text?.textContent.includes('第0段') && text.getBoundingClientRect().top < innerHeight &&
+                    document.querySelector('#loading-status')?.hidden;
+            }""", 5000)
+            # The document is usable while the player's only request is still held.
+            self.assertEqual(page.locator('[data-speech-toggle]').count(), 0)
+            self.assertFalse(posts)
+            wait(page, "() => !!document.querySelector('script[src*=\"tts-client\"]')", 5000)
+            with page.expect_event("requestfinished", predicate=lambda req: player_url.search(req.url), timeout=5000):
+                self.assertEqual(len(held), 1)
+                held[0].continue_()
+            job = self.play(page, posts)
+            self.assertTrue(job["text"].lstrip().startswith("第0段"), job["text"][:40])
+            self.assertEqual(page.locator('[data-speech-toggle]').count(), 1)
+            self.stop(page)
+            self.assertFalse(errors, errors)
+        finally:
+            context.close()
 
     def test_text_markdown_and_html_read_rendered_text(self):
         cases = (("txt", TEXT.encode(), "text/plain; charset=utf-8", "第0段"),

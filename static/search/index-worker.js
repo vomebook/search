@@ -950,6 +950,35 @@ function searchOrderKey(params) {
   return JSON.stringify(cacheParams);
 }
 
+/** @param {number} index @param {string[]} tokens @param {boolean} searchFolders */
+function relevanceScore(index, tokens, searchFolders) {
+  const fields = getRecordSearchFields(records[index] || {});
+  let score = 0;
+  for (const token of tokens) {
+    if (fields.file.includes(token)) score += 3;
+    if (searchFolders && fields.folder.includes(token)) score += 2;
+    if (fields.repo.includes(token)) score += 1;
+  }
+  return score;
+}
+
+/** @param {number[]} indices @param {string[]} tokens @param {boolean} searchFolders */
+function orderByRelevance(indices, tokens, searchFolders) {
+  // For many matches and few tokens, scores have a small integer range.
+  // Appending in match order keeps ties stable without allocating scored rows.
+  if (indices.length >= 1024 && tokens.length <= 8) {
+    const buckets = Array.from({length: tokens.length * 6 + 1}, () => /** @type {number[]} */ ([]));
+    for (const index of indices) {
+      const bucket = /** @type {number[]} */ (buckets[relevanceScore(index, tokens, searchFolders)]);
+      bucket.push(index);
+    }
+    return /** @type {number[]} */ ([]).concat(...buckets.reverse());
+  }
+  const scored = indices.map(index => ({ index, score: relevanceScore(index, tokens, searchFolders) }));
+  scored.sort((a, b) => b.score - a.score);
+  return scored.map(item => item.index);
+}
+
 /** @param {SearchParams} params @param {number[] | null} preparedExact */
 function searchLocal(params, preparedExact = null) {
   const query = String(params.q || "").trim();
@@ -977,7 +1006,9 @@ function searchLocal(params, preparedExact = null) {
     // Whitespace separates independent literal terms, matching the HF API.
     // A term may still be a wildcard pattern; every term must match.
     const terms = query.split(/\s+/).filter(Boolean);
-    matched = preparedExact === null ? exactSearchScope(params.repos).slice() : preparedExact;
+    // Borrow the scope: term filters do not mutate it, and applyFilters
+    // returns an owned array before any in-place result sort.
+    matched = preparedExact === null ? exactSearchScope(params.repos) : preparedExact;
     for (let termIndex = 0; preparedExact === null && termIndex < terms.length; termIndex++) {
       const term = /** @type {string} */ (terms[termIndex]);
       const wildcard = term.includes("*") || term.includes("?");
@@ -1084,21 +1115,7 @@ function searchLocal(params, preparedExact = null) {
     // These queries have no score tokens, so stable relevance keeps this order.
     ordered = filtered;
   } else {
-    const tokens = tokenize(query);
-    const scored = filtered.map((index) => {
-      /** @type {Partial<SearchRecord>} */
-      const record = records[index] || {};
-      const fields = getRecordSearchFields(record);
-      let score = 0;
-      for (const token of tokens) {
-        if (fields.file.includes(token)) score += 3;
-        if (searchFolders && fields.folder.includes(token)) score += 2;
-        if (fields.repo.includes(token)) score += 1;
-      }
-      return { index, score };
-    });
-    if (query) scored.sort((a, b) => b.score - a.score);
-    ordered = scored.map((item) => item.index);
+    ordered = orderByRelevance(filtered, tokenize(query), searchFolders);
   }
   searchOrderCache.set(cacheKey, ordered);
   while (searchOrderCache.size > SEARCH_ORDER_CACHE_MAX) searchOrderCache.delete(/** @type {string} */ (searchOrderCache.keys().next().value));

@@ -130,6 +130,9 @@ for (const inventory of [resources.shellAssets(staticBase), resources.runtimePat
   assert.ok(inventory.includes(staticBase + "reader/search/reader-pdf-book-validate.mjs"));
 }
 const buildFiles = resources.buildFiles(project);
+assert.ok(buildFiles.includes("tts-client.js"), "the optional player must still be hashed and published");
+assert.ok(resources.runtimePaths(staticBase).includes(staticBase + "tts-client.js"), "retain the warmed player for offline reuse");
+assert.ok(!resources.shellAssets(staticBase).includes(staticBase + "tts-client.js"), "search must not warm the optional player");
 const searchDeps = new Set(APP_DEPENDENCIES.filter(file => file.startsWith("search/")));
 for (const file of searchDeps) assert.ok(buildFiles.includes(file), `${file} must remain a build input`);
 const sourceWorker = readFileSync(new URL("../../../static/sw.js", import.meta.url), "utf8");

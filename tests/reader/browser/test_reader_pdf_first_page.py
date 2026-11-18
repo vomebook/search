@@ -271,6 +271,31 @@ class PdfFirstPageTests(unittest.TestCase):
             self.assertIn("Page 130", page.locator('.reader-page[data-page="130"] .reader-pdf-text').text_content())
             self.assertEqual(errors, [])
 
+    def test_staged_first_canvas_walks_and_installs_page_one_in_one_worker_request(self):
+        with range_source(sparse_pdf(nested=True)) as (source, state, _lock):
+            with self.browser.new_context(service_workers='block') as context:
+                page = context.new_page()
+                page.add_init_script('''(() => {
+                  const send = Worker.prototype.postMessage;
+                  window.__pageOneMessages = [];
+                  Worker.prototype.postMessage = function(message, ...rest) {
+                    const action = message?.action;
+                    if (['ReaderPrepareFirstPage', 'ReaderGetPagePrefix', 'ReaderInstallPagePrefix', 'GetPage'].includes(action))
+                      window.__pageOneMessages.push(action);
+                    return send.call(this, message, ...rest);
+                  };
+                })()''')
+                self.open(page, source)
+                page.locator('.reader-page[data-preview-ready="1"] canvas.ready').wait_for(timeout=15000)
+                messages = page.evaluate('window.__pageOneMessages')
+                self.assertIn('GetPage', messages)
+                self.assertEqual(messages[:messages.index('GetPage')], ['ReaderPrepareFirstPage'])
+                self.assertEqual(page.locator('#page-total').text_content(), '')
+                self.assertTrue(page.locator('#bookmark-ribbon').is_disabled())
+                state['block'].set()
+                page.wait_for_function("()=>document.documentElement.dataset.readerPhase==='ready'", timeout=30000)
+                self.assertEqual(page.locator('#page-number').get_attribute('max'), '130')
+
     def test_nested_tree_first_page_does_not_wait_for_other_pages(self):
         with range_source(sparse_pdf(nested=True)) as (source, state, lock):
             context=self.browser.new_context(service_workers="block");self.addCleanup(context.close)
