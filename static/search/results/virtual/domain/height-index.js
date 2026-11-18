@@ -100,9 +100,8 @@
     for (let i = oldLen + 1; i <= len; i++) {
       const rangeStart = i - (i & -i) + 1;
       const oldStart = Math.max(1, rangeStart);
-      const oldEnd = Math.min(oldLen, i);
-      const oldSum = oldEnd >= oldStart
-        ? prefixSum(state.heightTree, oldEnd, false, 0) - prefixSum(state.heightTree, oldStart - 1, false, 0)
+      const oldSum = oldLen >= oldStart
+        ? prefixSum(state.heightTree, oldLen, false, 0) - prefixSum(state.heightTree, oldStart - 1, false, 0)
         : 0;
       const newStart = Math.max(oldLen + 1, rangeStart);
       const newSum = /** @type {number} */ (newPrefix[i - oldLen]) - /** @type {number} */ (newPrefix[newStart - oldLen - 1]);
