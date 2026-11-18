@@ -51,6 +51,8 @@ test('encoding detection handles BOMs, valid UTF-8, UTF-16 heuristics and legacy
     assert.equal(detect(Uint8Array.of(0xff),'Русский'),'windows-1251');
     assert.equal(detect(Uint8Array.of(0xc4,0xe3,0xba,0xc3),'中文'),'gb18030');
     assert.equal(detect(Uint8Array.of(0xa4,0xa4,0xa4,0xe5),'中文'),'big5');
+    assert.equal(detect(Uint8Array.of(0xcf,0xf0,0xe8,0xe2,0xe5,0xf2,0x21)),'windows-1251',
+      'legacy Cyrillic text can be detected without a language hint in the title');
     // Compare the original two-filter heuristic on random bytes, BOMs and
     // threshold edges. Only the zero scan is replaced; decoder scoring stays.
     const oldHeuristic=bytes=>{
@@ -108,6 +110,20 @@ test('stream handles split UTF-8 BOM and codepoints and releases its resource',a
     await f.context.renderPlainText(responseChunks([]));
     assert.deepEqual(samples,[[]]);assert.equal(f.context.content.textContent,'');
     assert.deepEqual(f.events.filter(event=>event==='track'||event==='untrack'),['track','untrack']);
+
+    for (const [encoding, bom, a, b] of [
+      ['utf-16le', [0xff,0xfe], [0x41,0], [0x42,0]],
+      ['utf-16be', [0xfe,0xff], [0,0x41], [0,0x42]]
+    ]) {
+      f.context.content.children.length=0;f.events.length=0;samples.length=0;
+      const response=responseChunks([Uint8Array.of(bom[0]),Uint8Array.of(),Uint8Array.of(bom[1]),
+        Uint8Array.of(a[0]),Uint8Array.of(a[1],b[0]),Uint8Array.of(b[1])]);
+      await f.context.renderPlainText(response);
+      assert.equal(f.context.content.textContent,'AB',encoding);
+      assert.deepEqual(samples,[bom],`${encoding} decoder selected at the split BOM`);
+      assert.equal(response.body.locked,false);
+      assert.deepEqual(f.events.filter(event=>event==='track'||event==='untrack'),['track','untrack']);
+    }
   } finally {f.restore();}
 });
 
@@ -160,6 +176,14 @@ test('block boundaries preserve surrogate pairs and CRLF without creating oversi
       const last=block.textContent.charCodeAt(block.textContent.length-1);
       assert.ok(!(last>=0xd800&&last<=0xdbff));assert.notEqual(last,13);
     }
+
+    f.context.content.children.length=0;
+    const before='x'.repeat(32767), after='\r\n'+'y'.repeat(32763)+'\nend';
+    const encode=text=>new TextEncoder().encode(text);
+    await f.context.renderPlainText(responseChunks([encode('\ufeff'+before),encode(after)]));
+    assert.equal(f.context.content.textContent,before+after);
+    const streamed=f.context.content.children[0].children.map(block=>block.textContent);
+    assert.deepEqual(streamed,[before,after.slice(0,-3),'end']);
   } finally {f.restore();}
 });
 
