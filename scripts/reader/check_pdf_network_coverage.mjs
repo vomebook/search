@@ -33,6 +33,11 @@ const hintsRows = (result.stdout || "").split(/\r?\n/).flatMap(line => {
 });
 const text = result.stdout || "";
 const lines = text.split(/\r?\n/);
+// Node truncates fractional CLI floors; also check the reported aggregate.
+const aggregateRows = lines.flatMap(line => {
+  const match = /^\s*#\s*all files\s*\|\s*(\d+(?:\.\d+)?)\s*\|\s*(\d+(?:\.\d+)?)\s*\|\s*(\d+(?:\.\d+)?)\s*\|/.exec(line);
+  return match ? [match.slice(1).map(Number)] : [];
+});
 const skipped = lines.filter(line => /^# skipped(?:\s|$)/.test(line));
 const todo = lines.filter(line => /^# todo(?:\s|$)/.test(line));
 const required = [
@@ -41,7 +46,8 @@ const required = [
   ["tests/reader/pdf-network/test_pdf_range_hints_contract.mjs", "PDF range hints: bounded scheduling, malformed inputs and compatibility exports passed"],
   ["tests/reader/pdf-network/test_reader_pdf_sparse_ranges.mjs", "Sparse PDF detection, exact demand ranges, bounded concurrency and disposal passed"]
 ];
-if (result.status !== 0 || rows.length !== 1 || rows[0].some((value,index)=>value < minimum[index]) ||
+if (result.status !== 0 || aggregateRows.length !== 1 || aggregateRows[0].some((value,index)=>value < aggregateMinimum[index]) ||
+    rows.length !== 1 || rows[0].some((value,index)=>value < minimum[index]) ||
     cacheRows.length !== 1 || cacheRows[0].some((value,index)=>value < cacheMinimum[index]) ||
     hintsRows.length !== 1 || hintsRows[0].some((value,index)=>value < hintsMinimum[index]) ||
     skipped.length !== 1 || skipped[0] !== "# skipped 0" || todo.length !== 1 || todo[0] !== "# todo 0" ||

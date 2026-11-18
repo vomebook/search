@@ -87,6 +87,33 @@ test('waitForReader rejects on cancellation and resolves on its timer', async ()
   context.readerAbortController.abort();
   await assert.rejects(pending,{name:'AbortError'});
   await assert.rejects(context.waitForReader(0),{name:'AbortError'});
+
+  // Bookmark restoration uses the frame path. A completed frame must detach
+  // its abort handler; aborting a pending frame must cancel exactly that ID.
+  const frames=new Map(), cancelled=[];
+  let frameId=0;
+  const request=globalThis.requestAnimationFrame, cancel=globalThis.cancelAnimationFrame;
+  globalThis.requestAnimationFrame=done=>{frames.set(++frameId,done);return frameId;};
+  globalThis.cancelAnimationFrame=id=>{cancelled.push(id);frames.delete(id);};
+  try {
+    const first=fixture().context, completed=first.waitForReader(0,true);
+    const finish=frames.get(1);
+    frames.delete(1);
+    finish();
+    await completed;
+    first.readerAbortController.abort();
+    assert.deepEqual(cancelled,[]);
+
+    const second=fixture().context, interrupted=second.waitForReader(0,true);
+    assert.deepEqual([...frames.keys()],[2]);
+    second.readerAbortController.abort();
+    await assert.rejects(interrupted,{name:'AbortError'});
+    assert.deepEqual(cancelled,[2]);
+    assert.equal(frames.size,0);
+  } finally {
+    if (request===undefined) delete globalThis.requestAnimationFrame; else globalThis.requestAnimationFrame=request;
+    if (cancel===undefined) delete globalThis.cancelAnimationFrame; else globalThis.cancelAnimationFrame=cancel;
+  }
 });
 
 test('reader readiness preserves Foliate anchor only when loading node is connected', () => {
