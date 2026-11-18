@@ -46,43 +46,34 @@
     }
 
     async function randomBook() {
-      deps.showToast("正在随机下载书籍...");
-      if (deps.readView().dataLoaded) {
-        try {
-          const rec = await deps.getRandomLocal(false);
-          if (!rec) throw new Error("NO_RECORD");
-          const filename = (rec.File || "file") + (rec.Extension ? "." + rec.Extension : "");
-          await deps.downloadFile(filename, deps.getRecordLink(rec), { skipCheck: true });
-        } catch (e) {
-          deps.showToast("暂无可下载书籍");
-        }
-        return;
-      }
       const view = deps.readView();
-      const url = view.repoFull ? deps.apiBase + "/api/random?repo=" + encodeURIComponent(String(view.repo)) : deps.apiBase + "/api/random";
-      fetch(url).then(function(resp) {
-        if (!resp.ok) throw new Error("HTTP " + resp.status);
-        return resp.json();
-      }).then(function(rec) {
-        if (rec) {
-          const filename = (rec.File || "file") + (rec.Extension ? "." + rec.Extension : "");
-          deps.downloadFile(filename, deps.getRecordLink(rec), { skipCheck: true });
+      const clickUrl = location.href;
+      const onClickRoute = () => location.href === clickUrl && deps.readView().repoFull === view.repoFull;
+      deps.showToast("正在随机下载书籍...");
+      try {
+        let rec;
+        if (view.dataLoaded) {
+          rec = await deps.getRandomLocal(false);
         } else {
-          deps.showToast("暂无可下载书籍");
-        }
-      }).catch(function() {
-        async function fallback() {
-          const rec = await deps.getRandomLocal(false);
-          if (rec) {
-            const filename = (rec.File || "file") + (rec.Extension ? "." + rec.Extension : "");
-            deps.downloadFile(filename, deps.getRecordLink(rec), { skipCheck: true });
-          } else {
-            deps.showToast("暂无可下载书籍");
+          const url = view.repoFull ? deps.apiBase + "/api/random?repo=" + encodeURIComponent(String(view.repo)) : deps.apiBase + "/api/random";
+          try {
+            const response = await fetch(url);
+            if (!response.ok) throw new Error("HTTP " + response.status);
+            rec = await response.json();
+          } catch (error) {
+            if (!onClickRoute()) return;
+            if (!deps.readView().dataLoaded && !(await deps.ensureLocalDataLoaded())) throw new Error("LOCAL_UNAVAILABLE");
+            if (!onClickRoute()) return;
+            rec = await deps.getRandomLocal(false);
           }
         }
-        if (deps.readView().dataLoaded) fallback().catch(function() { deps.showToast("暂无可下载书籍"); });
-        else deps.ensureLocalDataLoaded().then(function(ok) { if (ok) return fallback(); throw new Error("LOCAL_UNAVAILABLE"); }).catch(function() { deps.showToast("暂无可下载书籍"); });
-      });
+        if (!onClickRoute()) return;
+        if (!rec) throw new Error("NO_RECORD");
+        const filename = (rec.File || "file") + (rec.Extension ? "." + rec.Extension : "");
+        await deps.downloadFile(filename, deps.getRecordLink(rec), { skipCheck: true });
+      } catch (error) {
+        if (onClickRoute()) deps.showToast("暂无可下载书籍");
+      }
     }
 
     /** @param {string} url @param {number} requestId @param {string} returnUrl */

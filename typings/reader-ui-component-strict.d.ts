@@ -70,7 +70,7 @@ export interface ReaderUiContext {
   updateProgressTools(): void;
   nextReaderGeneration(kind: string): number;
   isReaderGenerationCurrent(kind: string, generation: number): boolean;
-  navigateReader(url: string): void;
+  navigateReader(url: string, bookmark?: null, resumeHistory?: boolean): void;
   sourceUrl: string;
   historySuppressed: boolean;
   progressSaveChain: Promise<void>;

@@ -24,7 +24,7 @@ function fixture(route = '', overrides = {}) {
     pushState(data,unused,url){events.push(['push',data,url]);location.href=new URL(url,location).href;}};
   const c = vm.createContext({URLSearchParams,window:{location},location,history,STATE:state,DOM:dom,readerHost:{overlay:null},
     routeInitialized:false,appliedRouteHash:location.hash,appliedSearchRoute:location.pathname+location.search,routeNavigation:undefined,
-    searchComposing:false,initialSearchDraft:false,routeRenderId:2,searchId:10,folderContentsCache:{clear(){}},API:{},
+    searchComposing:false,initialSearchDraft:false,routeRenderId:2,searchId:10,folderContentsCache:{clear(){}},sidebarFolderTree:undefined,API:{},
     fmtSizeUrl:value=>value===1024?'1KB':String(value),parseSizeStr:value=>value==='1KB'?1024:Number(value),bytesToDisplay:value=>({value:String(value),unit:'B'}),
     mergeFolderFilters:(a,b)=>[...new Set([...a,...b])],showToast:text=>events.push(['toast',text]),
     setSearchInputValue:value=>events.push(['input',value]),loadStoredExtensionFilters:()=>{events.push(['loadExt']);return ['pdf'];},
@@ -146,6 +146,106 @@ test('same-view path-only navigation retains active work and geometry; changed v
     f.c.router.apply();assert.equal(f.events.some(e=>e[0]==='persist'),false);assert.equal(f.events.some(e=>e[0]==='ui'),false);
   }
 });
+
+if (source === current) {
+  test('size controls preserve the exact restored minimum when editing only the maximum', () => {
+    const f = fixture('Test?min_size=1500B&max_size=1MB');
+    vm.runInContext(fs.readFileSync('static/search/results/presentation/size-format.js', 'utf8'), f.c);
+    let pending;
+    Object.assign(f.c, {
+      sizeFilterTimer: null, setTimeout(fn) { pending = fn; return 1; }, clearTimeout() {},
+      doFilterSearch: () => f.c.syncStateToURL(),
+    });
+    for (const field of ['filterMinSize', 'filterMaxSize', 'filterMinUnit', 'filterMaxUnit']) {
+      f.dom[field].addEventListener = (type, fn) => { f.dom[field][type] = fn; };
+    }
+    for (const name of ['sizeInputToBytes', 'applyPendingSizeFilters', 'setupSizeFilterControls']) {
+      const match = source.match(new RegExp('^function ' + name + '\\([^]*?^}', 'm'));
+      assert.ok(match, name); vm.runInContext(match[0], f.c);
+    }
+    f.c.router.apply();
+    assert.equal(f.state.filterMinSize, 1500);
+    assert.deepEqual([f.dom.filterMinSize.value, f.dom.filterMinUnit.value], ['1500', 'B']);
+    assert.deepEqual([f.dom.filterMaxSize.value, f.dom.filterMaxUnit.value], ['1', 'MB']);
+    f.c.setupSizeFilterControls();
+    f.dom.filterMaxSize.value = '2'; f.dom.filterMaxSize.input(); pending();
+    assert.deepEqual([f.state.filterMinSize, f.state.filterMaxSize], [1500, 2097152]);
+    const params = new URLSearchParams(pages ? f.location.hash.split('?')[1] : f.location.search);
+    assert.equal(f.c.parseSizeStr(params.get('min_size')), 1500);
+    assert.equal(f.c.parseSizeStr(params.get('max_size')), 2097152);
+    assert.equal(f.c.formatSize(1500), '1.5 KB');
+  });
+}
+
+if (pages && source === current) {
+  test('history toggle replaces and persists the current route before another search', () => {
+    const f = fixture('Test', {recordHistory: true});
+    const stored = ['book'];
+    f.c.saveHistory = values => { stored.splice(0, stored.length, ...values); };
+    f.dom.historyToggle.addEventListener = (type, fn) => { f.dom.historyToggle[type] = fn; };
+    const handler = source.match(/^  DOM\.historyToggle\.addEventListener\("change", [^]*?^  \}\);/m);
+    assert.ok(handler); vm.runInContext(handler[0], f.c);
+    f.dom.historyToggle.checked = false; f.dom.historyToggle.change();
+    assert.deepEqual(stored, []);
+    assert.equal(f.state.recordHistory, false);
+    assert.equal(f.c.router.parse().params.history, '0');
+    assert.deepEqual(f.events.map(event => event[0]), ['replace', 'persist']);
+    f.c.router.apply();
+    assert.equal(f.dom.historyToggle.checked, false);
+    f.events.length = 0;
+    f.dom.historyToggle.checked = true; f.dom.historyToggle.change();
+    assert.equal(f.c.router.parse().params.history, undefined);
+    assert.deepEqual(f.events.map(event => event[0]), ['replace', 'persist']);
+  });
+
+  test('repo switch clears old folder rows and bulk actions cannot select them while the new tree is pending', () => {
+    const oldTree = [{name: 'old', path: 'old', children: [], hasDirectFiles: true}];
+    const f = fixture('Other', {folderTree: oldTree, folderTreeCollapsed: {old: true}});
+    const container = {innerHTML: 'old rows', addEventListener() {}};
+    for (const file of ['domain/folder-selection.js', 'presentation/folder-tree.js']) {
+      vm.runInContext(fs.readFileSync('static/search/sidebar/' + file, 'utf8'), f.c);
+    }
+    const commits = [];
+    const tree = f.c.sidebarFolderTree = f.c.VoiceOfMLSidebarFolderTree.create({
+      container, readView: () => ({tree: f.state.folderTree || [], mode: f.state.mode,
+        collapsed: f.state.folderTreeCollapsed, subtrees: f.state.filterFolderSubtrees, selfs: f.state.filterFolderSelfs}),
+      selection: f.c.VoiceOfMLSearchFolderSelection,
+      commitSelection: (...args) => commits.push(plain(args)),
+    });
+    // Transition to Other without completing its deferred folder render.
+    f.c.router.apply();
+    assert.equal(f.state.repo, 'Other');
+    assert.equal(f.state.folderTree, null);
+    assert.doesNotMatch(container.innerHTML, /old rows/);
+    tree.selectAll(); tree.invertSelection();
+    assert.deepEqual(commits, []);
+  });
+}
+
+if (pages && source === current) {
+  test('old API completion cannot overwrite a destination awaiting hashchange', async () => {
+    const f = fixture('Test');
+    let finish;
+    const reply = new Promise(resolve => { finish = resolve; });
+    f.c.VoiceOfMLSearchExecutionPolicy = {backend: () => 'api'};
+    vm.runInContext(fs.readFileSync('static/search/execution/application/controller.js', 'utf8'), f.c);
+    const view = {searchId: 1, intent: 1, page: 2, _pendingPage: 0, _loadedPage: 1};
+    const execution = f.c.VoiceOfMLSearchExecution.create({readView: () => view,
+      update: patch => Object.assign(view, patch), searchAPI: () => reply, signal() {},
+      renderPage() {}, prefetch() {}, warmConnection() {}, syncURL: f.c.syncStateToURL,
+      updateStatus() {}, finishPaging() {}, updatePaging() {}});
+    execution.execute({page: 2}, true, 1, 1);
+    f.c.router.navigate('repo', 'Other');
+    const destination = f.location.hash;
+    finish(true);
+    await new Promise(setImmediate);
+    assert.equal(f.location.hash, destination);
+    assert.notEqual(f.c.appliedRouteHash, destination);
+    assert.deepEqual(f.events, []);
+    f.c.router.apply();
+    assert.equal(f.state.repo, 'Other');
+  });
+}
 
 test('URL sync guards Reader and commits URL before persistence, including unchanged URLs',()=>{
   const f=fixture();f.c.readerHost.overlay={};f.c.syncStateToURL();assert.deepEqual(f.events,[]);

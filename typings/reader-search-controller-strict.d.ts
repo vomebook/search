@@ -9,8 +9,6 @@ declare namespace ReaderSearchController {
     page: Page | null;
     failedPage: { offset: number; selectLast: boolean | null; query: string } | null;
     complete: boolean;
-    pdfInProgress: boolean;
-    chapterInProgress: boolean;
     pageLoader: ((offset: number, generation?: number) => Promise<Page<Result>>) | null;
   }
   interface Options {

@@ -46,7 +46,8 @@ export interface ReaderFormatControllerContext {
   measurePdf<T>(promise: Promise<T>, stage: string): Promise<T>; resolveReaderSource(): Promise<void>; readerSourcePromise: Promise<unknown> | null;
   syncCapabilityControls(): void; downloadButton: HTMLAnchorElement; documentState: { title: string };
   readerDownloadUrl(title: string, url: string): string; fail(message: string, code: string): void;
-  foliateContinuous: boolean; loadReaderRestoration(): Promise<unknown>; readerRestorationPromise: Promise<unknown> | null;
+  params: URLSearchParams;
+  foliateContinuous: boolean; loadReaderRestoration(): Promise<import('./reader-progress-strict').ProgressState | null>; readerRestorationPromise: Promise<unknown> | null;
   awaitReader<T>(value: T | PromiseLike<T>): Promise<Awaited<T>>;
   applyInitialRestoration(entry: unknown, generation: number): Promise<unknown>; initialReaderTargetSection: unknown;
   setReaderPhase(phase: string): boolean; updateDocumentState(state: { restorationReady?: boolean; page?: number; pageCount?: number }): void;

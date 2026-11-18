@@ -1175,7 +1175,7 @@ const domSearch = createReaderDomSearch({
     fullSearchSession.pageLoader = async offset => loader(offset);
     fullSearchSession.page = page;
     if (partial) {
-      updateSearchState({ results: page.results, index: -1 });
+      updateSearchState({ results: page.results });
       renderFullSearchResults();
       fullSearchStatus.textContent = `${page.total} 个结果（正在搜索…）`;
     }

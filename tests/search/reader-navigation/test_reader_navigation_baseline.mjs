@@ -12,7 +12,7 @@ const source = fs.readFileSync(filename, 'utf8');
 const origin = 'https://search.example';
 const readerPath = '/search/static/reader.html';
 
-function fixture(readerDestination = readerPath, document = {readyState: 'loading', addEventListener() {}}) {
+function fixture(readerDestination = readerPath, document = {readyState: 'loading', addEventListener() {}}, options) {
   const data = new Map();
   const calls = [];
   const storage = {
@@ -30,9 +30,10 @@ function fixture(readerDestination = readerPath, document = {readyState: 'loadin
   // DOM and asynchronous Reader services remain intentionally unstubbed.
   const context = vm.createContext({self: root, window: root, document, sessionStorage: storage,
     localStorage: storage, location: new URL(origin + '/search/#/'), URL, URLSearchParams,
-    crypto, history, console, HTMLElement: ShellElement, Event});
+    crypto, history, console, HTMLElement: ShellElement, Event, CustomEvent,
+    setInterval: () => 1, clearInterval() {}});
   vm.runInContext(source, context, {filename});
-  return {nav: root.VoiceOfMLReaderNavigation.createNavigation(readerDestination), data, storage, crypto, calls, context};
+  return {nav: root.VoiceOfMLReaderNavigation.createNavigation(readerDestination, options), data, storage, crypto, calls, context};
 }
 
 const json = value => JSON.parse(JSON.stringify(value));
@@ -59,7 +60,7 @@ class ShellElement extends EventTarget {
     if (tagName === 'iframe') {
       this.contentWindow = new EventTarget();
       this.contentWindow.postMessage = () => {};
-      this.contentDocument = {title: 'VoiceOfML Reader', URL: 'about:blank'};
+      this.contentDocument = {title: 'VoiceOfML Reader', URL: 'about:blank', querySelector: () => null};
     }
   }
   append(...children) {
@@ -80,17 +81,97 @@ class ShellElement extends EventTarget {
   removeAttribute(key) { this.attributes.delete(key); }
 }
 
-function shellFixture(destination = readerPath) {
+function shellFixture(destination = readerPath, options) {
   const document = {readyState: 'loading', title: 'Search', addEventListener() {}};
   document.createElement = tag => new ShellElement(document, tag);
   document.body = document.createElement('body');
   const input = document.createElement('input');
   document.body.append(input);
   input.focus();
-  const state = fixture(destination, document);
+  const state = fixture(destination, document, options);
   return {...state, document, input,
-    shell: () => document.body.children.find(child => child.className === 'reader-overlay-opening')};
+    shell: () => document.body.children.find(child => child.className === 'reader-overlay-opening'),
+    mini: () => document.body.children.find(child => child.className === 'reader-speech-mini')};
 }
+
+function parkSpeakingReader(nav, url) {
+  const frame = nav.mount(url);
+  frame.contentDocument.URL = frame.src;
+  frame.dispatchEvent(new Event('load'));
+  let reveals = 0;
+  frame.contentWindow.CCRDSpeech = {state: () => ({active: true}), reveal: () => reveals++};
+  nav.unmount();
+  assert.equal(nav.backgroundReader, frame);
+  return {frame, reveals: () => reveals};
+}
+
+test('explicit fragment and bookmark opens bypass parked reuse without stopping speech', () => {
+  for (const target of ['#chapter%202', '&bookmark=saved&bookmark_source=https%3A%2F%2Ffiles.example%2Fbook.md']) {
+    const {nav, document, mini} = shellFixture();
+    const ordinary = nav.parse(readerPath + '?id=book&ext=md');
+    const url = nav.parse(ordinary.href + target);
+    const parked = parkSpeakingReader(nav, url);
+    const bar = mini();
+    // Even the identical opening URL is a fresh request when it comes from a link.
+    const next = nav.mount(url);
+    assert.notEqual(next, parked.frame);
+    assert.equal(next.src, url.href);
+    assert.equal(parked.reveals(), 0);
+    assert.equal(nav.backgroundReader, parked.frame);
+    assert.equal(parked.frame.parent, document.body);
+    assert.equal(mini(), bar);
+    nav.unmount(false);
+    assert.equal(nav.mount(ordinary), parked.frame);
+    assert.equal(parked.reveals(), 1);
+    assert.equal(nav.backgroundReader, null);
+    assert.equal(mini(), undefined);
+    nav.unmount(false);
+  }
+});
+
+test('mini-player resumes the live Reader even when its iframe src contains opening targets', () => {
+  for (const viaEvent of [false, true]) {
+    let resumed;
+    const resume = raw => {
+      const url = nav.prepare(raw, '/search/#/?q=book');
+      resumed = nav.mount(url, true);
+      nav.remember(url, {});
+    };
+    const {nav, mini, calls, context} = shellFixture(readerPath, viaEvent ? undefined : {resume});
+    if (viaEvent) context.window.addEventListener('voice-reader-resume', event => resume(event.detail));
+    const ordinary = nav.parse(readerPath + '?id=book&ext=md&title=Book');
+    const url = nav.parse(ordinary.href + '&bookmark=saved&bookmark_source=source#opening');
+    const parked = parkSpeakingReader(nav, url);
+    mini().children.find(child => child.className === 'reader-speech-mini-back').dispatchEvent(new Event('click'));
+    assert.equal(resumed, parked.frame);
+    assert.equal(parked.reveals(), 1);
+    assert.equal(parked.frame.src, url.href, 'resuming must not reload the live iframe');
+    assert.equal(calls[0][3], ordinary.href, 'mini-player history must not carry stale position requests');
+    assert.equal(nav.backgroundReader, null);
+    assert.equal(mini(), undefined);
+    nav.unmount(false);
+  }
+});
+
+test('a targeted Reader replacement keeps parked speech until the new Reader starts speaking', () => {
+  const {nav, context} = shellFixture();
+  const raw = readerPath + '?url=https%3A%2F%2Ffiles.example%2Fbook.md&ext=md';
+  const parked = parkSpeakingReader(nav, nav.parse(raw));
+  nav.mount(nav.parse(readerPath + '?id=other&nav=token'));
+  const next = nav.replace(raw + '#heading', {});
+  assert.notEqual(next, parked.frame);
+  const url = new URL(next.src);
+  assert.equal(url.hash, '#heading');
+  assert.equal(url.searchParams.get('nav'), 'token');
+  assert.equal(parked.reveals(), 0);
+  assert.equal(nav.backgroundReader, parked.frame);
+  const message = new Event('message');
+  Object.assign(message, {origin, source: next.contentWindow, data: {type: 'voice-reader-speech-start'}});
+  context.window.dispatchEvent(message);
+  assert.equal(nav.backgroundReader, null);
+  assert.equal(parked.frame.parent, null);
+  nav.unmount(false);
+});
 
 test('deferred titles survive failed history and release only for the requested URL', () => {
   const {nav, document, context} = shellFixture();

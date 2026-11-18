@@ -1,21 +1,28 @@
 // File size display and URL parsing. Keep the established parser behavior for
 // existing links, including its fallback for non-standard numeric strings.
 {
-/** @param {number | null | undefined} bytes @returns {{value: string, unit: "B" | "KB" | "MB" | "GB"}} */
-function sizeBytesToDisplay(bytes) {
-  if (bytes === null || bytes === undefined) return { value: "", unit: "MB" };
+/** @param {number} bytes @returns {{value: string, unit: "B" | "KB" | "MB" | "GB"}} */
+function sizeBytesToRoundedDisplay(bytes) {
   if (bytes >= 1073741824) return { value: (bytes / 1073741824).toFixed(2).replace(/\.?0+$/, ""), unit: "GB" };
   if (bytes >= 1048576) return { value: (bytes / 1048576).toFixed(1).replace(/\.0$/, ""), unit: "MB" };
   if (bytes >= 1024) return { value: (bytes / 1024).toFixed(1).replace(/\.0$/, ""), unit: "KB" };
   return { value: String(bytes), unit: "B" };
 }
 
+// Filter controls are parsed again when either bound changes. Never round
+// away bytes when restoring a bound from the route.
+/** @param {number | null | undefined} bytes @returns {{value: string, unit: "B" | "KB" | "MB" | "GB"}} */
+function sizeBytesToDisplay(bytes) {
+  if (bytes === null || bytes === undefined) return { value: "", unit: "MB" };
+  const display = sizeBytesToRoundedDisplay(bytes);
+  return sizeParseSizeStr(display.value + display.unit) === bytes ? display : { value: String(bytes), unit: "B" };
+}
+
 /** @param {number | null | undefined} bytes @returns {string | null} */
 function sizeFmtSizeUrl(bytes) {
   if (bytes === null || bytes === undefined) return null;
-  var d = sizeBytesToDisplay(bytes);
-  const formatted = d.value + d.unit;
-  return sizeParseSizeStr(formatted) === bytes ? formatted : String(bytes) + "B";
+  const display = sizeBytesToDisplay(bytes);
+  return display.value + display.unit;
 }
 
 /** @param {string | null | undefined} str @returns {number | null} */

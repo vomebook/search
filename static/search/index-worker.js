@@ -789,13 +789,15 @@ function matchesFolderFilters(recordFolders, folderPath, params, filters) {
   return false;
 }
 
-/** @param {number[]} indices @param {SearchParams} params */
-function applyFilters(indices, params) {
+/** @param {SearchParams} params @returns {((index: number) => boolean) | null} */
+function buildRecordFilter(params) {
   const filters = buildFilterSets(params);
   const hasFolderFilters = params.folderMatchMode === "mixed"
     ? filters.selfFolders.size || filters.subtreeFolders.size
     : !!filters.folders;
-  return indices.filter((index) => {
+  if (!filters.repoSet && !filters.extensionSet && !hasFolderFilters
+      && params.minSize == null && params.maxSize == null) return null;
+  return (index) => {
     /** @type {Partial<SearchRecord>} */
     const record = records[index] || {};
     if (filters.repoSet && !filters.repoSet.has(/** @type {string} */ (record.Repo))) return false;
@@ -810,7 +812,13 @@ function applyFilters(indices, params) {
       if (params.maxSize !== null && record.Size > /** @type {number} */ (params.maxSize)) return false;
     }
     return true;
-  });
+  };
+}
+
+/** @param {number[]} indices @param {SearchParams} params */
+function applyFilters(indices, params) {
+  const inScope = buildRecordFilter(params);
+  return inScope ? indices.filter(inScope) : indices.slice();
 }
 
 /** @param {unknown} path */
@@ -954,6 +962,7 @@ function searchLocal(params, preparedExact = null) {
     return pageResult(ordered, params);
   }
   let matched = [];
+  let filtered;
   if (singleCharacterSearch(query, params) && preparedExact !== null) {
     matched = preparedExact;
   } else if (!query) {
@@ -1004,6 +1013,7 @@ function searchLocal(params, preparedExact = null) {
     const activeIndex = /** @type {PostingIndex} */ (searchFolders ? wordIndex : wordIndexFilesOnly);
     const activeVocab = searchFolders ? vocabSorted : vocabSortedFilesOnly;
     const scope = exactSearchScope(params.repos);
+    const inScope = buildRecordFilter(params);
     const terms = query.toLowerCase().split(/\s+/).filter(Boolean);
     const termCandidates = [];
     // Repeated AND terms share candidates; retain the original term count
@@ -1015,16 +1025,18 @@ function searchLocal(params, preparedExact = null) {
       const seen = new Set();
       for (const index of literalScope) {
         const fields = getRecordSearchFields(/** @type {SearchRecord} */ (records[index]));
-        if (fields.file.includes(term) || fields.repo.includes(term)
-            || (searchFolders && fields.folder.includes(term))) seen.add(index);
+        if ((fields.file.includes(term) || fields.repo.includes(term)
+            || (searchFolders && fields.folder.includes(term))) && (!inScope || inScope(index))) seen.add(index);
       }
       const tokenCandidates = [];
       let sortedCandidates = true;
       for (const token of tokenize(term)) {
         let candidates = activeIndex[token] || [];
-        // Preserve the single-term literal answer without expanding missing
-        // tokens; multi-term queries retain complete fuzzy postings.
-        if (!candidates.length && !(terms.length === 1 && seen.size)) {
+        // Only an exact posting in the selected scope can block expansion.
+        // Probe lazily: one eligible posting is enough, and the intersection
+        // can still use the original sorted list before final filtering.
+        if (!(candidates.length && (!inScope || candidates.some(inScope)))
+            && !(terms.length === 1 && seen.size)) {
           sortedCandidates = false;
           const fuzzy = new Set();
           const maxDist = fuzzyDistanceBudget(token);
@@ -1047,8 +1059,9 @@ function searchLocal(params, preparedExact = null) {
       if (!seen.size) break;
     }
     matched = intersectCandidateLists(termCandidates, true);
+    filtered = inScope ? matched.filter(inScope) : matched;
   }
-  const filtered = applyFilters(matched, params);
+  filtered ??= applyFilters(matched, params);
   if (params.sort === "name" || params.sort === "size") {
     const repos = /** @type {string[]} */ (params.repos || []);
     const ready = params.sort === "name" ? nameOrderReady : sizeOrderReady;

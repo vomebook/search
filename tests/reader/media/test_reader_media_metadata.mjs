@@ -2,6 +2,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {createReaderMediaFormat} from '../../../static/reader/formats/reader-media-format.mjs';
+import {createReaderSource} from '../../../static/reader/core/reader-source.mjs';
+const sourceUrl = 'https://huggingface.co/datasets/VoiceOfML/VOMEBOOK/resolve/main/audio.mp3';
 const tick = () => new Promise(resolve => setImmediate(resolve));
 
 class FakeMedia extends EventTarget {
@@ -9,36 +11,42 @@ class FakeMedia extends EventTarget {
     super();this.tagName=mode;this.src='';this.currentTime=4;this.duration=10;this.paused=true;
     this.playbackRate=1;this.readyState=0;this.error=null;this.loads=0;this.style={};this.attrs={};
   }
+  get src(){return this._src;}
+  set src(url){this._src=url ? new URL(url,globalThis.location.href).href : '';}
   setAttribute(name,value){this.attrs[name]=value;}
   load(){this.loads++;}
   play(){this.paused=false;return Promise.resolve();}
 }
 
 function fixture() {
-  const previous={document:globalThis.document,contract:globalThis.VoiceOfMLReader};
+  const previous={document:globalThis.document,contract:globalThis.VoiceOfMLReader,location:globalThis.location};
   let media;const resources=new Set(),events=[],panel={textContent:''};
   globalThis.document={createElement(mode){media=new FakeMedia(mode);return media;}};
   globalThis.VoiceOfMLReader={capability:()=>({mode:'audio'})};
+  globalThis.location=new URL('https://reader.example.test/search/static/reader.html');
+  const {validSource,readerContentUrl}=createReaderSource({}), contentUrl=readerContentUrl(sourceUrl);
   const owner=new AbortController();
   const context={readerAbortController:owner,documentState:{title:'Book',restorationReady:true},
     content:{appendChild(node){events.push(['append',node]);}},status:{textContent:''},
-    mediaPanel:{querySelector:()=>panel},sourceUrl:'https://test/original',downloadUrl:'https://test/original',
-    contentUrl:'https://test/proxy',extension:'wav',resolvedReaderData:null,READER_PROXY_TIMEOUT_MS:20000,
+    mediaPanel:{querySelector:()=>panel},sourceUrl,downloadUrl:sourceUrl,
+    contentUrl,extension:'wav',resolvedReaderData:null,READER_PROXY_TIMEOUT_MS:20000,
     assertReaderActive(){owner.signal.throwIfAborted();},markReaderContentReady(){events.push('ready');},
     scheduleMarkerSync(){events.push('marker');},saveProgress(){events.push('save');},
     trackReaderResource(fn){resources.add(fn);return()=>resources.delete(fn);},readerAbortError:()=>new DOMException('cancelled','AbortError'),
-    validSource:url=>url.startsWith('https://'),fail:(...args)=>events.push(['fail',...args]),
+    validSource,readerContentUrl,fail:(...args)=>events.push(['fail',...args]),
     awaitReader:promise=>Promise.resolve(promise)};
   Object.assign(context,createReaderMediaFormat(context));
-  return {context,owner,resources,events,panel,get media(){return media;},restore(){
+  const proxyHref=new URL(contentUrl,globalThis.location.href).href;
+  return {context,owner,resources,events,panel,proxyHref,get media(){return media;},restore(){
     for(const cleanup of resources)cleanup();globalThis.document=previous.document;globalThis.VoiceOfMLReader=previous.contract;
+    globalThis.location=previous.location;
   }};
 }
 
 test('media readiness waits for metadata and reports player timing', async () => {
   const f=fixture();try {
     let done=false;const promise=f.context.renderMedia('audio').then(()=>{done=true;});await tick();
-    assert.equal(done,false);assert.equal(f.media.src,'https://test/proxy');assert.equal(f.media.preload,'metadata');
+    assert.equal(done,false);assert.equal(f.media.src,f.proxyHref);assert.equal(f.media.preload,'metadata');
     f.media.readyState=1;f.media.dispatchEvent(new Event('loadedmetadata'));await promise;
     assert.equal(done,true);assert.equal(f.context.status.textContent,'音频');assert.equal(f.panel.textContent,'00:04 / 00:10');
     assert.ok(f.events.includes('ready'));assert.ok(f.events.includes('marker'));
@@ -49,19 +57,32 @@ test('media readiness waits for metadata and reports player timing', async () =>
 });
 
 test('stalled proxy retries the proxy instead of the blocked dataset host', async () => {
-  const f=fixture();try {
-    f.context.sourceUrl=f.context.downloadUrl='https://huggingface.co/datasets/VoiceOfML/VOMEBOOK/resolve/main/audio.mp3';
-    f.context.contentUrl='https://voiceofml-search.hf.space/api/reader-content?url=audio';
-    const promise=f.context.renderMedia('audio');await tick();
-    f.media.dispatchEvent(new Event('error'));
-    assert.equal(f.media.src,f.context.contentUrl);
-    assert.equal(f.media.src.includes('huggingface.co'),false);
-    f.media.dispatchEvent(new Event('error'));
-    assert.equal(f.media.loads,1);
-    assert.ok(f.events.some(value=>Array.isArray(value)&&value[0]==='fail'&&value[2]==='READER_MEDIA'));
-    f.media.readyState=1;f.media.dispatchEvent(new Event('loadedmetadata'));
-    await assert.rejects(promise,{name:'AbortError'});
-  } finally {f.restore();}
+  for (const variant of ['generated','foreign-proxy','wrong-source','invalid-source']) {
+    const f=fixture();try {
+      const {context}=f, proxy=new URL(f.proxyHref);
+      assert.equal(proxy.origin,'https://voiceofml-search.hf.space');
+      assert.equal(proxy.pathname,'/api/reader-content');
+      assert.equal(proxy.searchParams.get('url'),sourceUrl);
+      assert.equal(context.validSource(sourceUrl),true);
+      assert.equal(context.validSource(context.contentUrl),false);
+      if(variant==='foreign-proxy')context.contentUrl=`https://elsewhere.test${proxy.pathname}${proxy.search}`;
+      if(variant==='wrong-source')context.contentUrl=context.readerContentUrl(sourceUrl.replace('audio.mp3','other.mp3'));
+      if(variant==='invalid-source') {
+        context.sourceUrl='https://elsewhere.test/audio.mp3';
+        context.contentUrl=context.readerContentUrl(context.sourceUrl);
+      }
+      const promise=context.renderMedia('audio');
+      f.media.dispatchEvent(new Event('error'));
+      if(variant==='generated') {
+        assert.equal(f.media.src,f.proxyHref);
+        assert.equal(f.media.loads,1);
+        f.media.dispatchEvent(new Event('error'));
+      }
+      await assert.rejects(promise,{name:'AbortError'});
+      assert.equal(f.media.loads,variant==='generated'?1:0);
+      assert.ok(f.events.some(value=>Array.isArray(value)&&value[0]==='fail'&&value[2]==='READER_MEDIA'));
+    } finally {f.restore();}
+  }
 });
 
 test('media source retries only once and restores position on metadata', async () => {
@@ -75,7 +96,7 @@ test('media source retries only once and restores position on metadata', async (
       f.context.documentState.restorationReady=restorationReady;
       const promise=f.context.renderMedia('audio');await tick();
       f.media.currentTime=time;f.media.playbackRate=1.5;
-      f.media.dispatchEvent(new Event('error'));assert.equal(f.media.src,'https://test/proxy');assert.equal(f.media.loads,1);
+      f.media.dispatchEvent(new Event('error'));assert.equal(f.media.src,f.proxyHref);assert.equal(f.media.loads,1);
       f.media.currentTime=0;f.media.duration=duration;f.media.playbackRate=1;
       f.media.dispatchEvent(new Event('timeupdate'));assert.equal(f.panel.textContent,'');
       f.media.readyState=1;f.media.dispatchEvent(new Event('loadedmetadata'));await promise;
@@ -147,7 +168,7 @@ test('idle deadline retries original once and rearms without changing hard deadl
         const promise=f.context.renderMedia('audio');
         const hard=[...callbacks].find(([,item])=>item.delay===20000)[0];
         const [firstIdle,idle]=[...callbacks].find(([,item])=>item.delay===15000);idle.callback();
-        assert.equal(f.media.src,'https://test/proxy');assert.equal(f.media.loads,1);
+        assert.equal(f.media.src,f.proxyHref);assert.equal(f.media.loads,1);
         assert.ok(callbacks.has(hard));assert.equal([...callbacks.values()].filter(item=>item.delay===20000).length,1);
         const [secondIdle,rearmed]=[...callbacks].find(([,item])=>item.delay===15000);
         assert.notEqual(secondIdle,firstIdle);assert.equal(callbacks.has(firstIdle),false);
@@ -193,7 +214,7 @@ test('capability lookup receives uncoerced original extension metadata', async (
 
 test('codec error reports a recoverable failure without retrying the same source', async () => {
   const f=fixture();try {
-    f.context.sourceUrl=f.context.downloadUrl=f.context.contentUrl;
+    f.context.contentUrl=f.context.sourceUrl;
     const promise=f.context.renderMedia('audio');await tick();
     f.media.error={code:3};f.media.dispatchEvent(new Event('error'));
     await assert.rejects(promise,{name:'AbortError'});assert.equal(f.media.loads,0);

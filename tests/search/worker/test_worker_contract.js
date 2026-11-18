@@ -1027,6 +1027,34 @@ test("fuzzy candidates retain selected repository and other terms after 200 matc
     assert.deepStrictEqual(await namesWithCorpus(input, {q, repos:["Repo/B"]}), ["alpha omega"]);
   }
 });
+test("only in-scope literal hits and exact postings suppress fuzzy expansion", async () => {
+  const target = {...records[0], Repo:"Repo/A", File:"alpha omega", Extension:"pdf", Folder:["docs"], Size:50};
+  const decoys = [{...target, File:"alpha"}, {...target, File:"omega"}];
+  for (const [filters, outside] of [
+    [{extensions:["PDF"]}, {Extension:"txt"}],
+    [{repos:["Repo/A"]}, {Repo:"Repo/B"}],
+    [{folders:["docs"]}, {Folder:["docs-other"]}],
+    [{folders:["docs"], folderMatchMode:"exact"}, {Folder:["docs", "child"]}],
+    [{folderMatchMode:"mixed", folderSelfs:["docs"]}, {Folder:["docs", "child"]}],
+    [{folderMatchMode:"mixed", folderSubtrees:["docs"]}, {Folder:["docs-other"]}],
+    [{minSize:50}, {Size:49}],
+    [{maxSize:50}, {Size:51}],
+  ]) for (const file of ["alpa omega", "xalpax omega"]) {
+    const blocker = {...target, ...outside, File:file};
+    const {worker} = await loaded([blocker, target, ...decoys]);
+    for (const searchFolders of [true, false]) {
+      for (const [q, expected] of [["alpa", [target, decoys[0]]], ["alpa omega", [target]], ["omega alpa", [target]]]) {
+        const params = {q, searchFolders, ...filters};
+        assert.deepStrictEqual((await worker.request("local-search", params)).records, expected, JSON.stringify(params));
+        assert.strictEqual((await worker.request("local-search", {...params, exact:true})).total, 0);
+      }
+      assert.deepStrictEqual((await worker.request("local-search", {q:"alpa", searchFolders})).records, [blocker]);
+      assert.deepStrictEqual((await worker.request("local-search", {q:"alpa omega", searchFolders})).records,
+        file === "alpa omega" ? [blocker] : [blocker, target]);
+    }
+  }
+});
+
 test("fuzzy collection deduplicates postings while preserving first-seen order", async () => {
   const input = Array.from({length:900},(_, i)=>({...records[0],
     Repo:i%2?'Repo/A':'Repo/B', File:['za','zb','zc','zd','ze','zf'][i%6]+' '+i, Folder:[]}));

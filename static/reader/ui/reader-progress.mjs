@@ -103,6 +103,8 @@ export function createReaderProgress(readerContext) {
   function currentReaderUrl() {
     const url = new URL(location.href);
     for (const key of ["return", "nav", "bookmark", "bookmark_source"]) url.searchParams.delete(key);
+    // History and bookmarks already store the position; the opening anchor may be stale.
+    if (readerContext.capability.mode === "markdown") url.hash = "";
     return url;
   }
 

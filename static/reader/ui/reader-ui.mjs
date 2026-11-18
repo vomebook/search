@@ -280,7 +280,7 @@ export function createReaderUi(readerContext) {
         link.type = "button";
         link.className = "panel-item-main";
         link.textContent = entry.title || entry.url;
-        link.addEventListener("click", () => readerContext.navigateReader(/** @type {string} */ (entry.readerUrl)));
+        link.addEventListener("click", () => readerContext.navigateReader(/** @type {string} */ (entry.readerUrl), null, true));
         const meta = document.createElement("small");
         meta.textContent = `${entry.pageCount ? `第 ${entry.page || 1} / ${entry.pageCount} 页 · ` : ""}${new Date(entry.lastReadAt).toLocaleString()}`;
         const remove = document.createElement("button");
