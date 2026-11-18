@@ -27,6 +27,7 @@ function createFixture(source, root) {
       get scrollTop(){return scrollTop;},set scrollTop(value){scrollTop=value;}}}, navigator:{onLine:true}, AbortController, DOMException,
     searchPrefetchAbortController:null, searchPagePrefetch:undefined, searchRequestId:1,
     positionRestore:null, readerHost:{overlay:null}, resultSnapshots:{cloneTask:null},
+    window:{location:{hash:'#/'}}, appliedRouteHash:'#/',
     APPEND_REQUEST_TIMEOUT:5000, RECENT_SEARCH_PAGE_TTL:604800000,
     searchPageMetadata:new WeakMap([[first,{generation:"stable",total:801}]]),
     recentSearchPages:new Map(), SEARCH_CACHE_TTL:60000,
@@ -66,6 +67,7 @@ function createFixture(source, root) {
     doSearch(){appended.push(context.STATE.page); context.STATE._loadedPage=context.STATE.page;},
     renderVisible(){clock += 8; return true;}, updateScrollTrack(){}, updateScrollThumb(){},
   };
+  context.displayedSearchView = {key: context.getSearchViewKey(), results: context.STATE.results};
   vm.createContext(context);
   installClassicSearchModules(root, context);
   context.searchResponseStore = context.VoiceOfMLSearchResponseStore.create({
@@ -105,7 +107,7 @@ function createFixture(source, root) {
   for (const file of ["domain/paging-policy.js", "application/paging-controller.js"]) {
     vm.runInContext(fs.readFileSync(path.join(root, "static/search/results", file), "utf8"), context);
   }
-  install(source,context,["getSearchPageMetadata","readPagingView"]);
+  install(source,context,["getSearchPageMetadata","ownsDisplayedSearchResults","readPagingView"]);
   context.pagingController = context.VoiceOfMLPagingController.create({
     policy: context.VoiceOfMLPagingPolicy,
     clock: {now:()=>clock, setTimeout:context.setTimeout, clearTimeout:context.clearTimeout},
@@ -183,6 +185,17 @@ for (const {name:project,root} of searchTestProjects()) {
       f.reads[i].result=data;f.reads[i].onsuccess();
     }
     await Promise.all(tasks);assert.strictEqual(f.calls.length,0);
+  });
+  test(project + " next page waits for the displayed search to own the results",()=>{
+    const f=fixture(source), c=f.context;
+    f.setScroll(400);
+    c.STATE._pageCache[2]=f.data(2).results;
+    c.queryKey='new-query';
+    c.maybeLoadNextPage();
+    assert.deepStrictEqual(f.appended,[]);
+    c.displayedSearchView={key:c.queryKey,results:c.STATE.results};
+    c.maybeLoadNextPage();
+    assert.deepStrictEqual(f.appended,[2]);
   });
   test(project + " next-page disk wait is bounded without delaying farther cache reuse",async()=>{
     const f=fixture(source); f.start(); await f.advance(24); assert.strictEqual(f.calls.length,0);

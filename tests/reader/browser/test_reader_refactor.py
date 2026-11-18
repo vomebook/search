@@ -1871,14 +1871,20 @@ class ReaderRefactorTest(unittest.TestCase):
             return timer(callback,delay,...args);
           };''')
         held, originals = [], []
-        self.page.route('**/api/reader-content**', lambda route: held.append(route))
+        def hold_proxy(route):
+            held.append(route)
+            self.page.evaluate('window.__mediaRequestHeld = true')
+        self.page.route('**/api/reader-content**', hold_proxy)
         self.page.route('https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/refactor.wav',
                         lambda route: (originals.append(route.request.url), route.abort()))
         self.page.goto(self.reader_url('wav'),wait_until='domcontentloaded')
         self.page.locator('audio').wait_for()
+        self.page.wait_for_function("() => window.__mediaRequestHeld && typeof window.__mediaIdle === 'function'")
+        self.assertEqual(len(held), 1)
         self.page.evaluate("window.dispatchEvent(new Event('voice-reader-dispose'))")
         self.page.evaluate('() => window.__mediaIdle()')
         self.page.wait_for_timeout(100)
+        self.assertEqual(len(held), 1)
         self.assertEqual(originals, [])
         self.assertEqual(self.page.locator('html').get_attribute('data-reader-phase'), 'disposed')
         self.assertFalse(self.page.locator('audio').get_attribute('src'))
@@ -1931,11 +1937,11 @@ class ReaderRefactorTest(unittest.TestCase):
             audio.setparams((1, 2, 8000, 8000, 'NONE', 'not compressed'))
             audio.writeframes(b'\0\0' * 8000)
         requests, direct = [], []
-        fail_next = [True]
+        failures_per_open = 1 if bucket else 2
+        fail_until = failures_per_open
         def proxy(route):
             requests.append(route.request.url)
-            if fail_next[0]:
-                fail_next[0] = False
+            if len(requests) <= fail_until:
                 route.fulfill(status=503, body='unavailable')
                 return
             data = buffer.getvalue()
@@ -1955,34 +1961,34 @@ class ReaderRefactorTest(unittest.TestCase):
             else:
                 self.page.goto(self.reader_url('wav', **options), wait_until='domcontentloaded')
             if not bucket:
-                # /api/reader-content is not a valid automatic media retry source.
+                # The generated proxy gets one automatic retry before manual recovery.
                 self.page.locator('#reader-engine-retry').wait_for()
+                self.assertEqual(self.page.locator('html').get_attribute('data-reader-phase'), 'failed')
                 self.assertEqual(self.page.locator('#content').get_attribute('data-error-code'), 'READER_MEDIA')
+                self.assertEqual(requests, [requests[0]] * fail_until)
                 self.assertEqual(direct, [])
-                self.assertEqual(len(requests), 3 if reload else 1)
                 self.page.locator('#reader-engine-retry').click()
             self.page.wait_for_function("() => document.documentElement.dataset.readerPhase === 'ready'")
 
+        attempts_per_open = failures_per_open + 1
         open_or_retry()
         self.page.wait_for_function("() => document.querySelector('audio').readyState >= 1")
-        self.assertEqual(requests, [requests[0]] * 2)
+        self.assertEqual(requests, [requests[0]] * attempts_per_open)
         self.assertEqual(direct, [])
         self.assertEqual(self.page.locator('audio').evaluate('node => node.duration'), 1)
         self.page.evaluate("async () => { const media = document.querySelector('audio'); media.currentTime = 0.5; await VoiceOfMLReaderStore.put({url: new URL(location.href).searchParams.get('url'), mediaTime: 0.5}); }")
-        fail_next[0] = True
+        fail_until = attempts_per_open + failures_per_open
         open_or_retry(reload=True)
         self.page.wait_for_function("() => document.documentElement.dataset.readerPhase === 'ready' && document.querySelector('audio')?.currentTime === 0.5")
-        self.assertEqual(requests, [requests[0]] * 4)
+        self.assertEqual(requests, [requests[0]] * (2 * attempts_per_open))
         self.assertEqual(direct, [])
-        self.page.evaluate("""() => {
-          const media=document.querySelector('audio');
-          if (!media) throw new Error('restored media disappeared');
-          media.dispatchEvent(new Event('error'));
-        }""")
+        # Only the manual reload reset the retry budget. Fail its one remaining retry.
+        fail_until = 2 * attempts_per_open + (0 if bucket else 1)
+        self.page.locator('audio').dispatch_event('error')
         self.page.wait_for_function("() => document.documentElement.dataset.readerPhase === 'failed'")
         self.assertEqual(self.page.locator('#content').get_attribute('data-error-code'), 'READER_MEDIA')
         self.assertTrue(self.page.locator('#reader-engine-retry').is_visible())
-        self.assertEqual(requests, [requests[0]] * 4)
+        self.assertEqual(requests, [requests[0]] * fail_until)
         self.assertEqual(direct, [])
 
     def test_chapter_links_load_target_without_leaving_reader(self):
