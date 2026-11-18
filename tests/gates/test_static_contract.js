@@ -829,13 +829,13 @@ test("Pages cross-site cache gates receive the reviewed HF worker before any sta
   assert.equal((suite.match(/\.\.\/hf-search\/static\/sw\.js/g) || []).length, 1);
   assert.doesNotMatch(suite, /existsSync|test\.skip/);
 });
-test("PDF release gate separates dependencies and requires the named artifact tests to pass", () => {
+test("PDF release gate requires all named artifact tests unless exact full-code proof is reused", () => {
   const deploy = workflow.slice(workflow.indexOf("\n  deploy:\n"));
   for (const [name, timeout] of [
     ["Install PDF Python dependencies", 10], ["Install qpdf system dependency", 10],
     ["Install Playwright Chromium system libraries", 15], ["Install Playwright Chromium browser", 15],
     ["Check content-addressed PDF opening", 30],
-  ]) assert.ok(deploy.includes(`- name: ${name}\n        timeout-minutes: ${timeout}`), name);
+  ]) assert.ok(deploy.includes(`- name: ${name}\n        if: needs.source-checks.outputs.reuse != 'true'\n        timeout-minutes: ${timeout}`), name);
   assert.match(deploy, /key: \$\{\{ runner\.os \}\}-\$\{\{ runner\.arch \}\}-\$\{\{ steps\.pdf-distro\.outputs\.version \}\}-playwright-1\.63\.0-chromium/);
   assert.match(deploy, /python3 -m pip install playwright==1\.63\.0 pypdf==6\.21\.4/);
   assert.match(deploy, /python3 -m playwright install-deps chromium/);
@@ -854,7 +854,15 @@ test("PDF release gate separates dependencies and requires the named artifact te
   assert.match(deploy, /READER_BUILT_SITE="\$GITHUB_WORKSPACE\/_site" READER_BUILT_PROJECT=github python3 -B scripts\/ci\/run_unittest_suite\.py/);
   assert.deepStrictEqual(deploy.match(/tests\.reader\.browser\.test_reader_pdf_first_page\.PdfFirstPageTests\.test_\w+/g), pdfChecks);
   assert.ok(deploy.indexOf('name: Check content-addressed PDF opening') < deploy.indexOf('uses: actions/upload-pages-artifact@v5'));
-  assert.doesNotMatch(workflow, /continue-on-error:|\bif:/);
+  assert.doesNotMatch(workflow, /continue-on-error:/);
+  const conditions = workflow.match(/^\s*if: .+$/gm).map(line => line.trim());
+  assert.equal(conditions.filter(line => line === "if: steps.code-proof.outputs.reuse != 'true'").length, 4);
+  assert.equal(conditions.filter(line => line === "if: needs.source-checks.outputs.reuse != 'true'").length, 9);
+  assert.deepStrictEqual(conditions.filter(line => !line.includes('outputs.reuse')), [
+    "if: github.event_name == 'workflow_dispatch' && inputs.search_transition != '' && inputs.search_generation != ''",
+  ]);
+  assert.match(workflow, /id: code-proof[\s\S]*?run: python3 -B scripts\/ci\/reuse_pages_code_checks\.py/);
+  assert.match(workflow, /\n  deploy:\n    needs: source-checks/);
   assert.match(workflow, /cache: npm/);
   assert.match(workflow, /cache-dependency-path: config\/dependencies\/static-check\.txt/);
   assert.match(workflow, /npm ci --ignore-scripts --no-audit --no-fund/);

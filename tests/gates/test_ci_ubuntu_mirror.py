@@ -57,7 +57,10 @@ class MirrorTests(unittest.TestCase):
         blocks = []
         for name, count in (('reader-refactor.yml', 3), ('static.yml', 1)):
             text = (root / '.github/workflows' / name).read_text()
-            parts = text.split('      - name: Configure official Ubuntu mirrors\n        run: |\n')
+            heading = '      - name: Configure official Ubuntu mirrors\n'
+            if name == 'static.yml':
+                heading += "        if: needs.source-checks.outputs.reuse != 'true'\n"
+            parts = text.split(heading + '        run: |\n')
             self.assertEqual(len(parts) - 1, count)
             blocks.extend(part.split('      - name:', 1)[0] for part in parts[1:])
         expected = '''          set -euo pipefail
