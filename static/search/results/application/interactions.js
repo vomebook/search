@@ -4,6 +4,17 @@
   function create(deps) {
     const { elements, selection } = deps;
 
+    /** @param {string} text @param {string} success */
+    async function copyLinks(text, success) {
+      try {
+        await navigator.clipboard.writeText(text);
+      } catch {
+        deps.showToast("复制失败");
+        return;
+      }
+      deps.showToast(success);
+    }
+
     function installSelection() {
       if (elements.multiSelectToggle) elements.multiSelectToggle.addEventListener("change", deps.updateSelectionUI);
       elements.resultsList.addEventListener("click", function(e) {
@@ -27,9 +38,7 @@
       if (elements.multiCopyLinks) elements.multiCopyLinks.addEventListener("click", function() {
         const links = deps.getSelectedFiles().map(item => deps.getCopyableLink(item.link));
         if (links.length === 0) { deps.showToast("未选中任何文件"); return; }
-        navigator.clipboard.writeText(links.join("\n")).then(function() {
-          deps.showToast("已复制 " + links.length + " 条链接");
-        }).catch(function() { deps.showToast("复制失败"); });
+        return copyLinks(links.join("\n"), "已复制 " + links.length + " 条链接");
       });
       if (elements.multiBatchDownload) elements.multiBatchDownload.addEventListener("click", function() {
         deps.startDownloadBatch(deps.getSelectedFiles());
@@ -66,10 +75,7 @@
           e.preventDefault();
           const action = actionBtn.dataset.action;
           if (action === "copy") {
-            navigator.clipboard.writeText(/** @type {string} */ (actionBtn.dataset.link))
-              .then(function() { deps.showToast("链接已复制"); })
-              .catch(function() { deps.showToast("复制失败"); });
-            return;
+            return copyLinks(/** @type {string} */ (actionBtn.dataset.link), "链接已复制");
           }
           if (action === "download") {
             deps.downloadFile(actionBtn.dataset.filename || "file", actionBtn.dataset.link || "", { button: actionBtn });

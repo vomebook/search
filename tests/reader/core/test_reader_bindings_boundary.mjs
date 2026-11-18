@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createReaderBindings } from '../../../static/reader/core/reader-bindings.mjs';
+import { createReaderProgress } from '../../../static/reader/ui/reader-progress.mjs';
 
 function storage(values = {}) {
   const data = new Map(Object.entries(values));
@@ -68,4 +69,49 @@ test('pointer movement never passes undefined coordinates to selection correctio
   delete context.pdfSelectionPointer.endX; delete context.pdfSelectionPointer.endY;
   callback();
   assert.deepEqual(coordinates, [1, 2]);
+});
+
+test('pressing End on the progress slider at 100% preserves the previous seek for Undo', async (t) => {
+  if (!globalThis.document) {
+    globalThis.document = {};
+    t.after(() => { delete globalThis.document; });
+  }
+  const range = Object.assign(new EventTarget(), { value: '0', setAttribute() {} });
+  let generation = 0;
+  const context = {
+    capability: { mode: 'markdown' }, viewport: { scrollTop: 0, scrollHeight: 1000, clientHeight: 100 },
+    progressRange: range, progressPercent: {}, progressUndo: new EventTarget(),
+    chapterPrev: new EventTarget(), chapterNext: new EventTarget(),
+    progressSeeking: false, previousProgressState: null, epubSeekPromise: Promise.resolve(),
+    beginReaderNavigation() { return ++generation; },
+    readerRuntime: { currentGeneration: () => generation },
+    isReaderGenerationCurrent: (_, value) => value === generation,
+    scheduleSave() {}, updateProgressTools() {}
+  };
+  const { seekProgress, captureProgressState, restoreProgressState, flushEpubSeek } = createReaderProgress(context);
+  Object.assign(context, { seekProgress, captureProgressState, restoreProgressState, flushEpubSeek });
+  createReaderBindings(context).bindProgressActions();
+  const key = type => range.dispatchEvent(Object.assign(new Event(type), { key: 'End' }));
+  const drag = (...values) => {
+    range.dispatchEvent(new Event('pointerdown'));
+    for (const value of values) {
+      range.value = value;
+      range.dispatchEvent(new Event('input'));
+    }
+    range.dispatchEvent(new Event('pointerup'));
+  };
+  drag('20');
+  assert.deepEqual(context.previousProgressState, { scrollTop: 0 });
+  drag('90', '100');
+  assert.equal(context.viewport.scrollTop, 900);
+  assert.deepEqual(context.previousProgressState, { scrollTop: 180 }, 'keep one undo point across drag events');
+
+  // At the upper limit the browser emits key events, but no input event.
+  const before = generation;
+  key('keydown');
+  key('keyup');
+  context.progressUndo.dispatchEvent(new Event('click'));
+  assert.equal(context.viewport.scrollTop, 180);
+  assert.equal(generation, before + 1, 'only Undo should start a navigation');
+  await context.epubSeekPromise;
 });
