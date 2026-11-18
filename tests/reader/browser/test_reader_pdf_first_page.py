@@ -181,7 +181,8 @@ def range_source(payload):
     Handler.state = ServerState()
     handler = functools.partial(Handler, directory=str(built or ROOT))
     server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    # The per-test server also polls for shutdown; avoid waiting the 0.5 s default.
+    thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.02}, daemon=True)
     thread.start()
     try:
         yield f"http://127.0.0.1:{server.server_port}", state, lock
