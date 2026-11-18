@@ -119,7 +119,9 @@ class ReaderRefactorTest(unittest.TestCase):
                     available = True
                     self.page.reload(wait_until="domcontentloaded")
                     self.page.locator('html[data-reader-phase="ready"]').wait_for()
-                    self.assertIn("Proxy readable", self.page.locator(selector).inner_text())
+                    # Plain text blocks use content-visibility; innerText can
+                    # omit their content until the next layout/paint.
+                    self.page.locator(selector, has_text="Proxy readable").wait_for(state="attached")
                     if extension == "md":
                         self.assertEqual(self.page.locator(selector + " h1").inner_text(), "Proxy readable")
                     self.assertEqual(self.page.locator(".reader-error, .reader-loading-indicator").count(), 0)
