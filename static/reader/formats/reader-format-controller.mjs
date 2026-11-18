@@ -225,11 +225,13 @@ export function createReaderFormatController(readerContext) {
       readerContext.assertReaderActive();
       readerContext.markReaderContentReady();
       const restored = await readerContext.awaitReader(restorationPromise);
+      // Capture the match before restoration consumes the bookmark parameters.
+      const explicitBookmark = readerContext.capability.mode === "markdown" && restored?.id &&
+        restored.id === readerContext.params.get("bookmark") && restored.url === readerContext.params.get("bookmark_source");
       await readerContext.applyInitialRestoration(restored, generation);
       readerContext.assertReaderActive();
-      // A Markdown cross-document link may request a specific anchor. It takes
-      // precedence over saved progress, unless the user navigated during load.
-      if (readerContext.capability.mode === "markdown" && location.hash &&
+      // A Markdown anchor overrides ordinary progress, but not a matched bookmark.
+      if (readerContext.capability.mode === "markdown" && !explicitBookmark && location.hash &&
           readerContext.isReaderGenerationCurrent("navigation", generation)) {
         try {
           const id = decodeURIComponent(location.hash.slice(1));

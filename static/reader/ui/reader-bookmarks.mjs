@@ -25,6 +25,8 @@ export function createReaderBookmarks(readerContext) {
           return null;
         url.searchParams.delete("bookmark");
         url.searchParams.delete("bookmark_source");
+        // A matched bookmark takes precedence over a Markdown opening anchor.
+        if (readerContext.capability.mode === "markdown") url.hash = "";
         return url.href;
       } catch (_) {
         return null;

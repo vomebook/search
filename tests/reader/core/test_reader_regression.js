@@ -390,3 +390,88 @@ assert.match(reader, /readerRuntime\.track\(readerRequestManager\)/)
 assert.match(reader, /readerPath[\s\S]*voice-reader-navigate/)
 assert.match(reader, /title: historyTitle|title,\s*extension/)
 console.log('reader regression contracts passed')
+
+require('node:test')('Markdown restores saved positions without overriding explicit links', async (t) => {
+  const { createReaderFormatController } = await import('../../../static/reader/formats/reader-format-controller.mjs')
+  const { createReaderBookmarks } = await import('../../../static/reader/ui/reader-bookmarks.mjs')
+  const { createReaderNavigation } = await import('../../../static/reader/ui/reader-navigation.mjs')
+  const { createReaderProgress } = await import('../../../static/reader/ui/reader-progress.mjs')
+  const { createReaderUi } = await import('../../../static/reader/ui/reader-ui.mjs')
+  const previous = Object.fromEntries(['location', 'window', 'document', 'VoiceOfMLReader', 'VoiceOfMLReaderStore'].map(key => [key, globalThis[key]]))
+  t.after(() => Object.assign(globalThis, previous))
+  const sourceUrl = 'https://huggingface.co/datasets/VoiceOfML/Books/resolve/main/book.md'
+  const link = new URL('https://reader.example.test/search/static/reader.html#section%202')
+  link.searchParams.set('url', sourceUrl)
+  link.searchParams.set('ext', 'md')
+  const historyEntry = { url: sourceUrl, scrollTop: 980, readerUrl: link.href }
+  const bookmark = { ...historyEntry, id: 'saved', scrollTop: 420 }
+  globalThis.VoiceOfMLReader = { ReaderMode: { UNSUPPORTED: 'unsupported' } }
+  globalThis.VoiceOfMLReaderStore = { get: async () => historyEntry, listBookmarks: async () => [bookmark], list: async () => [historyEntry] }
+  let assigned
+  const openUrl = (href) => {
+    globalThis.location = Object.assign(new URL(href), { assign: target => { assigned = new URL(target) } })
+  }
+  globalThis.window = { get location() { return globalThis.location }, history: { replaceState(_state, _title, href) { openUrl(href) } } }
+
+  function fixture(url) {
+    openUrl(url)
+    const viewport = { scrollTop: 0 }
+    const context = {
+      viewport, sourceUrl, params: new URLSearchParams(globalThis.location.search), capability: { mode: 'markdown' },
+      documentState: { title: 'Book' }, content: { querySelector: () => ({
+        querySelectorAll: () => [{ id: 'section 2', scrollIntoView() { viewport.scrollTop = 120 } }]
+      }) },
+      readerRuntime: { currentGeneration: () => 1 }, isReaderGenerationCurrent: () => true, beginReaderNavigation: () => 1,
+      resolveReaderSource: async () => {}, measurePdf: promise => promise, awaitReader: promise => promise, assertReaderActive() {},
+      syncCapabilityControls() {}, setReaderStage() {}, validSource: url => url === sourceUrl,
+      downloadButton: {}, readerDownloadUrl: () => sourceUrl, applyReaderMetadata() {},
+      formatAdapters: { activate() {}, active: { open() {}, render() {}, restore: (entry, generation) => context.restoreFormat('markdown', entry, generation) } },
+      readerResources: new Set(), markReaderContentReady() {}, updateDocumentState() {},
+      setReaderPhase: () => false, isReaderOverlayFrame: () => false, reportNavigationError: error => { throw error },
+      nextReaderGeneration: () => 1, readerAbortController: new AbortController(), classifyReaderError: error => { throw error }
+    }
+    return Object.assign(context, createReaderBookmarks(context), createReaderProgress(context), {
+      updateProgressTools() {}, scheduleSave() {}, saveProgress: async () => {}
+    })
+  }
+
+  const opening = new URL(link)
+  opening.searchParams.set('return', 'back')
+  const context = fixture(opening)
+  assert.strictEqual(context.currentReaderUrl().hash, '')
+  assert.deepStrictEqual([...context.currentReaderUrl().searchParams], [...link.searchParams])
+  assert.strictEqual(globalThis.location.href, opening.href)
+
+  // Exercise the history button, not just the URL serializer; old records still have a fragment.
+  const { navigateReader } = createReaderNavigation(context)
+  const node = () => ({ children: [], setAttribute() {}, addEventListener(type, fn) { this[type] = fn }, append(...items) { this.children.push(...items) } })
+  const list = node()
+  list.appendChild = item => list.append(item)
+  Object.defineProperty(list, 'childElementCount', { get: () => list.children.length })
+  globalThis.document = { querySelector: () => list, createElement: node }
+  await createReaderUi({ ...context, navigateReader, filterPanel() {}, emptyPanel(_list, message) { assert.fail(message) } }).renderHistory()
+  await list.children[0].children[0].click()
+  const historyUrl = assigned
+  assert.strictEqual(historyUrl.hash, '')
+  await navigateReader(link.href, bookmark)
+  const bookmarkUrl = assigned
+  assert.strictEqual(bookmarkUrl.hash, '')
+  assert.strictEqual(bookmarkUrl.searchParams.get('bookmark'), bookmark.id)
+  await navigateReader(link.href)
+  assert.strictEqual(assigned.hash, link.hash)
+
+  const anchoredBookmark = new URL(bookmarkUrl)
+  anchoredBookmark.hash = link.hash
+  const missingBookmark = new URL(anchoredBookmark)
+  missingBookmark.searchParams.set('bookmark', 'missing')
+  for (const [url, expected, hash] of [
+    [historyUrl, 980, ''], [link, 120, link.hash], [missingBookmark, 120, link.hash],
+    [bookmarkUrl, 420, ''], [anchoredBookmark, 420, '']
+  ]) {
+    const openingContext = fixture(url)
+    await createReaderFormatController(openingContext).start()
+    assert.strictEqual(openingContext.viewport.scrollTop, expected, url.href)
+    assert.strictEqual(globalThis.location.hash, hash)
+    if (expected === bookmark.scrollTop) assert.strictEqual(globalThis.location.searchParams.has('bookmark'), false)
+  }
+})

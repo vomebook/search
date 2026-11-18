@@ -2200,7 +2200,7 @@ class StaticGateTests(unittest.TestCase):
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(ROOT / path, target)
         check = ["node", paths[1]]
-        self.assert_check(self.run_check(*check), True, "# pass 20")
+        self.assert_check(self.run_check(*check), True, "# pass 23")
         test = self.root / paths[2]
         source = test.read_text()
         for new_name in (

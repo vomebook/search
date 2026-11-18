@@ -174,6 +174,31 @@ if (!space) {
     assert.equal(book.localCalls[0][1].readerOnly, false);
   });
 
+  test('Pages random download cancels fallback after navigation during the API request or corpus load', async () => {
+    for (const duringLoad of [false, true]) {
+      const f = fixture(), online = deferred(), local = deferred();
+      const urls = [];
+      f.c.fetch = url => { urls.push(url); return online.promise; };
+      f.c.ensureLocalDataLoaded = () => { f.loads.push('corpus'); return local.promise; };
+      const download = f.c.randomBook();
+      assert.deepEqual(urls, ['https://api.test/api/random?repo=A%20%26%20B']);
+      if (duringLoad) {
+        online.reject(new TypeError('network down'));
+        await turn();
+        assert.deepEqual(f.loads, ['corpus']);
+      }
+      Object.assign(f.c.STATE, {repo: 'Other', repoFull: 'VoiceOfML/Other', dataLoaded: true});
+      f.c.location.href = 'https://site.test/#/Other';
+      if (duringLoad) local.resolve(true);
+      else online.reject(new TypeError('network down'));
+      await download; await turn();
+      assert.deepEqual(f.loads, duringLoad ? ['corpus'] : []);
+      assert.deepEqual(f.localCalls, []);
+      assert.deepEqual(f.downloads, []);
+      assert.deepEqual(f.messages, ['正在随机下载书籍...']);
+    }
+  });
+
   test('Pages stale converted pool stops before native selection and stale local failure stays silent', async () => {
     const f = fixture(), pool = deferred(); f.c.STATE.dataLoaded = true;
     f.c.getConvertedReaderRecords = () => pool.promise;

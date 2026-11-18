@@ -1,5 +1,18 @@
 /** @import * as DomSearch from "../../../typings/reader-dom-search-strict" */
 // DOM matching, text snapshots and marks share one Reader-owned lifecycle.
+// Use semantic HTML boundaries, not computed styles (which can force layout).
+const SEARCH_BLOCKS = new Set(("address article aside blockquote br caption center dd details dialog div dl dt fieldset " +
+  "figcaption figure footer form h1 h2 h3 h4 h5 h6 header hgroup hr li main menu nav ol p pre search " +
+  "section summary table tbody td tfoot th thead tr ul").split(" "));
+const BLOCK_SEPARATOR = "\n";
+
+/** @param {Element} element */
+function isSearchBlock(element) {
+  // TXT blocks are storage/rendering chunks, not paragraph boundaries.
+  return SEARCH_BLOCKS.has(element.localName) && !(element.localName === "pre" &&
+    element.classList.contains("reader-text-block") && element.parentElement?.classList.contains("reader-text"));
+}
+
 /** @param {string} value */
 export function fullSearchEscape(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -61,7 +74,8 @@ export function createReaderDomSearch({
       get value() { return current() ? value : null; },
       set(data) {
         if (!current()) return;
-        if (data.offsets.length > 32768 || data.text.length * 2 + data.offsets.length * 64 > DOM_SEARCH_SNAPSHOT_BYTES) {
+        if (data.offsets.length > 32768 ||
+            data.text.length * 2 + data.offsets.length * 64 + data.breaks.length * 8 > DOM_SEARCH_SNAPSHOT_BYTES) {
           snapshot.dispose();
           return;
         }
@@ -168,22 +182,48 @@ export function createReaderDomSearch({
       fullSearchDomSnapshot?.resume();
     }
   }
-  /** @param {Element | ShadowRoot} root @param {number} generation @param {number} [endOffset] @param {DomSearch.Checkpoint | null} [checkpoint] @param {((node: Text) => void) | null} [collect] */
-  async function fullSearchTextNodes(root, generation, endOffset = Infinity, checkpoint = null, collect = null) {
-    const nodes = [],
-      walker = root.ownerDocument.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  /** @param {Element | ShadowRoot} root @param {number} generation @param {number} [endOffset] @param {DomSearch.Checkpoint | null} [checkpoint] @param {((node: Text, start: number, end: number) => void) | null} [collect] @param {boolean} [respectBlocks] */
+  async function fullSearchTextNodes(root, generation, endOffset = Infinity, checkpoint = null, collect = null, respectBlocks = true) {
+    const nodes = [];
+    /** @param {Element | null} element */
+    function enclosingBlock(element) {
+      for (; element && element !== root; element = element.parentElement)
+        if (isSearchBlock(element)) return element;
+      return null;
+    }
+    let block = respectBlocks && checkpoint ? enclosingBlock(checkpoint.target) : null;
+    let boundary = false, seenText = false;
+    const walker = root.ownerDocument.createTreeWalker(root, NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT, node => {
+      if (node.nodeType === Node.TEXT_NODE) return NodeFilter.FILTER_ACCEPT;
+      const element = /** @type {Element} */ (node);
+      if (element.localName === "script" || element.localName === "style" ||
+          element.classList.contains("reader-pdf-text") ||
+          (element.localName === "mark" && element.classList.contains("full-search-highlight")))
+        return NodeFilter.FILTER_REJECT;
+      if (respectBlocks && isSearchBlock(element)) {
+        block = element;
+        boundary = true;
+      }
+      return NodeFilter.FILTER_SKIP;
+    });
     if (checkpoint) walker.currentNode = checkpoint.target;
     let visited = 0, length = checkpoint?.start || 0, deadline = performance.now() + 8;
     while (walker.nextNode()) {
       if (!isCurrent("search", generation)) return null;
       const node = /** @type {Text} */ (walker.currentNode);
-      if (
-        node.data &&
-        !/** @type {HTMLElement} */ (node.parentElement).closest("script,style,mark.full-search-highlight,.reader-pdf-text")
-      ) {
-        if (collect) collect(node);
-        else nodes.push(node);
+      if (node.data) {
+        if (block && !block.contains(node)) {
+          block = enclosingBlock(node.parentElement);
+          boundary = true;
+        }
+        // A checkpoint starts at its text, after any preceding separator.
+        if (boundary && seenText) length++;
+        boundary = false;
+        seenText = true;
+        const start = length;
         length += node.data.length;
+        if (collect) collect(node, start, length);
+        else nodes.push(node);
         if (length >= endOffset) break;
       }
       if (++visited % 256 === 0 && performance.now() >= deadline) {
@@ -330,14 +370,23 @@ export function createReaderDomSearch({
     const offsets = cached ? cached.offsets : [];
     /** @type {string[]} */
     const chunks = [];
+    const breaks = cached ? cached.breaks : [];
+    const findLineBreaks = query.includes(BLOCK_SEPARATOR);
+    // Foliate's section-ordinal fallback must count the same concatenated text
+    // matches as the Foliate engine which produced the ordinal.
+    const respectBlocks = progressive || occurrence === null;
     let length = 0;
-    /** @param {Text} node */
-    const collect = node => {
-      offsets.push({ node, parent: /** @type {HTMLElement} */ (node.parentElement), start: length, end: length + node.data.length });
+    /** @type {(node: Text, start: number, end: number) => void} */
+    const collect = (node, start, end) => {
+      if (start > length) {
+        if (findLineBreaks || snapshot) breaks.push(length);
+        chunks.push(BLOCK_SEPARATOR);
+      }
+      offsets.push({ node, parent: /** @type {HTMLElement} */ (node.parentElement), start, end });
       chunks.push(node.data);
-      length += node.data.length;
+      length = end;
     };
-    const nodes = cached ? [] : await fullSearchTextNodes(root, generation, Infinity, null, collect);
+    const nodes = cached ? [] : await fullSearchTextNodes(root, generation, Infinity, null, collect, respectBlocks);
     if (!nodes || !isCurrent("search", generation)) return [];
     if (cached) locator?.seed(cached.checkpoints);
     else locator?.build(offsets);
@@ -348,10 +397,11 @@ export function createReaderDomSearch({
     /** @type {DomSearch.Match[]} */
     const firstHits = [];
     if (!cached && snapshot && (headingLookup || !getTocEntries().some(entry => isTocEntry(entry) && entry.target)))
-      snapshot.set({ text, offsets, headingLookup, checkpoints: /** @type {DomSearch.Locator} */ (locator).boundaries(), toc: getTocEntries() });
+      snapshot.set({ text, offsets, breaks, headingLookup, checkpoints: /** @type {DomSearch.Locator} */ (locator).boundaries(), toc: getTocEntries() });
     /** @type {DomSearch.HighlightOffset[]} */
     let highlightOffsets = /** @type {DomSearch.LiveOffset[]} */ (offsets);
     const patternText = fullSearchEscape(query);
+    const matchableBreaks = findLineBreaks ? breaks : [];
     let nextStart = 0, total = 0;
     /** @param {number} index @param {{start: number, end: number}[]} [parts] */
     const locateIndex = (index, parts = offsets) => {
@@ -373,10 +423,32 @@ export function createReaderDomSearch({
     /** @param {DomSearch.Group} group */
     const matchesIn = function* (group) {
       const re = new RegExp(patternText, "giu");
+      const source = text.slice(group.start, group.end);
       re.lastIndex = group.skip;
-      for (const match of text.slice(group.start, group.end).matchAll(re)) {
-        if (match.index >= 65536) break;
-        yield { index: group.start + match.index, value: match[0] };
+      if (!matchableBreaks.length) {
+        for (const match of source.matchAll(re)) {
+          if (match.index >= 65536) break;
+          yield { index: group.start + match.index, value: match[0] };
+        }
+        return;
+      }
+      let low = 0, high = matchableBreaks.length;
+      while (low < high) {
+        const middle = (low + high) >> 1;
+        if (matchableBreaks[middle] < group.start + group.skip) low = middle + 1;
+        else high = middle;
+      }
+      let boundary = matchableBreaks[low] ?? Infinity;
+      for (let match; (match = re.exec(source)) && match.index < 65536;) {
+        const index = group.start + match.index;
+        while (boundary < index) boundary = matchableBreaks[++low] ?? Infinity;
+        if (boundary < index + match[0].length) {
+          // Only literal source newlines are searchable. Resume after the
+          // synthetic separator, not after the rejected match.
+          re.lastIndex = boundary - group.start + 1;
+          continue;
+        }
+        yield { index, value: match[0] };
       }
     };
     /** @param {DomSearch.Match} match @returns {DomSearch.Result} */
@@ -390,22 +462,21 @@ export function createReaderDomSearch({
           const searchGeneration = runtime.currentGeneration("search");
           const end = match.index + match.value.length;
           clearFullSearchMarks();
-          let checkpoint = locator?.checkpoint(match.index);
-          let currentNodes = await fullSearchTextNodes(root, searchGeneration, end, checkpoint);
+          const checkpoint = locator?.checkpoint(match.index);
+          /** @type {DomSearch.TextPart[]} */
+          const parts = [];
+          /** @type {(node: Text, start: number, nodeEnd: number) => void} */
+          const collectMatch = (node, start, nodeEnd) => {
+            if (nodeEnd > match.index && start < end)
+              parts.push({ node, start: Math.max(0, match.index - start), end: Math.min(node.data.length, end - start) });
+          };
+          let currentNodes = await fullSearchTextNodes(root, searchGeneration, end, checkpoint, collectMatch, respectBlocks);
           if (checkpoint && !/** @type {DomSearch.Locator} */ (locator).current()) {
-            checkpoint = null;
-            currentNodes = await fullSearchTextNodes(root, searchGeneration, end);
+            parts.length = 0;
+            currentNodes = await fullSearchTextNodes(root, searchGeneration, end, null, collectMatch, respectBlocks);
           }
           if (!currentNodes || !isCurrent("search", searchGeneration) ||
               !isCurrent("navigation", navigationGeneration)) return false;
-          let position = checkpoint?.start || 0, parts = [];
-          for (const node of currentNodes) {
-            const nodeEnd = position + node.data.length;
-            if (nodeEnd > match.index && position < end)
-              parts.push({ node, start: Math.max(0, match.index - position), end: Math.min(node.data.length, end - position) });
-            position = nodeEnd;
-            if (position >= end) break;
-          }
           if (parts.map(part => part.node.data.slice(part.start, part.end)).join("") !== match.value) return false;
           const [target] = highlightTextParts(parts);
           target?.scrollIntoView({ block: "center" });
@@ -413,10 +484,14 @@ export function createReaderDomSearch({
         }
       };
     };
+    const pageSize = 50;
+    /** @type {DomSearch.Result[]} */
+    const firstPage = [];
     /** @param {number} requestedOffset @returns {DomSearch.Page} */
     const page = (requestedOffset) => {
-      const pageSize = 50, results = [];
       const offset = fullSearchPageOffset(total, requestedOffset, pageSize);
+      if (progressive && offset === 0) return { total, offset, pageSize, results: firstPage.slice() };
+      const results = [];
       let passed = 0;
       for (const group of groups) {
         if (passed + group.count <= offset) { passed += group.count; continue; }
@@ -437,6 +512,9 @@ export function createReaderDomSearch({
         group.count++;
         nextStart = match.index + match.value.length;
         if (firstHits.length < 100) firstHits.push(match);
+        // Keep rows already published on the first page activatable as the
+        // scan grows, without rebuilding their snippets or activation closures.
+        if (progressive && firstPage.length < pageSize) firstPage.push(resultFor(match));
       }
       groups.push(group);
       total += group.count;
@@ -467,16 +545,12 @@ export function createReaderDomSearch({
     if (cached && firstHits.length && navigationGeneration === runtime.currentGeneration("navigation")) {
       const checkpoint = /** @type {DomSearch.Locator} */ (locator).checkpoint(firstHits[0].index);
       const end = firstHits[firstHits.length - 1].index + firstHits[firstHits.length - 1].value.length;
-      const markNodes = await fullSearchTextNodes(root, generation, end, checkpoint);
+      highlightOffsets = [];
+      const markNodes = await fullSearchTextNodes(root, generation, end, checkpoint,
+        (node, start, end) => highlightOffsets.push({ node, start, end }));
       if (!markNodes || !isCurrent("search", generation)) return [];
       if (!/** @type {DomSearch.Snapshot} */ (snapshot).current())
         return fullSearchDomMatches(inputRoot, fallback, query, generation, progressive, occurrence, navigationGeneration);
-      let position = checkpoint?.start || 0;
-      highlightOffsets = markNodes.map(node => {
-        const part = { node, start: position, end: position + node.data.length };
-        position = part.end;
-        return part;
-      });
     }
     if (navigationGeneration === runtime.currentGeneration("navigation")) {
       for (let i = firstHits.length - 1; i >= 0; i--) {

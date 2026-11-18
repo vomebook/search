@@ -163,8 +163,8 @@ export function createReaderNavigation(readerContext) {
     readerContext.foliateScrollAnchors.remember();
   }
 
-  /** @param {string} rawUrl @param {{id: string, url: string} | null} [bookmark] */
-  async function navigateReader(rawUrl, bookmark = null) {
+  /** @param {string} rawUrl @param {{id: string, url: string} | null} [bookmark] @param {boolean} [resumeHistory] */
+  async function navigateReader(rawUrl, bookmark = null, resumeHistory = false) {
     let target;
     try {
       target = new URL(rawUrl, location.origin);
@@ -177,6 +177,8 @@ export function createReaderNavigation(readerContext) {
         return;
       target.searchParams.delete("bookmark");
       target.searchParams.delete("bookmark_source");
+      // Older saved URLs can still contain the anchor from the original link.
+      if (bookmark || resumeHistory) target.hash = "";
       if (bookmark) {
         if (
           typeof bookmark.id !== "string" ||

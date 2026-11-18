@@ -1192,7 +1192,8 @@ class ReaderRefactorTest(unittest.TestCase):
     def test_stale_foliate_fallback_cannot_highlight_after_navigation(self):
         def hold_fallback(route):
             response = route.fetch()
-            needle = "const nodes = cached ? [] : await fullSearchTextNodes(root, generation, Infinity, null, collect);"
+            needle = ("const nodes = cached ? [] : await fullSearchTextNodes("
+                      "root, generation, Infinity, null, collect, respectBlocks);")
             script = response.text()
             self.assertIn(needle, script)
             script = script.replace(needle, """if (occurrence !== null && !window.__fallbackHeld) {
@@ -2766,7 +2767,8 @@ class ReaderRefactorTest(unittest.TestCase):
     def test_pending_text_result_cannot_highlight_after_new_search(self):
         def hold_activation(route):
             response = route.fetch()
-            needle = "let currentNodes = await fullSearchTextNodes(root, searchGeneration, end, checkpoint);"
+            needle = ("let currentNodes = await fullSearchTextNodes("
+                      "root, searchGeneration, end, checkpoint, collectMatch, respectBlocks);")
             script = response.text()
             self.assertIn(needle, script)
             route.fulfill(response=response, body=script.replace(needle,

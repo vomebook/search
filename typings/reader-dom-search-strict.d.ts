@@ -6,7 +6,7 @@ export interface LiveOffset extends Offset { node: Text }
 export interface HighlightOffset { node: Text; start: number; end: number }
 export interface Checkpoint { target: HTMLElement; start: number }
 export type HeadingLookup = (offset: number) => { label: string | undefined } | null;
-export interface SnapshotData { text: string; offsets: Offset[]; headingLookup: HeadingLookup | null; checkpoints: Checkpoint[]; toc: unknown[] }
+export interface SnapshotData { text: string; offsets: Offset[]; breaks: number[]; headingLookup: HeadingLookup | null; checkpoints: Checkpoint[]; toc: unknown[] }
 export interface Snapshot { root: Element | ShadowRoot; current(): boolean; resume(): void; pause(): void; dispose(): void; readonly value: SnapshotData | null; set(data: SnapshotData): void }
 export interface Locator { current(): boolean; boundaries(): Checkpoint[]; seed(boundaries: Checkpoint[]): void; build(offsets: Offset[]): void; checkpoint(offset: number): Checkpoint | null; pause(): void; resume(): void; dispose(): void }
 export interface Snippet { text: string; matchStart: number; matchLength: number; prefix: string; suffix: string }

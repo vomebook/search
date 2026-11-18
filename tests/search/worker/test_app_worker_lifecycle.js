@@ -107,6 +107,7 @@ function callerHarness() {
     function doSearchAPI() { return new Promise((resolve, reject) => { finishApi = resolve; failApi = reject; }); }
     function renderSearchPage() { renders++; }
     function prefetchNextPage() {}
+    function ownsDisplayedSearchResults() { return true; }
     function warmConnection() {}
     ensureLocalDataLoaded = () => { loadCalls++; return new Promise(resolve => { finishLoad = resolve; }); };
     clearUnavailableSearchResults = () => {};

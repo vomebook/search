@@ -12,6 +12,7 @@ from playwright.sync_api import sync_playwright
 
 ROOT = Path(__file__).resolve().parents[3]
 MODULE_URL = '/static/reader/search/reader-dom-search.mjs'
+CONTROLLER_URL = '/static/reader/search/reader-search-controller.mjs'
 CONTRACT_URL = '/tests/reader/dom-search/contracts.mjs'
 
 
@@ -20,7 +21,7 @@ class ReaderDomSearchContracts(unittest.TestCase):
     def setUpClass(cls):
         stack = contextlib.ExitStack()
         cls.addClassCleanup(stack.close)
-        routes = {MODULE_URL: ROOT / MODULE_URL.lstrip('/'), CONTRACT_URL: ROOT / CONTRACT_URL.lstrip('/')}
+        routes = {url: ROOT / url.lstrip('/') for url in (MODULE_URL, CONTROLLER_URL, CONTRACT_URL)}
         cls.digests = {url: hashlib.sha256(path.read_bytes()).hexdigest() for url, path in routes.items()}
 
         class Handler(http.server.BaseHTTPRequestHandler):
@@ -96,9 +97,9 @@ class ReaderDomSearchContracts(unittest.TestCase):
                     self.assertEqual(errors, [])
                     self.assertEqual(logs, [])
                     self.assertEqual(blocked, [])
-                    expected_urls = {self.origin + '/', self.origin + MODULE_URL, self.origin + CONTRACT_URL}
+                    expected_urls = {self.origin + url for url in ('/', MODULE_URL, CONTROLLER_URL, CONTRACT_URL)}
                     self.assertEqual(set(requested), expected_urls)
-                    for url in (MODULE_URL, CONTRACT_URL):
+                    for url in (MODULE_URL, CONTROLLER_URL, CONTRACT_URL):
                         self.assertEqual([status for actual, status in responses if actual == self.origin + url], [200])
                     print(f'DOM_SEARCH_CONTRACT_COMPLETED {browser_name} {name} {self.digests[MODULE_URL]}', flush=True)
                 finally:

@@ -932,7 +932,8 @@ function checkSearchPageAppend(data) {
 
 /** @param {{results: unknown[], total: number, page: number, page_size?: number, generation?: string}} data @param {boolean | undefined} append */
 function applySearchPage(data, append) {
-  if (append && !checkSearchPageAppend(data)) return false;
+  if (window.location.hash !== appliedRouteHash) return false;
+  if (append && (!ownsDisplayedSearchResults() || !checkSearchPageAppend(data))) return false;
   rememberSearchPageMetadata(data);
   STATE.total = data.total;
   // Legacy renderer consumes these records without field validation; preserve the array and values.
@@ -951,7 +952,7 @@ function applySearchPage(data, append) {
 }
 
 function consumeCachedAppendPage() {
-  if (!STATE._pageCache[STATE.page]) return false;
+  if (!ownsDisplayedSearchResults() || !STATE._pageCache[STATE.page]) return false;
   if (!appendSearchResults(STATE.page)) return false;
   STATE.page = STATE._loadedPage;
   STATE._pendingPage = 0;
@@ -1021,6 +1022,7 @@ function prefetchSearchPages(base, template) {
 }
 
 function prefetchNextPage() {
+  if (!ownsDisplayedSearchResults()) return Promise.resolve();
   if (resultWindow) {
     const page = Math.floor(findVirtualIndex(getResultScrollTop()) / STATE.pageSize) + 1;
     for (let next = page + 1; next <= page + 2 && resultWindow.pending.size < 2; next++) loadResultWindowPage(next, true);
@@ -1423,7 +1425,10 @@ const ROUTER = {
       STATE.filterFolders = [];
       STATE.filterFolderSubtrees = [];
       STATE.filterFolderSelfs = [];
+      // Clear old rows and their selection targets before the deferred render.
+      STATE.folderTree = null;
       STATE.folderTreeCollapsed = {};
+      sidebarFolderTree?.render();
       folderContentsCache.clear();
     }
     const projected = VoiceOfMLRoute.project(route.params, STATE.mode, routeInitialized);
@@ -1579,7 +1584,11 @@ function getRouteNavigation() {
     persistSession: () => persistSearchSession(),
   }));
 }
-function syncStateToURL() { getRouteNavigation().sync(); }
+function syncStateToURL() {
+  // A hash assignment is visible synchronously, before hashchange applies its
+  // state. Never serialize the previous view over that pending destination.
+  if (window.location.hash === appliedRouteHash) getRouteNavigation().sync();
+}
 
 /** @param {number} routeId */
 function renderSidebarAndFiltersDeferred(routeId) {
@@ -2889,8 +2898,14 @@ function buildLocalSearchParams(page) {
   };
 }
 
+function ownsDisplayedSearchResults() {
+  return window.location.hash === appliedRouteHash &&
+    displayedSearchView?.key === getSearchViewKey() && displayedSearchView.results === STATE.results;
+}
+
 /** @param {boolean} [append] @param {boolean} [fromStart] @param {boolean} [restorePosition] */
 function doSearch(append, fromStart = false, restorePosition = false) {
+  if (append && STATE._loadedPage && !ownsDisplayedSearchResults()) return;
   if (append && resultWindow) { loadResultWindowPage(STATE._loadedPage + 1); return; }
   if (append && !STATE._loadedPage) append = false;
   if (!append) searchIntentId++;
@@ -3616,7 +3631,8 @@ function readPagingView() {
   return {
     generation: searchRequestId, loadedPage: STATE._loadedPage, page: STATE.page,
     resultCount: STATE.results.length, hasMore: STATE.hasMore, loading: STATE.isLoading,
-    suspended: !!resultSnapshots.cloneTask || !!positionRestore,
+    suspended: !!resultSnapshots.cloneTask || !!positionRestore ||
+      (STATE._loadedPage > 0 && !ownsDisplayedSearchResults()),
     inactive: document.hidden || !!readerHost.overlay, dragging: VSCROLL.isDraggingThumb,
     scrollTop: getResultScrollTop(), loadedHeight: getVirtualTotalHeight(),
     viewportHeight: DOM.resultsContainer ? DOM.resultsContainer.clientHeight : 0,
@@ -3798,11 +3814,13 @@ function setupQuickScroll() {
     const finalScrollTop = requestedScrollTop === null ? getResultScrollTop() : requestedScrollTop;
     VSCROLL.renderStart = -1;
     VSCROLL.renderEnd = -1;
-    setResultScrollTop(finalScrollTop);
-    renderVisible();
     VSCROLL.isDraggingThumb = false;
     VSCROLL.dragMetrics = null;
     DOM.resultsList.style.minHeight = "";
+    setResultScrollTop(finalScrollTop);
+    // The final viewport may contain unloaded sparse pages even at a fully
+    // loaded tail. Demand them now rather than waiting for another scroll.
+    renderVisible();
     updateScrollTrack();
   }
   /** @param {MouseEvent} e */
@@ -4078,6 +4096,7 @@ async function init() {
   DOM.historyToggle.addEventListener("change", function() {
     STATE.recordHistory = DOM.historyToggle.checked;
     if (!STATE.recordHistory) saveHistory([]);
+    syncStateToURL();
   });
   if (DOM.mirrorLinksToggle) DOM.mirrorLinksToggle.addEventListener("change", function() {
     STATE.useMirrorLinks = DOM.mirrorLinksToggle.checked;

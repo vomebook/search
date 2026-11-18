@@ -232,11 +232,69 @@ for (const {name: project, root} of searchTestProjects()) {
     assert.strictEqual(snapshot[99999].File,"99999");
     assert.strictEqual(context.STATE.hasMore,false);
   });
+  test(project + " old cached rows cannot page while the new view's saved viewport is pending", async () => {
+    const source = fs.readFileSync(path.join(root, "static/app.js"), "utf8");
+    const old = [{File: "A1"}], next = [{File: "A2"}];
+    const state = {results: old, page: 2, _loadedPage: 1, _pageCache: {2: next}, total: 2, hasMore: true};
+    let release, activeKey = "B", calls = 0;
+    const context = vm.createContext({STATE: state, window: {location: {hash: '#/B'}}, appliedRouteHash: '#/B',
+      displayedSearchView: {key: "A", results: old}, getSearchViewKey: () => activeKey,
+      searchId: 1, searchRequestId: 1, searchIntentId: 1, positionEntryId: 1, positionRestore: null,
+      saveSearchViewSnapshot() {}, cancelActiveSearch: () => true, cancelPositionRestore() {}, prepareReturnPosition() {},
+      resultSnapshots: {snapshots: new Map()}, getReturnPositionTarget: () => ({index: 1}),
+      readSearchViewport: () => new Promise(resolve => { release = resolve; }),
+      validSearchViewport: () => false, searchWithInitialFallbackFresh: () => true,
+      getResultScrollTop: () => 90, getVirtualTotalHeight: () => 100, DOM: {resultsContainer: {clientHeight: 10}},
+      document: {hidden: false}, readerHost: {overlay: null}, VSCROLL: {isDraggingThumb: false},
+      appendSearchResults() { calls++; return false; }});
+    for (const name of ['ownsDisplayedSearchResults', 'searchWithInitialFallback', 'consumeCachedAppendPage', 'readPagingView', 'doSearch'])
+      vm.runInContext(source.match(new RegExp('^(?:async )?function ' + name + '\\([^]*?^}', 'm'))[0], context);
+    const restoring = context.searchWithInitialFallback();
+    assert.equal(typeof release, 'function');
+    assert.equal(context.readPagingView().suspended, true);
+    assert.equal(context.consumeCachedAppendPage(), false);
+    await context.doSearch(true);
+    assert.equal(calls, 0);
+    assert.deepEqual(state.results, [{File: 'A1'}]);
+    assert.equal(state._pageCache[2], next);
+    release(null);
+    assert.equal(await restoring, true);
+    activeKey = 'A';
+    assert.equal(context.readPagingView().suspended, false);
+    context.consumeCachedAppendPage();
+    assert.equal(calls, 1, 'unchanged views still consume prefetched pages');
+  });
+  test(project + " settled scrollbar release demands visible sparse pages", () => {
+    const source = fs.readFileSync(path.join(root, "static/app.js"), "utf8");
+    const thumb = source.match(/^let cancelQuickScroll = \(\) => \{\};\nfunction setupQuickScroll\(\) \{[^]*?^}/m)[0];
+    const element = (height = 100) => Object.assign(new EventTarget(), {style: {}, classList: {add() {}, remove() {}},
+      clientHeight: height, scrollHeight: 1000});
+    const VSCROLL = {isDraggingThumb: false};
+    const DOM = {resultsContainer: element(), resultsList: element(), scrollTrack: element(), scrollThumb: element(40)};
+    const document = new EventTarget(), frames = new Map();
+    let top = 0, frame = 0, demand = 0;
+    const c = vm.createContext({window: new EventTarget(), document, DOM, VSCROLL, RESULT_SCROLL_SEGMENT_HEIGHT: 1000,
+      updateScrollTrack() {}, updateScrollThumb() {}, getResultScrollTop: () => top, setResultScrollTop: value => {top = value;},
+      getVirtualTotalHeight: () => 1000, renderVisible() {if (!VSCROLL.isDraggingThumb) demand++;},
+      requestAnimationFrame(fn) {frames.set(++frame, fn); return frame;}, cancelAnimationFrame: id => frames.delete(id),
+      consumeDeferredSearchAppend: () => false, maybeLoadNextPage() {}});
+    vm.runInContext(thumb + '\nsetupQuickScroll()', c);
+    const mouse = (target, event, clientY) => target.dispatchEvent(Object.assign(new Event(event), {clientY}));
+    mouse(DOM.scrollThumb, 'mousedown', 0);
+    mouse(document, 'mousemove', 30);
+    for (const [id, render] of frames) {frames.delete(id); render();}
+    assert.equal(top, 450);
+    assert.equal(demand, 0, 'scrolling while held must not load sparse pages');
+    mouse(document, 'mouseup', 30);
+    assert.equal(top, 450);
+    assert.equal(VSCROLL.isDraggingThumb, false);
+    assert.ok(demand > 0, 'release must load gaps even when no scroll frame remains');
+  });
   test(project + " raw first page keeps legacy result array and record identities", () => {
     const source = fs.readFileSync(path.join(root, "static/app.js"), "utf8");
     const records = [{File: 7, Extension: ["pdf"], Folder: [42]}, null];
     const state = {results: [], _pageCache: {}, total: 0};
-    const context = {STATE: state, rememberSearchPageMetadata() {}};
+    const context = {STATE: state, window: {location: {hash: '#/'}}, appliedRouteHash: '#/', rememberSearchPageMetadata() {}};
     vm.createContext(context);
     vm.runInContext(source.match(/^function applySearchPage\([^]*?^}/m)[0], context);
     context.page = {results: records, page: 1, total: 2};
@@ -252,6 +310,7 @@ for (const {name: project, root} of searchTestProjects()) {
       const old = [{File:"old"}], next = [{File:"new"}];
       const metadata = new WeakMap([[old[0],{generation:"A",total:2}], [next[0],{generation:"B",total:2}]]);
       const context = {STATE:{results:old,total:2,_loadedPage:1,_pageCache:{2:next},_resultBackend:"api"},
+        window:{location:{hash:'#/'}}, appliedRouteHash:'#/', ownsDisplayedSearchResults:()=>true,
         VSCROLL:{isDraggingThumb:true}, searchPageMetadata:metadata,
         resultSnapshots:{remove(){}}, getSearchViewKey:()=>"query", captureReaderReturnScroll:()=>({index:0,offset:12}),
         getResultStableId:r=>r.File, getReturnPositionTarget:()=>null, setReturnPositionTarget(){},

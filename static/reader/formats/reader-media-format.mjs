@@ -19,6 +19,7 @@
  * @property {string} sourceUrl
  * @property {string} contentUrl
  * @property {(url: string) => boolean} validSource
+ * @property {(url: string) => string} readerContentUrl
  * @property {number} READER_PROXY_TIMEOUT_MS
  * @property {(cleanup: () => void) => () => void} trackReaderResource
  * @property {<T>(promise: T | PromiseLike<T>) => Promise<Awaited<T>>} awaitReader
@@ -98,14 +99,14 @@ export function createReaderMediaFormat(readerContext) {
     // The runtime capability helper stringifies unknown metadata; its ambient
     // declaration is narrower. This assertion preserves the original argument.
     const originalMode = VoiceOfMLReader.capability(/** @type {string} */ (readerContext.resolvedReaderData?.original_extension || readerContext.extension)).mode;
-    // A stalled proxy used to assign the dataset URL to the media element. That
-    // URL is on huggingface.co, which this network cannot open, so the retry
-    // never reaches metadata. Reload the same proxied URL instead.
+    // The generated proxy is not itself a valid source. Verify its input and
+    // exact URL instead of broadening the source policy or retrying the dataset URL.
     const directSource = originalMode === mode && readerContext.validSource(readerContext.downloadUrl) ? readerContext.downloadUrl : readerContext.sourceUrl;
-    const retryUrl = readerContext.contentUrl && readerContext.contentUrl !== directSource ? readerContext.contentUrl : directSource;
-    const retryOriginal = () => {
-      if (sourceRetried || !readerContext.validSource(retryUrl)) return false;
-      if (retryUrl === media.src && retryUrl === directSource) return false;
+    const retryUrl = readerContext.contentUrl;
+    const canRetry = readerContext.validSource(readerContext.sourceUrl) &&
+      retryUrl === readerContext.readerContentUrl(readerContext.sourceUrl) && retryUrl !== directSource;
+    const retryProxy = () => {
+      if (sourceRetried || !canRetry) return false;
       readerContext.saveProgress();
       retryPosition = readerContext.documentState.restorationReady
         ? {time:media.currentTime, playing:!media.paused, rate:media.playbackRate} : null;
@@ -122,7 +123,7 @@ export function createReaderMediaFormat(readerContext) {
       // Progress can extend the idle budget, but not the metadata-only deadline.
       deadline ||= setTimeout(() => failMedia("媒体信息加载超时，请重试加载或下载原文件。"), readerContext.READER_PROXY_TIMEOUT_MS);
       idle = setTimeout(() => {
-        if (!retryOriginal()) failMedia("媒体信息加载停顿，请重试加载或下载原文件。");
+        if (!retryProxy()) failMedia("媒体信息加载停顿，请重试加载或下载原文件。");
       }, 15000);
     };
     const loaded = () => {
@@ -139,7 +140,7 @@ export function createReaderMediaFormat(readerContext) {
     };
     const failed = () => {
       if (readerContext.readerAbortController.signal.aborted) return;
-      if (retryOriginal()) return;
+      if (retryProxy()) return;
       failMedia((/** @type {(number | undefined)[]} */ ([3, 4])).includes(media.error?.code)
         ? "媒体加载失败：浏览器可能不支持其编码，或响应无效。请重试加载或下载原文件。"
         : "媒体加载失败，请重试加载，或下载原文件。");

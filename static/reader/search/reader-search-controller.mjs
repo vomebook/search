@@ -9,9 +9,10 @@ export function createReaderSearchController({
   const search = /** @type {{query: string, results: ReaderSearchController.Result[], index: number}} */ (runtime.state.search);
   /** @type {ReaderSearchController.State} */
   const state = {
-    page: null, failedPage: null, complete: false,
-    pdfInProgress: false, chapterInProgress: false, pageLoader: null
+    page: null, failedPage: null, complete: false, pageLoader: null
   };
+  /** @type {{generation: number, mode: string | null} | null} */
+  let initialSearch = null;
   /** @type {ReturnType<typeof setTimeout> | 0} */
   let inputTimer = 0;
   let disposed = false, confirmedNoText = false;
@@ -24,8 +25,7 @@ export function createReaderSearchController({
   const active = () => !disposed && !signal.aborted;
   /** @param {number} generation */
   const current = generation => active() && isCurrent(generation);
-  const busy = () => state.pdfInProgress || state.chapterInProgress;
-  const pagedMode = () => (/** @type {(string | null)[]} */ (["epub-chapters", "pdf", "pdf-pages", "foliate"])).includes(backend.mode());
+  const busy = () => initialSearch !== null && current(initialSearch.generation);
 
   const view = document.createElement("section");
   view.id = "full-search-view";
@@ -88,10 +88,15 @@ export function createReaderSearchController({
   function updateClear() {
     clear.hidden = !input.value;
   }
+  /** @param {number} step */
+  const nextResultIndex = step => search.index < 0 ? (step > 0 ? 0 : -1) : search.index + step;
   function updateNavigation() {
-    view.querySelectorAll(".full-search-nav button").forEach(node => {
-      /** @type {HTMLButtonElement} */ (node).disabled = !search.results.length;
-    });
+    const lockPage = !!state.page && busy();
+    for (const [selector, step] of /** @type {const} */ ([["#full-search-prev", -1], ["#full-search-next", 1]])) {
+      const next = nextResultIndex(step);
+      /** @type {HTMLButtonElement} */ (view.querySelector(selector)).disabled = !search.results.length ||
+        (lockPage && (next < 0 || next >= search.results.length));
+    }
   }
   function updatePagination() {
     const page = state.page;
@@ -148,7 +153,7 @@ export function createReaderSearchController({
   }
   function resetResults(query = search.query) {
     state.complete = false;
-    state.pdfInProgress = state.chapterInProgress = false;
+    initialSearch = null;
     state.page = state.failedPage = state.pageLoader = null;
     updateSearch({ query, results: [], index: -1 });
     render();
@@ -165,11 +170,15 @@ export function createReaderSearchController({
     const restoreFocus = view.contains(document.activeElement);
     const closingButtonFocused = document.activeElement === button;
     clearInputTimer();
-    if (busy()) state.complete = false;
+    const interrupted = busy();
+    const mode = initialSearch?.mode;
     nextGeneration();
-    if (state.chapterInProgress) backend.chapterClient()?.cancel();
-    if (state.pdfInProgress) backend.pdfClient()?.cancel();
-    state.pdfInProgress = state.chapterInProgress = false;
+    initialSearch = null;
+    if (interrupted) {
+      if (mode === "epub-chapters") backend.chapterClient()?.cancel();
+      else if (mode === "pdf" || mode === "pdf-pages" || mode === "foliate") backend.pdfClient()?.cancel();
+      resetResults();
+    }
     cancel.hidden = retry.hidden = true;
     panel.hide();
     updateButton(false);
@@ -192,37 +201,37 @@ export function createReaderSearchController({
     resetResults(query);
     retry.hidden = true;
     retry.textContent = "重试搜索";
-    cancel.hidden = !pagedMode() || !query;
-    state.pdfInProgress = (/** @type {(string | null)[]} */ (["pdf", "pdf-pages", "foliate"])).includes(backend.mode()) && !!query;
-    state.chapterInProgress = backend.mode() === "epub-chapters" && !!query;
+    cancel.hidden = !query;
     if (!query) {
       backend.chapterClient()?.cancel();
       status.textContent = "输入关键词搜索正文";
       return;
     }
+    const owner = { generation, mode: backend.mode() };
+    initialSearch = owner;
+    const ownsSearch = () => initialSearch === owner && current(generation);
     status.textContent = "正在搜索正文…";
     try {
       await backend.search(query, generation);
-      if (!current(generation)) return;
+      if (!ownsSearch()) return;
       state.complete = true;
-      state.pdfInProgress = state.chapterInProgress = false;
       render();
       const total = state.page?.total ?? search.results.length;
       status.textContent = total ? `${total}${!state.page && total === 100 ? "+" : ""} 个结果` : "未找到正文匹配";
     } catch (error) {
-      if (current(generation)) {
+      if (ownsSearch()) {
         const failure = /** @type {{code?: string, message?: string} | null | undefined} */ (error);
         const noText = failure?.code === "READER_NO_SEARCHABLE_TEXT";
         status.textContent = noText ? "此文件没有可搜索文字" : (failure?.message || "正文搜索不可用");
-        retry.hidden = noText || !pagedMode();
+        retry.hidden = noText;
         if (noText) {
           confirmedNoText = true;
           if (!panel.isOpen() || view.hidden) button.hidden = true;
         }
       }
     } finally {
-      if (current(generation)) {
-        state.pdfInProgress = state.chapterInProgress = false;
+      if (ownsSearch()) {
+        initialSearch = null;
         updatePagination();
         cancel.hidden = true;
         updateNavigation();
@@ -236,7 +245,9 @@ export function createReaderSearchController({
   }
   /** @param {number} offset @param {boolean | null} [selectLast] */
   async function loadPage(offset, selectLast = null) {
-    if (!active() || busy() || !state.page || (!backend.chapterClient() && !state.pageLoader)) return;
+    if (!active()) return;
+    if (busy()) { updatePagination(); return; }
+    if (!state.page || (!backend.chapterClient() && !state.pageLoader)) return;
     state.failedPage = null;
     const generation = nextGeneration();
     navigation.begin();
@@ -278,10 +289,12 @@ export function createReaderSearchController({
     const generation = navigation.begin();
     const ownsResult = () => current(searchGeneration) && search.results[index] === result;
     updateSearch({ index });
+    updateNavigation();
     try {
       const activated = await backend.activate(result, generation);
       if (activated === false && navigation.current(generation) && ownsResult()) {
         updateSearch({ index: previousIndex });
+        updateNavigation();
         status.textContent = "搜索结果定位失败，请重试";
         return;
       }
@@ -294,6 +307,7 @@ export function createReaderSearchController({
       const failure = /** @type {{name?: string, message?: string} | null | undefined} */ (error);
       if (failure?.name !== "AbortError" && navigation.current(generation) && ownsResult()) {
         updateSearch({ index: previousIndex });
+        updateNavigation();
         status.textContent = backend.mode() === "epub-chapters"
           ? failure?.message || "搜索结果定位失败，请重试" : "搜索结果定位失败，请重试";
       }
@@ -304,7 +318,7 @@ export function createReaderSearchController({
   function move(step) {
     const page = state.page;
     if (page?.total) {
-      const next = search.index < 0 ? (step > 0 ? 0 : -1) : search.index + step;
+      const next = nextResultIndex(step);
       if (next < 0) return loadPage(page.offset ? page.offset - page.pageSize
         : Math.floor((page.total - 1) / page.pageSize) * page.pageSize, true);
       if (next >= search.results.length) return loadPage(
@@ -320,7 +334,8 @@ export function createReaderSearchController({
     updateButton(true);
     updateClear();
     input.focus();
-    if (search.query !== input.value.trim() || !state.complete) run();
+    // Activating a partial row closes the panel, not the still-owned scan.
+    if (search.query !== input.value.trim() || (!state.complete && !busy())) run();
     else if (state.failedPage) retry.hidden = false;
   }
   function queue() {
@@ -379,6 +394,7 @@ export function createReaderSearchController({
   function dispose() {
     if (disposed) return;
     disposed = true;
+    initialSearch = null;
     clearInputTimer();
     for (const remove of listeners.splice(0)) remove();
     renderedResults = [];

@@ -81,7 +81,7 @@
       return title && title.trim() ? title : "";
     }
     // A Reader closed while reading aloud stays alive, hidden, with a small
-    // player on the search page; reopening the same book reuses it.
+    // player on the search page; reopening the same book without a target reuses it.
     /** @type {{frame: HTMLIFrameElement; bar: HTMLDivElement; focus: HTMLElement | null | undefined; key: string; timer: number} | null} */
     let parked = null;
     const sessionKey = "reader-navigation-current";
@@ -155,9 +155,13 @@
         return element;
       };
       const back = button("返回阅读", () => {
-        const url = target.src;
-        if (typeof options.resume === "function") options.resume(url);
-        else root.dispatchEvent(new CustomEvent("voice-reader-resume", { detail: url }));
+        // Resume the live position, not the fragment or bookmark that originally opened it.
+        const url = new URL(target.src);
+        url.hash = "";
+        url.searchParams.delete("bookmark");
+        url.searchParams.delete("bookmark_source");
+        if (typeof options.resume === "function") options.resume(url.href);
+        else root.dispatchEvent(new CustomEvent("voice-reader-resume", { detail: url.href }));
       });
       back.className = "reader-speech-mini-back";
       const play = button("暂停", () => /** @type {HTMLElement | null} */ (inFrame(target, "#speech-play"))?.click());
@@ -292,8 +296,8 @@
     function mount(url, deferTitle = false) {
       let owner = ++revision;
       const key = bookKey(url.href);
-      if (parked && key && parked.key === key) {
-        // The same book: show the Reader that kept reading, at its reading position.
+      if (parked && key && parked.key === key && !url.hash && !url.searchParams.get("bookmark")) {
+        // No explicit target: show the Reader that kept reading, at its reading position.
         if (frame && frame !== parked.frame) {
           owner++;
           unmount(false);
@@ -320,8 +324,8 @@
         return frame;
       }
       // A foreground Reader that is reading aloud becomes the background
-      // Reader. A different book's background speech is left running until
-      // the new Reader starts its own reading or the listener stops it.
+      // Reader. Existing background speech can continue during a targeted
+      // or different-book open until the new Reader starts speaking or the listener stops it.
       if (frame) {
         owner++;
         unmount(true);
