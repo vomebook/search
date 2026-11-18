@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import {mock} from 'node:test';
 import {createPdfFetchPolicy} from '../../../static/reader/pdf/reader-pdf-network.mjs';
 
 // Local transport fixture only: no upstream connection is made.
@@ -8,6 +9,52 @@ const bytes = new Uint8Array([1,2,3,4]);
 const headers = {ETag:'"stable"','Content-Range':'bytes 0-3/4'};
 const opts = {idleMs:1000,attemptMs:3000,rateLimitDelayMs:30,rateLimitSpacingMs:20,maxRateLimitDelayMs:300};
 const tick = () => new Promise(resolve=>setTimeout(resolve,0));
+
+async function withClock(run) {
+  // Node's timer mocks don't advance performance.now() or AbortSignal.timeout().
+  // Keep both on the scheduler's clock and let fetch/stream microtasks settle at
+  // the current instant before advancing again.
+  let now=0;
+  mock.timers.enable({apis:['setTimeout']});
+  try {
+    mock.method(performance,'now',()=>now);
+    mock.method(AbortSignal,'timeout',ms=>{
+      const controller=new AbortController();
+      setTimeout(()=>controller.abort(new DOMException('Timeout','TimeoutError')),ms);
+      return controller.signal;
+    });
+    await run(async ms=>{
+      now+=ms;
+      mock.timers.tick(ms);
+      await new Promise(resolve=>setImmediate(resolve));
+    });
+  } finally {
+    mock.restoreAll();
+    mock.timers.reset();
+  }
+}
+
+async function checkAdmissionDeadline(options,init,deadline) {
+  await withClock(async advance=>{
+    let calls=0,expired=false;
+    globalThis.fetch=async()=>{calls++;return new Response('',{status:429});};
+    const policy=createPdfFetchPolicy({...opts,rateLimitDelayMs:150,...options});policy.add(['/a.pdf']);
+    try {
+      const result=fetch('/a.pdf',init).then(()=>null,error=>{expired=true;return error;});
+      await advance(0);
+      assert.equal(policy.queuedAdmissions,1);
+      await advance(deadline-1);
+      assert.equal(expired,false,'the admission budget must not expire early');
+      assert.equal(calls,1);
+      await advance(1);
+      assert.equal(expired,true,'the admission budget must expire before the cooldown ends');
+      assert.equal((await result)?.name,'TimeoutError');
+      assert.equal(policy.queuedAdmissions,0);
+      await advance(150-deadline);
+      assert.equal(calls,1,'expired work must not issue an upstream retry');
+    } finally {policy.dispose();}
+  });
+}
 
 try {
   // A genuine 429 triggers one bounded retry after the shared pause, then a
@@ -286,15 +333,7 @@ try {
   }
   // An admitted recovery caller must not outlive the ordinary initial-body
   // deadline just because it is waiting in the shared cooldown queue.
-  {
-    let calls=0;
-    globalThis.fetch=async()=>{calls++;return new Response('',{status:429});};
-    const policy=createPdfFetchPolicy({...opts,rateLimitDelayMs:150,initialTotalMs:40});policy.add(['/a.pdf']);
-    const before=performance.now();
-    await assert.rejects(fetch('/a.pdf'));
-    assert.ok(performance.now()-before<120,'initial total deadline must include backoff');
-    assert.equal(calls,1);policy.dispose();
-  }
+  await checkAdmissionDeadline({initialTotalMs:40},undefined,40);
   // A server that keeps returning 429 may not trigger unbounded retries.
   {
     let calls=0;
@@ -358,16 +397,8 @@ try {
     await assert.rejects(response.arrayBuffer(),/rate limited/);assert.equal(calls,3);policy.dispose();
   }
   // A slow/hung range must retain an overall deadline even if it is queued by
-  // feedback. Previously the per-attempt timer only started after admission.
-  {
-    let calls=0;
-    globalThis.fetch=async()=>{calls++;return new Response('',{status:429});};
-    const policy=createPdfFetchPolicy({...opts,rateLimitDelayMs:150,attemptMs:40});policy.add(['/a.pdf']);
-    const before=performance.now();
-    await assert.rejects(fetch('/a.pdf',{headers:{Range:'bytes=0-3'}}));
-    assert.ok(performance.now()-before<120,'range deadline must include feedback wait');
-    assert.equal(calls,1);policy.dispose();
-  }
+  // feedback. The range admission budget covers at most two attempts.
+  await checkAdmissionDeadline({attemptMs:40},{headers:{Range:'bytes=0-3'}},80);
   // If a source changes during the backoff the body must not be mixed.
   {
     let calls=0;
@@ -453,23 +484,35 @@ try {
   // A bounded number of callers must be allowed to burst again after a
   // successful cooldown; otherwise one transient 429 makes all future page
   // turns and full-text search permanently slow.
-  {
-    const calls=new Map(),starts=[];
+  await withClock(async advance=>{
+    const starts=[];
     globalThis.fetch=async input=>{
-      const key=String(input),count=(calls.get(key)||0)+1;calls.set(key,count);starts.push({key,at:performance.now()});
-      if(key.endsWith('/a.pdf')&&count===1)return new Response('',{status:429});
+      starts.push(String(input));
+      if(starts.length===1)return new Response('',{status:429});
       return new Response(bytes,{status:206,headers});
     };
     const policy=createPdfFetchPolicy({...opts,rateLimitSpacingMs:45,rateLimitRecoveryMs:10});
-    policy.add(['/a.pdf','/b.pdf','/c.pdf','/d.pdf']);
-    await (await fetch('/a.pdf',{headers:{Range:'bytes=0-3'}})).arrayBuffer();
-    await new Promise(resolve=>setTimeout(resolve,15));
-    const responses=await Promise.all(['/b.pdf','/c.pdf','/d.pdf'].map(url=>fetch(url,{headers:{Range:'bytes=0-3'}})));
-    for(const response of responses)await response.arrayBuffer();
-    const later=starts.filter(row=>!row.key.endsWith('/a.pdf'));
-    assert.ok(later.at(-1).at-later[0].at<40,'successful recovery must not impose a permanent spacing tax');
-    policy.dispose();
-  }
+    const burst=['/b.pdf','/c.pdf','/d.pdf'];
+    const init={headers:{Range:'bytes=0-3'}};
+    policy.add(['/a.pdf',...burst]);
+    try {
+      const recovered=fetch('/a.pdf',init).then(response=>response.arrayBuffer());
+      void recovered.catch(()=>{});
+      await advance(0);
+      await advance(29);
+      assert.deepEqual(starts,['/a.pdf']);
+      await advance(1);
+      assert.deepEqual(starts,['/a.pdf','/a.pdf']);
+      assert.deepEqual(new Uint8Array(await recovered),bytes);
+      await advance(10);
+      const responses=Promise.all(burst.map(url=>fetch(url,init).then(response=>response.arrayBuffer())));
+      void responses.catch(()=>{});
+      await advance(0);
+      // The next paced slot would be at t=75; all three must start at t=40.
+      assert.deepEqual(starts.slice(2).sort(),burst);
+      for(const response of await responses)assert.deepEqual(new Uint8Array(response),bytes);
+    } finally {policy.dispose();}
+  });
   // A very long Retry-After can overlap a pre-429 request completing. Its
   // late success must not leave permanent throttling or strand a future read.
   {

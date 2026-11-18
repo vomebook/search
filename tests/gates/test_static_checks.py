@@ -61,14 +61,35 @@ class StaticGateTests(unittest.TestCase):
         (self.root / "scripts/check_python_static.py").write_bytes((ROOT / "scripts/check_python_static.py").read_bytes())
         (self.root / "scripts/sample.py").write_text("print('ok')\n")
 
-    def run_check(self, *command, timeout=30):
+    def run_check(self, *command, timeout=30, tap_stdout=False):
+        # Replay only stdout: a Node warning on stderr is not TAP input.
         return subprocess.run(command, cwd=self.root, text=True, stdout=subprocess.PIPE,
-                              stderr=subprocess.STDOUT, env=os.environ.copy(), timeout=timeout)
+                              stderr=subprocess.PIPE if tap_stdout else subprocess.STDOUT,
+                              env=os.environ.copy(), timeout=timeout)
 
     def assert_check(self, result, success, message):
-        self.assertEqual(result.returncode == 0, success, result.stdout)
+        output = result.stdout + (result.stderr or "")
+        self.assertEqual(result.returncode == 0, success, output)
         if message:
-            self.assertIn(message, result.stdout)
+            self.assertIn(message, output)
+
+    def assert_coverage_child_result(self, gate, source, report, status, success, message):
+        """Run the real gate with a fixed child result instead of rerunning its suite."""
+        result = json.dumps({'status': status, 'stdout': report})
+        self.assert_gate_child_fixture(gate, source, f'export const spawnSync = () => ({result});\n', success, message)
+
+    def assert_gate_child_fixture(self, gate, source, child_source, success, message):
+        gate_source, count = re.subn(r'''from ["']node:child_process["'];''',
+                                     "from './coverage-fixture.mjs';", source)
+        self.assertEqual(count, 1)
+        fixture = gate.with_name('coverage-fixture.mjs')
+        try:
+            fixture.write_text(child_source)
+            gate.write_text(gate_source)
+            self.assert_check(self.run_check('node', gate), success, message)
+        finally:
+            gate.write_text(source)
+            fixture.unlink(missing_ok=True)
 
     def assert_passing_tap(self, output, *, multiple_reports=False):
         """Check one Node TAP summary per run, without pinning the test count."""
@@ -108,26 +129,18 @@ class StaticGateTests(unittest.TestCase):
         gate_source, count = re.subn(rf'^const {re.escape(minimum)} = \[[^\n]+\];$',
                                       f'const {minimum} = [90, 80, 70];', source, flags=re.M)
         self.assertEqual(count, 1)
-        gate_source, count = re.subn(r'''from ["']node:child_process["'];''',
-                                      "from './coverage-fixture.mjs';", gate_source)
-        self.assertEqual(count, 1)
         row_pattern = rf'^(#\s+{re.escape(module)}\s*\|)[^\n]+$'
-        fixture = gate.with_name('coverage-fixture.mjs')
         cases = [((90, 80, 70), 0, True), ((95, 85, 75), 0, True), ((95, 85, 75), 1, False),
                  ((89.99, 85, 75), 0, False), ((95, 79.99, 75), 0, False), ((95, 85, 69.99), 0, False)]
         try:
-            gate.write_text(gate_source)
             for scores, status, passes in cases:
                 with self.subTest(module=module, scores=scores, status=status):
                     row = ' | '.join(f'{value:.2f}' for value in scores)
                     tap, count = re.subn(row_pattern, rf'\g<1> {row} |', report, flags=re.M)
                     self.assertEqual(count, 1)
-                    result = json.dumps({'status': status, 'stdout': tap})
-                    fixture.write_text(f'export const spawnSync = () => ({result});\n')
-                    self.assert_check(self.run_check('node', gate), passes, module if passes else message)
+                    self.assert_coverage_child_result(gate, gate_source, tap, status, passes, module if passes else message)
         finally:
             gate.write_text(source)
-            fixture.unlink(missing_ok=True)
 
     def test_javascript_reports_undefined_names_and_ignores_vendor(self):
         eslint = ROOT / "node_modules/eslint/bin/eslint.js"
@@ -363,7 +376,8 @@ class StaticGateTests(unittest.TestCase):
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(ROOT / relative, target)
         check = ["node", paths[1]]
-        self.assert_tap_success(self.run_check(*check))
+        live = self.run_check(*check, tap_stdout=True)
+        self.assert_tap_success(live)
         contract = self.root / paths[3]
         original = contract.read_text()
         gate_source = (self.root / paths[1]).read_text()
@@ -372,12 +386,33 @@ class StaticGateTests(unittest.TestCase):
         self.assertTrue(names)
         self.assertCountEqual(re.findall(r'^test\("([^"\n]+)"', original, re.M), names)
         self.assertEqual(len(set(names)), len(names))
+        gate = self.root / paths[1]
+        message = "passing named contracts"
+        self.assert_coverage_child_result(gate, gate_source, live.stdout, 0, True, "controller.js |")
         for name in names:
             anchor = 'test("' + name + '"'
             self.assertEqual(original.count(anchor), 1)
-            for replacement in ('test("renamed contract"', 'test.skip("' + name + '"', 'test.todo("' + name + '"'):
-                contract.write_text(original.replace(anchor, replacement))
-                self.assert_check(self.run_check(*check), False, "passing named contracts")
+            subtest = f"# Subtest: {name}\n"
+            row_pattern = rf"^ok \d+ - {re.escape(name)}$"
+            self.assertEqual(live.stdout.count(subtest), 1)
+            for case in ("rename", "skip", "todo"):
+                with self.subTest(name=name, case=case):
+                    tap = live.stdout
+                    if case == "rename":
+                        tap = tap.replace(subtest, "# Subtest: renamed contract\n")
+                    suffix = "" if case == "rename" else f" # {case.upper()}"
+                    tap, count = re.subn(row_pattern,
+                                         lambda match: (match[0].replace(name, "renamed contract")
+                                                        if case == "rename" else match[0] + suffix),
+                                         tap, flags=re.M)
+                    self.assertEqual(count, 1)
+                    self.assert_coverage_child_result(gate, gate_source, tap, 0, False, message)
+        # Keep a real source-level example of each Node reporter path. The
+        # remaining names exercised above isolate the gate's own TAP checks.
+        anchor = 'test("' + names[0] + '"'
+        for replacement in ('test("renamed contract"', 'test.skip("' + names[0] + '"', 'test.todo("' + names[0] + '"'):
+            contract.write_text(original.replace(anchor, replacement))
+            self.assert_check(self.run_check(*check), False, message)
         for extra in ('test("' + names[0] + '", () => {});',
                       'test.skip("extra skip", () => {});', 'test.todo("extra todo");',
                       'console.log("skipped 0");', 'console.log("todo 0");'):
@@ -387,12 +422,7 @@ class StaticGateTests(unittest.TestCase):
         self.assert_check(self.run_check(*check), False, "failed download contract")
         contract.write_text('const test = require("node:test"); test("empty", () => {});\n')
         self.assert_check(self.run_check(*check), False, "exactly one source row")
-        contract.write_text(original)
-        gate = self.root / paths[1]
-        source = gate.read_text()
-        report = self.run_check(*check)
-        self.assert_check(report, True, 'controller.js |')
-        self.assert_coverage_threshold_fixture(gate, source, report.stdout, 'controller.js', 'above each minimum')
+        self.assert_coverage_threshold_fixture(gate, gate_source, live.stdout, 'controller.js', 'above each minimum')
 
     def test_download_controller_declaration_matches_exact_runtime(self):
         config = self.root / "download-exact.json"
@@ -1779,7 +1809,12 @@ class StaticGateTests(unittest.TestCase):
         check = ["node", "scripts/reader/check_pdf_network_coverage.mjs"]
         shutil.copyfile(ROOT / "tests/reader/pdf-network/test_pdf_range_hints_contract.mjs",
                         self.root / "tests/reader/pdf-network/test_pdf_range_hints_contract.mjs")
-        self.assert_check(self.run_check(*check), True, "reader-pdf-network.mjs")
+        live = self.run_check(*check, tap_stdout=True)
+        self.assert_check(live, True, "reader-pdf-network.mjs")
+        gate = self.root / check[1]
+        source = gate.read_text()
+        report = live.stdout
+        message = "passing named tests"
         contracts = [("tests/reader/pdf-network/test_pdf_range_hints_contract.mjs",
                       "PDF range hints: bounded scheduling, malformed inputs and compatibility exports passed"),
                      ("tests/reader/pdf-network/test_reader_pdf_backpressure.mjs",
@@ -1788,27 +1823,29 @@ class StaticGateTests(unittest.TestCase):
                       "PDF network contracts: cache identity, safe revalidation and live cancellation passed"),
                      ("tests/reader/pdf-network/test_reader_pdf_sparse_ranges.mjs",
                       "Sparse PDF detection, exact demand ranges, bounded concurrency and disposal passed")]
+        # Reuse this real TAP report for parser-only negative controls. Changing
+        # a required marker or summary cannot affect the PDF coverage itself.
+        self.assert_coverage_child_result(gate, source, report, 0, True, "reader-pdf-network.mjs")
         for path, marker in contracts:
-            test = self.root / path
-            original = test.read_text()
-            self.assertEqual(original.count(marker), 1)
-            test.write_text(original.replace(marker, "missing PDF network completion marker"))
-            self.assert_check(self.run_check(*check), False, "passing named tests")
-            test.write_text(original)
+            with self.subTest(path=path):
+                line = f"# {marker}\n# Subtest: {path}\n"
+                self.assertEqual(report.count(line), 1)
+                subtest = f"# Subtest: {path}\n"
+                for replacement in (subtest, "# wrong PDF completion marker\n" + subtest):
+                    self.assert_coverage_child_result(gate, source, report.replace(line, replacement),
+                                                      0, False, message)
+        for field in ("skipped", "todo"):
+            line = f"# {field} 0\n"
+            self.assertEqual(report.count(line), 1)
+            nonzero = report.replace(line, f"# {field} 1\n")
+            cases = (nonzero, line + nonzero, line + report)
+            for case, tap in zip(("nonzero", "forged zero", "duplicate zero"), cases, strict=True):
+                with self.subTest(field=field, case=case):
+                    self.assert_coverage_child_result(gate, source, tap, 0, False, message)
+        self.assert_coverage_child_result(gate, source, report, 1, False, message)
         test = self.root / contracts[1][0]
-        original = test.read_text()
-        for extra in ('import {test as extraTest} from "node:test"; extraTest.skip("extra skip", () => {});',
-                      'import {test as extraTest} from "node:test"; extraTest.todo("extra todo");'):
-            test.write_text(original + "\n" + extra + "\n")
-            self.assert_check(self.run_check(*check), False, "passing named tests")
-        for extra in ('import {test as extraTest} from "node:test"; console.log("skipped 0"); extraTest.skip("extra skip", () => {});',
-                      'import {test as extraTest} from "node:test"; console.log("todo 0"); extraTest.todo("extra todo");',
-                      'console.log("skipped 0");', 'console.log("todo 0");'):
-            test.write_text(original + "\n" + extra + "\n")
-            self.assert_check(self.run_check(*check), False, "passing named tests")
-        test.write_text(original + '\nthrow new Error("PDF network assertion failure");\n')
+        test.write_text(test.read_text() + '\nthrow new Error("PDF network assertion failure");\n')
         self.assert_check(self.run_check(*check), False, "PDF network assertion failure")
-        test.write_text(original)
         empty = 'import { test } from "node:test"; test("empty", () => {});\n'
         for path in [*paths, contracts[0][0]]:
             if path.startswith("tests/"):
@@ -1831,25 +1868,22 @@ class StaticGateTests(unittest.TestCase):
                         self.root / "tests/reader/pdf-network/test_pdf_range_hints_contract.mjs")
         gate = self.root / paths[3]
         source = gate.read_text()
-        measured = self.run_check("node", paths[3])
+        measured = self.run_check("node", paths[3], tap_stdout=True)
         self.assert_check(measured, True, "reader-pdf-network.mjs")
         message = 'PDF network coverage gate requires passing named tests'
         self.assert_coverage_threshold_fixture(gate, source, measured.stdout, 'reader-pdf-network.mjs', message)
         self.assert_coverage_threshold_fixture(gate, source, measured.stdout, 'all files', message,
                                                minimum='aggregateMinimum')
-        cache_needle = "const cacheMinimum = [100, 97.01, 100];"
-        self.assertEqual(source.count(cache_needle), 1)
-        gate.write_text(source.replace(cache_needle, "const cacheMinimum = [100.01, 97.01, 100];"))
-        self.assert_check(self.run_check("node", paths[3]), False,
-                          "PDF network coverage gate requires passing named tests")
-        match = re.search(r"const hintsMinimum = \[[^\]]+\];", source)
-        self.assertIsNotNone(match)
-        gate.write_text(source.replace(match.group(0), "const hintsMinimum = [100.01, 0, 0];"))
-        self.assert_check(self.run_check("node", paths[3]), False, message)
         for module in ("cache", "hints"):
-            gate.write_text(source.replace(f"reader-pdf-range-{module}\\.mjs", f"missing-pdf-range-{module}\\.mjs"))
-            self.assert_check(self.run_check("node", paths[3]), False,
-                              "exactly one source coverage row")
+            name = f"reader-pdf-range-{module}.mjs"
+            self.assert_coverage_threshold_fixture(gate, source, measured.stdout, name, message,
+                                                   minimum=f"{module}Minimum")
+            pattern = rf"^#\s+{re.escape(name)}\s*\|[^\n]+\n"
+            rows = re.findall(pattern, measured.stdout, flags=re.M)
+            self.assertEqual(len(rows), 1)
+            row = rows[0]
+            for report in (measured.stdout.replace(row, ""), measured.stdout.replace(row, row * 2)):
+                self.assert_coverage_child_result(gate, source, report, 0, False, "exactly one source coverage row")
 
     def test_pdf_network_coverage_gate_rejects_removed_branch_coverage(self):
         paths = ["static/reader/pdf/reader-pdf-network.mjs", "static/reader/core/reader-security.js",
@@ -2793,7 +2827,8 @@ class StaticGateTests(unittest.TestCase):
         shutil.copyfile(ROOT / 'tests/reader/djvu/test_reader_djvu_range_boundaries.mjs', boundary)
         check = ['node', 'scripts/reader/check_reader_djvu_contracts.mjs']
         message = 'DjVu contracts require seven named scripts'
-        self.assert_tap_success(self.run_check(*check), multiple_reports=True)
+        live = self.run_check(*check, tap_stdout=True)
+        self.assert_tap_success(live, multiple_reports=True)
         worker = directory / 'test_reader_djvu_worker.mjs'
         source = worker.read_text()
         marker = 'DjVu Worker bounds, errors, timeout, cancellation and geometry checks passed'
@@ -2838,69 +2873,60 @@ class StaticGateTests(unittest.TestCase):
             boundary.write_text(boundary_source + '\nconsole.log(' + json.dumps(summary) + ');\n')
             self.assert_check(self.run_check(*check), False, message)
         boundary.write_text(boundary_source)
-        for minimum in ('[100.01, 88, 80]', '[100, 101, 80]', '[100, 88, 100.01]'):
-            self.assertEqual(original.count('[100, 88, 80]'), 1)
-            gate.write_text(original.replace('[100, 88, 80]', minimum))
+        for name in ('worker', 'scheduler', 'source_integrity'):
+            test = directory / f'test_reader_djvu_{name}.mjs'
+            body = test.read_text()
+            test.write_text(body + '\nconsole.log("end of coverage report");\n')
             self.assert_check(self.run_check(*check), False, message)
-        self.assertEqual(original.count('reader-djvu-range\\.mjs'), 1)
-        gate.write_text(original.replace('reader-djvu-range\\.mjs', 'missing-djvu-range\\.mjs'))
-        self.assert_check(self.run_check(*check), False, message)
-        # A missing or forged worker coverage row, or any higher minimum,
-        # cannot make the new module-level quality gate appear to pass.
-        gate.write_text(original)
-        for minimum in ('[100.01, 93, 100]', '[100, 101, 100]', '[100, 93, 100.01]'):
-            self.assertEqual(original.count('[100, 93, 100]'), 1)
-            gate.write_text(original.replace('[100, 93, 100]', minimum))
-            self.assert_check(self.run_check(*check), False, message)
-        self.assertEqual(original.count('reader-djvu-worker\\.mjs'), 1)
-        gate.write_text(original.replace('reader-djvu-worker\\.mjs', 'missing-djvu-worker\\.mjs'))
-        self.assert_check(self.run_check(*check), False, message)
-        gate.write_text(original)
-        worker.write_text(source + '\nconsole.log("end of coverage report");\n')
-        self.assert_check(self.run_check(*check), False, message)
-        worker.write_text(source)
-        # The scheduler gate must reject inflated limits and missing/fake rows.
-        for minimum in ('[100.01, 92, 100]', '[100, 101, 100]', '[100, 92, 100.01]'):
-            self.assertEqual(original.count('[100, 92, 100]'), 1)
-            gate.write_text(original.replace('[100, 92, 100]', minimum))
-            self.assert_check(self.run_check(*check), False, message)
-        self.assertEqual(original.count('reader-djvu-scheduler\\.mjs'), 1)
-        gate.write_text(original.replace('reader-djvu-scheduler\\.mjs', 'missing-djvu-scheduler\\.mjs'))
-        self.assert_check(self.run_check(*check), False, message)
-        gate.write_text(original)
-        scheduler = directory / 'test_reader_djvu_scheduler.mjs'
-        scheduler_source = scheduler.read_text()
-        scheduler.write_text(scheduler_source + '\nconsole.log("end of coverage report");\n')
-        self.assert_check(self.run_check(*check), False, message)
-        scheduler.write_text(scheduler_source)
-        for minimum in ('[100.01, 90, 100]', '[99, 101, 100]', '[99, 90, 100.01]'):
-            self.assertEqual(original.count('[99, 90, 100]'), 1)
-            gate.write_text(original.replace('[99, 90, 100]', minimum))
-            self.assert_check(self.run_check(*check), False, message)
-        self.assertEqual(original.count('reader-djvu-adapter\\.mjs'), 1)
-        gate.write_text(original.replace('reader-djvu-adapter\\.mjs', 'missing-djvu-adapter\\.mjs'))
-        self.assert_check(self.run_check(*check), False, message)
-        gate.write_text(original)
-        for minimum in ('[100.01, 96, 100]', '[100, 101, 100]', '[100, 96, 100.01]'):
-            self.assertEqual(original.count('[100, 96, 100]'), 1)
-            gate.write_text(original.replace('[100, 96, 100]', minimum))
-            self.assert_check(self.run_check(*check), False, message)
-        self.assertEqual(original.count('reader-djvu-identity\\.mjs'), 1)
-        gate.write_text(original.replace('reader-djvu-identity\\.mjs', 'missing-djvu-identity\\.mjs'))
-        self.assert_check(self.run_check(*check), False, message)
-        gate.write_text(original)
-        identity = directory / 'test_reader_djvu_source_integrity.mjs'
-        identity_source = identity.read_text()
-        identity.write_text(identity_source + '\nconsole.log("end of coverage report");\n')
-        self.assert_check(self.run_check(*check), False, message)
-        identity.write_text(identity_source)
-        for minimum in ('[100.01, 85, 100]', '[100, 101, 100]', '[100, 85, 100.01]'):
-            self.assertEqual(original.count('[100, 85, 100]'), 1)
-            gate.write_text(original.replace('[100, 85, 100]', minimum))
-            self.assert_check(self.run_check(*check), False, message)
-        self.assertEqual(original.count('reader-djvu-loader\\.mjs'), 1)
-        gate.write_text(original.replace('reader-djvu-loader\\.mjs', 'missing-djvu-loader\\.mjs'))
-        self.assert_check(self.run_check(*check), False, message)
+            test.write_text(body)
+
+        # The gate prints seven separate child reports. Replay by coverage
+        # include, not by call order or by handing each child merged TAP.
+        parts = re.split(r'(?=^TAP version 13\n)', live.stdout, flags=re.M)
+        self.assertEqual(parts[0], '')
+        self.assertEqual(len(parts[1:]), 7)
+        reports = {'': parts[1]}
+        floors = {'range': (100, 88, 80), 'worker': (100, 93, 100), 'scheduler': (100, 92, 100),
+                  'adapter': (99, 90, 100), 'identity': (100, 96, 100), 'loader': (100, 85, 100)}
+        keys = {module: f'--test-coverage-include=**/static/reader/pdf/reader-djvu-{module}.mjs' for module in floors}
+        rows = {}
+        for module, key in keys.items():
+            pattern = rf'^#\s+reader-djvu-{module}\.mjs\s*\|[^\n]+\n'
+            matches = [(part, row) for part in parts[2:] for row in re.findall(pattern, part, flags=re.M)]
+            self.assertEqual(len(matches), 1, module)
+            reports[key], rows[module] = matches[0]
+        self.assertCountEqual(reports.values(), parts[1:])
+
+        def replay(result, success, failed_child=None):
+            child_source = (f'const reports = new Map(Object.entries({json.dumps(result)}));\n'
+                            f'const failedChild = {json.dumps(failed_child)};\n'
+                            'export function spawnSync(_exe, args) {\n'
+                            '  const key = args.find(arg => arg.startsWith("--test-coverage-include=")) ?? "";\n'
+                            '  if (!reports.has(key)) throw Error(`Unexpected child: ${key}`);\n'
+                            '  return {status: key === failedChild ? 1 : 0, stdout: reports.get(key)};\n'
+                            '}\n')
+            self.assert_gate_child_fixture(gate, original, child_source, success, '# pass 7' if success else message)
+
+        replay(reports, True)
+        for key in reports:
+            with self.subTest(failed_child=key or "base suite"):
+                replay(reports, False, failed_child=key)
+        for module, key in keys.items():
+            row = rows[module]
+            scores = floors[module]
+            header = row.split('|', 1)[0]
+            equal = f"{header}| {' | '.join(f'{score:.2f}' for score in scores)} |\n"
+            with self.subTest(module=module, case="equal to floor"):
+                replay({**reports, key: reports[key].replace(row, equal)}, True)
+            cases = {"missing": "", "duplicate": row * 2}
+            for index, metric in enumerate(('lines', 'branches', 'functions')):
+                values = list(scores)
+                values[index] -= 0.01
+                cases[metric] = f"{header}| {' | '.join(f'{value:.2f}' for value in values)} |\n"
+            for case, replacement in cases.items():
+                with self.subTest(module=module, case=case):
+                    changed = reports[key].replace(row, replacement)
+                    replay({**reports, key: changed}, False)
 
     def test_reader_lifecycle_coverage_gate_fails_closed(self):
         paths = ["static/reader/core/reader-lifecycle.mjs", "scripts/reader/check_reader_lifecycle_coverage.mjs",
