@@ -421,38 +421,55 @@ export function createReaderHtmlFormat(readerContext) {
   const foliateStyleCache = new Map();
   const FOLIATE_STYLE_CACHE_MAX = 64;
 
-  /** @param {Iterable<Element>} nodes */
-  async function sanitizeFoliateStyles(nodes) {
-    const output = [];
-    for (const node of nodes) {
-      if (node.localName === "link") {
-        const href = node.getAttribute("href") || "";
-        if (!/^blob:/i.test(href)) continue;
-        let pending = foliateStyleCache.get(href);
-        if (!pending) {
-          pending = readBlobStylesheet(href).then(text => text === null ? null : inlineCssImports(text, 0, new Set([href])));
-          pending.then(text => { if (text === null) foliateStyleCache.delete(href); });
-          foliateStyleCache.set(href, pending);
-          while (foliateStyleCache.size > FOLIATE_STYLE_CACHE_MAX) {
-            const oldest = foliateStyleCache.keys().next();
-            if (oldest.done) break;
-            foliateStyleCache.delete(oldest.value);
-          }
-        }
-        const text = await pending;
-        if (text === null) continue;
-        const style = document.createElement("style");
-        const media = node.getAttribute("media");
-        if (media) style.setAttribute("media", media);
-        style.textContent = text;
-        output.push(style);
-      } else {
-        const style = /** @type {Element} */ (node.cloneNode(false));
-        style.textContent = await inlineCssImports(node.textContent || "");
-        output.push(style);
+  /** @param {Element} node @returns {Promise<Element | null>} */
+  async function sanitizeFoliateStyle(node) {
+    if (node.localName !== "link") {
+      const style = /** @type {Element} */ (node.cloneNode(false));
+      style.textContent = await inlineCssImports(node.textContent || "");
+      return style;
+    }
+    const href = node.getAttribute("href") || "";
+    if (!/^blob:/i.test(href)) return null;
+    let pending = foliateStyleCache.get(href);
+    if (!pending) {
+      pending = readBlobStylesheet(href).then(text => {
+        if (text !== null) return inlineCssImports(text, 0, new Set([href]));
+        // An old failed read must not evict a newer entry after cache rotation.
+        if (foliateStyleCache.get(href) === pending) foliateStyleCache.delete(href);
+        return null;
+      });
+      foliateStyleCache.set(href, pending);
+      while (foliateStyleCache.size > FOLIATE_STYLE_CACHE_MAX) {
+        const oldest = foliateStyleCache.keys().next();
+        if (oldest.done) break;
+        foliateStyleCache.delete(oldest.value);
       }
     }
-    return output;
+    const text = await pending;
+    if (text === null) return null;
+    const style = document.createElement("style");
+    const media = node.getAttribute("media");
+    if (media) style.setAttribute("media", media);
+    style.textContent = text;
+    return style;
+  }
+
+  /** @param {Iterable<Element>} nodes */
+  async function sanitizeFoliateStyles(nodes) {
+    const ordered = Array.from(nodes);
+    /** @type {(Element | null)[]} */
+    const output = [];
+    let next = 0;
+    // Overlap the archive's independent sheets without starting every read at
+    // once. Insert only sanitized output, in the original cascade order.
+    await Promise.all(Array.from({ length: Math.min(3, ordered.length) }, async () => {
+      while (next < ordered.length) {
+        readerContext.assertReaderActive();
+        const index = next++;
+        output[index] = await sanitizeFoliateStyle(/** @type {Element} */ (ordered[index]));
+      }
+    }));
+    return output.filter(style => style !== null);
   }
 
   /** @param {Document} doc @param {{keepBlobImports?: boolean}} [options] */
@@ -552,7 +569,11 @@ export function createReaderHtmlFormat(readerContext) {
       const text = new TextDecoder(readerContext.detectTextEncoding(bytes, readerContext.documentState.title)).decode(bytes);
       const article = document.createElement("article");
       article.className = "reader-markdown";
-      article.innerHTML = DOMPurify.sanitize(marked.parse(stripMarkdownFrontMatter(text)), { USE_PROFILES: { html: true } });
+      // Reuse the sanitized nodes instead of serializing them and reparsing
+      // the entire article before the first paint.
+      article.appendChild(DOMPurify.sanitize(marked.parse(stripMarkdownFrontMatter(text)), {
+        USE_PROFILES: { html: true }, RETURN_DOM_FRAGMENT: true
+      }));
       prepareMarkdownLinks(article);
       readerContext.content.appendChild(article);
       readerContext.setToc(readerContext.headingTocEntries(article));
@@ -595,10 +616,14 @@ export function createReaderHtmlFormat(readerContext) {
 
   /** @param {string} text */
   function buildDiscourseDocument(text) {
+    // The class may be case-insensitive in quirks mode or contain numeric
+    // character references. Let the HTML parser decide either case.
+    if (!/post-stream/i.test(text) && !text.includes("&#")) return null;
     try {
       const source = new DOMParser().parseFromString(text, "text/html");
+      if (!source.querySelector(".post-stream")) return null;
       const posts = [...source.querySelectorAll(readerContext.DISCOURSE_POST_SELECTOR)];
-      if (!source.querySelector(".post-stream") || !posts.length) return null;
+      if (!posts.length) return null;
       const article = source.createElement("article");
       article.className = "reader-forum-document";
       const titleNode = source.querySelector(readerContext.DISCOURSE_TITLE_SELECTOR);
@@ -691,7 +716,13 @@ export function createReaderHtmlFormat(readerContext) {
           for (const type of ["wheel", "touchstart", "pointerdown"])
             frame.contentDocument.addEventListener(type, readerContext.beginReaderNavigation, { passive: true });
           readerContext.setToc(readerContext.headingTocEntries(frame.contentDocument));
-          if (documentData.spreadsheet) await readerContext.waitForSpreadsheetImages(frame);
+          if (documentData.spreadsheet) {
+            // The sanitized cells are already readable. Let them take the
+            // loading indicator's space before charts have finished decoding.
+            // The full startup/restore path still waits for stable geometry.
+            readerContext.markReaderContentReady();
+            await readerContext.waitForSpreadsheetImages(frame);
+          }
           readerContext.assertReaderActive();
           resolve();
         } catch (error) {

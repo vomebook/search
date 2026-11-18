@@ -9,7 +9,7 @@ class FakeText {
   get textContent() { return this.data; }
 }
 class FakeElement {
-  constructor(tag) { this.tag=tag;this.children=[];this.className=''; }
+  constructor(tag) { this.tag=tag;this.children=[];this.className='';this.dataset={}; }
   appendChild(node) { this.children.push(node);return node; }
   get lastChild() { return this.children.at(-1) ?? null; }
   get textContent() { return this.children.map(child=>child.textContent).join(''); }
@@ -224,6 +224,69 @@ test('large samples select the decoder before EOF and retain all streamed text',
     assert.equal(f.context.content.textContent,first+suffix);assert.equal(detections,1);
     assert.equal(stream.locked,false);
     assert.ok(f.events.includes('untrack'));
+  } finally {f.restore();}
+});
+
+test('Chinese UTF-8 preview is bounded and keeps authoritative stream text exact',async()=>{
+  const f=fixture();
+  const encode=text=>new TextEncoder().encode(text);
+  try {
+    const open=()=>{
+      f.context.content.children.length=0;
+      let controller;
+      const task=f.context.renderPlainText(new Response(new ReadableStream({start(c){controller=c;}})));
+      return {controller,task,pre:f.context.content.children[0]};
+    };
+    const tick=()=>new Promise(resolve=>setImmediate(resolve));
+    const first='中文首屏😀', giant='文'.repeat(2044)+'😀';
+    {
+      const {controller,task,pre}=open();
+      const bytes=encode(first);
+      for(const byte of bytes.subarray(0,bytes.length-1)) controller.enqueue(Uint8Array.of(byte));
+      await tick();
+      assert.equal(pre.dataset.textPreview,'中文首屏');
+      assert.equal(pre.textContent,'','provisional glyphs are not document text');
+      controller.enqueue(bytes.subarray(bytes.length-1)); await tick();
+      assert.equal(pre.dataset.textPreview,first);
+      controller.close(); await task;
+      assert.equal(pre.dataset.textPreview,undefined);
+      assert.equal(pre.textContent,first);
+    }
+    for(const tail of [Uint8Array.of(0xc4,0xe3,0xba,0xc3), Uint8Array.of(0)]) {
+      const {controller,task,pre}=open();
+      const prefix=encode(first);
+      const bytes=Uint8Array.from([...prefix,...tail]);
+      const decoder=new TextDecoder(f.context.detectTextEncoding(bytes));
+      const decoded=decoder.decode(bytes);
+      controller.enqueue(prefix); await tick();
+      assert.equal(pre.dataset.textPreview,first);
+      controller.enqueue(tail); await tick();
+      assert.equal(pre.dataset.textPreview,undefined);
+      controller.close(); await task;
+      assert.equal(pre.textContent,decoder.encoding.startsWith('utf-')?decoded:decoded.replace(/\ufffd/g,''));
+    }
+    {
+      const {controller,task,pre}=open();
+      // The preview cap would split the emoji after its leading surrogate.
+      controller.enqueue(encode('中文首'+giant)); await tick();
+      assert.equal(pre.dataset.textPreview.length,2047);
+      assert.equal(pre.dataset.textPreview,'中文首'+'文'.repeat(2044));
+      controller.enqueue(encode('更多')); await tick();
+      assert.ok(pre.dataset.textPreview.length<=2048);
+      controller.enqueue(encode('尾'.repeat(22500))); await tick();
+      assert.equal(pre.dataset.textPreview,undefined);
+      controller.close(); await task;
+      assert.equal(pre.textContent,'中文首'+giant+'更多'+'尾'.repeat(22500));
+    }
+    {
+      const {controller,task,pre}=open();
+      const firstBytes=Uint8Array.of(0x61,0x62,0x63,0x64,0xe0,0x4e);
+      const tail=Uint8Array.of(0x41,0,0x42,0,0x43,0,0x44,0,0x45,0,0x46,0);
+      controller.enqueue(firstBytes); await tick();
+      assert.equal(pre.textContent,'abcd');
+      controller.enqueue(tail); controller.close(); await task;
+      assert.equal(pre.textContent,new TextDecoder('utf-16le').decode(Uint8Array.from([...firstBytes,...tail])));
+    }
   } finally {f.restore();}
 });
 

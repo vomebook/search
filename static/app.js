@@ -1087,23 +1087,30 @@ let localDataIdleCallback = null;
 function scheduleBackgroundLocalDataLoad() {
   if (localDataLoadTimer !== null) clearTimeout(localDataLoadTimer);
   if (localDataIdleCallback !== null) window.cancelIdleCallback(localDataIdleCallback);
+  localDataLoadTimer = null;
   localDataIdleCallback = null;
-  if (STATE.dataLoaded) return;
-  var connection = navigator.connection;
-  var delay = connection && (connection.saveData || /^(slow-)?2g$/.test(connection.effectiveType || "")) ? 2500 : 100;
+  // Only speculative warming is gated. A search that needs the corpus still
+  // loads it on demand, including through the existing offline cache path.
+  const canWarm = () => {
+    const connection = navigator.connection;
+    return !STATE.dataLoaded && !connection?.saveData &&
+      connection?.effectiveType !== "slow-2g" && connection?.effectiveType !== "2g";
+  };
+  if (!canWarm()) return;
   localDataLoadTimer = setTimeout(function() {
     localDataLoadTimer = null;
-    var start = function() {
+    if (!canWarm()) return;
+    const start = function() {
       localDataIdleCallback = null;
       localDataLoadTimer = null;
-      if (!STATE.dataLoaded) ensureLocalDataLoaded(false, true);
+      if (canWarm()) ensureLocalDataLoaded(false, true);
     };
     if (typeof window.requestIdleCallback === "function") {
       localDataIdleCallback = window.requestIdleCallback(start, { timeout: 2500 });
     } else {
       localDataLoadTimer = setTimeout(start, 1000);
     }
-  }, delay);
+  }, 100);
 }
 
 const catalog = VoiceOfMLCatalogClient.create({

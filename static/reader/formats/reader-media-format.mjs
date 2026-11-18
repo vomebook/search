@@ -25,7 +25,8 @@
  * @property {<T>(promise: T | PromiseLike<T>) => Promise<Awaited<T>>} awaitReader
  * @property {(url: string) => Promise<void>} loadScript
  * @property {string} RUFFLE_URL
- * @property {() => Promise<Response>} fetchReaderResponse
+ * @property {(tasks: Promise<unknown>[]) => {response: Promise<Response>, engines: Promise<unknown>}} prepareReaderDocument
+ * @property {(response: Promise<Response>, engines: Promise<unknown>) => Promise<Uint8Array>} readPreparedBytes
  * @property {HTMLElement | null} swfPlayer
  */
 /** @param {ReaderMediaContext} readerContext */
@@ -164,9 +165,8 @@ export function createReaderMediaFormat(readerContext) {
   }
 
   async function loadSwfDocument() {
-    await readerContext.loadScript(readerContext.RUFFLE_URL);
-    const response = await readerContext.fetchReaderResponse();
-    return new Uint8Array(await response.arrayBuffer());
+    const {response, engines} = readerContext.prepareReaderDocument([readerContext.loadScript(readerContext.RUFFLE_URL)]);
+    return readerContext.readPreparedBytes(response, engines);
   }
 
   /** @param {unknown} data */

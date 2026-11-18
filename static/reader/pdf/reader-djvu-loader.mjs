@@ -101,7 +101,8 @@ const workerUrl = new URL("./reader-djvu-engine-worker.mjs", import.meta.url);
 /** @param {DjvuContext} context */
 export async function openNativeDjvu(context) {
   const signal = context.readerAbortController.signal;
-  const resolved = await resolveDjvuSource(context,context.sourceUrl,signal);
+  signal.throwIfAborted();
+  const resolving = resolveDjvuSource(context,context.sourceUrl,signal);
   const cacheBytes=matchMedia('(max-width: 700px)').matches ? 32*1024*1024 : 64*1024*1024;
   // Historical OCR is retained only under the already-established full-source
   // SHA-256 check below. Until the bytes can be independently authenticated,
@@ -112,9 +113,35 @@ export async function openNativeDjvu(context) {
     /** @type {ReturnType<typeof createDjvuWorkerAdapter> | undefined} */
     let documentWorker;
     const stopBootstrap=new AbortController();
-    const abortBootstrap=()=>stopBootstrap.abort(signal.reason);
+    const abortBootstrap=()=>{stopBootstrap.abort(signal.reason);documentWorker?.close(signal.reason);};
     signal.addEventListener('abort',abortBootstrap,{once:true});
     if (signal.aborted) abortBootstrap();
+    // Preparing the decoder needs no source bytes. Only begin Range I/O once
+    // revision resolution succeeds, even if decoder preparation fails first.
+    let rangeAuthorized = false;
+    /** @type {import('./reader-djvu-worker.mjs').DjvuRangeReader} */
+    const deferredRange = {get total(){return rangeAuthorized ? (range?.total ?? 0) : 0}, get failure(){return range?.failure},
+      read:(offset,length)=>requireRange(rangeAuthorized ? range : undefined).read(offset,length), close:()=>range?.close()};
+    const prepareFailure = {error: /** @type {unknown} */ (null)};
+    const preparing=Promise.resolve().then(()=>{
+      stopBootstrap.signal.throwIfAborted();
+      documentWorker=createDjvuWorkerAdapter(workerUrl,{cacheBytes,rangeReader:deferredRange});
+      return documentWorker.prepare(stopBootstrap.signal);
+    }).catch(error=>{
+      prepareFailure.error = error;
+      throw prepareFailure;
+    });
+    preparing.catch(()=>{});
+    let resolved;
+    try {
+      resolved = await resolving;
+      signal.throwIfAborted();
+    } catch (error) {
+      stopBootstrap.abort(error);
+      signal.removeEventListener('abort',abortBootstrap);
+      documentWorker?.close(error);
+      throw error;
+    }
     const stopOutline=new AbortController();
     const abortOutline=()=>stopOutline.abort(signal.reason);
     signal.addEventListener('abort',abortOutline,{once:true});
@@ -128,16 +155,9 @@ export async function openNativeDjvu(context) {
       const opening=openDjvuRange({signal:stopBootstrap.signal,fetchResponse,url:rangeUrl,
         readBytes:(response,limit)=>VoiceOfMLReaderSecurity.readBytes(response,limit),
         timeoutMs:context.READER_PROXY_TIMEOUT_MS}).then(value=>{range=value;return value;});
-      // Decoder initialization and the first validated Range are independent.
-      // Start both after revision pinning; neither is sufficient to show a page.
-      /** @type {import('./reader-djvu-worker.mjs').DjvuRangeReader} */
-      const deferredRange = {get total(){return range?.total ?? 0}, get failure(){return range?.failure},
-        read:(offset,length)=>requireRange(range).read(offset,length), close:()=>range?.close()};
-      const preparing=Promise.resolve().then(()=>{
-        documentWorker=createDjvuWorkerAdapter(workerUrl,{cacheBytes,rangeReader:deferredRange});
-        return documentWorker.prepare(stopBootstrap.signal);
-      });
+
       await Promise.all([opening,preparing]);
+      rangeAuthorized = true;
       const document=await openDjvuDocument({workerUrl,rangeReader:range,preparedWorker:documentWorker,
         signal,outlineFallback,cacheBytes,cachePages:2});
       // Until the transport has authenticated all slices as one immutable
@@ -151,23 +171,35 @@ export async function openNativeDjvu(context) {
       signal.removeEventListener('abort',abortBootstrap);documentWorker?.close();
       const transportFailure=range?.failure;
       range?.close();
+      // Engine setup cannot authorize a full-source fallback. Only a Range
+      // capability failure or an unsupported lazy open may do so.
+      if (error === prepareFailure) throw prepareFailure.error;
       if (signal.aborted) throw error;
+      if (!rangeAuthorized && (!isErrorDetail(error) || error.code !== 'DJVU_RANGE_UNSUPPORTED')) throw error;
       // Only an explicit lack of Range support or an unsupported lazy index
       // may use the previous full-original path. Network errors, mismatches,
       // corruption and security failures remain errors, not silent success.
       requireSupportedFallback(transportFailure,error);
+      return openFullNative(context,resolved,signal,cacheBytes);
     }
   }
-  return openFullNative(context,resolved,signal,cacheBytes);
+  return openFullNative(context,await resolving,signal,cacheBytes);
 }
 
 /** @param {DjvuContext} context @param {DjvuManifest} manifest @param {Promise<unknown>} pageMapPromise */
 export async function openDirectDjvu(context, manifest, pageMapPromise) {
   const ref = manifest.primary.resource;
   const signal = context.readerAbortController.signal;
-  // Never hand bytes to a Worker until size/hash and the page map have passed.
+  // Prepare only the decoder while loading the checked source and page map.
+  // The Worker must not receive any document bytes until both are verified.
   const download = new AbortController();
-  const stopDownload = () => download.abort(signal.reason);
+  const cacheBytes = matchMedia("(max-width: 700px)").matches ? 32 * 1024 * 1024 : 64 * 1024 * 1024;
+  /** @type {ReturnType<typeof createDjvuWorkerAdapter> | undefined} */
+  let worker;
+  const stopDownload = () => {
+    download.abort(signal.reason);
+    worker?.close(signal.reason);
+  };
   signal.addEventListener("abort", stopDownload, { once: true });
   if (signal.aborted) stopDownload();
   const source = (async () => {
@@ -183,23 +215,30 @@ export async function openDirectDjvu(context, manifest, pageMapPromise) {
     if (hash !== ref.sha256) throw new Error("DJVU_PRIMARY_HASH_MISMATCH");
     return bytes;
   })();
-  let packed, pageMap;
+  const preparing = Promise.resolve().then(async () => {
+    signal.throwIfAborted();
+    worker = createDjvuWorkerAdapter(workerUrl, {cacheBytes});
+    await worker.prepare(signal);
+    return worker;
+  });
+  // Keep integrity failures authoritative even if the engine fails first.
+  preparing.catch(() => {});
   try {
-    [packed, pageMap] = await Promise.all([source, pageMapPromise]);
+    const [packed, pageMap] = await Promise.all([source, pageMapPromise]);
+    context.assertReaderActive();
+    const preparedWorker = await preparing;
+    const bytes = packed.byteOffset === 0 && packed.byteLength === packed.buffer.byteLength
+      ? packed.buffer : packed.buffer.slice(packed.byteOffset, packed.byteOffset + packed.byteLength);
+    const document = await openDjvuDocument({workerUrl, bytes, pageMap, signal, cacheBytes,
+      cachePages: 2, preparedWorker});
+    context.trackReaderResource(() => document.destroy());
+    context.assertReaderActive();
+    return document;
   } catch (error) {
     download.abort();
+    worker?.close(error);
     throw error;
   } finally {
     signal.removeEventListener("abort", stopDownload);
   }
-  context.assertReaderActive();
-  const bytes = packed.byteOffset === 0 && packed.byteLength === packed.buffer.byteLength
-    ? packed.buffer : packed.buffer.slice(packed.byteOffset, packed.byteOffset + packed.byteLength);
-  packed = null;
-  const document = await openDjvuDocument({ workerUrl, bytes, pageMap, signal,
-    cacheBytes: matchMedia("(max-width: 700px)").matches ? 32 * 1024 * 1024 : 64 * 1024 * 1024,
-    cachePages: 2 });
-  context.trackReaderResource(() => document.destroy());
-  context.assertReaderActive();
-  return document;
 }

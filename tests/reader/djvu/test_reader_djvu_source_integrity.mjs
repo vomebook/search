@@ -16,7 +16,12 @@ globalThis.VoiceOfMLReaderSecurity = {
   validatePdfOcrManifest(value) { if (!value || typeof value.source_sha256 !== 'string') throw Error('PDF_OCR_MANIFEST_INVALID'); return value; }
 };
 let workers = 0;
-globalThis.Worker = class { constructor() { workers++; throw new Error('unexpected decoder start'); } };
+const directWorkers = [];
+globalThis.Worker = class {
+  constructor() { directWorkers.push(this); this.operations=[]; this.terminated=false; }
+  postMessage(message) { this.operations.push(message.operation); assert.equal(message.operation,'prepare'); }
+  terminate() { this.terminated=true; }
+};
 const bytes = new TextEncoder().encode('AT&TFORM fixture');
 const sha256 = createHash('sha256').update(bytes).digest('hex');
 const manifest = {primary: {resource: {kind: 'dataset-source', bytes: bytes.length, sha256}}};
@@ -32,12 +37,14 @@ function context(fetchReaderUrl, controller = new AbortController()) {
     return new Response(corrupt);
   });
   await assert.rejects(openDirectDjvu(contextValue, manifest, Promise.resolve({})), /DJVU_PRIMARY_HASH_MISMATCH/);
-  assert.equal(workers, 0, 'corrupt source must not reach decoder');
+  assert.deepEqual(directWorkers.at(-1).operations,['prepare']);
+  assert.equal(directWorkers.at(-1).terminated,true,'corrupt source must close the prepared worker');
 }
 {
   const contextValue = context(async () => new Response(bytes.slice(0, -1)));
   await assert.rejects(openDirectDjvu(contextValue, manifest, Promise.resolve({})), /DJVU_PRIMARY_SIZE_MISMATCH/);
-  assert.equal(workers, 0, 'truncated source must not reach decoder');
+  assert.deepEqual(directWorkers.at(-1).operations,['prepare']);
+  assert.equal(directWorkers.at(-1).terminated,true,'truncated source must close the prepared worker');
 }
 {
   let started, release;
@@ -53,7 +60,8 @@ function context(fetchReaderUrl, controller = new AbortController()) {
   controller.abort();
   await assert.rejects(opening, {name: 'AbortError'});
   release(new Response(bytes));
-  assert.equal(workers, 0, 'cancelled download must not reach decoder');
+  assert.deepEqual(directWorkers.at(-1).operations,['prepare']);
+  assert.equal(directWorkers.at(-1).terminated,true,'cancelled source must close the prepared worker');
 }
 {
   let stopped = false;
@@ -62,17 +70,93 @@ function context(fetchReaderUrl, controller = new AbortController()) {
   }));
   await assert.rejects(openDirectDjvu(contextValue, manifest, Promise.reject(new Error('bad page map'))), /bad page map/);
   assert.equal(stopped, true, 'failed page map cancels source download');
-  assert.equal(workers, 0);
+  assert.deepEqual(directWorkers.at(-1).operations,['prepare']);
+  assert.equal(directWorkers.at(-1).terminated,true);
 }
 {
-  let sourceReads=0;
-  const value = context(async()=>{sourceReads++;return new Response(bytes);});
-  Object.assign(value,{sourceUrl:url.replace('a'.repeat(40),'main'),readerDownloadApiUrl:x=>x,READER_PROXY_TIMEOUT_MS:1000,
-    fetchWithReaderTimeout:async()=>new Response(JSON.stringify({revision:'b'.repeat(40),
-      url:url.replace('/book.djvu','/different.djvu').replace('a'.repeat(40),'b'.repeat(40))}))});
-  await assert.rejects(openNativeDjvu(value),/DJVU_SOURCE_REVISION_INVALID/);
-  assert.equal(sourceReads,0,'changed immutable revision must not be downloaded');
-  assert.equal(workers,0);
+  let releaseSource, notifyEngineFailed, opened=false;
+  const engineFailed=new Promise(resolve=>notifyEngineFailed=resolve);
+  globalThis.Worker=class {
+    postMessage(message){
+      if(message.operation!=='prepare'){opened=true;throw new Error('unexpected open');}
+      queueMicrotask(()=>{
+        this.onmessage({data:{id:message.id,ok:false,error:'DJVU_WORKER_FAILED'}});
+        notifyEngineFailed();
+      });
+    }
+    terminate(){}
+  };
+  const value=context(()=>new Promise(resolve=>releaseSource=resolve));
+  const opening=openDirectDjvu(value,manifest,Promise.resolve({}));
+  await engineFailed;
+  releaseSource(new Response(bytes.slice(0,-1)));
+  await assert.rejects(opening,/DJVU_PRIMARY_SIZE_MISMATCH/);
+  assert.equal(opened,false);
+}
+globalThis.Worker = class { constructor() { workers++; throw new Error('unexpected decoder start'); } };
+{
+  // The decoder may prepare, but even an early decoder failure cannot
+  // turn a mismatched revision into a source request or another error.
+  for (const engineFails of [false,true]) {
+    let releaseRevision, prepared, worker, sourceReads=0;
+    const decoderStarted=new Promise(resolve=>prepared=resolve);
+    globalThis.Worker=class {
+      constructor(){worker=this;this.operations=[];this.terminated=false;}
+      postMessage(message){
+        this.operations.push(message.operation);
+        assert.equal(message.operation,'prepare');
+        queueMicrotask(()=>{
+          this.onmessage({data:engineFails?{id:message.id,ok:false,error:'DJVU_WORKER_FAILED'}:{id:message.id,ok:true}});
+          prepared();
+        });
+      }
+      terminate(){this.terminated=true;}
+    };
+    const value = context(async()=>{sourceReads++;return new Response(bytes);});
+    Object.assign(value,{sourceUrl:url.replace('a'.repeat(40),'main'),readerDownloadApiUrl:x=>x,READER_PROXY_TIMEOUT_MS:1000,
+      fetchWithReaderTimeout:actual=>{
+        if(!actual.startsWith('/api/reader-source-revision')){sourceReads++;throw Error('unexpected range');}
+        return new Promise(resolve=>releaseRevision=resolve);
+      }});
+    const opening=openNativeDjvu(value);
+    await decoderStarted;
+    assert.equal(sourceReads,0);
+    releaseRevision(new Response(JSON.stringify({revision:'b'.repeat(40),
+      url:url.replace('/book.djvu','/different.djvu').replace('a'.repeat(40),'b'.repeat(40))})));
+    await assert.rejects(opening,/DJVU_SOURCE_REVISION_INVALID/);
+    assert.equal(sourceReads,0,'changed immutable revision must not be downloaded');
+    assert.deepEqual(worker.operations,['prepare']);
+    assert.equal(worker.terminated,true);
+  }
+}
+{
+  let worker, prepared, revisionCancelled=false, sourceReads=0;
+  const decoderStarted=new Promise(resolve=>prepared=resolve);
+  const controller=new AbortController();
+  globalThis.Worker=class {
+    constructor(){worker=this;this.terminated=false;}
+    postMessage(message){
+      assert.equal(message.operation,'prepare');
+      queueMicrotask(()=>{this.onmessage({data:{id:message.id,ok:true}});prepared();});
+    }
+    terminate(){this.terminated=true;}
+  };
+  const value=context(async()=>{sourceReads++;throw Error('unexpected full source');},controller);
+  Object.assign(value,{sourceUrl:url.replace('a'.repeat(40),'main'),readerDownloadApiUrl:x=>x,
+    readerContentUrl:x=>x,READER_PROXY_TIMEOUT_MS:1000,
+    fetchWithReaderTimeout:(actual,_timeout,options)=>{
+      if(!actual.startsWith('/api/reader-source-revision')){sourceReads++;throw Error('unexpected range');}
+      return new Promise((_,reject)=>options.signal.addEventListener('abort',()=>{
+        revisionCancelled=true;reject(options.signal.reason);
+      },{once:true}));
+    }});
+  const opening=openNativeDjvu(value);
+  await decoderStarted;
+  controller.abort();
+  assert.equal(worker.terminated,true,'closing must terminate an already prepared worker during revision lookup');
+  await assert.rejects(opening,{name:'AbortError'});
+  assert.equal(revisionCancelled,true);
+  assert.equal(sourceReads,0);
 }
 {
   let revisionRequests=0,sourceRequests=0;
@@ -177,6 +261,52 @@ for (const invalid of [
   await assert.rejects(opening,/DJVU_WORKER_FAILED/);
   assert.equal(rangeCancelled,true);assert.equal(instance.terminated,true);
 }
+// A prepare failure is not evidence that Range or the lazy open is unsupported.
+{
+  let fullReads=0, abortRange=false;
+  let failPrepare;
+  globalThis.Worker=class {
+    postMessage(message){
+      assert.equal(message.operation,'prepare');
+      failPrepare=()=>this.onmessage({data:{id:message.id,ok:false,error:'DJVU_LAZY_UNSUPPORTED'}});
+    }
+    terminate(){}
+  };
+  const value=context(async()=>{fullReads++;throw Error('unexpected full source');});
+  Object.assign(value,{sourceUrl:url,readerContentUrl:x=>x,READER_PROXY_TIMEOUT_MS:1000,
+    fetchWithReaderTimeout:(_url,_timeout,options)=>new Promise((_,reject)=>{
+      options.signal.addEventListener('abort',()=>{abortRange=true;reject(options.signal.reason);},{once:true});
+      failPrepare();
+    })});
+  await assert.rejects(openNativeDjvu(value),/DJVU_LAZY_UNSUPPORTED/);
+  assert.equal(fullReads,0);
+  assert.equal(abortRange,true);
+}
+// A validated first window still must not authorize a Range from the prepare task.
+{
+  let askForRange, worker, fullReads=0;
+  const operations=[];
+  globalThis.Worker=class {
+    constructor(){worker=this;this.closed=false;}
+    postMessage(message){
+      operations.push(message.operation);
+      askForRange=()=>this.onmessage({data:{id:message.id,operation:'range',rangeId:1,offset:0,length:8}});
+    }
+    terminate(){this.closed=true;}
+  };
+  const value=context(async()=>{fullReads++;throw Error('unexpected full source');});
+  Object.assign(value,{sourceUrl:url,readerContentUrl:x=>x,READER_PROXY_TIMEOUT_MS:1000,
+    fetchWithReaderTimeout:async()=>new Response(bytes,{status:206,headers:{'ETag':'"stable"',
+      'Content-Range':`bytes 0-${bytes.length-1}/${bytes.length}`}})});
+  const opening=openNativeDjvu(value);
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.deepEqual(operations,['prepare']);
+  askForRange();
+  await assert.rejects(opening,/DJVU_WORKER_PROTOCOL/);
+  assert.deepEqual(operations,['prepare']);
+  assert.equal(fullReads,0);
+  assert.equal(worker.closed,true);
+}
 // Whole-original historical OCR is attached only after source hashing. A
 // malformed or mismatched manifest must not block the native original or leak
 // stale OCR into the Reader. All bytes and workers below are synthetic.
@@ -218,16 +348,31 @@ for (const invalid of [
 // Direct immutable primaries bind exact length, SHA-256 and page-map completion
 // before the only transfer of the checked original bytes to the decoder.
 {
-  let worker,cleanup,transferred;
+  let worker,cleanup,transferred,releaseMap,releaseSource;
   globalThis.Worker=class {
-    constructor(){worker=this;this.terminated=false;}
-    postMessage(message,transfer){assert.equal(message.operation,'open');transferred=transfer;
+    constructor(){worker=this;this.terminated=false;this.operations=[];}
+    postMessage(message,transfer){
+      this.operations.push(message.operation);
+      if(message.operation==='prepare'){
+        assert.equal(message.bytes,undefined);
+        queueMicrotask(()=>this.onmessage({data:{id:message.id,ok:true}}));
+        return;
+      }
+      assert.equal(message.operation,'open');transferred=transfer;
       assert.ok(message.bytes instanceof ArrayBuffer);queueMicrotask(()=>this.onmessage({data:{id:message.id,ok:true,count:1}}));}
     terminate(){this.terminated=true;}
   };
-  const value=context(async()=>new Response(bytes));value.trackReaderResource=fn=>cleanup=fn;
+  const value=context(()=>new Promise(resolve=>releaseSource=resolve));value.trackReaderResource=fn=>cleanup=fn;
   const map={pages:[{page:1,width:2.4,height:4.8,rotation:0,djvu:{pixels:[10,20],dpi:300}}]};
-  const document=await openDirectDjvu(value,manifest,Promise.resolve(map));
+  const opening=openDirectDjvu(value,manifest,new Promise(resolve=>releaseMap=resolve));
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.deepEqual(worker.operations,['prepare'],'engine must prepare before either input is available');
+  releaseSource(new Response(bytes));
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.deepEqual(worker.operations,['prepare'],'source bytes alone must not authorize open');
+  releaseMap(map);
+  const document=await opening;
+  assert.deepEqual(worker.operations,['prepare','open']);
   assert.equal(document.numPages,1);assert.equal(transferred.length,1);
   cleanup();assert.equal(worker.terminated,true);
   const bad=context(async()=>new Response('',{status:503}));

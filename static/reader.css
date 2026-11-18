@@ -1213,6 +1213,13 @@ body {
     monospace;
   color: #e7e9eb;
 }
+.reader-text[data-text-preview]::before {
+  content: attr(data-text-preview) / "";
+  display: block;
+  max-height: max(0px, calc(100dvh - var(--reader-toolbar-height, 48px) - 48px));
+  overflow: clip;
+  user-select: none;
+}
 .reader-text-block {
   margin: 0;
   font: inherit;

@@ -241,7 +241,7 @@ export function createReaderPdfEngine(readerContext) {
     const navigation = readerContext.readerRuntime?.currentGeneration("navigation");
     // Keep the actual restoration outcome independently of the short opening
     // timeout. It can settle while the initial range is still being retried.
-    /** @type {{value: {page?: number | string, pageOffset?: number | string, id?: string} | null | undefined} | null} */
+    /** @type {{value: import("../../../typings/reader-pdf-engine-strict").Restoration | null} | null} */
     let settledRestoration = null;
     readerContext.readerRestorationPromise?.then(entry => {
       settledRestoration = {value:entry};
@@ -284,12 +284,14 @@ export function createReaderPdfEngine(readerContext) {
         readerContext.extension === "pdf" && restoration && !readerContext.ocrManifestUrl &&
         !readerContext.pdfV3Manifest;
       if (eligible) {
+        let releaseHistoryWait = () => {};
         /** @template T @param {Promise<T>} promise @returns {Promise<T | null>} */
         const optional = promise => {
           /** @type {ReturnType<typeof setTimeout> | undefined} */
           let timer;
           return readerContext.awaitReader(new Promise(/** @type {(resolve: (value: T | null) => void, reject: (error: unknown) => void) => void} */ ((resolve, reject) => {
             timer = setTimeout(() => resolve(null), 5000);
+            releaseHistoryWait = () => resolve(null);
             Promise.resolve(promise).then(resolve, reject);
           }))).finally(() => clearTimeout(timer));
         };
@@ -319,13 +321,20 @@ export function createReaderPdfEngine(readerContext) {
           }
           return null;
         };
-        let first = null, saved = null;
-        try {
-          [first, saved] = await Promise.all([
-            initial ? initialRange() : null,
-            optional(Promise.resolve(restoration).then(value => ({value})))
-          ]);
-        } catch (_) { readerContext.assertReaderActive(); }
+        // Start the same bounded history window in parallel with the range.
+        // Only wait for it when the response can actually use staging.
+        const historyWait = optional(Promise.resolve(restoration).then(value => ({value})));
+        historyWait.catch(() => {});
+        let first = null;
+        try { first = initial ? await initialRange() : null; }
+        catch (_) { readerContext.assertReaderActive(); }
+        if (!first || first.complete || typeof first.total !== "number" || !(first.total >= 8 * 1024 * 1024) ||
+            !(first.bytes instanceof Uint8Array) || first.bytes[0] !== 0x25 || first.bytes[1] !== 0x50 ||
+            first.bytes[2] !== 0x44 || first.bytes[3] !== 0x46 || first.bytes[4] !== 0x2d) {
+          releaseHistoryWait();
+          return await workerPreload;
+        }
+        let saved = await historyWait.catch(() => { readerContext.assertReaderActive(); return null; });
         saved ||= settledRestoration;
         if (first && !saved && !readerContext.restorationFailed &&
             navigation === readerContext.readerRuntime?.currentGeneration("navigation")) {
@@ -349,11 +358,8 @@ export function createReaderPdfEngine(readerContext) {
         const entry = saved?.value;
         const freshPageOne = saved && (!entry || (Number(entry.page) === 1 &&
           Number(entry.pageOffset || 0) === 0 && !entry.id));
-        const stagedCandidate = first && !first.complete && typeof first.total === "number" && first.bytes instanceof Uint8Array &&
-          first.bytes[0] === 0x25 && first.bytes[1] === 0x50 && first.bytes[2] === 0x44 &&
-          first.bytes[3] === 0x46 && first.bytes[4] === 0x2d && (
-          readerContext.isFirstPageCandidate(first.bytes, first.total, first.rangeChunkSize) ||
-          (freshPageOne && first.total >= 8 * 1024 * 1024));
+        const stagedCandidate = freshPageOne ||
+          readerContext.isFirstPageCandidate(first.bytes, first.total, first.rangeChunkSize);
         if (stagedCandidate && saved && !readerContext.restorationFailed &&
             navigation === readerContext.readerRuntime?.currentGeneration("navigation")) {
           workerPreloadOwner?.abort();

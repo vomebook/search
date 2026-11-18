@@ -52,6 +52,54 @@ class ReaderFormatPipelineTests(unittest.TestCase):
                       self.page.locator('.reader-section-body').first.inner_text() if ext=='epub' else self.page.locator('#content').inner_text())
                 self.assertTrue(text.strip())
 
+    def test_swf_body_finishes_while_ruffle_is_held(self):
+        held = []
+        self.page.route('**/vendor/ruffle/**/ruffle.js', lambda route: held.append(route))
+        self.page.add_init_script('''(()=>{
+          const native=fetch;
+          window.fetch=(url,init)=>String(url).includes('/api/reader-content?')
+            ? Promise.resolve(new Response(new ReadableStream({pull(controller){
+                controller.enqueue(Uint8Array.of(70,87,83));
+                controller.close();
+                window.__swfBodyRead=true;
+              }},{highWaterMark:0}))) : native(url,init);
+        })();''')
+        self.page.goto(self.origin+support.PREFIX+'/static/reader.html?'+urlencode(dict(
+            url='https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/pipeline.swf',ext='swf')),wait_until='domcontentloaded')
+        self.page.wait_for_function('()=>!!window.__swfBodyRead',timeout=5000)
+        self.assertEqual(len(held),1)
+        self.assertEqual(self.page.locator('.reader-swf').count(),0)
+        held.pop().fulfill(content_type='text/javascript',body='''
+          window.RufflePlayer={newest:()=>({createPlayer(){
+            const player=document.createElement('div');
+            player.ruffle=()=>({load:async({data})=>{window.__swfLoaded=[...data];}});
+            return player;
+          }})};
+        ''')
+        self.page.wait_for_function("()=>document.documentElement.dataset.readerPhase==='ready'")
+        self.assertEqual(self.page.evaluate('window.__swfLoaded'),[70,87,83])
+
+    def test_swf_engine_failure_cancels_the_body(self):
+        held = []
+        self.page.route('**/vendor/ruffle/**/ruffle.js', lambda route: held.append(route))
+        self.page.add_init_script('''(()=>{
+          const native=fetch;
+          window.fetch=(url,init)=>String(url).includes('/api/reader-content?')
+            ? Promise.resolve(new Response(new ReadableStream({
+                start(controller){controller.enqueue(Uint8Array.of(70,87,83));},
+                pull(){window.__swfBodyWaiting=true;},
+                cancel(){window.__swfBodyCancelled=true;}
+              },{highWaterMark:0}))) : native(url,init);
+        })();''')
+        self.page.goto(self.origin+support.PREFIX+'/static/reader.html?'+urlencode(dict(
+            url='https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/stalled.swf',ext='swf')),wait_until='domcontentloaded')
+        self.page.wait_for_function('()=>!!window.__swfBodyWaiting',timeout=5000)
+        self.assertEqual(len(held),1)
+        held.pop().fulfill(status=503,body='unavailable')
+        self.page.locator('#reader-engine-retry').wait_for(timeout=3000)
+        self.page.wait_for_function('()=>!!window.__swfBodyCancelled')
+        self.assertEqual(self.page.locator('.reader-swf').count(),0)
+
     def test_streaming_text_replaces_loading_feedback_before_response_finishes(self):
         self.page.add_init_script(r'''(()=>{
           const native=fetch;window.fetch=(input,init)=>String(input).includes('/api/reader-content?')
@@ -68,6 +116,30 @@ class ReaderFormatPipelineTests(unittest.TestCase):
         self.page.evaluate('window.__finishText()')
         self.page.wait_for_function("()=>document.documentElement.dataset.readerPhase==='ready'")
         self.assertEqual(self.page.locator('.reader-text').text_content(),'Readable text\nTail text')
+
+    def test_bomless_chinese_text_is_visible_before_charset_sample_finishes(self):
+        self.page.add_init_script(r'''(()=>{
+          const native=fetch;window.fetch=(input,init)=>String(input).includes('/api/reader-content?')
+            ?Promise.resolve(new Response(new ReadableStream({start(c){
+              const encode = text => new TextEncoder().encode(text);
+              const bytes = encode('中文首屏😀');
+              c.enqueue(bytes.slice(0, -1));
+              window.__finishChinese=()=>{c.enqueue(bytes.slice(-1));c.enqueue(encode('后续正文'));c.close();};
+            }}),{headers:{'Content-Type':'text/plain'}})):native(input,init);
+        })();''')
+        self.page.goto(self.origin+support.PREFIX+'/static/reader.html?'+urlencode(dict(
+            url='https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/chinese-stream.txt',ext='txt')),wait_until='domcontentloaded')
+        self.page.wait_for_function('''()=>{
+          const text = document.querySelector('.reader-text');
+          return text?.dataset.textPreview === '中文首屏' && getComputedStyle(text,'::before').content.includes('中文首屏');
+        }''')
+        self.assertEqual(self.page.locator('.reader-text').text_content(),'')
+        self.assertEqual(self.page.locator('.reader-loading-indicator').count(),0)
+        self.assertNotEqual(self.page.locator('html').get_attribute('data-reader-phase'),'ready')
+        self.page.evaluate('window.__finishChinese()')
+        self.page.wait_for_function("()=>document.documentElement.dataset.readerPhase==='ready'")
+        self.assertEqual(self.page.locator('.reader-text').text_content(),'中文首屏😀后续正文')
+        self.assertIsNone(self.page.locator('.reader-text').get_attribute('data-text-preview'))
 
     def test_engine_failure_cancels_a_stalled_body_without_waiting_for_download(self):
         self.page.add_init_script(r'''(()=>{

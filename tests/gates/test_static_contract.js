@@ -90,6 +90,53 @@ test("background corpus loading uses idle scheduling independently of API prefet
   assert.match(app, /function scheduleBackgroundLocalDataLoad/);
   assert.match(app, /requestIdleCallback/);
   assert.doesNotMatch(app, /mozConnection|webkitConnection/);
+
+  function runScheduler(connection, useIdle = true) {
+    const timers = new Map(), idle = new Map(), calls = [];
+    let next = 0;
+    const context = vm.createContext({
+      navigator: { connection }, STATE: { dataLoaded: false },
+      setTimeout: (fn, delay) => (timers.set(++next, { fn, delay }), next),
+      clearTimeout: id => timers.delete(id),
+      window: useIdle ? {
+        requestIdleCallback: (fn, options) => (idle.set(++next, { fn, delay: options.timeout }), next),
+        cancelIdleCallback: id => idle.delete(id),
+      } : {},
+      ensureLocalDataLoaded: (...args) => calls.push(args),
+    });
+    vm.runInContext(`let localDataLoadTimer = null, localDataIdleCallback = null;\n${scheduler[0]}`, context);
+    context.scheduleBackgroundLocalDataLoad();
+    return { context, timers, idle, calls, fire(queue, delay) {
+      assert.strictEqual(queue.size, 1);
+      const [id, task] = queue.entries().next().value;
+      assert.strictEqual(task.delay, delay);
+      queue.delete(id);
+      task.fn();
+    } };
+  }
+  for (const connection of [{ saveData: true, effectiveType: "4g" }, { effectiveType: "2g" }, { effectiveType: "slow-2g" }]) {
+    const f = runScheduler(connection);
+    assert.strictEqual(f.timers.size + f.idle.size, 0);
+    assert.deepStrictEqual(f.calls, []);
+  }
+  const normal = runScheduler(undefined);
+  normal.fire(normal.timers, 100);
+  normal.fire(normal.idle, 2500);
+  assert.deepStrictEqual(normal.calls, [[false, true]]);
+  const changed = runScheduler({ effectiveType: "4g" });
+  changed.fire(changed.timers, 100);
+  changed.context.navigator.connection.saveData = true;
+  changed.fire(changed.idle, 2500);
+  assert.deepStrictEqual(changed.calls, []);
+  const canceled = runScheduler({ effectiveType: "4g" });
+  canceled.fire(canceled.timers, 100);
+  canceled.context.navigator.connection.effectiveType = "2g";
+  canceled.context.scheduleBackgroundLocalDataLoad();
+  assert.strictEqual(canceled.timers.size + canceled.idle.size, 0);
+  const fallback = runScheduler({ effectiveType: "3g" }, false);
+  fallback.fire(fallback.timers, 100);
+  fallback.fire(fallback.timers, 1000);
+  assert.deepStrictEqual(fallback.calls, [[false, true]]);
 });
 test("HTML preloads the default first-page payload before styles and application startup", () => {
   assert.match(html, /<link rel="preload" href="\/search\/data\/initial\/global\.json" as="fetch" crossorigin="anonymous">/);
