@@ -36,6 +36,20 @@ export function stripBundledScripts(html) {
     (tag, filename) => APP_DEPENDENCIES.includes(filename) ? "" : tag);
 }
 
+// Bundled search host modules are needed individually in development only.
+// Keep shared Reader dependencies and standalone Worker scripts in precache.
+export function stripBundledPrecache(sw, staticBase) {
+  const bundled = new Set(APP_DEPENDENCIES.filter(file => file.startsWith("search/"))
+    .map(file => staticBase + file));
+  // Pages minifies the worker before the hash pass, retaining this same array
+  // initializer. Only edit its entries, not the separate hashed asset graph.
+  return sw.replace(/(\bPRECACHE_URLS\s*=\s*\[)([^\]]*)(\])/, (_, start, entries, end) =>
+    start + entries.split(",").filter(entry => {
+      const literal = /^(?:"([^"]+)"|'([^']+)')$/.exec(entry.trim());
+      return !literal || !bundled.has(literal[1] ?? literal[2]);
+    }).join(",") + end);
+}
+
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
   process.stdout.write([...APP_DEPENDENCIES, "app.js"]
     .map(file => readFileSync("static/" + file, "utf8")).join("\n;\n"));
