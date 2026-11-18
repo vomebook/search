@@ -53,6 +53,7 @@
       "tests.gates.test_static_checks.StaticGateTests.test_reader_image_loader_coverage_gate_fails_closed",
       "tests.gates.test_static_checks.StaticGateTests.test_reader_lifecycle_strict_signatures_and_annotations",
       "tests.gates.test_static_checks.StaticGateTests.test_reader_navigation_baseline_gate_fails_closed",
+      "tests.gates.test_static_checks.StaticGateTests.test_successful_tap_requires_one_consistent_summary",
       "tests.gates.test_static_checks.StaticGateTests.test_reader_text_coverage_gate_fails_closed",
       "tests.gates.test_static_checks.StaticGateTests.test_reader_v3_gates_fail_closed",
       "tests.gates.test_static_checks.StaticGateTests.test_request_manager_coverage_gate_fails_on_fractional_regression",

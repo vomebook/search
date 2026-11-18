@@ -261,7 +261,8 @@ test("virtual results use bounded buffering", () => {
   assert.match(css, /overflow-anchor: none/);
   assert.strictEqual(/function finishDrag\(\)[\s\S]*?measureHeights/.test(app), false);
   assert.match(app, /dragRange = Math\.max\(1, DOM\.scrollTrack\.clientHeight - DOM\.scrollThumb\.clientHeight\)/);
-  assert.match(app, /applyPendingScrollTop\(\);[\s\S]*?setResultScrollTop\(finalScrollTop\);\s*renderVisible\(\);\s*VSCROLL\.isDraggingThumb = false/);
+  const release = app.match(/function finishDrag\(\) \{[^]*?^  }/m)?.[0] || '';
+  assert.match(release, /applyPendingScrollTop\(\);[\s\S]*?VSCROLL\.isDraggingThumb = false;[\s\S]*?setResultScrollTop\(finalScrollTop\);[\s\S]*?renderVisible\(\);/);
   assert.match(app, /const requestedScrollTop = pendingScrollTop/);
   assert.match(app, /const finalScrollTop = requestedScrollTop === null \? getResultScrollTop\(\) : requestedScrollTop/);
   assert.match(app, /setResultScrollTop\(finalScrollTop\)/);
@@ -694,13 +695,18 @@ test("Pages jobs pin the Ubuntu release and configure mirrors before apt", () =>
   const source = workflow.slice(workflow.indexOf("\n  source-checks:"), workflow.indexOf("\n  deploy:"));
   const deploy = workflow.slice(workflow.indexOf("\n  deploy:"));
   assert.match(source, /runs-on: ubuntu-24\.04/);
-  assert.match(source, /tests\.gates\.test_ci_ubuntu_mirror/);
+  assert.match(source, /^\s*run: bash scripts\/ci\/check_pages_source\.sh$/m);
+  assert.match(fs.readFileSync('scripts/ci/check_pages_source.sh', 'utf8'), /tests\.gates\.test_ci_ubuntu_mirror/);
   assert.match(deploy, /runs-on: ubuntu-24\.04/);
   assert.match(deploy, /python3 -B scripts\/ci\/ci_ubuntu_mirror\.py[\s\S]*sudo apt-get update[\s\S]*playwright install-deps chromium/);
 });
 test("deployment workflow builds and uploads minified static artifacts", () => {
-  assert.match(workflow, /source-checks:[\s\S]*npm run check:static[\s\S]*scripts\/check_python_static\.py/);
-  assert.match(workflow, /python -B -m unittest -v tests\.gates\.test_static_shards_runner[\s\S]*python -B scripts\/ci\/run_static_gate_shards\.py --project github[\s\S]*python -B -m unittest -v tests\.gates\.test_ci_ubuntu_mirror/);
+  const source = workflow.slice(workflow.indexOf('\n  source-checks:'), workflow.indexOf('\n  deploy:'));
+  const sourceGates = fs.readFileSync('scripts/ci/check_pages_source.sh', 'utf8');
+  assert.match(source, /^\s*run: bash scripts\/ci\/check_pages_source\.sh$/m);
+  assert.match(sourceGates, /^set -euo pipefail$/m);
+  assert.match(sourceGates, /^npm run check:static$[\s\S]*^python -B scripts\/check_python_static\.py$/m);
+  assert.match(sourceGates, /python -B -m unittest -v tests\.gates\.test_static_shards_runner[\s\S]*python -B scripts\/ci\/run_static_gate_shards\.py --project github[\s\S]*python -B -m unittest -v tests\.gates\.test_ci_ubuntu_mirror/);
   assert.match(workflow, /deploy:\s*\n\s*needs: source-checks/);
   const deployJob = workflow.slice(workflow.indexOf("\n  deploy:\n"));
   assert.deepStrictEqual(Array.from(deployJob.matchAll(/node (tests\/\S+)/g), match => match[1]), [
@@ -708,7 +714,7 @@ test("deployment workflow builds and uploads minified static artifacts", () => {
   ]);
   assert.match(deployJob, /fetch_reader_assets\.mjs _site\/data\/reader_assets\.json\.gz\s+SEARCH_TEST_DATA_DIR=_site\/data node tests\/search\/data\/test_data_integrity\.js\s+SEARCH_TEST_DATA_DIR=_site\/data node tests\/search\/data\/test_corpus_oracle\.js/);
   assert.ok(deployJob.indexOf("node tests/search/data/test_corpus_oracle.js") < deployJob.indexOf("uses: actions/upload-pages-artifact"));
-  assert.match(workflow, /source-checks:[\s\S]*node tests\/reader\/pdf-v3\/test_dataset_primary_policy\.mjs/);
+  assert.match(sourceGates, /^node tests\/reader\/pdf-v3\/test_dataset_primary_policy\.mjs$/m);
   assert.match(workflow, /node-version: '26\.13\.1'/);
   assert.match(deployJob, /uses: actions\/setup-python@v7\s*\n\s*with:\s*\n\s*python-version: '3\.15\.2'/);
   assert.ok(deployJob.indexOf("uses: actions/setup-python@v7") < deployJob.indexOf("python3 scripts/build/seo.py"));
