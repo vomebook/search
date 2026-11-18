@@ -1,0 +1,41 @@
+name: Functional release preflight
+
+on:
+  push:
+    branches: [release-preflight/functional-20261118]
+
+permissions:
+  contents: read
+
+jobs:
+  preflight:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '26.13.1'
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.15.2'
+      - name: Install pinned Pages checker dependencies
+        run: |
+          npm ci --ignore-scripts --no-audit --no-fund
+          python -m pip install -r config/dependencies/static-check.txt
+      - name: Materialize exact Space candidate
+        env:
+          GIT_LFS_SKIP_SMUDGE: '1'
+        run: |
+          set -euo pipefail
+          revision=$(python -I -B -c 'import json; print(json.load(open(".github/hf-source-revision.json"))["revision"])')
+          python -I -B scripts/verify_hf_source_revision.py "$revision"
+          git clone --single-branch --branch release-preflight/functional-20261118 --no-checkout https://huggingface.co/spaces/VoiceOfML/Search "$RUNNER_TEMP/space-src"
+          test "$(git -C "$RUNNER_TEMP/space-src" rev-parse refs/remotes/origin/release-preflight/functional-20261118)" = "$revision"
+          git -C "$RUNNER_TEMP/space-src" checkout --detach "$revision"
+          git -C "$RUNNER_TEMP/space-src" lfs pull
+          git -C "$RUNNER_TEMP/space-src" lfs fsck --objects --pointers
+      - name: Run production Pages source gates and full Space Docker build
+        run: bash scripts/ci/preflight_release.sh "$RUNNER_TEMP/space-src"
