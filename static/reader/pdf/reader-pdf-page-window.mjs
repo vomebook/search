@@ -586,15 +586,22 @@ export function createReaderPdfPageWindow(readerContext) {
     try {
       const targetShell = readerContext.pdfShellWindow
         ? readerContext.pdfShellWindow.ensure(initialPage)
-        : (await readerContext.pdfShellsReady, readerContext.content.querySelector(`.reader-page[data-page="${initialPage}"]`));
+        : initialPage === 1
+          ? firstShell
+          : (await readerContext.pdfShellsReady, readerContext.content.querySelector(`.reader-page[data-page="${initialPage}"]`));
       if (!targetShell) throw new Error("PDF initial page shell missing");
       readerContext.viewport.scrollTop = readerContext.readerPageScrollTop(targetShell);
       await readerContext.renderPdfImageShell(targetShell, false, true);
       readerContext.markReaderContentReady();
       readerContext.viewport.scrollTop = readerContext.readerPageScrollTop(targetShell);
+      // Page one is already mounted and can paint before the remaining shells.
     } finally {
+      // Restore or fall back only after the batch stops mutating the layout.
+      // Keep the original image error if the abandoned batch also fails.
+      await readerContext.pdfShellsReady.catch(() => {});
       releaseInitialRenderGate();
     }
+    await readerContext.pdfShellsReady;
   }
 
   /** @param {Response | Promise<Response>} prepared */
@@ -1222,11 +1229,18 @@ export function createReaderPdfPageWindow(readerContext) {
       visibleObserver.unobserve(shell);
       pageObserver.unobserve(shell);
     }, firstViewport.height / firstViewport.width, previewPages);
-    readerContext.pdfShellsReady = readerContext.pdfShellWindow ? Promise.resolve() : readerContext.appendShellsBatched(createShell, pdf.numPages, 24);
+    const shellsReady = readerContext.pdfShellsReady = readerContext.pdfShellWindow
+      ? Promise.resolve() : readerContext.appendShellsBatched(createShell, pdf.numPages, 24);
+    shellsReady.catch(() => {});
+    const drawWhileBatching = !readerContext.pdfShellWindow && !previewShell &&
+      readerContext.extension === "pdf" && initialPage === 1;
+    let releaseObservers = !drawWhileBatching;
     try {
       const targetShell = readerContext.pdfShellWindow
         ? readerContext.pdfShellWindow.ensure(initialPage)
-        : (await readerContext.pdfShellsReady, readerContext.content.querySelector(`.reader-page[data-page="${initialPage}"]`));
+        : drawWhileBatching
+          ? firstShell
+          : (await shellsReady, readerContext.content.querySelector(`.reader-page[data-page="${initialPage}"]`));
       if (!targetShell) throw new Error("PDF initial page shell missing");
       (/** @type {HTMLDivElement | null} */ (previewPadding))?.remove();
       if (previewAnchor) {
@@ -1242,11 +1256,23 @@ export function createReaderPdfPageWindow(readerContext) {
       }
       readerContext.markReaderContentReady();
       if (!previewShell) readerContext.viewport.scrollTop = readerContext.readerPageScrollTop(targetShell);
-      await readerContext.renderPdfShell(targetShell, false, true);
+      try {
+        await readerContext.renderPdfShell(targetShell, false, true);
+      } catch (error) {
+        // A newer visible demand can cancel this now-offscreen canvas without
+        // closing the document. Do not swallow an actual render failure.
+        const cancelled = /** @type {import('../../../typings/reader-page-window-strict').WindowShell} */ (targetShell)._pdfRenderCancelled;
+        if (!drawWhileBatching || readerContext.readerAbortController.signal.aborted || !cancelled ||
+            !(error instanceof Error && error.name === "AbortError")) throw error;
+      }
       readerContext.markReaderContentReady();
-      if (!previewShell) readerContext.viewport.scrollTop = readerContext.readerPageScrollTop(targetShell);
+      if (!previewShell && !drawWhileBatching) readerContext.viewport.scrollTop = readerContext.readerPageScrollTop(targetShell);
+      // Do not realign page one after the reader has had a chance to scroll.
+      await shellsReady;
+      readerContext.assertReaderActive();
+      releaseObservers = true;
     } finally {
-      releaseInitialRenderGate();
+      if (releaseObservers && !readerContext.readerAbortController.signal.aborted) releaseInitialRenderGate();
     }
     if (pdf.outlineNeedsFullSource) {
       // An ambiguous range index may hide document-level NAVM after page
@@ -1271,7 +1297,6 @@ export function createReaderPdfPageWindow(readerContext) {
       });
       outlineReady.catch(() => {});
     }
-    await readerContext.pdfShellsReady;
     readerContext.assertReaderActive();
   }
 

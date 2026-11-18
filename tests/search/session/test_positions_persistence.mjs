@@ -44,7 +44,7 @@ function fakeDatabase() {
   const f = fixture({indexedDB: {open: () => opening}});
   const initializing = f.storage.init(() => {});
   opening.result = db; opening.onsuccess();
-  transaction.request.result = []; transaction.request.onsuccess(); transaction.oncomplete();
+  transaction.request.result = []; transaction.oncomplete();
   return {...f, initializing, transaction: () => transaction};
 }
 
@@ -97,7 +97,7 @@ test('startup deadline releases at 1500ms while current connection hydrates on c
   const loading = f.controller.init().then(() => {released = true;});
   clock = 1000; opening.result = db; opening.onsuccess();
   const saved = key => ({version: 1, key, index: 1, offset: 0, anchorId: 'disk', loadedPage: 1, savedAt: Date.now()});
-  clock = 1100; read.result = [saved('late'), saved('newer')]; read.onsuccess();
+  clock = 1100; read.result = [saved('late'), saved('newer')];
   assert.equal(f.controller.getPosition('late'), undefined);
   clock = 1500;
   for (const [id, timer] of timers) if (timer.at <= clock) {timers.delete(id); timer.fn();}
@@ -109,6 +109,41 @@ test('startup deadline releases at 1500ms while current connection hydrates on c
   assert.equal(f.controller.getPosition('late').anchorId, 'disk');
   assert.equal(f.controller.getPosition('newer'), fresh);
   f.storage.close();
+});
+
+test('startup publishes only the committed readonly snapshot and does not wait for cleanup', async () => {
+  const opening = {}, timers = new Map(), transactions = [], deleted = [];
+  let timerId = 0;
+  const f = fixture({indexedDB: {open: () => opening},
+    setTimeout(fn, delay) {timers.set(++timerId, {fn, delay}); return timerId;},
+    clearTimeout(id) {timers.delete(id);}});
+  const disk = (key, savedAt = Date.now()) => ({version: 1, key, index: 3, offset: 0, anchorId: key, loadedPage: 1, savedAt});
+  const valid = disk('valid'), refreshed = disk('refreshed'), expired = disk('expired', 0);
+  const db = {close() {}, transaction(name, mode) {
+    const request = {}, tx = {mode, request, objectStore: () => ({getAll: () => request,
+      delete: key => deleted.push(key)})};
+    assert.equal(name, 'positions'); transactions.push(tx); return tx;
+  }};
+  const loading = f.controller.init();
+  opening.result = db; opening.onsuccess();
+  const read = transactions[0];
+  assert.equal(read.mode, 'readonly');
+  read.request.result = [valid, expired, {...refreshed, savedAt: 0}, {key: 'malformed'}];
+  await Promise.resolve();
+  assert.equal(f.controller.getPosition('valid'), undefined);
+  read.oncomplete(); await loading;
+  assert.equal(f.controller.getPosition('valid').index, 3);
+  assert.equal(f.controller.getPosition('expired'), undefined);
+  assert.equal(transactions.length, 1, 'startup promise must not need a write transaction');
+  assert.deepEqual(deleted, []);
+  const cleanup = [...timers.values()].find(timer => timer.delay === 0);
+  assert.ok(cleanup);
+  cleanup.fn();
+  const write = transactions[1]; assert.equal(write.mode, 'readwrite');
+  write.request.result = [valid, expired, refreshed, {key: 'malformed'}]; write.request.onsuccess();
+  assert.deepEqual(deleted.sort(), ['expired', 'malformed']);
+  f.storage.close(); cleanup.fn();
+  assert.equal(transactions.length, 2, 'closed connection must not start queued cleanup');
 });
 
 test('malformed viewport rows and recent-page holes fail validation without throwing', () => {

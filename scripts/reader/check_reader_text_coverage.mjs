@@ -13,6 +13,7 @@ const required = [
   'block boundaries preserve surrogate pairs and CRLF without creating oversized blocks',
   'resource cleanup cancels an outstanding stream and always releases ownership',
   'large samples select the decoder before EOF and retain all streamed text',
+  'Chinese UTF-8 preview is bounded and keeps authoritative stream text exact',
   'long text yields to the host before completing subsequent blocks',
   'host abort while yielding stops future blocks without swallowing the error',
   'reader errors preserve the original reason and release the reader lock',
@@ -37,7 +38,7 @@ if(result.status!==0||rows.length!==1||rows[0].some((value,index)=>value<minimum
     !hasPassingTapContracts(text,required)||
     ['# start of coverage report','# end of coverage report'].some(marker=>lines.filter(line=>line===marker).length!==1)||
     lines.filter(line=>/^# duration_ms \d+(?:\.\d+)?$/.test(line)).length!==1||
-    !['1..14','# tests 14','# pass 14','# fail 0','# cancelled 0'].every(summary=>lines.filter(line=>line===summary).length===1)||
+    !['1..15','# tests 15','# pass 15','# fail 0','# cancelled 0'].every(summary=>lines.filter(line=>line===summary).length===1)||
     ['# tests ','# pass ','# fail ','# cancelled '].some(prefix=>lines.filter(line=>line.startsWith(prefix)).length!==1)){
   console.error('Reader text requires named contracts and exactly one source row above each minimum');
   process.exitCode=1;

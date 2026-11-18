@@ -217,6 +217,30 @@ class ReaderRefactorTest(unittest.TestCase):
         self.assertEqual(urllib.parse.urlsplit(self.page.url).fragment, 'section')
         self.page.wait_for_function("() => { const n=document.querySelector('#section'), v=document.querySelector('#viewport'); return n && Math.abs(n.getBoundingClientRect().top-v.getBoundingClientRect().top)<40; }")
 
+    def test_markdown_mounts_sanitized_nodes_without_reparsing_article(self):
+        self.page.add_init_script('''(() => {
+          const html = Object.getOwnPropertyDescriptor(Element.prototype, 'innerHTML');
+          window.__markdownArticleWrites = 0;
+          Object.defineProperty(Element.prototype, 'innerHTML', {...html, set(value) {
+            if (this.matches('article.reader-markdown')) window.__markdownArticleWrites++;
+            return html.set.call(this, value);
+          }});
+        })()''')
+        self.serve('---\ntitle: frontmatter sentinel\n---\n\n# Readable Markdown\n\n'
+                   '**Bold** and `code`.\n\n'
+                   '| Cell | Value |\n| --- | --- |\n| A | 中文 |\n\n'
+                   '<script>/* disallowed in book content */</script>\n'
+                   '<a id="filtered-link" href="javascript:void(0)">Unsafe link</a>', 'text/markdown')
+        self.open(self.reader_url('md', 'fragment-output'))
+        article = self.page.locator('.reader-markdown')
+        self.assertEqual(article.locator('h1').inner_text(), 'Readable Markdown')
+        self.assertEqual(article.locator('strong').inner_text(), 'Bold')
+        self.assertEqual(article.locator('tbody td').all_text_contents(), ['A', '中文'])
+        self.assertEqual(article.locator('script').count(), 0)
+        self.assertIsNone(article.locator('#filtered-link').get_attribute('href'))
+        self.assertNotIn('frontmatter sentinel', article.inner_text())
+        self.assertEqual(self.page.evaluate('window.__markdownArticleWrites'), 0)
+
     def test_markdown_cached_source_relative_links_use_original_download(self):
         base = self.markdown_link_fixture()
         cache = 'https://voiceofml-search.hf.space/api/reader-bucket-resource?path=documents/text/md/' + 'a'*64 + '/document.md'
@@ -448,6 +472,59 @@ class ReaderRefactorTest(unittest.TestCase):
         self.assertFalse(any(path.startswith('objects/') for path in requested))
         self.assertTrue(self.page.locator('#download').get_attribute('href'))
 
+    def test_tiff_first_page_renders_before_remaining_shell_batches_finish(self):
+        prefix = 'pages/image/tiff/' + 'a' * 64 + '/'
+        source = 'https://voiceofml-search.hf.space/api/reader-bucket-resource?' + urllib.parse.urlencode({'path': prefix+'page-manifest.json'})
+        data = support.IMAGE_FIXTURES['webp'][1]
+        count = 253  # Requires a second shell batch but not large-book virtualization.
+        manifest = dict(version=1, kind='image-page-stream', page_count=count,
+                        pages=[dict(path=f'pages/page-{page:06}.webp', bytes=len(data), sha256='a'*64)
+                               for page in range(1, count+1)])
+        def asset(route):
+            path = urllib.parse.parse_qs(urllib.parse.urlsplit(route.request.url).query).get('path', [''])[0]
+            if path == prefix+'page-manifest.json':
+                route.fulfill(json=manifest)
+            else:
+                route.fulfill(content_type='image/webp', body=data)
+        self.page.route('**/api/reader-bucket-resource?**', asset)
+        def hold_shells(route):
+            script = route.fetch().text()
+            anchor = 'readerContext.content.appendChild(fragment);\n      await readerContext.waitForReader();'
+            self.assertEqual(script.count(anchor), 1)
+            route.fulfill(content_type='text/javascript', body=script.replace(anchor, anchor+'''
+              if (readerContext.capability.mode === 'image-pages' && start === 2)
+                await new Promise(resolve=>{window.__releaseImageShells=resolve;});
+            '''))
+        self.page.route('**/static/reader/pdf/reader-pdf-page-window.mjs', hold_shells)
+        # Disable the independent low-priority image preload; measure the real
+        # image demand/reveal path, not a speculative duplicate request.
+        self.page.add_init_script('''Object.defineProperty(navigator,'connection',{value:{saveData:true}});''')
+        self.page.goto(self.reader_url('image-pages', url=source), wait_until='domcontentloaded')
+        self.page.wait_for_function('()=>!!window.__releaseImageShells')
+        self.assertEqual(self.page.locator(f'.reader-page[data-page="{count}"]').count(), 0)
+        self.page.locator('.reader-page[data-page="1"] img.ready').wait_for(state='visible')
+        self.assertNotEqual(self.page.locator('html').get_attribute('data-reader-phase'), 'ready')
+        self.page.evaluate('window.__releaseImageShells()')
+        self.page.wait_for_function("()=>document.documentElement.dataset.readerPhase==='ready'")
+        self.assertEqual(self.page.locator('.reader-page').count(), count)
+        self.page.locator('#page-number').fill(str(count))
+        self.page.locator('#page-number').dispatch_event('change')
+        self.page.locator(f'.reader-page[data-page="{count}"] img.ready').wait_for(state='visible')
+
+        # With a saved destination in a later batch, don't race a page-one
+        # render against restoration or briefly reveal the wrong image.
+        self.page.route('**/static/reader/core/reader-store.js', lambda route: route.fulfill(
+            content_type='text/javascript', body=support.STORE_SCRIPT.replace(
+                'new Promise((resolve) => setTimeout(() => resolve(null), 300))',
+                f'Promise.resolve({{page:{count},zoom:100}})')))
+        self.page.reload(wait_until='domcontentloaded')
+        self.page.wait_for_function('()=>!!window.__releaseImageShells')
+        self.assertEqual(self.page.locator('.reader-page img.ready').count(), 0)
+        self.page.evaluate('window.__releaseImageShells()')
+        self.page.wait_for_function("()=>document.documentElement.dataset.readerPhase==='ready'")
+        self.assertEqual(self.page.locator('#page-number').input_value(), str(count))
+        self.page.locator(f'.reader-page[data-page="{count}"] img.ready').wait_for(state='visible')
+
     def test_missing_image_manifest_or_page_recovers_original_without_changing_book_identity(self):
         prefix = 'pages/image/bmp/' + 'a' * 64 + '/'
         source = 'https://voiceofml-search.hf.space/api/reader-bucket-resource?' + urllib.parse.urlencode({'path':prefix+'page-manifest.json'})
@@ -552,6 +629,41 @@ class ReaderRefactorTest(unittest.TestCase):
         self.assertEqual(image.evaluate('node => node.loading'), 'eager')
         self.assertGreater(image.evaluate('node => node.naturalWidth'), 0)
         self.assertEqual(len(images), 1)
+
+    def test_spreadsheet_cells_take_first_viewport_while_images_are_pending(self):
+        # Delay only the post-frame image settlement. The sanitized HTML has
+        # already loaded, so this distinguishes first paint from restore-ready.
+        self.page.set_viewport_size({'width': 390, 'height': 240})
+        chart = base64.b64encode(support.IMAGE_FIXTURES['webp'][1]).decode()
+        self.serve(f'<section class="reader-spreadsheet-sheet"><table><tr>'
+                   f'<td id="first-cell">首行单元格</td><td><img src="data:image/webp;base64,{chart}"></td>'
+                   '</tr></table><div style="height:1800px">后续行</div></section>', 'text/html')
+        def hold_images(route):
+            response = route.fetch()
+            script = response.text()
+            anchor = 'async function waitForSpreadsheetImages(frame) {'
+            self.assertEqual(script.count(anchor), 1)
+            route.fulfill(response=response, body=script.replace(anchor, anchor+'''
+              await new Promise(resolve=>{window.__releaseSheetImages=resolve;});
+            '''))
+        self.page.route('**/static/reader/formats/reader-html-format.mjs', hold_images)
+        store = support.STORE_SCRIPT.replace('new Promise((resolve) => setTimeout(() => resolve(null), 300))',
+                                             'Promise.resolve({htmlScrollTop:420,zoom:100})')
+        self.page.route('**/static/reader/core/reader-store.js', lambda route: route.fulfill(
+            status=200, content_type='text/javascript', body=store))
+        self.page.goto(self.reader_url('html', 'sheet-first-view'), wait_until='domcontentloaded')
+        self.page.wait_for_function('()=>!!window.__releaseSheetImages')
+        self.assertEqual(self.page.locator('.reader-loading-indicator').count(), 0)
+        self.assertNotEqual(self.page.locator('html').get_attribute('data-reader-phase'), 'ready')
+        self.assertIsNone(self.page.evaluate('window.__savedReaderProgress || null'))
+        self.page.wait_for_function('''()=>{
+          const frame=document.querySelector('iframe.spreadsheet-html-frame');
+          const cell=frame?.contentDocument?.querySelector('#first-cell');
+          return !!cell && frame.getBoundingClientRect().top + cell.getBoundingClientRect().bottom <= innerHeight;
+        }''')
+        self.page.evaluate('window.__releaseSheetImages()')
+        self.page.wait_for_function("()=>document.documentElement.dataset.readerPhase==='ready'")
+        self.assertEqual(self.page.locator('iframe.spreadsheet-html-frame').evaluate('frame=>frame.contentWindow.scrollY'),420)
 
     def test_native_spreadsheet_html_keeps_cells_selectable_and_zoomable(self):
         chart = support.IMAGE_FIXTURES["webp"][1]
@@ -3357,6 +3469,41 @@ class ReaderRefactorTest(unittest.TestCase):
         self.page.wait_for_function("() => document.querySelectorAll('.toc-item')[2].classList.contains('is-current')")
         self.page.locator(".reader-chapter-next").click()
         self.page.wait_for_function("() => document.querySelectorAll('.toc-item')[3].classList.contains('is-current')")
+
+    def test_plain_html_skips_forum_dom_probe_but_keeps_sanitization(self):
+        self.page.add_init_script('''(() => {
+          const parse = DOMParser.prototype.parseFromString;
+          window.__parsedHtml = [];
+          DOMParser.prototype.parseFromString = function(text, mime) {
+            if (mime === 'text/html' && String(text).includes('ordinary-document-marker'))
+              window.__parsedHtml.push(new Error().stack);
+            return parse.call(this,text,mime);
+          };
+        })()''')
+        self.serve('<h1>ordinary-document-marker</h1><p>Ordinary document</p><script>/* removed */</script>', 'text/html')
+        self.open(self.reader_url('html', 'plain-html'))
+        body = self.page.frame_locator('.html-frame')
+        self.assertEqual(body.locator('h1').inner_text(), 'ordinary-document-marker')
+        self.assertEqual(body.locator('p').inner_text(), 'Ordinary document')
+        self.assertEqual(body.locator('script').count(), 0)
+        # DOMPurify may also call DOMParser with the original document. Check
+        # the probe's call site instead of expecting a particular wrapper.
+        self.assertFalse(self.page.evaluate("()=>window.__parsedHtml.some(stack=>stack?.includes('buildDiscourseDocument'))"))
+
+    def test_discourse_probe_keeps_encoded_and_quirks_mode_class_names(self):
+        for name, prefix, cls, extracted in [('decimal', '<!doctype html>', 'post&#45;stream', True),
+                                             ('hex', '<!doctype html>', 'post&#x2D;stream', True),
+                                             ('quirks', '', 'POST-STREAM', True),
+                                             ('standards', '<!doctype html>', 'POST-STREAM', False)]:
+            with self.subTest(kind=name):
+                document = prefix + '<meta charset="gbk">' + f'<header>Forum chrome</header><div class="{cls}">' + (
+                    '<article class="topic-post"><div class="cooked">论坛正文<script>/* removed */</script></div></article></div>')
+                self.serve(document.encode('gb18030'), 'text/html')
+                self.open(self.reader_url('html', name='forum-' + name))
+                frame = self.page.frame_locator('.html-frame')
+                self.assertEqual(frame.locator('.reader-forum-post' if extracted else '.cooked').inner_text(), '论坛正文')
+                self.assertEqual(frame.locator('header').count(), 0 if extracted else 1)
+                self.assertEqual(frame.locator('script').count(), 0)
 
     def test_discourse_html_extracts_posts_without_forum_shell(self):
         html = """<!doctype html><html><head><title>论坛标题</title></head><body>

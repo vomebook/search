@@ -7,7 +7,7 @@ const required = [
   'time formatting preserves nonnumeric and coercion behavior',
   'image readiness and errors retain ordering',
   'media mode reaches document.createElement unchanged before element work',
-  'Flash loader preserves byte values and script-before-fetch sequencing',
+  'Flash loader overlaps the bounded body and engine without rendering early',
   'Flash renderer forwards the original data and reports unavailable engine',
   'media readiness waits for metadata and reports player timing',
   'stalled proxy retries the proxy instead of the blocked dataset host',

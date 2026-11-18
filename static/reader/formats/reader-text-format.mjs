@@ -85,7 +85,33 @@ export function createReaderTextFormat(readerContext) {
       previewChunkOffset = 0,
       /** @type {TextDecoder | null} */ decoder = null,
       asciiPreviewPossible = true,
-      asciiPrefixLength = 0;
+      asciiPrefixLength = 0,
+      /** @type {TextDecoder | null} */ utf8Preview = new TextDecoder("utf-8", { fatal: true }),
+      previewText = "";
+    const clearUtf8Preview = () => {
+      delete pre.dataset.textPreview;
+      utf8Preview = null;
+      previewText = "";
+    };
+    /** @param {Uint8Array} chunk */
+    const showUtf8Preview = chunk => {
+      if (!utf8Preview) return;
+      if (displayedSampleSize || chunk.includes(0)) { clearUtf8Preview(); return; }
+      let decoded;
+      try { decoded = utf8Preview.decode(chunk, { stream: true }); }
+      catch (_) { clearUtf8Preview(); return; }
+      // Keep this tentative, bounded text out of the document's text nodes so
+      // search, speech and bookmark excerpts cannot consume a charset guess.
+      if (previewText.length < 2048) {
+        const end = 2048 - previewText.length;
+        const last = decoded.charCodeAt(end - 1);
+        previewText += decoded.slice(0, last >= 0xd800 && last <= 0xdbff ? end - 1 : end);
+        if (/^(?:[^\u3400-\u9fff]*[\u3400-\u9fff]){4}/.test(previewText)) {
+          pre.dataset.textPreview = previewText;
+          readerContext.markReaderContentReady();
+        }
+      }
+    };
     const startDecoder = async () => {
       const sample = new Uint8Array(sampleLength);
       let offset = 0;
@@ -94,6 +120,15 @@ export function createReaderTextFormat(readerContext) {
         offset += chunk.byteLength;
       }
       decoder = new TextDecoder(readerContext.detectTextEncoding(sample, readerContext.documentState.title));
+      clearUtf8Preview();
+      if (decoder.encoding.startsWith("utf-16") && displayedSampleSize) {
+        // A late NUL pattern can choose UTF-16 even after the ASCII preview
+        // stopped. Rebuild from byte zero, not the ASCII preview's byte offset.
+        pre.textContent = "";
+        block = null;
+        blockLength = 0;
+        displayedSampleSize = 0;
+      }
       await appendDecoded(decoder.decode(sample.subarray(displayedSampleSize), { stream: true }), decoder.encoding);
       sampleChunks.length = 0;
     };
@@ -151,7 +186,7 @@ export function createReaderTextFormat(readerContext) {
               }
             }
           }
-          if (sampleLength < 65540) continue;
+          if (sampleLength < 65540) { showUtf8Preview(value); continue; }
           await startDecoder();
         } else {
           // This branch is reached only after the closure assigned a decoder;
@@ -164,11 +199,13 @@ export function createReaderTextFormat(readerContext) {
       if (!decoder) await startDecoder();
       await appendDecoded((/** @type {TextDecoder} */ (/** @type {unknown} */ (decoder))).decode(), (/** @type {TextDecoder} */ (/** @type {unknown} */ (decoder))).encoding);
     } catch (reason) {
+      clearUtf8Preview();
       try {
         await reader.cancel(reason);
       } catch (_) {}
       throw reason;
     } finally {
+      clearUtf8Preview();
       untrack();
       reader.releaseLock();
     }

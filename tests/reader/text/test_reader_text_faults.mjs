@@ -8,7 +8,7 @@ test('reader errors preserve the original reason and release the reader lock', a
   const failure=new Error('source failed'), events=[], reader={read:async()=>{throw failure;},
     cancel:async reason=>{events.push(['cancel',reason]);throw new Error('cancel also failed');},
     releaseLock:()=>events.push('release')};
-  globalThis.document={createElement:()=>({className:'',appendChild(){}})};
+  globalThis.document={createElement:()=>({className:'',dataset:{},appendChild(){}})};
   globalThis.VoiceOfMLReaderSecurity={LIMITS:{documentBytes:32},assertResponseSize(){}};
   const context={content:{appendChild(){}},documentState:{title:''},assertReaderActive(){},
     trackReaderResource(){events.push('track');return()=>events.push('untrack');},

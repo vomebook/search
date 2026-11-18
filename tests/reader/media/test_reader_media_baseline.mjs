@@ -2,6 +2,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {createReaderMediaFormat} from '../../../static/reader/formats/reader-media-format.mjs';
+import {createReaderDocumentLoader} from '../../../static/reader/core/reader-document-loader.mjs';
 const fixture = () => {
   const context = {readerAbortController:new AbortController(), content:{children:[],appendChild(node){this.children.push(node);}},
     status:{textContent:''},documentState:{title:'Synthetic',restorationReady:false},mediaPanel:{querySelector:()=>({})},
@@ -39,12 +40,42 @@ test('media mode reaches document.createElement unchanged before element work', 
   } finally {globalThis.document=old;}
 });
 
-test('Flash loader preserves byte values and script-before-fetch sequencing', async () => {
-  const context=fixture(),events=[];context.RUFFLE_URL='/ruffle.js';
-  context.loadScript=async url=>events.push(['script',url]);
-  context.fetchReaderResponse=async()=>{events.push(['fetch']);return new Response(Uint8Array.of(0,2,255));};
-  assert.deepEqual(await context.loadSwfDocument(),Uint8Array.of(0,2,255));
-  assert.deepEqual(events,[['script','/ruffle.js'],['fetch']]);
+test('Flash loader overlaps the bounded body and engine without rendering early', async () => {
+  const context=fixture(), events=[], previous=globalThis.VoiceOfMLReaderSecurity;
+  Object.assign(context,createReaderDocumentLoader(context));
+  context.RUFFLE_URL='/ruffle.js';
+  globalThis.VoiceOfMLReaderSecurity={LIMITS:{documentBytes:3},async readBytes(response,limit){
+    events.push(['read',limit]);
+    const bytes=new Uint8Array(await response.arrayBuffer());
+    if(bytes.length>limit)throw new Error('READER_RESOURCE_LIMIT');
+    events.push(['body']);return bytes;
+  }};
+  try {
+    for(const engineFirst of [false,true]) {
+      events.length=0;
+      let releaseEngine,releaseBody,completed=false;
+      context.loadScript=url=>{events.push(['script',url]);return new Promise(resolve=>releaseEngine=resolve);};
+      context.fetchReaderResponse=async()=>{events.push(['fetch']);return new Response(new ReadableStream({start(stream){
+        releaseBody=()=>{stream.enqueue(Uint8Array.of(0,2,255));stream.close();};
+      }}));};
+      const pending=context.loadSwfDocument().then(bytes=>{completed=true;return bytes;});
+      await new Promise(resolve=>setImmediate(resolve));
+      assert.deepEqual(events,[['script','/ruffle.js'],['fetch'],['read',3]]);
+      (engineFirst?releaseEngine:releaseBody)();
+      await new Promise(resolve=>setImmediate(resolve));
+      assert.equal(completed,false);
+      (engineFirst?releaseBody:releaseEngine)();
+      assert.deepEqual(await pending,Uint8Array.of(0,2,255));
+      assert.equal(context.content.children.length,0);
+    }
+    const failed=new Error('engine unavailable');
+    context.loadScript=()=>Promise.reject(failed);
+    context.fetchReaderResponse=()=>new Promise(()=>{});
+    await assert.rejects(context.loadSwfDocument(),error=>error===failed);
+    context.loadScript=async()=>{};
+    context.fetchReaderResponse=async()=>new Response(Uint8Array.of(0,1,2,3));
+    await assert.rejects(context.loadSwfDocument(),/READER_RESOURCE_LIMIT/);
+  } finally {globalThis.VoiceOfMLReaderSecurity=previous;}
 });
 
 test('Flash renderer forwards the original data and reports unavailable engine', async () => {

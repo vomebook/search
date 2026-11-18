@@ -2691,7 +2691,7 @@ class StaticGateTests(unittest.TestCase):
             self.assert_check(self.run_check(*check), False, message)
         for extra in ("test('" + name + "', () => {});", "test.skip('extra skip', () => {});",
                       "test.todo('extra todo');", 'console.log("skipped 0");', 'console.log("todo 0");',
-                      'console.log("pass 14");', 'console.log("end of coverage report");'):
+                      'console.log("pass 15");', 'console.log("end of coverage report");'):
             source.write_text(original + '\n' + extra + '\n')
             self.assert_check(self.run_check(*check), False, message)
         self.assertIn(anchor + ',async()=>{', original)
@@ -2722,7 +2722,7 @@ class StaticGateTests(unittest.TestCase):
                  'tests/reader/media/test_ruffle_closure.mjs', 'tests/service_worker/test_ruffle_retention.js',
                  'scripts/build/copy_reader_vendor.mjs', 'scripts/build/fetch_foliate_reader.mjs',
                  'scripts/build/check_reader_release.mjs', 'static/reader-resources.js', 'static/sw.js',
-                 'static/reader/core/reader-source.mjs']
+                 'static/reader/core/reader-source.mjs', 'static/reader/core/reader-document-loader.mjs']
         for path in paths:
             target = self.root / path
             target.parent.mkdir(parents=True, exist_ok=True)
@@ -2730,7 +2730,7 @@ class StaticGateTests(unittest.TestCase):
         check = ['node', paths[1]]
         message = 'Reader media requires named contracts and exactly one source row'
         report = self.run_check(*check, timeout=120)
-        self.assert_tap_success(report)
+        self.assert_tap_success(report, multiple_reports=True)
         source = self.root / paths[4]
         original = source.read_text()
         name = 'resource cleanup rejects pending metadata and removes listeners'
@@ -2762,8 +2762,9 @@ class StaticGateTests(unittest.TestCase):
         regression = self.run_check(*check)
         self.assert_check(regression, False, message)
         self.assert_passing_tap(regression.stdout)
+        primary_report = report.stdout.split('\nTAP version 13\n', 1)[0]
         self.assertEqual(re.findall(r'(?m)^# Subtest: .+$', regression.stdout),
-                         re.findall(r'(?m)^# Subtest: .+$', report.stdout))
+                         re.findall(r'(?m)^# Subtest: .+$', primary_report))
         self.assertIn('branch coverage', regression.stdout)
         source.write_text(original)
         self.assertEqual(gate_original.count('[100, 100, 100]'), 1)

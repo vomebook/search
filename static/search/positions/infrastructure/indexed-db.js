@@ -18,6 +18,19 @@
     };
   }
 
+  /** @param {SearchPosition[]} values @param {(position: SearchPosition) => void} [discard] */
+  function retainPositions(values, discard) {
+    // Invalid timestamps must not affect the order of otherwise valid rows.
+    const valid = values.filter(value => {
+      if (VoiceOfMLPositionPolicy.validPosition(value)) return true;
+      discard?.(value);
+      return false;
+    }).sort((a, b) => b.savedAt - a.savedAt);
+    const limit = VoiceOfMLPositionPolicy.POSITION_MAX;
+    if (discard) for (const value of valid.slice(limit)) discard(value);
+    return valid.slice(0, limit);
+  }
+
   /** @returns {SearchPositionStorage} */
   function create() {
     /** @type {IDBDatabase | null} */
@@ -49,24 +62,27 @@
             database = db;
             db.onversionchange = () => { db.close(); if (database === db) close(); };
             try {
-              const transaction = db.transaction("positions", "readwrite");
+              const transaction = db.transaction("positions", "readonly");
               const completion = VoiceOfMLSearchSession.watchTransaction(transaction);
-              const store = transaction.objectStore("positions");
-              /** @type {SearchPosition[]} */
-              const retained = [];
-              const read = store.getAll();
-              read.onsuccess = () => {
-                let count = 0;
-                const values = /** @type {SearchPosition[]} */ (read.result).sort((a, b) => b.savedAt - a.savedAt);
-                for (const value of values) {
-                  if (!VoiceOfMLPositionPolicy.validPosition(value) || ++count > VoiceOfMLPositionPolicy.POSITION_MAX) store.delete(value.key);
-                  else retained.push(value);
-                }
-              };
+              const read = transaction.objectStore("positions").getAll();
               void completion.result.then(success => {
-                // The startup deadline releases its waiter, not this connection's
-                // hydration. A committed late read must still fill missing keys.
-                if (success && owner === revision && database === db) accept(retained);
+                // A committed late read can still fill missing keys, but only
+                // for the current connection. Startup need not wait for deletes.
+                if (success && owner === revision && database === db) {
+                  const values = /** @type {SearchPosition[]} */ (read.result);
+                  const retained = retainPositions(values);
+                  accept(retained);
+                  if (retained.length < values.length) setTimeout(() => {
+                    if (owner !== revision || database !== db) return;
+                    // Recheck current values within the write transaction: a
+                    // different tab may have refreshed a row since the read.
+                    try {
+                      const store = db.transaction("positions", "readwrite").objectStore("positions");
+                      const latest = store.getAll();
+                      latest.onsuccess = () => retainPositions(latest.result, value => store.delete(value.key));
+                    } catch (_) {}
+                  }, 0);
+                }
                 finish();
               });
             } catch (_) { finish(); }

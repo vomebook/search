@@ -57,6 +57,49 @@ class EbookFlowTests(unittest.TestCase):
         self.assertTrue(self.page.locator('.reader-section-body').first.text_content())
         for route in held:route.abort()
 
+    def test_native_first_chapter_reads_packaged_styles_in_parallel_and_keeps_cascade(self):
+        with zipfile.ZipFile(io.BytesIO(epub_with_many_chapters(count=1))) as archive:
+            files = {name: archive.read(name) for name in archive.namelist()}
+        links = ''.join(f'<link rel="stylesheet" href="style-{i}.css"/>' for i in range(1, 5))
+        sheets = ''.join(f'<item id="style-{i}" href="style-{i}.css" media-type="text/css"/>' for i in range(1, 5))
+        files['OEBPS/content.opf'] = files['OEBPS/content.opf'].replace(b'</manifest>', sheets.encode() + b'</manifest>')
+        files['OEBPS/nav.xhtml'] = files['OEBPS/nav.xhtml'].replace(b'<body>', f'<head>{links}</head><body><p id="cascade-probe">styles</p>'.encode())
+        for i in range(1, 5):
+            files[f'OEBPS/style-{i}.css'] = f'#cascade-probe {{letter-spacing:{i}px}}'.encode()
+        body = io.BytesIO()
+        with zipfile.ZipFile(body, 'w', zipfile.ZIP_DEFLATED) as archive:
+            for name, data in files.items(): archive.writestr(name, data)
+
+        self.page.add_init_script('''(() => {
+          const fetchNative = window.fetch;
+          const blobNative = Response.prototype.blob;
+          window.__heldStyles = {};
+          window.fetch = async (url, ...rest) => {
+            const response = await fetchNative(url, ...rest);
+            if (!String(url).startsWith('blob:') || !response.headers.get('content-type')?.includes('text/css')) return response;
+            const blob = await blobNative.call(response);
+            const marker = /letter-spacing:(\\d)px/.exec(await blob.text());
+            if (!marker) return new Response(blob, {headers: response.headers});
+            await new Promise(resolve => { window.__heldStyles[marker[1]] = resolve; });
+            return new Response(blob, {headers: response.headers});
+          };
+        })()''')
+        self.page.route('**/api/reader-content**', lambda route: route.fulfill(
+            content_type='application/epub+zip', body=body.getvalue(), headers={'Access-Control-Allow-Origin':'*'}))
+        self.page.goto(self.origin+support.PREFIX+'/static/reader.html?'+urlencode(dict(
+            url='https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/style-order.epub',ext='epub')),
+            wait_until='domcontentloaded')
+        self.page.wait_for_function("()=>['1','2','3'].every(key=>!!window.__heldStyles[key])")
+        self.assertFalse(self.page.evaluate("()=>!!window.__heldStyles['4']"))
+        # Finish out of order. The last sheet in document order must still win.
+        self.page.evaluate("()=>window.__heldStyles['3']()")
+        self.page.wait_for_function("()=>!!window.__heldStyles['4']")
+        self.page.evaluate("()=>{for(const key of ['4','2','1']) window.__heldStyles[key]();}")
+        self.page.wait_for_function('''()=>{
+          const probe = document.querySelector('article[data-section="0"]')?.shadowRoot?.querySelector('#cascade-probe');
+          return probe && getComputedStyle(probe).letterSpacing === '4px';
+        }''')
+
     def test_native_restore_and_progress_do_not_wait_for_unrelated_neighbors(self):
         self.native()
         self.page.wait_for_function("()=>document.documentElement.dataset.readerPhase==='ready'")

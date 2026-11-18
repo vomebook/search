@@ -4,7 +4,7 @@ from pathlib import Path
 
 from playwright.sync_api import sync_playwright
 from scripts.benchmarks.benchmark_djvu import local_server
-from tests.support.reader_native_fixture import install
+from tests.support.reader_native_fixture import PINNED, RAW, REVISION, SHA256, install
 
 ROOT=Path(__file__).resolve().parents[3]
 PREFIX='/search' if '/search/static/' in (ROOT/'static/reader.html').read_text() else ''
@@ -22,6 +22,82 @@ class DjvuEngineBootstrapTests(unittest.TestCase):
         self.addCleanup(self.context.close);self.page=self.context.new_page();self.errors=[];self.requests=[]
         self.page.on('pageerror',lambda error:self.errors.append(str(error)))
         self.page.on('request',lambda request:self.requests.append(request.url))
+
+    def test_direct_djvu_prepares_decoder_before_source_and_map(self):
+        source_url = self.origin + '/direct-synthetic.djvu'
+        held = []
+        self.page.route(source_url, lambda route: held.append(route))
+        self.page.goto(self.origin + PREFIX + '/static/manifest.json')
+        self.page.add_script_tag(url=self.origin + PREFIX + '/static/reader/core/reader-security.js')
+        self.page.evaluate('''({moduleUrl,sourceUrl,sha256,size}) => {
+          const Native = Worker;
+          window.__ops = [];
+          window.Worker = class extends Native {
+            postMessage(message,...args) {
+              window.__ops.push(message.operation);
+              return super.postMessage(message,...args);
+            }
+          };
+          const controller = new AbortController();
+          const context = {
+            readerAbortController: controller,
+            fetchReaderUrl: (url, options) => fetch(url, options),
+            v3ResourceUrl: () => sourceUrl,
+            assertReaderActive: () => controller.signal.throwIfAborted(),
+            trackReaderResource: cleanup => {window.__closeDirectDjvu = cleanup;}
+          };
+          const map = new Promise(resolve => {window.__providePageMap = resolve;});
+          window.__direct = import(moduleUrl).then(({openDirectDjvu}) => openDirectDjvu(context,
+            {primary:{resource:{bytes:size,sha256}}}, map));
+          window.__direct.catch(() => {});
+        }''', {'moduleUrl': PREFIX + '/static/reader/pdf/reader-djvu-loader.mjs',
+                'sourceUrl': source_url, 'sha256': SHA256, 'size': len(RAW)})
+        self.page.wait_for_function("()=>window.__ops.includes('prepare')", timeout=5000)
+        self.assertEqual(self.page.evaluate('window.__ops'), ['prepare'])
+        self.assertEqual(len(held), 1)
+        held.pop().fulfill(status=200, content_type='image/vnd.djvu', body=RAW)
+        self.page.evaluate('''()=>window.__providePageMap({pages:[1,2,3].map(page=>
+          ({page,width:23.04,height:30.72,rotation:0,djvu:{pixels:[96,128],dpi:300}}))})''')
+        self.assertEqual(self.page.evaluate('async()=> (await window.__direct).numPages'), 3)
+        self.assertEqual(self.page.evaluate('window.__ops'), ['prepare', 'open'])
+        self.page.evaluate('window.__closeDirectDjvu()')
+        self.assertEqual(self.errors, [])
+
+    def test_native_decoder_prepares_while_revision_is_pending(self):
+        state = install(self.page, self.origin, prefix=PREFIX)
+        held = []
+        self.page.route('**/api/reader-source-revision?**', lambda route: held.append(route))
+        self.page.add_init_script('''(() => {
+          const Native = Worker;
+          window.__ops = [];
+          window.Worker = class extends Native {
+            constructor(url, options) {
+              super(url, options);
+              if (!String(url).includes('reader-djvu-engine-worker')) return;
+              let prepareId;
+              const post = this.postMessage.bind(this);
+              this.postMessage = (message, ...args) => {
+                window.__ops.push(message.operation);
+                if (message.operation === 'prepare') prepareId = message.id;
+                return post(message, ...args);
+              };
+              this.addEventListener('message', ({data}) => {
+                if (prepareId !== undefined && data.id === prepareId && data.ok) window.__decoderPrepared = true;
+              });
+            }
+          };
+        })()''')
+        self.page.goto(state['url'], wait_until='domcontentloaded')
+        self.page.wait_for_function('()=>window.__decoderPrepared === true', timeout=10000)
+        self.assertEqual(len(held), 1)
+        self.assertEqual(state['source'], [])
+        self.assertEqual(self.page.evaluate('window.__ops'), ['prepare'])
+        self.assertEqual(self.page.locator('.reader-page canvas.ready').count(), 0)
+        held.pop().fulfill(json={'url': PINNED, 'revision': REVISION}, headers={'Access-Control-Allow-Origin': '*'})
+        self.page.locator('.reader-page[data-page="1"] canvas.ready').wait_for(timeout=10000)
+        self.assertTrue(state['source'] and all(row['url'] == PINNED and row['range'] for row in state['source']))
+        self.assertEqual(self.page.evaluate('window.__ops.slice(0, 2)'), ['prepare', 'open-range'])
+        self.assertEqual(self.errors, [])
 
     def test_failed_wasm_does_not_show_unverified_page(self):
         state=install(self.page,self.origin,prefix=PREFIX)

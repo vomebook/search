@@ -10,6 +10,76 @@ class PdfHistoryRaceTests(unittest.TestCase):
     setUpClass = classmethod(support.PdfFirstPageTests.setUpClass.__func__)
     open = support.PdfFirstPageTests.open
 
+    def test_ordinary_pdf_first_canvas_does_not_wait_for_other_shell_batches(self):
+        for saved_page, preempt in [(1, False), (1, True), (48, False)]:
+            with self.subTest(saved_page=saved_page, preempt=preempt), support.range_source(support.sparse_pdf(count=48, stride=32768)) as (source, state, _lock):
+                state['block'].set()
+                context = self.browser.new_context(service_workers='block')
+                try:
+                    page = context.new_page()
+                    if preempt:
+                        def hold_first_draw(route):
+                            response = route.fetch()
+                            script = response.text()
+                            anchor = 'await readerContext.measurePdf(readerContext.awaitReader(rendering.promise, renderController.signal), "draw", Number(shell.dataset.page));'
+                            self.assertEqual(script.count(anchor), 1)
+                            route.fulfill(response=response, body=script.replace(anchor, '''
+                              if (shell.dataset.page === "1" && !window.__firstDrawHeld) {
+                                window.__firstDrawHeld = true;
+                                await readerContext.awaitReader(new Promise(() => {}), renderController.signal);
+                              }
+                            '''+anchor))
+                        page.route('**/static/reader/pdf/reader-pdf-renderer.mjs*', hold_first_draw)
+                    store = ('window.VoiceOfMLReaderStore={get:async()=>%s,put:async()=>{window.__progressWritten=true;},'
+                             'list:async()=>[],listBookmarks:async()=>[],listAllBookmarks:async()=>[]};' % (
+                                 'null' if saved_page == 1 else '({page:48,pageCount:48,zoom:100})'))
+                    page.route('**/static/reader/core/reader-store.js*', lambda route: route.fulfill(
+                        content_type='text/javascript', body=store))
+
+                    def hold_remaining_shells(route):
+                        response = route.fetch()
+                        script = response.text()
+                        anchor = 'readerContext.content.appendChild(fragment);\n      await readerContext.waitForReader();'
+                        self.assertEqual(script.count(anchor), 1)
+                        route.fulfill(response=response, body=script.replace(anchor, anchor+'''
+                          if (start === 2) await new Promise(resolve=>{window.__releasePdfShells=resolve;});
+                        '''))
+
+                    page.route('**/static/reader/pdf/reader-pdf-page-window.mjs*', hold_remaining_shells)
+                    self.open(page, source)
+                    try:
+                        page.wait_for_function('()=>!!window.__releasePdfShells', timeout=10000)
+                    except PlaywrightTimeoutError as error:
+                        error.add_note(str(page.evaluate('''()=>({phase:document.documentElement.dataset.readerPhase,
+                          status:document.querySelector('#status')?.textContent,error:document.querySelector('.reader-error')?.textContent,
+                          page:document.querySelector('#page-number')?.value})''')))
+                        raise
+                    self.assertEqual(page.locator('.reader-page[data-page="48"]').count(), 0)
+                    expected_page = saved_page
+                    if saved_page == 1:
+                        if preempt:
+                            page.wait_for_function('()=>window.__firstDrawHeld === true')
+                        else:
+                            page.locator('.reader-page[data-page="1"] canvas.ready').wait_for(timeout=10000)
+                        # Both a completed and a pending startup draw must yield to navigation.
+                        expected_page = 12
+                        page.locator('#page-number').fill(str(expected_page))
+                        page.locator('#page-number').dispatch_event('change')
+                        page.locator(f'.reader-page[data-page="{expected_page}"] canvas.ready').wait_for(timeout=10000)
+                    else:
+                        self.assertEqual(page.locator('.reader-page canvas.ready').count(), 0)
+                    self.assertNotEqual(page.locator('html').get_attribute('data-reader-phase'), 'ready')
+                    self.assertFalse(page.evaluate('window.__progressWritten === true'))
+                    before = page.locator('#viewport').evaluate('node=>node.scrollTop')
+                    page.evaluate('window.__releasePdfShells()')
+                    page.wait_for_function("()=>document.documentElement.dataset.readerPhase==='ready'")
+                    self.assertEqual(page.locator('#page-number').input_value(), str(expected_page))
+                    if saved_page == 1:
+                        self.assertAlmostEqual(page.locator('#viewport').evaluate('node=>node.scrollTop'), before, delta=3)
+                    page.locator(f'.reader-page[data-page="{expected_page}"] canvas.ready').wait_for(timeout=10000)
+                finally:
+                    context.close()
+
     def suppress_ordinary_worker_handshake(self, page, include_staged=False):
         # Hold the first range until the real ordinary Worker has emitted its
         # ready message. PDF.js never receives that message, deterministically
@@ -350,6 +420,50 @@ class PdfHistoryRaceTests(unittest.TestCase):
                 finally:
                     context.close()
 
+    def test_small_pdf_paints_before_staging_history_returns(self):
+        # Exercise both a complete initial range and a partial strong-ETag
+        # response. Neither can use the staged worker.
+        for stride in (1024, 32768):
+            payload = support.sparse_pdf(count=20, stride=stride)
+            with self.subTest(stride=stride), support.range_source(payload) as (source, state, _lock):
+                state['block'].set()
+                context = self.browser.new_context(service_workers='block')
+                try:
+                    page = context.new_page()
+                    workers = []
+                    page.on('request', lambda request: workers.append(request.url)
+                            if 'pdf-worker-wrapper' in request.url else None)
+                    page.route('**/static/reader/core/reader-store.js*', lambda route: route.fulfill(
+                        content_type='text/javascript', body='''
+                          window.__progressWrites=0;
+                          window.VoiceOfMLReaderStore={
+                            get:()=>new Promise(resolve=>{window.__finishHistory=resolve;}),
+                            put:async()=>{window.__progressWrites++;},list:async()=>[],
+                            listBookmarks:async()=>[],listAllBookmarks:async()=>[]
+                          };
+                        '''))
+
+                    def hold_staging_deadline(route):
+                        script = route.fetch().text()
+                        original = 'timer = setTimeout(() => resolve(null), 5000)'
+                        self.assertEqual(script.count(original), 1)
+                        route.fulfill(content_type='text/javascript', body=script.replace(
+                            original, 'window.__heldStagingDeadline = () => resolve(null)'))
+
+                    page.route('**/static/reader/pdf/reader-pdf-engine.mjs*', hold_staging_deadline)
+                    self.open(page, source)
+                    page.locator('.reader-page[data-page="1"] canvas.ready').wait_for(timeout=12000)
+                    self.assertFalse(any('reader-first-page=1' in url for url in workers), workers)
+                    self.assertEqual(page.locator('.reader-pdf-opening').count(), 0)
+                    self.assertNotEqual(page.locator('html').get_attribute('data-reader-phase'), 'ready')
+                    self.assertEqual(page.evaluate('window.__progressWrites'), 0)
+                    page.evaluate('window.__finishHistory({page:12,pageCount:20,zoom:100})')
+                    page.locator('.reader-page[data-page="12"] canvas.ready').wait_for(timeout=12000)
+                    page.wait_for_function("()=>document.documentElement.dataset.readerPhase==='ready'")
+                    self.assertEqual(page.locator('#page-number').input_value(), '12')
+                finally:
+                    context.close()
+
     def test_unresolved_history_does_not_hold_a_ready_ordinary_worker(self):
         with support.range_source(support.sparse_pdf(root_at_end=True)) as (source, state, _lock):
             state['block'].set()
@@ -455,7 +569,7 @@ class PdfHistoryRaceTests(unittest.TestCase):
                     def instrument_engine(route):
                         script = route.fetch().text()
                         old = 'timer = setTimeout(() => resolve(null), 5000)'
-                        selection = 'const stagedCandidate = first && !first.complete'
+                        selection = 'const stagedCandidate = freshPageOne ||'
                         if old not in script:
                             failures.append("opening history timeout hook missing")
                         if selection not in script:
