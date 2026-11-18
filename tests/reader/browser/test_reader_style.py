@@ -445,48 +445,86 @@ class ReaderStyleTests(unittest.TestCase):
 
     def test_mobile_title_and_controls_fit_all_formats(self):
         self.page.emulate_media(reduced_motion='reduce')
-        self.page.evaluate("""()=>{
-          document.querySelector('#title').textContent='标题很长的书名'.repeat(15);
-          const tools=document.querySelector('.reader-actions');
-          const ocr=document.createElement('a');ocr.id='ocr';ocr.className='text-button';ocr.textContent='OCR';tools.prepend(ocr);
-          if (!tools.querySelector('.preview-speech-btn')) {
-            const speech=document.createElement('button');speech.className='icon-button preview-speech-btn';tools.prepend(speech);
-          }
+        actions = self.page.locator('.reader-actions')
+        # The speech button loads asynchronously, even after the Reader is ready.
+        actions.locator('[data-speech-toggle]').wait_for()
+        self.page.evaluate("""() => {
+          document.querySelector('#title').textContent = '标题很长的书名'.repeat(15);
+          document.querySelector('#page-total').textContent = '/ 12345';
+          const ocr = document.createElement('a');
+          ocr.id = 'ocr'; ocr.className = 'text-button'; ocr.textContent = 'OCR'; ocr.href = '#ocr-fixture';
+          document.querySelector('.reader-actions [data-speech-toggle]').after(ocr);
         }""")
-        for width in (320, 390, 600):
-            self.page.set_viewport_size({'width':width, 'height':700})
-            for pagination, zoom in ((False, False), (False, True), (True, True)):
-                with self.subTest(width=width, pagination=pagination, zoom=zoom):
-                    self.page.evaluate('''([pagination, zoom])=>{
-                      document.querySelector('.page-controls').hidden=!pagination;
-                      document.querySelector('.zoom-controls').hidden=!zoom;
-                    }''', [pagination, zoom])
-                    boxes=self.page.evaluate('''()=>{
-                      const toolbar=document.querySelector('.reader-toolbar').getBoundingClientRect();
-                      return [...document.querySelectorAll('#back,#title,#history,.reader-actions button:not([hidden]),.reader-actions input,#download,#ocr')]
-                        .filter(n=>n.getClientRects().length).map(n=>{const r=n.getBoundingClientRect();
-                        return {id:n.id,left:r.left,right:r.right,top:r.top,bottom:r.bottom,
-                          inside:r.left>=toolbar.left&&r.right<=toolbar.right&&r.top>=toolbar.top&&r.bottom<=toolbar.bottom};});
+        cases = [(width, pagination, zoom) for width in (320, 390, 600)
+                 for pagination, zoom in ((False, False), (False, True), (True, True))]
+        # At 280px, even the fixed-width controls alone are wider than the strip.
+        for width, pagination, zoom in [*cases, (280, True, True)]:
+            with self.subTest(width=width, pagination=pagination, zoom=zoom):
+                self.page.set_viewport_size({'width': width, 'height': 700})
+                self.page.evaluate('''([pagination, zoom]) => {
+                  document.querySelector('.page-controls').hidden = !pagination;
+                  document.querySelector('.zoom-controls').hidden = !zoom;
+                  document.querySelector('.reader-actions').scrollLeft = 0;
+                }''', [pagination, zoom])
+                layout = actions.evaluate('''actions => {
+                  const rect = node => node.getBoundingClientRect().toJSON();
+                  const controls = [...actions.querySelectorAll('button, input, a')]
+                    .filter(node => node.getClientRects().length)
+                    .map(node => ({selector: node.id ? '#' + node.id : '[data-speech-toggle]', ...rect(node)}));
+                  return {controls, toolbar: rect(actions.closest('header')), strip: rect(actions),
+                    back: rect(document.querySelector('#back')), menu: rect(document.querySelector('#history')),
+                    scroll: actions.scrollWidth > actions.clientWidth};
+                }''')
+                toolbar, strip, back, menu = (layout[key] for key in ('toolbar', 'strip', 'back', 'menu'))
+                self.assertEqual(toolbar['height'], 36)
+                self.assertTrue(self.page.locator('#title').is_hidden())
+                self.assertGreaterEqual(back['left'], toolbar['left'])
+                self.assertGreaterEqual(strip['left'], back['right'])
+                self.assertLessEqual(strip['right'], menu['left'])
+                self.assertLessEqual(menu['right'], toolbar['right'])
+                expected = ['[data-speech-toggle]', '#ocr']
+                if pagination:
+                    expected += ['#page-prev', '#page-number', '#page-next']
+                if zoom:
+                    expected += ['#zoom-out', '#zoom', '#zoom-in']
+                expected += ['#download']
+                controls = layout['controls']
+                self.assertEqual([box['selector'] for box in controls], expected)
+                for box in (back, strip, *controls, menu):
+                    self.assertGreaterEqual(box['top'], toolbar['top'], box)
+                    self.assertLessEqual(box['bottom'], toolbar['bottom'], box)
+                for previous, following in zip(controls, controls[1:]):
+                    self.assertLessEqual(previous['right'], following['left'] + 0.5, (previous, following))
+                if width == 280:
+                    self.assertTrue(layout['scroll'], layout)
+                if not layout['scroll']:
+                    for box in controls:
+                        self.assertGreaterEqual(box['left'], strip['left'], box)
+                        self.assertLessEqual(box['right'], strip['right'], box)
+
+                # Tab must reach every control, including those clipped by the scrolling strip.
+                self.page.locator('#back').focus()
+                self.page.keyboard.press('Tab')
+                # Some browsers give the scroll container its own tab stop.
+                if actions.evaluate('node => node === document.activeElement'):
+                    self.page.keyboard.press('Tab')
+                for selector in expected:
+                    focus = actions.locator(selector).evaluate('''node => {
+                      const box = node.getBoundingClientRect();
+                      const strip = node.closest('.reader-actions').getBoundingClientRect();
+                      return {focused: node.matches(':focus-visible'), outline: getComputedStyle(node).outlineStyle,
+                        left: box.left - strip.left, right: strip.right - box.right};
                     }''')
-                    self.assertEqual(self.page.locator('.reader-toolbar').bounding_box()['height'], 36)
-                    self.assertTrue(self.page.locator('#title').is_hidden())
-                    self.assertTrue(all(box['inside'] for box in boxes), boxes)
-                    actions=self.page.locator('.reader-actions')
-                    metrics=actions.evaluate('''n=>{const r=n.getBoundingClientRect(),back=document.querySelector('#back').getBoundingClientRect(),
-                      menu=document.querySelector('#history').getBoundingClientRect();
-                      return {left:r.left,right:r.right,back:back.right,menu:menu.left,scroll:n.scrollWidth>n.clientWidth}}''')
-                    self.assertGreaterEqual(metrics['left'],metrics['back']-.5)
-                    self.assertLessEqual(metrics['right'],metrics['menu']+.5)
-                    inside=[b for b in boxes if b['id'] in ('back','history') or
-                            b['left'] >= metrics['left']-.5 and b['right'] <= metrics['right']+.5]
-                    for i, a in enumerate(inside):
-                        for b in inside[i+1:]:
-                            overlap=min(a['right'], b['right'])-max(a['left'], b['left'])
-                            vertical=min(a['bottom'], b['bottom'])-max(a['top'], b['top'])
-                            self.assertFalse(overlap > 0.5 and vertical > 0.5, (a, b))
-                    if metrics['scroll']:
-                        actions.evaluate('n=>n.scrollLeft=n.scrollWidth')
-                        self.assertGreater(actions.evaluate('n=>n.scrollLeft'),0)
+                    self.assertTrue(focus['focused'], (selector, focus))
+                    self.assertEqual(focus['outline'], 'solid', (selector, focus))
+                    self.assertGreaterEqual(focus['left'], -0.5, (selector, focus))
+                    self.assertGreaterEqual(focus['right'], -0.5, (selector, focus))
+                    self.page.keyboard.press('Tab')
+                if layout['scroll']:
+                    self.assertGreater(actions.evaluate('node => node.scrollLeft'), 0)
+                self.assertTrue(self.page.locator('#history').evaluate("node => node.matches(':focus-visible')"))
+                self.assertEqual(self.page.locator('#back').bounding_box()['x'], back['left'])
+                self.assertEqual(self.page.locator('#history').bounding_box()['x'], menu['left'])
 
     def test_mobile_overflowing_toolbar_supports_touch_swipe(self):
         context=self.browser.new_context(viewport={'width':280,'height':700},is_mobile=True,has_touch=True)

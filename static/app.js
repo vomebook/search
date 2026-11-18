@@ -3205,7 +3205,6 @@ function ensureResultTemplateCache() {
 function createResultRow(rec, idx) { return getResultRows().createRow(rec, idx); }
 
 // The controller owns virtual rendering; paging/snapshots/thumb retain the shared state reference.
-const RESULT_SCROLL_SEGMENT_HEIGHT = VoiceOfMLVirtualResults.segmentHeight;
 /** @type {SearchVirtualController | undefined} */
 let virtualResults;
 function getVirtualResults() {
@@ -3766,9 +3765,12 @@ function setupVirtualScroll() {
   }, { passive: true });
 }
 
+// Keep the thumb on its frozen pointer mapping while measured rows settle underneath it.
+/** @type {number | null} */
+let dragThumbScrollTop = null;
 function updateScrollThumb() {
-  const scrollTop = getResultScrollTop();
   const drag = VSCROLL.dragMetrics;
+  const scrollTop = (drag && dragThumbScrollTop) ?? getResultScrollTop();
   const scrollHeight = drag ? drag.scrollHeight : getVirtualTotalHeight();
   const clientHeight = DOM.resultsContainer.clientHeight;
   if (scrollHeight <= clientHeight || !DOM.scrollTrack.clientHeight) { DOM.scrollTrack.classList.remove("visible"); return; }
@@ -3791,7 +3793,13 @@ function setupQuickScroll() {
   function applyPendingScrollTop() {
     dragFrame = 0;
     if (pendingScrollTop === null || !VSCROLL.isDraggingThumb) return;
-    setResultScrollTop(pendingScrollTop);
+    const delta = pendingScrollTop - (dragThumbScrollTop ?? startST);
+    dragThumbScrollTop = pendingScrollTop;
+    // Use the frozen scale for interior motion, but apply it to the
+    // compensated position. Only the endpoints follow the live range.
+    const top = pendingScrollTop === 0 ? 0 : pendingScrollTop === maxScrollTop
+      ? getVirtualTotalHeight() - DOM.resultsContainer.clientHeight : getResultScrollTop() + delta;
+    setResultScrollTop(top);
     pendingScrollTop = null;
     renderVisible();
     updateScrollThumb();
@@ -3812,21 +3820,19 @@ function setupQuickScroll() {
     maxScrollTop = Math.max(0, getVirtualTotalHeight() - scrollEl.clientHeight);
     VSCROLL.isDraggingThumb = true;
     VSCROLL.dragMetrics = { scrollHeight: getVirtualTotalHeight(), trackHeight: DOM.scrollTrack.clientHeight, thumbHeight: DOM.scrollThumb.clientHeight };
-    DOM.resultsList.style.minHeight = Math.min(RESULT_SCROLL_SEGMENT_HEIGHT, scrollEl.scrollHeight) + "px";
   }
   function finishDrag() {
     if (dragFrame) cancelAnimationFrame(dragFrame);
-    const requestedScrollTop = pendingScrollTop;
     applyPendingScrollTop();
-    const finalScrollTop = requestedScrollTop === null ? getResultScrollTop() : requestedScrollTop;
-    VSCROLL.renderStart = -1;
-    VSCROLL.renderEnd = -1;
+    const finalScrollTop = getResultScrollTop();
     VSCROLL.isDraggingThumb = false;
-    DOM.resultsList.style.minHeight = "";
     // Measure and demand pages at the released viewport, but keep the drag's
     // tight window so offscreen height corrections don't move it on release.
     try { setResultScrollTop(finalScrollTop, true); }
-    finally { VSCROLL.dragMetrics = null; }
+    finally {
+      VSCROLL.dragMetrics = null;
+      dragThumbScrollTop = null;
+    }
     updateScrollTrack();
   }
   /** @param {MouseEvent} e */
@@ -3882,7 +3888,7 @@ function setupQuickScroll() {
     pendingScrollTop = null;
     VSCROLL.isDraggingThumb = false;
     VSCROLL.dragMetrics = null;
-    DOM.resultsList.style.minHeight = "";
+    dragThumbScrollTop = null;
     document.removeEventListener("mousemove", onMouseMove);
     document.removeEventListener("mouseup", onMouseUp);
     document.removeEventListener("touchmove", onTouchMove);

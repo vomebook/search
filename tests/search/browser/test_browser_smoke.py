@@ -507,9 +507,12 @@ class BrowserBehaviorTest(unittest.TestCase):
 
     def test_virtual_scroll_settles_after_jumps_and_preserves_append(self):
         self.load()
-        # Force the long text to wrap on every runner, so estimated appended
-        # rows differ substantially from their actual height at thumb release.
-        self.page.add_style_tag(content=".result-path, .result-title { letter-spacing: 5px; }")
+        # Give the original results taller geometry so the appended rows start
+        # with a substantial overestimate, independently of the runner's fonts.
+        self.page.add_style_tag(content="""
+            .result-path, .result-title { letter-spacing: 5px; }
+            .result-item:has([data-filename^='virtual-']) { min-height: 220px; }
+        """)
         result = self.page.evaluate("""async () => {
             const repeat = (value, count) => Array(count).fill(value).join("");
             STATE.results = Array.from({length: 800}, (_, index) => ({
@@ -629,11 +632,52 @@ class BrowserBehaviorTest(unittest.TestCase):
                 await new Promise(requestAnimationFrame);
                 maxReleaseJump = Math.max(maxReleaseJump, Math.abs(container.scrollTop - scrollTopAfterDragFrame));
             }
+            const trackTopStable = trackTopBeforeScroll === DOM.scrollTrack.style.top;
+            const trackHeightStable = trackHeightBeforeScroll === DOM.scrollTrack.style.height;
+            const thumbHeightStable = thumbHeightBeforeScroll === DOM.scrollThumb.style.height;
+            const settledBottomGap = container.scrollHeight - container.clientHeight - container.scrollTop;
+            const lastRow = DOM.resultsList.querySelector(`.result-item[data-index="${STATE.results.length - 1}"]`);
+            const lastRowBottomError = lastRow
+                ? Math.abs(lastRow.getBoundingClientRect().bottom - container.getBoundingClientRect().bottom)
+                : null;
+
+            // Release inside the newly appended, still mostly unmeasured rows.
+            // The same row should remain at the same viewport-relative offset.
+            container.scrollTop = 0;
+            renderVisible();
+            const interiorThumb = DOM.scrollThumb.getBoundingClientRect();
+            const startY = interiorThumb.top + interiorThumb.height / 2;
+            const frozenRange = getVirtualTotalHeight() - container.clientHeight;
+            const travel = DOM.scrollTrack.clientHeight - DOM.scrollThumb.clientHeight;
+            const interiorY = startY + travel * (getVirtualOffset(820) + 30) / frozenRange;
+            const moveInterior = () => document.dispatchEvent(new MouseEvent("mousemove", {
+                bubbles: true, clientY: interiorY,
+            }));
+            DOM.scrollThumb.dispatchEvent(new MouseEvent("mousedown", {bubbles: true, clientY: startY}));
+            moveInterior();
+            await new Promise(requestAnimationFrame);
+            const anchorIndex = findVirtualIndex(getResultScrollTop());
+            const anchorRow = DOM.resultsList.querySelector(`.result-item[data-index="${anchorIndex}"]`);
+            const anchorY = anchorRow.getBoundingClientRect().top - container.getBoundingClientRect().top;
+            let sameInteriorRow = true;
+            let interiorOffsetError = 0;
+            const checkInteriorAnchor = () => {
+                sameInteriorRow &&= anchorRow.isConnected && findVirtualIndex(getResultScrollTop()) === anchorIndex;
+                interiorOffsetError = Math.max(interiorOffsetError, Math.abs(
+                    anchorRow.getBoundingClientRect().top - container.getBoundingClientRect().top - anchorY,
+                ));
+            };
+            // Flush a queued move at the same pointer position on release.
+            moveInterior();
+            document.dispatchEvent(new MouseEvent("mouseup", {bubbles: true}));
+            checkInteriorAnchor();
+            for (let frame = 0; frame < 5; frame++) {
+                await new Promise(requestAnimationFrame);
+                checkInteriorAnchor();
+            }
             return {
-                samples,
-                trackTopStable: trackTopBeforeScroll === DOM.scrollTrack.style.top,
-                trackHeightStable: trackHeightBeforeScroll === DOM.scrollTrack.style.height,
-                thumbHeightStable: thumbHeightBeforeScroll === DOM.scrollThumb.style.height,
+                samples, trackTopStable, trackHeightStable, thumbHeightStable,
+                settledBottomGap, lastRowBottomError, sameInteriorRow, interiorOffsetError,
                 skeletonCount,
                 domVisibleAfterJump,
                 preservedAfterAppend,
@@ -666,9 +710,14 @@ class BrowserBehaviorTest(unittest.TestCase):
         self.assertGreater(result["readsAfterWidthChange"], result["readsAtSameWidth"])
         self.assertEqual(result["scrollTopBeforeDragFrame"], 0)
         self.assertGreater(result["scrollTopAfterDragFrame"], result["scrollTopBeforeDragFrame"])
+        self.assertLess(result["maxReleaseJump"], result["clientHeight"])
         self.assertIsNotNone(result["dragHitIndex"])
         self.assertLess(result["dragDomCount"], 50)
-        self.assertLess(result["maxReleaseJump"], result["clientHeight"])
+        self.assertLessEqual(abs(result["settledBottomGap"]), 1)
+        self.assertIsNotNone(result["lastRowBottomError"])
+        self.assertLessEqual(result["lastRowBottomError"], 1)
+        self.assertTrue(result["sameInteriorRow"])
+        self.assertLessEqual(result["interiorOffsetError"], 1)
         self.assertFalse(result["draggingAfterMouseUp"])
         self.assertEqual(self.page_errors, [])
 

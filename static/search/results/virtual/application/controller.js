@@ -9,6 +9,8 @@ const { elements: DOM, updateCurrentResultPosition, maybeLoadNextPage, updateScr
   getHeightMeasurementKey, getResultStableId } = deps;
 /** @type {SearchVirtualScroll} */
 const scroll = { origin: 0, target: null };
+/** @type {number | null} */
+let releasedDragTop = null;
 const heights = VoiceOfMLVirtualHeights.create(VSCROLL, deps);
 const { ensureHeightTree, getVirtualTotalHeight, getVirtualOffset, findVirtualIndex, ensureVirtualHeights } = heights;
 const { getResultScrollOrigin, layoutResultScrollSegment, reconcileVirtualRows } = VoiceOfMLVirtualRows.create(VSCROLL, scroll, {
@@ -37,10 +39,12 @@ function setResultScrollTop(value, restoreWindow = false) {
     VSCROLL.lastScrollTop = target;
     VSCROLL.lastScrollTime = 0;
     VSCROLL.scrollVelocity = 0;
+    releasedDragTop = null;
   }
   scroll.target = target;
   VSCROLL.renderStart = -1; VSCROLL.renderEnd = -1;
   try { renderVisible(); } finally { scroll.target = null; }
+  if (restoreWindow && VSCROLL.dragMetrics && !VSCROLL.isDraggingThumb) releasedDragTop = getResultScrollTop();
   updateCurrentResultPosition();
 }
 
@@ -94,8 +98,12 @@ function renderVisible() {
   const totalH = getVirtualOffset(len);
   const segmentNeedsRecenter = getResultScrollOrigin(totalH, scrollTop, viewH) !== scroll.origin;
   const needsLayout = segmentNeedsRecenter || scroll.target !== null;
-  const safeStart = findVirtualIndex(Math.max(0, scrollTop - baseOverscanPx * 0.35));
-  const safeEnd = Math.min(len, findVirtualIndex(scrollTop + viewH + baseOverscanPx * 0.35) + 1);
+  // A scroll event from drag compensation must not widen the released
+  // window. Normal overscan resumes as soon as the viewport actually moves.
+  if (releasedDragTop !== null && Math.abs(scrollTop - releasedDragTop) > 1) releasedDragTop = null;
+  const safePadding = releasedDragTop !== null ? 0 : tightWindow ? viewH * 0.35 : baseOverscanPx * 0.35;
+  const safeStart = findVirtualIndex(Math.max(0, scrollTop - safePadding));
+  const safeEnd = Math.min(len, findVirtualIndex(scrollTop + viewH + safePadding) + 1);
   ensureResultWindowPages(safeStart, safeEnd);
   updateCurrentResultPosition();
   if (!deps.pendingEntrance() && !needsLayout
@@ -121,6 +129,22 @@ function renderVisible() {
   const anchor = { index: anchorIndex, offset: scrollTop - getVirtualOffset(anchorIndex) };
   reconcileVirtualRows(items, start, end, topH, bottomH, viewH);
   if (DOM.multiSelectToggle && DOM.multiSelectToggle.checked) updateVisibleSelection();
+  if (VSCROLL.isDraggingThumb) {
+    // A provisional bottom made of estimated rows can shrink by multiple
+    // viewports. Settle it during the drag, keeping the last row reachable.
+    const atBottom = scrollTop >= totalH - viewH - 1;
+    if (measureRenderedHeights(start, end, anchor, atBottom)) {
+      // If the first batch shrank, fill the tight overscan again before
+      // displaying it under the thumb, so release doesn't discover new rows.
+      const correctedTop = getResultScrollTop();
+      if ((start > 0 && correctedTop - viewH * 0.35 < getVirtualOffset(start) - 1)
+          || (end < len && correctedTop + viewH * 1.35 > getVirtualOffset(end) + 1)) {
+        VSCROLL.renderStart = -1;
+        VSCROLL.renderEnd = -1;
+        if (renderVisible()) return true;
+      }
+    }
+  }
   // Correct the rendered window before paint, using one content anchor.
   // A deferred measurement can otherwise run against another window/query.
   if (!VSCROLL.isDraggingThumb && measureHeights(start, end, anchor)) {
@@ -139,6 +163,7 @@ function renderVisible() {
 function resetVirtualScrollState() {
   scroll.origin = 0;
   scroll.target = null;
+  releasedDragTop = null;
   rememberDisplayedSearchView();
   cancelQuickScroll();
   if (VSCROLL.renderFrame) cancelAnimationFrame(VSCROLL.renderFrame);
@@ -200,7 +225,8 @@ function ensureVirtualViewportCovered() {
   if (VSCROLL.renderStart < 0 || VSCROLL.renderEnd <= VSCROLL.renderStart) return;
   const viewTop = getResultScrollTop();
   const viewBottom = viewTop + DOM.resultsContainer.clientHeight;
-  if (viewTop < getVirtualOffset(VSCROLL.renderStart) || viewBottom > getVirtualOffset(VSCROLL.renderEnd)) {
+  if ((VSCROLL.renderStart > 0 && viewTop < getVirtualOffset(VSCROLL.renderStart) - 1)
+      || (VSCROLL.renderEnd < VSCROLL.heights.length && viewBottom > getVirtualOffset(VSCROLL.renderEnd) + 1)) {
     // Let the scroll RAF perform the single DOM update for this frame. A
     // synchronous render here would duplicate layout and height measurement.
     VSCROLL.renderStart = -1;
@@ -211,9 +237,13 @@ function ensureVirtualViewportCovered() {
 /** @param {number} [start] @param {number} [end] @param {{index: number, offset: number} | null} [anchor] */
 function measureHeights(start = VSCROLL.renderStart, end = VSCROLL.renderEnd, anchor = null) {
   if (VSCROLL.isDraggingThumb || start !== VSCROLL.renderStart || end !== VSCROLL.renderEnd) return false;
-  const container = DOM.resultsContainer;
-  const anchorIndex = anchor ? anchor.index : findVirtualIndex(getResultScrollTop());
-  const anchorOffset = anchor ? anchor.offset : getResultScrollTop() - getVirtualOffset(anchorIndex);
+  const top = getResultScrollTop();
+  const index = anchor ? anchor.index : findVirtualIndex(top);
+  return measureRenderedHeights(start, end, anchor || { index, offset: top - getVirtualOffset(index) });
+}
+
+/** @param {number} start @param {number} end @param {{index: number, offset: number}} anchor */
+function measureRenderedHeights(start, end, anchor, pinBottom = false) {
   const rowMeasureKey = getHeightMeasurementKey();
   const measureKey = [rowMeasureKey, start, end].join(":");
   if (VSCROLL.measuredWindowKey === measureKey) return false;
@@ -255,7 +285,7 @@ function measureHeights(start = VSCROLL.renderStart, end = VSCROLL.renderEnd, an
       changed = true;
     }
   }
-  if (!VSCROLL.sparseHeights && measuredCount > 10 && VSCROLL.estimateMeasurementKey !== rowMeasureKey) {
+  if (!VSCROLL.isDraggingThumb && !VSCROLL.sparseHeights && measuredCount > 10 && VSCROLL.estimateMeasurementKey !== rowMeasureKey) {
     VSCROLL.estimateMeasurementKey = rowMeasureKey;
     const nextEstimate = measuredSum / measuredCount;
     if (Math.abs(nextEstimate - VSCROLL.estimatedHeight) > 1) {
@@ -271,14 +301,17 @@ function measureHeights(start = VSCROLL.renderStart, end = VSCROLL.renderEnd, an
       }
     }
   }
+  VSCROLL.measuredWindowKey = measureKey;
   if (changed) {
     refreshVirtualAfterAppend(false);
-    const height = VSCROLL.heights[anchorIndex] || VSCROLL.heightBase;
-    const target = getVirtualOffset(anchorIndex) + Math.min(anchorOffset, height - 1);
-    if (Math.abs(getResultScrollTop() - target) > 0.5) setResultScrollTop(Math.max(0, target));
+    const height = VSCROLL.heights[anchor.index] || VSCROLL.heightBase;
+    const viewport = DOM.resultsContainer.clientHeight;
+    const maxTop = Math.max(0, getVirtualTotalHeight() - viewport);
+    const target = pinBottom ? maxTop
+      : Math.max(0, Math.min(maxTop, getVirtualOffset(anchor.index) + Math.min(anchor.offset, height - 1)));
+    if (Math.abs(getResultScrollTop() - target) > 0.5) setResultScrollTop(target);
     VSCROLL.lastScrollTop = getResultScrollTop();
   }
-  VSCROLL.measuredWindowKey = measureKey;
   return changed;
 }
 return { ...heights, getResultScrollTop, setResultScrollTop, scheduleVirtualRender, renderVisible, resetVirtualScrollState, refreshVirtualAfterAppend, ensureVirtualViewportCovered, measureHeights };

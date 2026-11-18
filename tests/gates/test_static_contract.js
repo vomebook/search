@@ -300,7 +300,8 @@ test("virtual results use bounded buffering", () => {
   assert.match(virtual, /updateScrollTrack\(\);[\s\S]*?return true;/);
   assert.match(virtual, /if \(updateView\) \{[\s\S]*?scheduleVirtualRender\(\);/);
   assert.match(app, /if \(!dragFrame\) dragFrame = requestAnimationFrame\(applyPendingScrollTop\)/);
-  assert.match(app, /setResultScrollTop\(pendingScrollTop\);\s*pendingScrollTop = null;\s*renderVisible\(\);/);
+  const applyDrag = app.match(/function applyPendingScrollTop\(\) \{[^]*?^  }/m)?.[0] || '';
+  assert.match(applyDrag, /setResultScrollTop\([^;]+\);\s*pendingScrollTop = null;\s*renderVisible\(\);/);
   assert.match(virtual, /const tightWindow = VSCROLL\.isDraggingThumb \|\| !!VSCROLL\.dragMetrics/);
   assert.match(virtual, /tightWindow\s*\? viewH \* 0\.35/);
   assert.match(virtual, /if \(!VSCROLL\.isDraggingThumb && measureHeights\(start, end, anchor\)\)/);
@@ -310,9 +311,10 @@ test("virtual results use bounded buffering", () => {
   assert.match(app, /dragRange = Math\.max\(1, DOM\.scrollTrack\.clientHeight - DOM\.scrollThumb\.clientHeight\)/);
   const release = app.match(/function finishDrag\(\) \{[^]*?^  }/m)?.[0] || '';
   assert.match(release, /applyPendingScrollTop\(\);[\s\S]*?VSCROLL\.isDraggingThumb = false;[\s\S]*?setResultScrollTop\(finalScrollTop, true\);[\s\S]*?VSCROLL\.dragMetrics = null;/);
-  assert.match(virtual, /if \(restoreWindow\) \{[\s\S]*?VSCROLL\.scrollVelocity = 0;\s*\}[\s\S]*?try \{ renderVisible\(\); \}/);
-  assert.match(app, /const requestedScrollTop = pendingScrollTop/);
-  assert.match(app, /const finalScrollTop = requestedScrollTop === null \? getResultScrollTop\(\) : requestedScrollTop/);
+  assert.match(virtual, /if \(restoreWindow\) \{[^}]*VSCROLL\.scrollVelocity = 0;/);
+  assert.match(virtual, /try \{ renderVisible\(\); \} finally \{ scroll\.target = null; \}/);
+  // Release-frame movement and final anchoring are covered by the virtual
+  // scroll browser regression; the pending coordinate need not be a raw px value.
   assert.strictEqual(/VSCROLL\.renderStart = -1;\s*VSCROLL\.renderEnd = -1;\s*renderVisible\(\);\s*if \(STATE\._deferredAppendWhileDragging\)/.test(app), false);
   assert.match(virtual, /VSCROLL\.measuredWindowKey === measureKey/);
   assert.match(virtual, /VSCROLL\.measuredRowKeys\[idx\] === rowMeasureKey/);
