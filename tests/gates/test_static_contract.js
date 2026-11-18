@@ -723,6 +723,16 @@ test("deployment workflow grants required Pages permissions", () => {
   assert.match(workflow, /pages: write/);
   assert.match(workflow, /id-token: write/);
 });
+test("Pages waits for the exact uploaded artifact before attempting deployment", () => {
+  const upload = workflow.indexOf('name: Upload artifact');
+  const wait = workflow.indexOf('name: Wait for the uploaded Pages artifact');
+  const deploy = workflow.indexOf('name: Deploy to GitHub Pages');
+  assert.ok(0 < upload && upload < wait && wait < deploy);
+  assert.match(workflow.slice(upload, wait), /id: upload/);
+  assert.match(workflow.slice(wait, deploy), /UPLOADED_ARTIFACT_ID: \$\{\{ steps\.upload\.outputs\.artifact_id \}\}/);
+  assert.match(workflow.slice(wait, deploy), /run: python3 -B scripts\/ci\/wait_pages_artifact\.py/);
+  assert.match(workflow, /^permissions:\n  contents: read\n  actions: read\n  pages: write$/m);
+});
 test("deployment workflow uses official checkout configure upload and deploy actions", () => {
   const actions = Array.from(workflow.matchAll(/uses: ([^\s]+)/g), (match) => match[1]);
   assert.deepStrictEqual(actions, [
