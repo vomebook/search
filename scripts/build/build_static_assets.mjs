@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { existsSync, readdirSync, renameSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, extname, join, relative } from "node:path";
 import { createRequire } from "node:module";
-import { stripBundledScripts } from "./compose_app.mjs";
+import { stripBundledPrecache, stripBundledScripts } from "./compose_app.mjs";
 const resources = createRequire(import.meta.url)(join(process.cwd(), "static/reader-resources.js"));
 
 const root = process.env.STATIC_OUTPUT_DIR || "_site";
@@ -45,6 +45,7 @@ for (const filename of ["index.html", "static/reader.html", "sw.js"]) {
   const target = join(root, filename);
   let content = readFileSync(target, "utf8");
   if (filename === "index.html") content = stripBundledScripts(content);
+  if (filename === "sw.js") content = stripBundledPrecache(content, "/search/static/");
   content = rewrite(content, filename === "static/reader.html" ? "reader.html" : filename);
   if (filename === "sw.js") content = content.replace(/CURRENT_HASHED_ASSETS\s*=\s*\[\]/,
     "CURRENT_HASHED_ASSETS=" + JSON.stringify([...replacements.values()].filter(url => url.startsWith("static/")).map(url => "/search/" + url).concat([...currentVendorAssets], resources.djvuDecoderAssets("/search/static/"), resources.ruffleAssets("/search/static/"))));
