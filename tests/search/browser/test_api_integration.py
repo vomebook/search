@@ -271,7 +271,13 @@ class ApiIntegrationTest(unittest.TestCase):
         }''')
         self.page.wait_for_function("STATE._loadedPage === 1 && !STATE.isLoading")
         expected = self.page.evaluate("async () => (await doSearchLocal({q:'手机', exact:STATE.exact, searchFolders:STATE.searchFolders, page:1, pageSize:500})).results.map(getResultStableId)")
-        self.page.evaluate("STATE.useLocalMode = false; STATE.page = 2; localStartupSearch(true)")
+        self.page.evaluate('''() => {
+          // Exercise the pinned backend independently of a UI toggle, which
+          // starts a fresh view. Keep the current rows owned by this test view.
+          STATE.useLocalMode = false;
+          displayedSearchView.key = getSearchViewKey();
+          STATE.page = 2; localStartupSearch(true);
+        }''')
         self.page.wait_for_function("STATE._loadedPage >= 2 && !STATE.isLoading")
         actual = self.page.evaluate("STATE.results.map(getResultStableId)")
         self.assertEqual(self.page.evaluate('STATE._loadedPage'), 2)
@@ -293,7 +299,14 @@ class ApiIntegrationTest(unittest.TestCase):
                                          "results": [result(f"API-{i}") for i in range(100)]}
         self.load("#/?q=pin-test&local=0")
         self.page.wait_for_function("STATE._loadedPage === 1 && !STATE.isLoading")
-        self.page.evaluate("async () => { await ensureLocalDataLoaded(false, true); STATE.useLocalMode = true; cancelSearchPrefetch(); STATE._pageCache = {}; searchResponseCache.clear(); }")
+        self.page.evaluate('''async () => {
+          await ensureLocalDataLoaded(false, true);
+          // Simulate a changed preference without starting a new search, so
+          // page 2 must still use the backend that supplied these rows.
+          STATE.useLocalMode = true;
+          displayedSearchView.key = getSearchViewKey();
+          cancelSearchPrefetch(); STATE._pageCache = {}; searchResponseCache.clear();
+        }''')
         self.search_response_override = {"page": 2, "page_size": 100, "total": 200,
                                          "results": [result(f"API-{i}") for i in range(100, 200)]}
         self.page.evaluate("STATE.page = 2; doSearch(true)")

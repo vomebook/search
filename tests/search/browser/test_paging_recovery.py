@@ -156,6 +156,8 @@ class PagingRecoveryTests(unittest.TestCase):
             self.assertEqual(self.page.evaluate('''() => {
               const cached = getCachedSearchResponse(getCurrentSearchCacheKey(1));
               STATE.results = cached.results;
+              // Simulate a cache round trip for the same displayed view.
+              displayedSearchView.results = STATE.results;
               return cached.generation;
             }'''), '')
         if local_ready:

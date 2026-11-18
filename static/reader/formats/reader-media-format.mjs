@@ -107,7 +107,7 @@ export function createReaderMediaFormat(readerContext) {
     const canRetry = readerContext.validSource(readerContext.sourceUrl) &&
       retryUrl === readerContext.readerContentUrl(readerContext.sourceUrl) && retryUrl !== directSource;
     const retryProxy = () => {
-      if (sourceRetried || !canRetry) return false;
+      if (readerContext.readerAbortController.signal.aborted || sourceRetried || !canRetry) return false;
       readerContext.saveProgress();
       retryPosition = readerContext.documentState.restorationReady
         ? {time:media.currentTime, playing:!media.paused, rate:media.playbackRate} : null;

@@ -119,6 +119,7 @@ test('resource cleanup rejects pending metadata and removes listeners', async ()
       const f=fixture();try {
         const promise=f.context.renderMedia('audio');await tick();
         assert.equal(f.resources.size,1);assert.equal(callbacks.size,2);
+        const idle=[...callbacks.values()].find(item=>item.delay===15000);
         if(abort) {
           f.owner.abort();
           const before=[...f.events];
@@ -130,7 +131,12 @@ test('resource cleanup rejects pending metadata and removes listeners', async ()
         }
         for(const cleanup of f.resources){cleanup();cleanup();}
         await assert.rejects(promise,{name:'AbortError'});assert.equal(callbacks.size,0);
-        // Disposed elements must not restart timers, reload, or restore retry state.
+        // A stale callback and subsequent events must not restart disposed media.
+        if(abort) {
+          const before=[...f.events];
+          idle.callback();
+          assert.deepEqual(f.events,before);
+        }
         f.media._readerSourceRetry=true;
         for(const event of ['progress','error','loadedmetadata'])f.media.dispatchEvent(new Event(event));
         assert.equal(callbacks.size,0);assert.equal(f.media._readerSourceRetry,true);
