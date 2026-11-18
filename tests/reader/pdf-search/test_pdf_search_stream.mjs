@@ -37,4 +37,12 @@ test('cancellation rejection is swallowed while abort still settles',async()=>{
  const body=new ReadableStream({pull(){ready();return new Promise(()=>{});},cancel(){throw new Error('cancel failed');}});
  const owner=new AbortController();const pending=readPdfSearchText(body,owner.signal,10);
  await waiting;owner.abort();await assert.rejects(pending,{name:'AbortError'});assert.equal(body.locked,false);
+
+ // A size-limit failure also owns stream cleanup; a failed cancellation must
+ // not mask the size error or leave the body locked.
+ let cancellations=0;
+ const oversized=new ReadableStream({start(controller){controller.enqueue(Uint8Array.of(1,2));},
+  cancel(){cancellations++;throw new Error('cancel failed after limit');}});
+ await assert.rejects(readPdfSearchBytes(oversized,signal(),1,1),/READER_RESOURCE_LIMIT/);
+ assert.equal(cancellations,1);assert.equal(oversized.locked,false);
 });

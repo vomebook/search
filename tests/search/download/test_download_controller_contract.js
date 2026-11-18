@@ -121,9 +121,26 @@ test("shared checks preserve independent cancellation, cached success and expira
 });
 
 test("two active checks bound the queue and abandoned work never starts", async () => {
+  let allowSpeculation = false, batchActive = false;
+  const guarded = fixture({
+    isSpeculativeAllowed: () => allowSpeculation, isBatchActive: () => batchActive,
+  });
+  assert.equal(await guarded.controller.checkDownload("opted-out", true), false);
+  allowSpeculation = true;
+  batchActive = true;
+  assert.equal(await guarded.controller.checkDownload("batch-active", true), false);
+  const aborted = new AbortController();
+  aborted.abort();
+  assert.equal(await guarded.controller.checkDownload("already-aborted", false, aborted.signal), false);
+  assert.equal(guarded.requests.length, 0);
+  assert.equal(guarded.timers.size, 0);
+  assert.equal(guarded.controller.downloadChecks.size, 0);
+  assert.equal(guarded.controller.downloadCheckQueue.length, 0);
+
   const {controller: c, requests} = fixture();
   const thirdOwner = new AbortController();
   const first = c.checkDownload("a"), second = c.checkDownload("b");
+  const shared = c.checkDownload("a", true); // Join an existing check despite busy slots.
   const third = c.checkDownload("c", false, thirdOwner.signal);
   assert.equal(c.activeDownloadChecks, 2);
   assert.equal(c.downloadCheckQueue.length, 1);
@@ -134,6 +151,7 @@ test("two active checks bound the queue and abandoned work never starts", async 
   assert.equal(c.downloadChecks.has("c"), false);
   requests[0].resolve(response({ok: true}));
   assert.equal(await first, true);
+  assert.equal(await shared, true);
   assert.equal(requests.length, 2);
   assert.equal(c.downloadCheckQueue.length, 0);
   requests[1].resolve(response({ok: true}));

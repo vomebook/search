@@ -78,14 +78,20 @@ assert.match((await search()).error, /索引无效/);
 const before = messages.length;
 await send(null); await send({type:"cancel"});
 assert.equal(messages.length, before);
-await send({type:"page", id:++id, session:null, offset:"bad"});
-assert.match(latest().error, /索引无效/);
+const invalidPagingRequests = requests.length;
+for (const page of [{session:null, offset:"bad"}, {session:1, offset:"0"}]) {
+  const invalidId = ++id;
+  await send({type:"page", id:invalidId, ...page});
+  assert.equal(latest().id, invalidId);
+  assert.match(latest().error, /索引无效/);
+}
+assert.equal(requests.length, invalidPagingRequests);
 await send({type:"unknown", id:++id});
 assert.match(latest().error, /索引无效/);
 for (const index of [
   {...config.index, url:"https://evil.example/api/reader-content"},
   {...config.index, bytes:0}, {...config.index, bytes:64*1024*1024+1},
-  {...config.index, sha256:"bad"},
+  {...config.index, sha256:"bad"}, {...config.index, text_profile:42},
   {...config.index, url:proxyOrigin+"/api/reader-bucket-resource?path=../bad"}
 ]) {
   await send({type:"init", configuration:{...config,index}});
@@ -100,6 +106,12 @@ for (const [mode, expected] of [["http",/HTTP 503/],["null",/索引无效/],
   assert.match((await search()).error, expected, mode);
 }
 assert.equal(streamCancelled, true);
+responseMode = "valid";
+// A response of exactly the expected length must still match the SHA-256.
+const actualHash = config.index.sha256;
+const otherHash = (actualHash[0] === "0" ? "1" : "0") + actualHash.slice(1);
+await send({type:"init", configuration:{...config,index:{...config.index,sha256:otherHash}}});
+assert.match((await search()).error, /校验失败/);
 // Abort while the response stream is blocked in read(): the Worker must cancel
 // the underlying stream and a subsequent fetch must still be possible.
 responseMode = "held-stream"; streamCancelled = false;

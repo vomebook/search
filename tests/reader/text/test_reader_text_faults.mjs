@@ -6,7 +6,8 @@ import {createReaderTextFormat} from '../../../static/reader/formats/reader-text
 test('reader errors preserve the original reason and release the reader lock', async () => {
   const old={document:globalThis.document,security:globalThis.VoiceOfMLReaderSecurity};
   const failure=new Error('source failed'), events=[], reader={read:async()=>{throw failure;},
-    cancel:async reason=>events.push(['cancel',reason]),releaseLock:()=>events.push('release')};
+    cancel:async reason=>{events.push(['cancel',reason]);throw new Error('cancel also failed');},
+    releaseLock:()=>events.push('release')};
   globalThis.document={createElement:()=>({className:'',appendChild(){}})};
   globalThis.VoiceOfMLReaderSecurity={LIMITS:{documentBytes:32},assertResponseSize(){}};
   const context={content:{appendChild(){}},documentState:{title:''},assertReaderActive(){},
