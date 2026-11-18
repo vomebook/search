@@ -76,11 +76,15 @@ test('cancel before ready terminates the owner and retries with a fresh worker',
   const f=fixture();try {
     const old=f.workers[0],first=f.client.search('first'),rejected=assert.rejects(first,{name:'AbortError'});
     f.client.cancel();await rejected;assert.equal(old.terminated,1);
-    const second=f.client.search('retry'),current=f.workers[1],request=current.messages.at(-1);
+    const second=observe(f.client.search('retry')),current=f.workers[1],request=current.messages.at(-1);
     assert.notStrictEqual(old,current);assert.equal(current.messages[0].type,'init');
     old.send({bookReady:true});old.send({id:request.id,total:999});
+    assert.equal(old.error(),0,'an old Worker must not take ownership of the new search error');
+    await tick();
+    assert.equal(second.status,'pending');assert.equal(f.client.failed,false);
     current.send({bookReady:true});current.send({id:request.id,session:request.id,total:1,offset:0,pageSize:50,results:[]});
-    assert.equal((await second).total,1);assert.equal(f.client.failed,false);
+    await second.done;
+    assert.equal(second.status,'resolved');assert.equal(second.value.total,1);assert.equal(f.client.failed,false);
   } finally {f.restore();}
 });
 

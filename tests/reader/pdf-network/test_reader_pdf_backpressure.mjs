@@ -102,6 +102,110 @@ try {
     const response=await fetch('/a.pdf',{headers:{Range:'bytes=0-3'}});
     await assert.rejects(response.arrayBuffer());assert.ok(calls<=2);policy.dispose();
   }
+  // A same-validator retry may change chunk boundaries. PDF.js reads the
+  // entire value.buffer, so skipped bytes and backing-buffer padding must
+  // never appear in the delivered data.
+  {
+    const ranges=[];
+    globalThis.fetch=async (_input,init)=>{
+      ranges.push(new Headers(init.headers).get('Range'));
+      const chunks=ranges.length===1 ? [Uint8Array.of(90,1,2,91).subarray(1,3)] :
+        [Uint8Array.of(1),Uint8Array.of(92,2,3,4,93).subarray(1,4)];
+      return new Response(new ReadableStream({start(controller){
+        for (const chunk of chunks) controller.enqueue(chunk);
+        controller.close();
+      }}),{status:206,headers});
+    };
+    const policy=createPdfFetchPolicy(opts);policy.add(['/a.pdf']);
+    const reader=(await fetch('/a.pdf',{headers:{Range:'bytes=0-3'}})).body.getReader();
+    try {
+      const first=await reader.read();
+      assert.deepEqual([...new Uint8Array(first.value.buffer)],[1,2]);
+      assert.deepEqual(ranges,['bytes=0-3']);
+      const replayed=await reader.read();
+      assert.deepEqual([...new Uint8Array(replayed.value.buffer)],[3,4]);
+      assert.equal((await reader.read()).done,true);
+      assert.deepEqual(ranges,['bytes=0-3','bytes=0-3']);
+      assert.ok(policy.identity,'a same-source retry must retain the validated identity');
+    } finally {reader.releaseLock();policy.dispose();}
+  }
+  // A valid prefix is already with PDF.js. Do not read any bytes from a retry
+  // until its status, byte range and original-file identity all match.
+  for (const [label,status,replayHeaders,error] of [
+    ['full body instead of a range',200,{ETag:'"stable"','Content-Length':'4'},/PDF_RANGE_INVALID/],
+    ['missing range',206,{ETag:'"stable"'},/PDF_RANGE_INVALID/],
+    ['shifted range',206,{...headers,'Content-Range':'bytes 1-3/4'},/PDF_RANGE_INVALID/],
+    ['different document length',206,{...headers,'Content-Range':'bytes 0-3/5'},/PDF_SOURCE_CHANGED/],
+    ['different ETag',206,{...headers,ETag:'"changed"'},/PDF_SOURCE_CHANGED/],
+    ['lost strong validator',206,{...headers,ETag:'W/"stable"'},/PDF_SOURCE_CHANGED/],
+  ]) {
+    const ranges=[];
+    let pulls=0,cancellations=0;
+    globalThis.fetch=async (_input,init)=>{
+      ranges.push(new Headers(init.headers).get('Range'));
+      if (ranges.length===1) return new Response(bytes.slice(0,2),{status:206,headers});
+      assert.equal(ranges.length,2,label);
+      const retryBody=new ReadableStream({pull(controller){pulls++;controller.enqueue(bytes);controller.close();},
+        cancel(){cancellations++;}},{highWaterMark:0});
+      return new Response(retryBody,{status,headers:replayHeaders});
+    };
+    const policy=createPdfFetchPolicy(opts);policy.add(['/a.pdf']);
+    try {
+      const reader=(await fetch('/a.pdf',{headers:{Range:'bytes=0-3'}})).body.getReader();
+      try {
+        assert.deepEqual([...(await reader.read()).value],[1,2],label);
+        assert.deepEqual(ranges,['bytes=0-3'],label);
+        await assert.rejects(reader.read(),error,label);
+        assert.deepEqual(ranges,['bytes=0-3','bytes=0-3'],label);
+        assert.equal(pulls,0,label);
+        assert.equal(cancellations,1,label);
+      } finally {reader.releaseLock();}
+    } finally {policy.dispose();}
+  }
+  // An empty 206 can retry, but the returned stream still represents a range.
+  // Even with the same validator a full 200 must not silently finish that range.
+  {
+    const ranges=[];
+    let pulls=0,cancellations=0;
+    globalThis.fetch=async (_input,init)=>{
+      ranges.push(new Headers(init.headers).get('Range'));
+      if (ranges.length===1) return new Response(new Uint8Array(0),{status:206,headers});
+      assert.equal(ranges.length,2);
+      const whole=new ReadableStream({pull(controller){pulls++;controller.enqueue(bytes);controller.close();},
+        cancel(){cancellations++;}},{highWaterMark:0});
+      return new Response(whole,{status:200,headers:{ETag:'"stable"','Content-Length':'4'}});
+    };
+    const policy=createPdfFetchPolicy(opts);policy.add(['/a.pdf']);
+    try {
+      const response=await fetch('/a.pdf',{headers:{Range:'bytes=0-3'}});
+      assert.equal(response.status,206);
+      assert.deepEqual(ranges,['bytes=0-3']);
+      await assert.rejects(response.arrayBuffer(),/PDF_RANGE_INVALID/);
+      assert.deepEqual(ranges,['bytes=0-3','bytes=0-3']);
+      assert.equal(pulls,0);assert.equal(cancellations,1);
+    } finally {policy.dispose();}
+  }
+  // With bytes already delivered but no strong ETag, even a truncated 206
+  // must fail without scheduling a replay.
+  for (const tag of [null,'W/"stable"']) {
+    let calls=0;
+    globalThis.fetch=async()=>{
+      calls++;
+      const responseHeaders=new Headers({'Content-Range':'bytes 0-3/4'});
+      if (tag) responseHeaders.set('ETag',tag);
+      return new Response(bytes.slice(0,2),{status:206,headers:responseHeaders});
+    };
+    const policy=createPdfFetchPolicy(opts);policy.add(['/a.pdf']);
+    try {
+      const reader=(await fetch('/a.pdf',{headers:{Range:'bytes=0-3'}})).body.getReader();
+      try {
+        assert.deepEqual([...(await reader.read()).value],[1,2]);
+        await assert.rejects(reader.read(),/PDF_RANGE_TRUNCATED/);
+        assert.equal(calls,1);
+        assert.equal(policy.identity,null);
+      } finally {reader.releaseLock();}
+    } finally {policy.dispose();}
+  }
   // Foreground promotion must be scoped to a document URL; identical byte
   // offsets in a different hybrid/secondary source are unrelated.
   {

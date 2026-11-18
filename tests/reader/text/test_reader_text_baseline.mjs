@@ -212,13 +212,17 @@ test('large samples select the decoder before EOF and retain all streamed text',
     f.context.detectTextEncoding=(...args)=>{detections++;const value=detect(...args);detected.push(value);return value;};
     const stream=new ReadableStream({start(value){controller=value;}});
     const pending=f.context.renderPlainText(new Response(stream));
-    const first='a'.repeat(65540), bytes=new TextEncoder().encode(first+'尾');
+    // At the sample boundary a UTF-8 character can still be incomplete.
+    // Selecting the final decoder must retain its pending bytes without
+    // repeating the ASCII preview or emitting a replacement character.
+    const first='a'.repeat(65538), suffix='😀尾', bytes=new TextEncoder().encode(first+suffix);
     controller.enqueue(bytes.subarray(0,65540));
     await new Promise(resolve=>setImmediate(resolve));
     assert.equal(f.context.content.textContent,first);assert.equal(detections,1,'decoder must be selected before EOF');
     assert.deepEqual(detected,['utf-8']);
     controller.enqueue(bytes.subarray(65540));controller.close();await pending;
-    assert.equal(f.context.content.textContent,first+'尾');assert.equal(detections,1);
+    assert.equal(f.context.content.textContent,first+suffix);assert.equal(detections,1);
+    assert.equal(stream.locked,false);
     assert.ok(f.events.includes('untrack'));
   } finally {f.restore();}
 });

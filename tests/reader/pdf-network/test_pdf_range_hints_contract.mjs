@@ -49,6 +49,20 @@ assert.equal(firstPageSectionEnd(linear(total,chunk),total,chunk),0);
 assert.equal(firstPageSectionEnd(linear(total,chunk*4+1),total,chunk),0);
 assert.equal(firstPageSectionEnd(linear(total,chunk*2,'/P 2 0 R'),total,chunk),0);
 assert.equal(firstPageSectionEnd(linear(),chunk*6,chunk),0);
+
+// Only a valid first-object linearization hint gets first-page scheduling.
+// A partial prefix, an indirect /L or an impossible length must keep normal loading.
+assert.equal(isFirstPageCandidate(linear(),total,chunk),true);
+for (const hint of [linear(0),linear(total+1),linear(Number.MAX_SAFE_INTEGER+1)]) {
+  assert.equal(isFirstPageCandidate(hint,total,chunk),false);
+}
+const linearHeader = new TextDecoder().decode(linear());
+assert.equal(isFirstPageCandidate(encode(linearHeader.replace(`/L ${total}`,`/L ${total} 0 R`)),total,chunk),false);
+assert.equal(firstPageSectionEnd(encode('%PDF-1.7\n1 0 obj\n<< /Linearized 1'),total,chunk),0);
+assert.equal(isFirstPageCandidate(encode('not a PDF'),total,chunk),false);
+for (const kids of ['','3 0 R stray 11 0 R','3 0 R 11 0 R 12 0 R']) {
+  assert.equal(isFirstPageCandidate(encode(`%PDF-1.7\n2 0 obj\n<</Type/Pages/Count 500/Kids[${kids}]>>\nendobj`),large,chunk),false);
+}
 const firstPage='%PDF-1.7\n1 0 obj\n<</Type/Page/Contents[9 0 R]/Parent 18274 0 R/Resources 7 0 R>>\nendobj\n';
 const tailStart=Math.floor((total-1)/chunk)*chunk-chunk*4;
 assert.equal(firstPageTailHintStart(encode(firstPage),total,chunk),tailStart);
@@ -66,6 +80,17 @@ for (const altered of [image.replace('/Im1 2 0 R','/Im1 8 0 R'),
   assert.equal(firstImageSectionEnd(encode(altered),total,chunk),0);
 }
 assert.equal(firstImageSectionEnd(null,total,chunk),0);
+for (const [problem, prefix] of [
+  ['no PDF header', image.replace('%PDF-1.7', 'not a PDF')],
+  ['linearized document uses its separate hint', image.replace('%PDF-1.7','%PDF-1.7\n0 0 obj\n<</Linearized 1>>\nendobj')],
+  ['empty image stream', image.replace('/Length 600000','/Length 0')],
+  ['image still fits within the initial chunk', image.replace('/Length 600000','/Length 128')],
+  ['image exceeds the bounded read-ahead', image.replace('/Length 600000',`/Length ${chunk*4}`)],
+  ['missing resource dictionary', image.replace('/Resources 4 0 R','/Resources 8 0 R')],
+  ['duplicate resource dictionary', image.replace('1 0 obj', '4 0 obj\n<</XObject<</Im2 2 0 R>>>>\nendobj\n1 0 obj')],
+]) {
+  assert.equal(firstImageSectionEnd(encode(prefix),total,chunk),0,problem);
+}
 
 // Regression: a large flat tree may follow small direct-length streams and
 // exceed 16 KiB; an inserted cover ref can precede otherwise ordered pages.
