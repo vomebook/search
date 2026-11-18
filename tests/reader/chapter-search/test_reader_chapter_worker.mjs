@@ -28,6 +28,12 @@ globalThis.fetch = async (url, options) => {
     pull() { throw new Error("stream read failed"); }
   }));
   if (responseMode === "wrong-bytes") return new Response(packed.subarray(1));
+  if (responseMode === "expired-response") {
+    const response = new Response(packed);
+    // The headers arrived, but the load deadline expired before body reading.
+    expire();
+    return response;
+  }
   if (responseMode === "too-large") {
     const chunk = new Uint8Array(16 * 1024 * 1024);
     return new Response(new ReadableStream({
@@ -101,7 +107,8 @@ for (const index of [
 }
 for (const [mode, expected] of [["http",/HTTP 503/],["null",/索引无效/],
     ["throw",/transport failed/],["throw-string",/transport string failure/],
-    ["stream-error",/stream read failed/],["wrong-bytes",/校验失败/],["too-large",/超过大小限制/]]) {
+    ["stream-error",/stream read failed/],["wrong-bytes",/校验失败/],["too-large",/超过大小限制/],
+    ["expired-response",/取消或加载超时/]]) {
   responseMode = mode; await send({type:"init", configuration:config});
   assert.match((await search()).error, expected, mode);
 }
@@ -125,7 +132,23 @@ responseMode = "valid";
 config = await buildConfiguration({...goodIndex, kind:"invalid"});
 await send({type:"init", configuration:config});
 assert.match((await search()).error, /索引不完整/);
-config = await buildConfiguration(goodIndex, [{index:1,path:"one",title:42}]);
+const bucketPath = "/api/reader-bucket-resource?path=" + encodeURIComponent(
+  "chapters/ebook/epub/" + "a".repeat(64) + "/" + "b".repeat(16) + "/epub-search-index.json.gz");
+const profile = "dom-text-v1", needleText = "needle ".repeat(120);
+const v2 = await buildConfiguration({version:2, kind:"epub-search-index", text_profile:profile, chapters:[
+  {index:1,path:"one",text:needleText + "手机 ".repeat(65),bf:"CP0BAEAAAAAgAgIAEAAAAIRAAAAAAACAIAgAAAABAAA="},
+  {index:2,path:"two",text:"桌面电脑",bf:"AAAAYgAAAAACAAQQQAghAAAEAAAAgAAAhACIAAIIAAE="}
+]}, [{index:1,path:"one",title:42}, {index:2,path:"two",title:"Desktop"}]);
+const rejectedUrl = isSpace ? "https://voiceofml-search.hf.space" + bucketPath : bucketPath;
+const acceptedUrl = isSpace ? bucketPath : proxyOrigin + bucketPath;
+const requestsBeforeV2 = requests.length;
+await send({type:"init", configuration:{...v2,index:{...v2.index,url:rejectedUrl,text_profile:profile}}});
+assert.match((await search("手机")).error, /索引无效/);
+assert.equal(requests.length, requestsBeforeV2);
+await send({type:"init", configuration:{...v2,index:{...v2.index,url:acceptedUrl}}});
+assert.match((await search("手机")).error, /文本格式不一致/);
+assert.equal(requests.length, requestsBeforeV2 + 1);
+config = {...v2,index:{...v2.index,url:acceptedUrl,text_profile:profile}};
 await send({type:"init", configuration:config});
 assert.match((await search(" ")).error, /1–2048/);
 assert.match((await search("x".repeat(2049))).error, /1–2048/);
@@ -163,12 +186,20 @@ assert.equal(latest().results.length, 50);
 assert.equal(latest().results[0].location, "第 1 章 · 42");
 const loadedRequests = requests.length;
 const cached = await search("手机");
-assert.equal(cached.total, 1);
+assert.equal(cached.total, 65);
+assert.equal(cached.offset, 0);
+assert.deepEqual(cached.results.map(hit => [hit.chapterIndex,hit.start,hit.length]),
+  Array.from({length:50}, (_,i) => [1, needleText.length+i*3, 2]));
+await send({type:"page", id:++id, session:cached.session, offset:50});
+assert.equal(latest().offset, 50);
+assert.equal(latest().session, cached.session);
+assert.deepEqual(latest().results.map(hit => [hit.chapterIndex,hit.start,hit.length]),
+  Array.from({length:15}, (_,i) => [1, needleText.length+(50+i)*3, 2]));
 assert.equal(requests.length, loadedRequests); // the validated index is cached
 await send({type:"search", id:resumedId, query:"needle"});
 assert.equal(latest().total, 120);
 assert.equal(requests.at(-1).credentials, isSpace ? "same-origin" : "omit");
-assert.ok(requests.at(-1).url.startsWith(proxyOrigin));
+assert.equal(requests.at(-1).url, proxyOrigin + bucketPath);
 await send({type:"page", id:++id, session:resumedId, offset:100});
 assert.equal(latest().offset, 100); assert.equal(latest().results.length, 20);
 await send({type:"page", id:++id, session:resumedId, offset:9999});
