@@ -21,7 +21,15 @@ const required = [
   {name: 'tests/reader/images/test_reader_image_loader.mjs', marker: 'Reader image loader: direct load, cleanup, cancellation, HTTP errors and bounded fallback passed'},
   {name: 'direct image success clears handlers and the tracked resource'},
   {name: 'image cancellation settles immediately even when the reader stays active'},
-  {name: 'resource disposal settles without retaining handlers or starting fallback'}
+  {name: 'resource disposal settles without retaining handlers or starting fallback'},
+  {name: 'pre-aborted image never starts a request'},
+  {name: 'a complete image reuses its canonical source'},
+  {name: 'offline image failures never retry or fetch'},
+  {name: 'image retry honors the original deadline'},
+  {name: 'cancelling a retry stops without a third attempt'},
+  {name: 'timed-out image fetch preserves the signal and cancels a failed response body'},
+  {name: 'cancelling a fallback image revokes its blob URL'},
+  {name: 'bytes arriving after cancellation never create an image'}
 ];
 if (result.status !== 0 || rows.length !== 1 || rows[0].some((value, index) => value < minimum[index]) ||
     !hasPassingTapContracts(text, required)) {

@@ -70,6 +70,32 @@ class StaticGateTests(unittest.TestCase):
         if message:
             self.assertIn(message, result.stdout)
 
+    def assert_coverage_threshold_fixture(self, gate, source, report, module, message, minimum='minimum'):
+        """Exercise the real gate's row comparison independently of measured coverage."""
+        gate_source, count = re.subn(rf'^const {re.escape(minimum)} = \[[^\n]+\];$',
+                                      f'const {minimum} = [90, 80, 70];', source, flags=re.M)
+        self.assertEqual(count, 1)
+        gate_source, count = re.subn(r'''from ["']node:child_process["'];''',
+                                      "from './coverage-fixture.mjs';", gate_source)
+        self.assertEqual(count, 1)
+        row_pattern = rf'^(#\s+{re.escape(module)}\s*\|)[^\n]+$'
+        fixture = gate.with_name('coverage-fixture.mjs')
+        cases = [((90, 80, 70), 0, True), ((95, 85, 75), 0, True), ((95, 85, 75), 1, False),
+                 ((89.99, 85, 75), 0, False), ((95, 79.99, 75), 0, False), ((95, 85, 69.99), 0, False)]
+        try:
+            gate.write_text(gate_source)
+            for scores, status, passes in cases:
+                with self.subTest(module=module, scores=scores, status=status):
+                    row = ' | '.join(f'{value:.2f}' for value in scores)
+                    tap, count = re.subn(row_pattern, rf'\g<1> {row} |', report, flags=re.M)
+                    self.assertEqual(count, 1)
+                    result = json.dumps({'status': status, 'stdout': tap})
+                    fixture.write_text(f'export const spawnSync = () => ({result});\n')
+                    self.assert_check(self.run_check('node', gate), passes, module if passes else message)
+        finally:
+            gate.write_text(source)
+            fixture.unlink(missing_ok=True)
+
     def test_javascript_reports_undefined_names_and_ignores_vendor(self):
         eslint = ROOT / "node_modules/eslint/bin/eslint.js"
         self.assert_check(self.run_check("node", eslint, "static"), True, "")
@@ -364,10 +390,9 @@ class StaticGateTests(unittest.TestCase):
         contract.write_text(original)
         gate = self.root / paths[1]
         source = gate.read_text()
-        anchor = "const minimum = [100, 88.89, 100];"
-        self.assertEqual(source.count(anchor), 1)
-        gate.write_text(source.replace(anchor, "const minimum = [100, 100, 100];"))
-        self.assert_check(self.run_check(*check), False, "above each minimum")
+        report = self.run_check(*check)
+        self.assert_check(report, True, 'controller.js |')
+        self.assert_coverage_threshold_fixture(gate, source, report.stdout, 'controller.js', 'above each minimum')
 
     def test_download_controller_declaration_matches_exact_runtime(self):
         config = self.root / "download-exact.json"
@@ -431,13 +456,9 @@ class StaticGateTests(unittest.TestCase):
             shutil.copyfile(ROOT / path, target)
         gate = self.root / paths[1]
         source = gate.read_text()
-        minimum = "const minimum = [100, 98.65, 97.22];"
-        self.assertEqual(source.count(minimum), 1)
-        for raised in ("const minimum = [100, 98.66, 97.22];",
-                       "const minimum = [100, 98.65, 97.23];"):
-            gate.write_text(source.replace(minimum, raised))
-            self.assert_check(self.run_check("node", paths[1]), False, "above each minimum")
-        gate.write_text(source)
+        report = self.run_check('node', gate)
+        self.assert_check(report, True, 'reader-document-loader.mjs |')
+        self.assert_coverage_threshold_fixture(gate, source, report.stdout, 'reader-document-loader.mjs', 'above each minimum')
         # Remove real cleanup coverage while retaining every required test name.
         contract = self.root / paths[2]
         original = contract.read_text()
@@ -1424,10 +1445,9 @@ class StaticGateTests(unittest.TestCase):
             shutil.copyfile(ROOT / path, target)
         gate = self.root / "scripts/search/check_search_highlight_coverage.mjs"
         source = gate.read_text()
-        before = "const minimum = [100, 95.45, 100];"
-        self.assertEqual(source.count(before), 1)
-        gate.write_text(source.replace(before, "const minimum = [100, 95.99, 100];"))
-        self.assert_check(self.run_check("node", str(gate)), False, "above each minimum")
+        report = self.run_check('node', gate)
+        self.assert_check(report, True, 'highlight.js |')
+        self.assert_coverage_threshold_fixture(gate, source, report.stdout, 'highlight.js', 'above each minimum')
 
     def test_search_highlight_declaration_matches_runtime(self):
         config = self.root / "jsconfig.json"
@@ -1666,11 +1686,9 @@ class StaticGateTests(unittest.TestCase):
             shutil.copyfile(ROOT / path, target)
         gate = self.root / paths[1]
         source = gate.read_text()
-        self.assertEqual(source.count("const minimum = [100, 95.24, 95.12];"), 1)
-        gate.write_text(source.replace("const minimum = [100, 95.24, 95.12];",
-                                       "const minimum = [100, 95.99, 95.12];"))
-        self.assert_check(self.run_check("node", paths[1]), False,
-                          "above each minimum")
+        report = self.run_check('node', gate)
+        self.assert_check(report, True, 'reader-request-manager.js |')
+        self.assert_coverage_threshold_fixture(gate, source, report.stdout, 'reader-request-manager.js', 'above each minimum')
 
     def test_request_manager_async_test_runner_rejects_unfinished_test(self):
         test = self.root / "tests/pending-request.js"
@@ -1793,26 +1811,19 @@ class StaticGateTests(unittest.TestCase):
         source = gate.read_text()
         measured = self.run_check("node", paths[3])
         self.assert_check(measured, True, "reader-pdf-network.mjs")
-        row = re.search(r"(?m)^\s*#\s*reader-pdf-network\.mjs\s*\|\s*(\d+(?:\.\d+)?)\s*\|", measured.stdout)
-        self.assertIsNotNone(row, measured.stdout)
-        hundredths = int(round(float(row.group(1)) * 100))
-        self.assertLess(hundredths, 10000, "fractional negative test needs a non-perfect line baseline")
-        needle = "const minimum = [97.86, 84.20, 86.27];"
-        self.assertEqual(source.count(needle), 1)
-        above = f"const minimum = [{(hundredths + 1) / 100:.2f}, 84.20, 86.27];"
-        gate.write_text(source.replace(needle, above))
-        self.assert_check(self.run_check("node", paths[3]), False,
-                          "PDF network coverage gate requires passing named tests")
+        message = 'PDF network coverage gate requires passing named tests'
+        self.assert_coverage_threshold_fixture(gate, source, measured.stdout, 'reader-pdf-network.mjs', message)
+        self.assert_coverage_threshold_fixture(gate, source, measured.stdout, 'all files', message,
+                                               minimum='aggregateMinimum')
         cache_needle = "const cacheMinimum = [100, 97.01, 100];"
         self.assertEqual(source.count(cache_needle), 1)
         gate.write_text(source.replace(cache_needle, "const cacheMinimum = [100.01, 97.01, 100];"))
         self.assert_check(self.run_check("node", paths[3]), False,
                           "PDF network coverage gate requires passing named tests")
-        for minimum in ("aggregateMinimum", "hintsMinimum"):
-            match = re.search(rf"const {minimum} = \[([^\]]+)\];", source)
-            self.assertIsNotNone(match)
-            gate.write_text(source.replace(match.group(0), f"const {minimum} = [100.01, 0, 0];"))
-            self.assert_check(self.run_check("node", paths[3]), False, "coverage")
+        match = re.search(r"const hintsMinimum = \[[^\]]+\];", source)
+        self.assertIsNotNone(match)
+        gate.write_text(source.replace(match.group(0), "const hintsMinimum = [100.01, 0, 0];"))
+        self.assert_check(self.run_check("node", paths[3]), False, message)
         for module in ("cache", "hints"):
             gate.write_text(source.replace(f"reader-pdf-range-{module}\\.mjs", f"missing-pdf-range-{module}\\.mjs"))
             self.assert_check(self.run_check("node", paths[3]), False,
@@ -2257,7 +2268,8 @@ class StaticGateTests(unittest.TestCase):
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(ROOT / path, target)
         check = ["node", paths[1]]
-        self.assert_check(self.run_check(*check), True, "reader-image-loader.mjs |")
+        live_report = self.run_check(*check)
+        self.assert_check(live_report, True, "reader-image-loader.mjs |")
         test = self.root / paths[4]
         source = test.read_text()
         name = 'image cancellation settles immediately even when the reader stays active'
@@ -2293,10 +2305,8 @@ class StaticGateTests(unittest.TestCase):
         self.assertEqual(original.count('reader-image-loader\\.mjs'), 1)
         gate.write_text(original.replace('reader-image-loader\\.mjs', 'missing-image-loader\\.mjs'))
         self.assert_check(self.run_check(*check), False, 'exactly one source row')
-        for thresholds in ('[100.01, 89.36, 91.67]', '[100, 89.37, 91.67]', '[100, 89.36, 91.68]'):
-            self.assertIn('[100, 89.36, 91.67]', original)
-            gate.write_text(original.replace('[100, 89.36, 91.67]', thresholds))
-            self.assert_check(self.run_check(*check), False, 'Reader image loader requires named contracts')
+        self.assert_coverage_threshold_fixture(gate, original, live_report.stdout, 'reader-image-loader.mjs',
+                                               'Reader image loader requires named contracts')
 
     def test_pdf_prefetch_contract_gate_fails_closed(self):
         dependencies = ['static/reader/pdf/reader-pdf-search.mjs',
@@ -2455,16 +2465,15 @@ class StaticGateTests(unittest.TestCase):
   assert.equal(calls.filter(sha => sha === refs[0].sha256).length, 2);
 """))
         coverage, mutation = ['node', paths[6]], ['node', paths[7]]
-        self.assert_check(self.run_check(*coverage), True, '# pass 14')
+        report = self.run_check(*coverage)
+        self.assert_check(report, True, '# pass 14')
         self.assert_check(self.run_check(*mutation), True, '"total":7,"killed":7,"survived":0,"errors":0')
         gate, test, source, mutant_gate = (self.root / paths[i] for i in (6, 9, 0, 7))
         gate_original, test_original, source_original, mutant_original = (
             p.read_text() for p in (gate, test, source, mutant_gate))
         try:
-            anchor = '[98.13, 87.50, 100]'
-            self.assertEqual(gate_original.count(anchor), 1)
-            gate.write_text(gate_original.replace(anchor, '[100, 100, 100]'))
-            self.assert_check(self.run_check(*coverage), False, 'reader-v3 coverage requires')
+            self.assert_coverage_threshold_fixture(gate, gate_original, report.stdout, 'reader-v3.mjs',
+                                                   'reader-v3 coverage requires')
             row = r'reader-v3\.mjs\s*\|'
             self.assertEqual(gate_original.count(row), 1)
             gate.write_text(gate_original.replace(row, r'missing-v3\.mjs\s*\|'))
@@ -2871,7 +2880,8 @@ class StaticGateTests(unittest.TestCase):
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(ROOT / path, target)
         check = ["node", paths[1]]
-        self.assert_check(self.run_check(*check), True, "reader-lifecycle.mjs |")
+        report = self.run_check(*check)
+        self.assert_check(report, True, 'reader-lifecycle.mjs |')
         test = self.root / paths[3]
         source = test.read_text()
         name = 'error classification preserves dynamic getter access and uncoerced matching codes'
@@ -2901,10 +2911,8 @@ class StaticGateTests(unittest.TestCase):
         self.assertEqual(original.count('reader-lifecycle\\.mjs'), 1)
         gate.write_text(original.replace('reader-lifecycle\\.mjs', 'missing-lifecycle\\.mjs'))
         self.assert_check(self.run_check(*check), False, 'exactly one source row')
-        self.assertIn('[100, 97.47, 100]', original)
-        for thresholds in ('[100.01, 97.47, 100]', '[100, 97.54, 100]', '[100, 97.47, 100.01]'):
-            gate.write_text(original.replace('[100, 97.47, 100]', thresholds))
-            self.assert_check(self.run_check(*check), False, 'Reader lifecycle requires named contracts')
+        self.assert_coverage_threshold_fixture(gate, original, report.stdout, 'reader-lifecycle.mjs',
+                                               'Reader lifecycle requires named contracts')
 
     def test_search_readability_baseline_gate_fails_closed(self):
         paths = ["static/app.js", "scripts/search/check_search_readability_baseline.mjs",
