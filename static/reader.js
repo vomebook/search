@@ -10,7 +10,6 @@ import "/search/static/reader/formats/reader-section-virtualizer.js";
 import "/search/static/reader/core/reader-runtime.js";
 import "/search/static/reader/formats/reader-format-adapters.js";
 import "/search/static/reader/core/reader-security.js";
-import { paintTextHit, hitBoxes } from "/search/static/reader/search/reader-book-text.js";
 import { createPdfFetchPolicy, openPdfRangeTask, preparePdfInitialRange, isFirstPageCandidate } from "./reader/pdf/reader-pdf-network.mjs";
 import { createV3Repository, validateResource, validateReadingManifest, validatePageMap, datasetPrimaryUrl } from "./reader/pdf/reader-v3.mjs";
 import { populateIndependentTextLayer, independentTextCaret } from "./reader/pdf/reader-pdf-text.js";
@@ -187,7 +186,6 @@ const readerContext = {
   get highlightPdfText() { return highlightPdfText; }, set highlightPdfText(value) { highlightPdfText = value; },
   get highlightTextParts() { return highlightTextParts; },
   get historySuppressed() { return historySuppressed; }, set historySuppressed(value) { historySuppressed = value; },
-  get hitBoxes() { return hitBoxes; },
   get htmlFrame() { return htmlFrame; }, set htmlFrame(value) { htmlFrame = value; },
   get imageLoader() { return imageLoader; },
   get independentTextCaret() { return independentTextCaret; },
@@ -232,7 +230,6 @@ const readerContext = {
   get pageInvertToggle() { return pageInvertToggle; },
   get pageInverted() { return pageInverted; }, set pageInverted(value) { pageInverted = value; },
   get pageNavigationLockUntil() { return pageNavigationLockUntil; }, set pageNavigationLockUntil(value) { pageNavigationLockUntil = value; },
-  get paintTextHit() { return paintTextHit; },
   get panelAnimationTimer() { return panelAnimationTimer; }, set panelAnimationTimer(value) { panelAnimationTimer = value; },
   get panelState() { return panelState; },
   get params() { return params; },

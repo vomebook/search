@@ -38,8 +38,7 @@ declare namespace ReaderPdfSearch {
     pdfBookSearchPrefetchTimer: ReturnType<typeof setTimeout> | 0; PDF_BOOK_SEARCH_PREFETCH_DELAY: number; prefetchPdfBookSearch(): Promise<void>;
     goToPage(page: number, generation: number): Promise<boolean>; isReaderGenerationCurrent(kind: "search" | "navigation", generation: number): boolean;
     content: HTMLElement; pdfV3Manifest: Manifest | null; renderPdfOcrText(shell: Element): Promise<unknown>;
-    hitBoxes(page: { text: string; text_spans: { start: number; end: number; box: number[]; precision: string | undefined }[] }, start: number, length: number): Box[];
-    paintTextHit(shell: Element, boxes: Box[], hit: Hit): void; viewport: HTMLElement; bookmarkRibbon: HTMLElement; readerPageScrollTop(shell: Element): number;
+    viewport: HTMLElement; bookmarkRibbon: HTMLElement; readerPageScrollTop(shell: Element): number;
     fullSearchSession: ReaderSearchController.State;
     updateSearchState(patch: { results: Result[]; index: number }): unknown; renderFullSearchResults(): void; fullSearchStatus: HTMLElement;
     pdfDocument: PdfDocument | null; readerRuntime: { currentGeneration(kind: "search"): number };
@@ -57,6 +56,10 @@ declare namespace ReaderPdfSearch {
   }
 }
 interface Navigator { readonly connection?: { readonly saveData?: boolean; readonly effectiveType?: string; readonly downlink?: number; readonly rtt?: number } }
+declare module "*/reader-book-text.js" {
+  export const hitBoxes: typeof import('../static/reader/search/reader-book-text.js').hitBoxes;
+  export const paintTextHit: typeof import('../static/reader/search/reader-book-text.js').paintTextHit;
+}
 declare module "*/reader-pdf-book-search.mjs" { export const createPdfBookSearch: ReaderPdfSearch.Module["createPdfBookSearch"]; }
 declare module "*/reader-pdf-text-store.mjs" {
   export const pdfTextStoreKey: ReaderPdfSearch.StoreModule["pdfTextStoreKey"];

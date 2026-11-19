@@ -498,11 +498,26 @@ class ReaderRefactorTest(unittest.TestCase):
         self.page.route('**/static/reader/pdf/reader-pdf-page-window.mjs', hold_shells)
         # Disable the independent low-priority image preload; measure the real
         # image demand/reveal path, not a speculative duplicate request.
-        self.page.add_init_script('''Object.defineProperty(navigator,'connection',{value:{saveData:true}});''')
+        self.page.add_init_script('''
+          Object.defineProperty(navigator,'connection',{value:{saveData:true}});
+          const parse = JSON.parse, stringify = JSON.stringify;
+          window.imageManifestWork = {wire:0, synthetic:0};
+          JSON.parse = function (value, ...args) {
+            const result = parse.call(this,value,...args);
+            if (result?.kind === 'image-page-stream') imageManifestWork.wire++;
+            if (result?.kind === 'pdf-pages') imageManifestWork.synthetic++;
+            return result;
+          };
+          JSON.stringify = function (value,...args) {
+            if (value?.kind === 'pdf-pages') imageManifestWork.synthetic++;
+            return stringify.call(this,value,...args);
+          };
+        ''')
         self.page.goto(self.reader_url('image-pages', url=source), wait_until='domcontentloaded')
         self.page.wait_for_function('()=>!!window.__releaseImageShells')
         self.assertEqual(self.page.locator(f'.reader-page[data-page="{count}"]').count(), 0)
         self.page.locator('.reader-page[data-page="1"] img.ready').wait_for(state='visible')
+        self.assertEqual(self.page.evaluate('window.imageManifestWork'), {'wire': 1, 'synthetic': 0})
         self.assertNotEqual(self.page.locator('html').get_attribute('data-reader-phase'), 'ready')
         self.page.evaluate('window.__releaseImageShells()')
         self.page.wait_for_function("()=>document.documentElement.dataset.readerPhase==='ready'")
@@ -534,13 +549,27 @@ class ReaderRefactorTest(unittest.TestCase):
         originals = []
         self.page.route('**/api/reader-content?**', lambda route: (
             originals.append(route.request.url), route.fulfill(content_type='image/webp', body=support.IMAGE_FIXTURES['webp'][1])))
-        for fault in ('manifest', 'page'):
+        for fault in ('manifest', 'page', 'null-entry', 'too-many', 'too-large'):
             with self.subTest(fault=fault):
                 manifest = dict(version=1, kind='image-page-stream', page_count=1,
                                 pages=[dict(path='pages/page-000001.webp', bytes=10, sha256='a'*64)])
-                self.page.route('**/api/reader-bucket-resource?**', lambda route: route.fulfill(json=manifest)
-                                if fault == 'page' and 'page-manifest.json' in route.request.url
-                                else route.fulfill(status=404, body='missing'))
+                if fault == 'null-entry':
+                    manifest['pages'] = [None]
+                if fault == 'too-many':
+                    manifest.update(page_count=100001, pages=[{}] * 100001)
+                if fault == 'too-large':
+                    manifest['padding'] = 'x' * (8 * 1024 * 1024)
+                requested = []
+
+                def resource(route):
+                    is_manifest = 'page-manifest.json' in route.request.url
+                    requested.append(is_manifest)
+                    if fault != 'manifest' and is_manifest:
+                        route.fulfill(json=manifest)
+                    else:
+                        route.fulfill(status=404, body='missing')
+
+                self.page.route('**/api/reader-bucket-resource?**', resource)
                 self.open(self.origin+'/static/reader.html?id=0ym7e7wbcxau0&ext=image-pages')
                 self.assertTrue(self.page.locator('img.reader-image').evaluate('image => image.naturalWidth > 0'))
                 self.assertTrue(self.page.locator('#full-search-toggle').evaluate('node => node.hidden'))
@@ -549,7 +578,8 @@ class ReaderRefactorTest(unittest.TestCase):
                 self.page.evaluate('window.dispatchEvent(new Event("voice-reader-dispose"))')
                 self.assertEqual(self.page.locator('html').get_attribute('data-reader-phase'), 'disposed')
                 self.page.unroute('**/api/reader-bucket-resource?**')
-        self.assertEqual(len(originals), 2)
+                self.assertEqual(False in requested, fault == 'page')
+        self.assertEqual(len(originals), 5)
 
     def test_classic_engine_failure_timeout_and_disposal_release_scripts(self):
         self.page.add_init_script('''const timer = window.setTimeout.bind(window);
@@ -1564,6 +1594,8 @@ class ReaderRefactorTest(unittest.TestCase):
         self.assertEqual([path for path in requests if path != layer_path], [manifest_path, book_path])
         self.assertLessEqual(requests.count(layer_path), 1)
         self.assertEqual(self.page.evaluate("window.__nativeTextReads || 0"), native_reads)
+        self.page.locator('.full-search-result').click()
+        self.page.locator('.reader-page[data-page="1"] .reader-text-hit-box').wait_for(state='attached')
 
     def test_pdf_ocr_progress_preserves_full_first_page_and_focus(self):
         def pause_after_first_page(route):

@@ -104,6 +104,37 @@ class EbookFlowTests(unittest.TestCase):
                     self.assertEqual(self.page.locator('#wide-table caption').text_content(),'Table caption')
                     self.assertEqual(self.page.locator('#wide-pre').text_content(),'0123456789 ' * 50)
 
+    def test_ebook_first_content_does_not_import_pdf_hit_projection(self):
+        requested = []
+
+        def pdf_only(route):
+            requested.append(route.request.url)
+            route.abort()
+
+        self.page.route('**/reader/search/reader-book-text*.js*', pdf_only)
+        self.page.route('**/reader/search/reader-pdf-book-validate*.mjs*', pdf_only)
+        source = ('https://voiceofml-search.hf.space/api/reader-bucket-resource?path=chapters/ebook/epub/'
+                  + 'a' * 64 + '/1234567890abcdef/chapter-manifest.json')
+        chapter = '<h1>Visible converted chapter</h1><p>Opening ebook text</p>'
+        self.page.route('**/api/reader-bucket-resource**', lambda route: route.fulfill(json={
+            'version': 1, 'kind': 'epub-chapters', 'chapters': [
+                {'index': 1, 'path': 'chapters/chapter-0001.xhtml', 'bytes': len(chapter)}]
+        }) if 'chapter-manifest.json' in route.request.url else route.fulfill(content_type='text/html', body=chapter))
+        self.page.goto(self.origin + support.PREFIX + '/static/reader.html?' + urlencode(
+            dict(url=source, ext='epub-chapters')))
+        self.page.wait_for_function("()=>document.documentElement.dataset.readerPhase==='ready'")
+        heading = self.page.locator('.reader-epub-chapter h1')
+        self.assertTrue(heading.is_visible())
+        self.assertEqual(heading.text_content(), 'Visible converted chapter')
+        self.page.route('**/api/reader-content**', lambda route: route.fulfill(
+            content_type='application/epub+zip', body=epub_with_many_chapters(count=2),
+            headers={'Access-Control-Allow-Origin': '*'}))
+        self.page.goto(self.origin + support.PREFIX + '/static/reader.html?' + urlencode(dict(
+            url='https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/flow.epub', ext='epub')))
+        self.page.wait_for_function("()=>document.documentElement.dataset.readerPhase==='ready'")
+        self.assertTrue(self.page.locator('.reader-section-body').first.is_visible())
+        self.assertEqual(requested, [])
+
     def test_native_first_text_does_not_wait_for_image_body(self):
         held=[]
         self.page.route('**/api/reader-resource?**',lambda route:held.append(route))

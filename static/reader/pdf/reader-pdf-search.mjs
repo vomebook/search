@@ -99,14 +99,17 @@ export function createReaderPdfSearch(readerContext) {
           if (!await readerContext.goToPage(hit.page, nav) || !readerContext.isReaderGenerationCurrent("navigation", nav))
             return false;
           readerContext.content.querySelectorAll(".reader-text-hit-box").forEach(node => node.remove());
-          const shell = readerContext.content.querySelector(`.reader-page[data-page="${hit.page}"]`);
+          const shell = /** @type {HTMLElement | null} */ (readerContext.content.querySelector(`.reader-page[data-page="${hit.page}"]`));
           if (shell && (hit.boxes.length || hit.textGeneration)) {
+            // PDF hit projection isn't needed to open or paint a document.
+            const { hitBoxes, paintTextHit } = await readerContext.awaitReader(import("/search/static/reader/search/reader-book-text.js"));
+            if (!readerContext.isReaderGenerationCurrent("navigation", nav)) return false;
             let boxes = hit.boxes;
             if (hit.textGeneration) {
               const layer = await (/** @type {ReaderPdfSearch.Repository} */ (readerContext.pdfTextLayerRepository)).textPage(/** @type {ReaderPdfSearch.Resource | undefined} */ (manifest.text_layer), hit.page);
               if (!readerContext.isReaderGenerationCurrent("navigation", nav)) return false;
               if (layer.generation !== hit.textGeneration) throw new Error("PDF_V3_GENERATION_CHANGED");
-              boxes = readerContext.hitBoxes({text: layer.text, text_spans: layer.regions.map(region => ({
+              boxes = hitBoxes({text: layer.text, text_spans: layer.regions.map(region => ({
                 start: region.start, end: region.end, box: region.box, precision: region.mapping_precision
               }))}, hit.start, hit.length);
             }
@@ -114,7 +117,9 @@ export function createReaderPdfSearch(readerContext) {
               await readerContext.renderPdfOcrText(shell);
               if (!readerContext.isReaderGenerationCurrent("navigation", nav)) return false;
             }
-            readerContext.paintTextHit(shell, boxes, hit);
+            // A virtual page can leave the DOM while the module or OCR loads.
+            if (!shell.isConnected) return false;
+            paintTextHit(shell, boxes, hit);
             const mark = shell.querySelector(".reader-text-hit-box");
             if (mark) {
               // Keep the search hit visible without leaving the previous page

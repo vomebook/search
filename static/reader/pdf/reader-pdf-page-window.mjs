@@ -479,9 +479,17 @@ export function createReaderPdfPageWindow(readerContext) {
       readerContext.syncCapabilityControls();
       return readerContext.renderPdf(readerContext.loadPdfDocument(primary));
     }
+    return renderImagePageWindow(manifest.page_count, book, manifest.toc);
+  }
+
+  /**
+   * @param {number} totalPages
+   * @param {{seedRatio: number}} book
+   * @param {import('../../../typings/reader-security-strict').ValidatedPdfPageManifest['toc']} [toc]
+   */
+  async function renderImagePageWindow(totalPages, book, toc) {
     readerContext.assertReaderActive();
     const source = readerContext.pdfManifestSource();
-    const totalPages = manifest.page_count;
     if (!source?.pageUrl) throw new Error("PDF_MANIFEST_INVALID");
     readerContext.pdfPageManifest = { ...source, pageUrl: source.pageUrl, pageCount: totalPages, codec: "webp", sourceFormat: "image" };
     readerContext.updateDocumentState({ pageCount: totalPages });
@@ -495,9 +503,9 @@ export function createReaderPdfPageWindow(readerContext) {
     }
     await readerContext.preloadPdfFirstPage(totalPages);
     let initialRenderGate = true;
-    if (Array.isArray(manifest.toc) && manifest.toc.length)
+    if (Array.isArray(toc) && toc.length)
       readerContext.setToc(
-        manifest.toc.map((item) => ({
+        toc.map((item) => ({
           label: `${item.title} · 第 ${item.page} 页`,
           depth: item.depth,
           page: item.page,
@@ -616,28 +624,21 @@ export function createReaderPdfPageWindow(readerContext) {
   async function renderImagePages(prepared) {
     const response = await prepared;
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    /** @type {{version: number, kind: string, page_count: number, pages: {path: string, bytes: number, sha256: string}[]}} */
+    /** @type {{version: number, kind: string, page_count: number, pages: unknown[]} | null} */
     const manifest = JSON.parse(
       await VoiceOfMLReaderSecurity.readText(response, VoiceOfMLReaderSecurity.LIMITS.manifestBytes)
     );
     if (!manifest || manifest.version !== 1 || manifest.kind !== "image-page-stream" ||
         !Number.isInteger(manifest.page_count) || manifest.page_count < 1 ||
-        !Array.isArray(manifest.pages) || manifest.pages.length !== manifest.page_count)
+        !Array.isArray(manifest.pages) || manifest.pages.length !== manifest.page_count ||
+        manifest.pages.includes(null))
       throw new Error("IMAGE_MANIFEST_INVALID");
-    const normalized = {
-      version: 2,
-      kind: "pdf-pages",
-      page_count: manifest.page_count,
-      entries: manifest.pages.map((entry, index) => ({
-        page: index + 1,
-        path: entry.path,
-        bytes: entry.bytes,
-        sha256: entry.sha256
-      }))
-    };
-    return readerContext.renderPdfPages(Promise.resolve(new Response(JSON.stringify(normalized), {
-      headers: { "Content-Type": "application/json" }
-    })));
+    if (manifest.page_count > VoiceOfMLReaderSecurity.LIMITS.pdfPages)
+      throw Object.assign(new Error("READER_RESOURCE_LIMIT"), { code: "READER_RESOURCE_LIMIT" });
+    // Page URLs come from the source contract, not the unused entry metadata.
+    // Apply the byte limit to the wire body, not a larger reserialized copy.
+    pdfPagesBook = { seedRatio: 0 };
+    return renderImagePageWindow(manifest.page_count, pdfPagesBook);
   }
 
   /** @typedef {import('../../../typings/reader-page-window-strict').PdfPreviewDocument | import('../../../typings/reader-page-window-strict').DirectDjvuDocument} VerifiedPdf */
