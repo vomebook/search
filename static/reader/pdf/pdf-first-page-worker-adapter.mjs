@@ -67,13 +67,15 @@ export function makeFirstPageWorkerSource(source) {
     catalog.pageKidsCountCache.clear();
     catalog.pageIndexCache.clear();
     for (const [pageIndex, [pageDict, ref]] of pagesTree) {
-      const promise = pageDict instanceof Error ? Promise.reject(pageDict) : Promise.resolve(new Page({
+      const page = pageDict instanceof Error ? null : new Page({
         pdfManager, xref: this.xref, pageIndex, pageDict, ref,
         globalIdFactory: this._globalIdFactory, fontCache: catalog.fontCache,
         builtInCMapCache: catalog.builtInCMapCache, standardFontDataCache: catalog.standardFontDataCache,
         globalColorSpaceCache: catalog.globalColorSpaceCache, globalImageCache: catalog.globalImageCache,
         systemFontCache: catalog.systemFontCache, nonBlendModesSet: catalog.nonBlendModesSet, xfaFactory: null
-      }));
+      });
+      if (page && provisional && pageIndex === 0) page.readerOpeningResources = true;
+      const promise = page ? Promise.resolve(page) : Promise.reject(pageDict);
       promise.catch(() => {});
       this.#pagePromises.set(pageIndex, promise);
       if (ref instanceof Ref) catalog.pageIndexCache.put(ref, pageIndex);
@@ -151,6 +153,24 @@ export function makeFirstPageWorkerSource(source) {
     `for (const range of pendingRequests.slice(0, 32))
         this.xref.pdfManager.streamManager?.msgHandler.send("ReaderPrioritizeRange", range);
       await this.xref.stream.manager.requestRanges(pendingRequests);`, "prioritize-page-resources");
+  source = replaceOnce(source,
+    `const resourcesPromise = this.loadResources(RESOURCES_KEYS_OPERATOR_LIST);`,
+    `const resourcesPromise = this.readerOpeningResources
+      ? this.readerLoadOpeningResources() : this.loadResources(RESOURCES_KEYS_OPERATOR_LIST);`, "opening-page-resources");
+  source = replaceOnce(source,
+    `async #getMergedResources(streamDict, keys) {`,
+    `async readerLoadOpeningResources() {
+    await (this.#resourcesPromise ??= this.pdfManager.ensure(this, "resources"));
+    const keys = RESOURCES_KEYS_OPERATOR_LIST;
+    // Font, color space and XObject can each uncover more ranges. Start the
+    // same loader work independently, retaining the join before evaluation.
+    // The existing ChunkedStreamManager owns deduplication and cancellation.
+    const independent = ["ColorSpace", "Font", "XObject"].filter(key => this.resources.has(key));
+    if (independent.length < 2) return ObjectLoader.load(this.resources, keys, this.xref);
+    const groups = [keys.filter(key => !independent.includes(key)), ...independent.map(key => [key])];
+    await Promise.all(groups.map(group => ObjectLoader.load(this.resources, group, this.xref)));
+  }
+  async #getMergedResources(streamDict, keys) {`, "parallel-opening-resource-groups");
   source = replaceOnce(source,
     'const workerHandlerName = docId + "_worker";\n    let handler = new MessageHandler(workerHandlerName, docId, port);',
     'const workerHandlerName = docId + "_worker";\n    let readerCountPending = false;\n    let handler = new MessageHandler(workerHandlerName, docId, port);', "document-state");
