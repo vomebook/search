@@ -51,7 +51,7 @@ globalThis.matchMedia = () => ({matches: false});
 }
 
 function fixture() {
-  let visible = false, loads = 0, released = 0, epoch = 0;
+  let visible = false, loads = 0, released = 0, epoch = 0, readyLookups = 0, markerReads = 0;
   const classes = new Set(['ready']);
   const image = {tagName: 'IMG', naturalWidth: 3295, naturalHeight: 2539,
     classList: {add: value => classes.add(value), contains: value => classes.has(value)},
@@ -60,6 +60,7 @@ function fixture() {
   const shell = {dataset: {page: '54', renderState: 'rendered', textReady: '1'},
     style: {}, isConnected: true, image,
     querySelector(selector) {
+      if (selector.endsWith('.ready')) readyLookups++;
       if (selector === '.reader-pdf-text') return textLayer;
       if (selector === '.reader-page-state') return null;
       if (selector.includes('img')) return shell.image;
@@ -77,7 +78,7 @@ function fixture() {
         if (selector.includes('canvas') || selector.includes('img')) return shell.image ? [shell.image] : [];
         return [shell];
       }},
-    pageAtMarker: () => marker, isPdfPageVisible: () => visible, pdfSelectionIntersects: () => false,
+    pageAtMarker: () => {markerReads++; return marker;}, isPdfPageVisible: () => visible, pdfSelectionIntersects: () => false,
     domSearch: {pruneMarks() {}},
     pdfPageManifest: {codec: 'png', pageUrl: () => 'https://fixture.test/page.png'},
     pdfPageEntry: page => ({page}), pdfPagePriority: () => visible ? 2 : 1,
@@ -101,7 +102,21 @@ function fixture() {
   reader.trimPdfManifestImages = () => {};
   return {reader, shell, marker, classes,
     visible: value => {visible = value;},
-    stats: () => ({loads, released, epoch})};
+    stats: () => ({loads, released, epoch, readyLookups, markerReads})};
+}
+
+{
+  const value = fixture();
+  value.reader.pdfPixelBudget = () => 20_000_000;
+  value.reader.trimPdfSurfaces(null);
+  assert.equal(value.stats().markerReads, 0, 'within budget needs no eviction priority');
+  assert.equal(value.stats().readyLookups, 2, 'inspect each ready surface once');
+  assert.notEqual(value.shell.image, null);
+  value.reader.pdfPixelBudget = () => 1;
+  value.reader.trimPdfSurfaces(null);
+  assert.equal(value.stats().readyLookups, 4, 'the eviction reuses the inspected surfaces');
+  assert.equal(value.stats().markerReads, 1);
+  assert.equal(value.shell.image, null);
 }
 
 {

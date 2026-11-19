@@ -93,26 +93,36 @@ export function createReaderPdfScheduler(readerContext) {
   /** @param {import('../../../typings/reader-pdf-scheduler-strict').PdfShell | null} [protectedShell] @param {number} [incomingPixels] */
   function trimPdfSurfaces(protectedShell, incomingPixels = 0) {
     readerContext.trimPdfManifestPrefetches();
-    const shells = [.../** @type {NodeListOf<import('../../../typings/reader-pdf-scheduler-strict').PdfShell>} */ (readerContext.content.querySelectorAll('.reader-page[data-render-state="rendered"]'))];
+    const shells = /** @type {NodeListOf<import('../../../typings/reader-pdf-scheduler-strict').PdfShell>} */ (readerContext.content.querySelectorAll('.reader-page[data-render-state="rendered"]'));
     const canvasLimit = matchMedia("(max-width: 700px)").matches ? 7 : 11;
-    let canvases = shells.filter(shell => shell.querySelector("canvas.ready")).length;
-    let images = shells.filter(shell => shell.querySelector("img.ready")).length;
+    let canvases = 0, images = 0;
+    const surfaces = Array.from(shells, shell => {
+      const canvas = /** @type {HTMLCanvasElement | null} */ (shell.querySelector("canvas.ready"));
+      const image = /** @type {HTMLImageElement | null} */ (shell.querySelector("img.ready"));
+      if (canvas) canvases++;
+      if (image) images++;
+      return { shell, canvas, image };
+    });
     // The target canvas may already have a backing store that resizing replaces.
     // Account for the larger of its current and incoming allocations, not both.
     const currentCanvas = protectedShell?.querySelector("canvas");
     const currentPixels = currentCanvas ? readerContext.pdfSurfacePixels(currentCanvas) : 0;
     let pixels = readerContext.pdfRetainedPixels() + Math.max(0, incomingPixels - currentPixels);
+    const budget = readerContext.pdfPixelBudget();
+    if (pixels <= budget && canvases <= canvasLimit && images <= 25) {
+      readerContext.domSearch.pruneMarks();
+      return;
+    }
     const retentionPage = Number(readerContext.pageAtMarker()?.dataset.page) || readerContext.documentState.page;
     /** @param {import('../../../typings/reader-pdf-scheduler-strict').PdfShell} shell */
     const distance = shell => {
       const delta = Number(shell.dataset.page) - retentionPage;
       return Math.abs(delta) * (delta * readerContext.pdfScrollDirection < 0 ? 2 : 1);
     };
-    shells.sort((a, b) => distance(b) - distance(a) ||
-      Number(a.dataset.renderUsedAt || 0) - Number(b.dataset.renderUsedAt || 0));
-    for (const shell of shells) {
-      const canvas = /** @type {HTMLCanvasElement | null} */ (shell.querySelector("canvas.ready")), image = /** @type {HTMLImageElement | null} */ (shell.querySelector("img.ready"));
-      if (pixels <= readerContext.pdfPixelBudget() && !(canvas && canvases > canvasLimit) && !(image && images > 25)) continue;
+    surfaces.sort((a, b) => distance(b.shell) - distance(a.shell) ||
+      Number(a.shell.dataset.renderUsedAt || 0) - Number(b.shell.dataset.renderUsedAt || 0));
+    for (const { shell, canvas, image } of surfaces) {
+      if (pixels <= budget && !(canvas && canvases > canvasLimit) && !(image && images > 25)) continue;
       if (shell === protectedShell || readerContext.isPdfPageVisible(shell) || Number(shell.dataset.page) === retentionPage || readerContext.pdfSelectionIntersects(shell) || shell.querySelector('.full-search-highlight, .reader-text-hit-box')) continue;
       shell._textEpoch = (shell._textEpoch || 0) + 1;
       if (canvas) {
@@ -128,7 +138,7 @@ export function createReaderPdfScheduler(readerContext) {
         // that same speculative pass. Visible/explicit demand always wins.
         shell._pdfImageEvictedAt = {
           page: readerContext.documentState.page, zoom: readerContext.documentState.zoom,
-          direction: readerContext.pdfScrollDirection, budget: readerContext.pdfPixelBudget(),
+          direction: readerContext.pdfScrollDirection, budget,
           width: readerContext.viewport.clientWidth, height: readerContext.viewport.clientHeight
         };
         image.removeAttribute("src");
@@ -471,9 +481,9 @@ export function createReaderPdfScheduler(readerContext) {
       return rect.bottom >= -1200 && rect.top <= innerHeight + 1200;
     });
     const marker = readerContext.pageAtMarker();
-    shells.sort((a, b) => Number(b === marker) - Number(a === marker) ||
-      readerContext.pdfPagePriority(b) - readerContext.pdfPagePriority(a));
-    for (const shell of shells) {
+    const ranked = shells.map(shell => ({ shell, priority: shell === marker ? 4 : readerContext.pdfPagePriority(shell) }));
+    ranked.sort((a, b) => b.priority - a.priority);
+    for (const { shell } of ranked) {
       if (shell._renderPromise) shell.dataset.pendingRerender = "1";
       else readerContext.renderPdfInBackground(shell, true);
     }

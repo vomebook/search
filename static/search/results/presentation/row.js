@@ -15,13 +15,17 @@
       const recordLink = getRecordLink(rec);
       const action = readerAction(rec, recordLink);
       const readerActionUrl = action.url;
-      const breadcrumb = (rec.Folder || []).map((f, j) => {
-        const accum = (rec.Folder || []).slice(0, j + 1).join("/");
-        const folderDisplay = view.searchFolders ? highlightText(f, view.query) : escapeHTML(f);
-        const separator = j < (rec.Folder || []).length - 1 ? '<span class="path-sep">/</span>' : '';
-        return '<span role="button" tabindex="0" class="path-folder" aria-label="筛选路径：' + escapeHTML(accum) + '" data-folder="' + escapeHTML(accum) + '" data-repo="' + repoShort + '">' + folderDisplay + separator + '</span>';
-      }).join("");
-      const repoSeparator = (rec.Folder || []).length ? '<span class="path-sep">/</span>' : '';
+      const folders = rec.Folder || [], pathSeparator = '<span class="path-sep">/</span>';
+      let prefix = "", breadcrumb = "";
+      for (const [index, folder] of folders.entries()) {
+        prefix += (index ? "/" : "") + (folder ?? "");
+        if (!(index in folders)) continue;
+        const path = escapeHTML(prefix);
+        const folderDisplay = view.searchFolders ? highlightText(folder, view.query) : escapeHTML(folder);
+        const separator = index < folders.length - 1 ? pathSeparator : "";
+        breadcrumb += `<span role="button" tabindex="0" class="path-folder" aria-label="筛选路径：${path}" data-folder="${path}" data-repo="${repoShort}">${folderDisplay}${separator}</span>`;
+      }
+      const repoSeparator = folders.length ? pathSeparator : "";
       return (
         '<input type="checkbox" class="result-checkbox" aria-label="选择文件：' + fileName + '" data-index="' + idx + '">' +
         '<div class="result-file-icon" aria-hidden="true">' + (icons[iconType] || icons.file) + '</div>' +

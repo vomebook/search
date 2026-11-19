@@ -134,7 +134,7 @@ await send({type:"init", configuration:config});
 assert.match((await search()).error, /索引不完整/);
 const bucketPath = "/api/reader-bucket-resource?path=" + encodeURIComponent(
   "chapters/ebook/epub/" + "a".repeat(64) + "/" + "b".repeat(16) + "/epub-search-index.json.gz");
-const profile = "dom-text-v1", needleText = "needle ".repeat(120);
+const profile = "dom-text-v1", needleText = "needle ".repeat(10000);
 const v2 = await buildConfiguration({version:2, kind:"epub-search-index", text_profile:profile, chapters:[
   {index:1,path:"one",text:needleText + "手机 ".repeat(65),bf:"CP0BAEAAAAAgAgIAEAAAAIRAAAAAAACAIAgAAAABAAA="},
   {index:2,path:"two",text:"桌面电脑",bf:"AAAAYgAAAAACAAQQQAghAAAEAAAAgAAAhACIAAIIAAE="}
@@ -181,7 +181,7 @@ await started; await send({type:"cancel"});
 const resumedId = ++id, resumed = send({type:"search", id:resumedId, query:"needle"});
 await Promise.all([abandoned, resumed]);
 assert.equal(messages.some(value => value.id === abandonedId), false);
-assert.equal(latest().id, resumedId); assert.equal(latest().total, 120);
+assert.equal(latest().id, resumedId); assert.equal(latest().total, 10000);
 assert.equal(latest().results.length, 50);
 assert.equal(latest().results[0].location, "第 1 章 · 42");
 const loadedRequests = requests.length;
@@ -197,13 +197,27 @@ assert.deepEqual(latest().results.map(hit => [hit.chapterIndex,hit.start,hit.len
   Array.from({length:15}, (_,i) => [1, needleText.length+(50+i)*3, 2]));
 assert.equal(requests.length, loadedRequests); // the validated index is cached
 await send({type:"search", id:resumedId, query:"needle"});
-assert.equal(latest().total, 120);
+assert.equal(latest().total, 10000);
 assert.equal(requests.at(-1).credentials, isSpace ? "same-origin" : "omit");
 assert.equal(requests.at(-1).url, proxyOrigin + bucketPath);
 await send({type:"page", id:++id, session:resumedId, offset:100});
-assert.equal(latest().offset, 100); assert.equal(latest().results.length, 20);
-await send({type:"page", id:++id, session:resumedId, offset:9999});
-assert.equal(latest().offset, 100); assert.equal(latest().results.length, 20);
+assert.equal(latest().offset, 100); assert.equal(latest().results.length, 50);
+const exec = RegExp.prototype.exec;
+let visits = 0;
+RegExp.prototype.exec = function (text) {
+  const match = exec.call(this, text);
+  if (match && this.source === 'needle') visits++;
+  return match;
+};
+try {
+  await send({type:'page', id:++id, session:resumedId, offset:999999});
+} finally {
+  RegExp.prototype.exec = exec;
+}
+assert.equal(latest().offset, 9950);
+assert.deepEqual(latest().results.map(({start,length}) => [start,length]),
+  Array.from({length:50}, (_, i) => [(9950 + i) * 7, 6]));
+assert.equal(visits, 272, 'late page starts at existing match checkpoint');
 await send({type:"page", id:++id, session:999, offset:0});
 assert.match(latest().error, /取消/);
 await send({type:"cancel"});

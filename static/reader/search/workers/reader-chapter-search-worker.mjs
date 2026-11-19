@@ -146,7 +146,7 @@ async function handleRequest(data,scope) {
       if (!current()) return;
     } else offset=pageOffset(data.offset,data.session);
     if (!session || !chapters) throw aborted();
-    const result=offset ? await resultPage(chapters,session.query,session.counts,offset,current) : session.firstPage.slice();
+    const result=offset ? await resultPage(chapters,session.query,session.counts,offset,current,session.checkpoints) : session.firstPage.slice();
     if (current()) scope.postMessage({id:data.id,session:session.id,total:session.total,
       offset,pageSize:PAGE_SIZE,results:result});
   } catch (error) {

@@ -166,21 +166,26 @@ export function createReaderUi(readerContext) {
       return;
     }
     readerContext.clearSearchHighlights(view);
+    const items = /** @type {NodeListOf<HTMLElement>} */ (view.querySelectorAll(".panel-item"));
+    if (!query) {
+      for (const item of items) if (item.hidden) item.hidden = false;
+      status.hidden = true;
+      return;
+    }
     let count = 0;
-    for (const item of /** @type {NodeListOf<HTMLElement>} */ (view.querySelectorAll(".panel-item"))) {
+    for (const item of items) {
       const searchableText = [...item.children]
         .filter((child) => !child.classList.contains("panel-item-remove"))
         .map((child) => child.textContent)
         .join(" ")
         .toLowerCase();
-      item.hidden = !!query && !searchableText.includes(query);
+      item.hidden = !searchableText.includes(query);
       if (!item.hidden) {
         count++;
-        if (query) readerContext.highlightPanelItem(item, query);
+        readerContext.highlightPanelItem(item, query);
       }
     }
-    const empty = view.querySelector(".panel-list > .panel-empty");
-    status.hidden = !query || count > 0 || !!empty;
+    status.hidden = count > 0 || !!view.querySelector(".panel-list > .panel-empty");
   }
 
   /** @param {string} state */

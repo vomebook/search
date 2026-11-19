@@ -248,6 +248,31 @@ class ReaderOptimizationTests(unittest.TestCase):
         self.assertEqual((result['percent'],result['input']), ('100.0%','4'))
         self.assertGreaterEqual(result['offset'],0)
 
+    def test_pdf_zoom_rerender_reads_priority_once_per_nearby_shell(self):
+        self.expose()
+        self.serve('zoom priority fixture')
+        self.open(self.reader_url('txt'))
+        result=self.page.evaluate('''()=>{
+          const c=__pdfRenderContext;
+          const keys=[2,1,3,3,2,0,1,3,0,2,3,2], markerIndex=7, pendingIndex=11;
+          const shells=keys.map((priority,index)=>{
+            const shell=document.createElement('section');shell.className='reader-page';
+            shell.dataset.page=String(index);
+            shell.getBoundingClientRect=()=>index===10?{top:innerHeight+1400,bottom:innerHeight+1600}:{top:0,bottom:200};
+            return shell;
+          });
+          c.content.replaceChildren(...shells); shells[pendingIndex]._renderPromise=Promise.resolve();
+          let reads=0; const order=[];
+          c.pageAtMarker=()=>shells[markerIndex];
+          c.pdfPagePriority=shell=>{reads++;return keys[Number(shell.dataset.page)]};
+          c.renderPdfInBackground=(shell,force)=>order.push([Number(shell.dataset.page),force]);
+          c.rerenderVisiblePdfPages();
+          return {order,reads,pending:shells[pendingIndex].dataset.pendingRerender};
+        }''')
+        self.assertEqual(result['order'],[[i,True] for i in (7,2,3,0,4,9,1,6,5,8)])
+        self.assertEqual(result['pending'],'1')
+        self.assertEqual(result['reads'],10)
+
     def test_speculative_render_does_not_preemptively_evict_completed_neighbor(self):
         self.expose()
         self.serve('render priority fixture')

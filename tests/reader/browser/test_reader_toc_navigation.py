@@ -73,7 +73,8 @@ class TocNavigationTests(unittest.TestCase):
             route.fulfill(response=response, body=response.text() + '''
               window.__replaceTocForSearch=setToc;
               window.__toc={nav:()=>navigationState, jump:i=>navigateTocEntry(i), syncFoliate:syncFoliateScrollLocation,
-                set:setToc, setPageCount:count=>updateDocumentState({pageCount:count}),
+                set:setToc, filter:()=>filterPanel(document.querySelector('#toc-panel')),
+                setPageCount:count=>updateDocumentState({pageCount:count}),
                 setPage:page=>{updateDocumentState({page});updateTocCurrentMark()},
                 setCurrent:index=>{updateNavigationState({currentChapterIndex:index});updateTocCurrentMark()},
                 state:()=>tocVirtualState,
@@ -777,6 +778,24 @@ class TocNavigationTests(unittest.TestCase):
         self.page.locator('#toc-list [role=link]').press('Enter')
         self.page.wait_for_function("()=>__toc.nav().currentChapterIndex===2098")
         self.assertEqual(field.input_value(),'第2099章')
+
+    def test_empty_directory_filter_restores_rows_without_building_searchable_text(self):
+        self.open_chapters(150)
+        result=self.page.evaluate('''()=>{
+          const panel=document.querySelector('#toc-panel'), input=panel.querySelector('.panel-search');
+          const rows=[...panel.querySelectorAll('.toc-item')];
+          input.hidden=false;input.value='not found';__toc.filter();
+          const allHidden=rows.every(row=>row.hidden);
+          let reads=0;
+          const text=Object.getOwnPropertyDescriptor(Node.prototype,'textContent');
+          for(const row of rows)Object.defineProperty(row.querySelector('.panel-item-main'),'textContent',{
+            configurable:true,get(){reads++;return text.get.call(this)},set(value){text.set.call(this,value)}
+          });
+          input.value='';__toc.filter();
+          return {reads,allHidden,nowVisible:rows.every(row=>!row.hidden),
+            statusHidden:panel.querySelector('.panel-filter-empty').hidden};
+        }''')
+        self.assertEqual(result,dict(reads=0,allHidden=True,nowVisible=True,statusHidden=True))
 
     def test_small_directory_search_shows_empty_state_and_resets(self):
         self.open_chapters(12)

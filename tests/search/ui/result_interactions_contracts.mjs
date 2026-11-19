@@ -101,6 +101,24 @@ test('row clone identity, live hooks, escaping, cache LRU and placeholders retai
   assert.equal(rows.createRow(undefined, 999).placeholder, 999);
 });
 
+test('deep breadcrumb builds each escaped path prefix once without slicing folders', () => {
+  const {c} = fixture();
+  const parts = ['', 'a&"', '', '目录', '<末>/'];
+  let slices = 0;
+  const folders = parts.slice();
+  folders.slice = (...args) => { slices++; return parts.slice(...args); };
+  const escape = c.escapeHTML, calls = [];
+  c.escapeHTML = value => { calls.push(value); return escape(value); };
+  c.highlightText = value => `<mark>${escape(value)}</mark>`;
+  const html = c.getResultRows().buildHTML({File: 'book', Extension: 'txt', Repo: 'VoiceOfML/R', Folder: folders}, 0);
+  const attrs = [...html.matchAll(/aria-label="筛选路径：([^"]*)" data-folder="([^"]*)"/g)];
+  const prefixes = parts.map((_, i) => parts.slice(0, i + 1).join('/'));
+  assert.deepEqual(attrs.map(([, name, path]) => [name, path]), prefixes.map(value => [escape(value), escape(value)]));
+  assert.ok(html.includes('<mark>&lt;末&gt;/</mark>'));
+  assert.equal(slices, 0);
+  for (const prefix of prefixes) assert.equal(calls.filter(value => value === prefix).length, 1, prefix);
+});
+
 test('result actions retain current Reader asset, clipboard failures and shared download button identity', async () => {
   const f = fixture(), {c, DOM, click} = f;
   const row = node(), record = {File: 'fresh'}; c.resultRowRecords.set(row, record);
