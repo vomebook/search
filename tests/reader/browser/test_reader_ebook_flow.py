@@ -248,6 +248,36 @@ class EbookFlowTests(unittest.TestCase):
         }''')
         self.assertAlmostEqual(result['before'],result['after'],delta=2)
 
+    def test_chapter_window_reuses_geometry_when_marker_is_in_a_gap(self):
+        def expose_window(route):
+            response=route.fetch()
+            script=response.text()
+            needle='    function scheduleChapterWindow() {'
+            self.assertIn(needle,script)
+            route.fulfill(response=response,body=script.replace(needle,
+                '    window.__refreshChapterWindow = refreshChapterWindow;\n'+needle))
+        self.page.route('**/static/reader/formats/reader-chapter-format.mjs*',expose_window)
+        source='https://voiceofml-search.hf.space/api/reader-bucket-resource?path=chapters/ebook/epub/'+'a'*64+'/1234567890abcdef/chapter-manifest.json'
+        body='<h1>Hello</h1><p>Text</p>'
+        manifest={'version':1,'kind':'epub-chapters','chapters':[{'index':1,'path':'chapters/chapter-0001.xhtml','bytes':len(body)}]}
+        self.page.route('**/api/reader-bucket-resource**',lambda route:route.fulfill(json=manifest) if 'chapter-manifest' in route.request.url
+            else route.fulfill(content_type='text/html',body=body))
+        self.page.goto(self.origin+support.PREFIX+'/static/reader.html?'+urlencode(dict(url=source,ext='epub-chapters')))
+        self.page.wait_for_function("()=>document.documentElement.dataset.readerPhase==='ready'")
+        result=self.page.evaluate('''()=>{
+          const frame=document.querySelector('.epub-frame'), real=frame.querySelector('.reader-epub-chapter');
+          const top=document.querySelector('#viewport').getBoundingClientRect().top;
+          const before=document.createElement('article');before.dataset.chapter='1';
+          frame.insertBefore(before,real);
+          const originals=[before.getBoundingClientRect,real.getBoundingClientRect];
+          const reads=[0,0];
+          before.getBoundingClientRect=()=>{reads[0]++;return {top:top-40,bottom:top-5}};
+          real.getBoundingClientRect=()=>{reads[1]++;return {top:top+90,bottom:top+170}};
+          try { __refreshChapterWindow(); return reads; }
+          finally { before.remove();real.getBoundingClientRect=originals[1]; }
+        }''')
+        self.assertEqual(result,[1,1])
+
     def test_chapter_jump_warms_both_sides_without_old_observer_demands(self):
         manifest={'version':1,'kind':'epub-chapters','chapters':[{'index':i,'path':f'chapters/chapter-{i:04d}.xhtml','bytes':500} for i in range(1,41)]}
         requested=[]

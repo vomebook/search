@@ -72,7 +72,7 @@ class TocNavigationTests(unittest.TestCase):
             response = route.fetch()
             route.fulfill(response=response, body=response.text() + '''
               window.__replaceTocForSearch=setToc;
-              window.__toc={nav:()=>navigationState, jump:i=>navigateTocEntry(i),
+              window.__toc={nav:()=>navigationState, jump:i=>navigateTocEntry(i), syncFoliate:syncFoliateScrollLocation,
                 set:setToc, setPageCount:count=>updateDocumentState({pageCount:count}),
                 setPage:page=>{updateDocumentState({page});updateTocCurrentMark()},
                 setCurrent:index=>{updateNavigationState({currentChapterIndex:index});updateTocCurrentMark()},
@@ -221,6 +221,35 @@ class TocNavigationTests(unittest.TestCase):
                 self.page.keyboard.press('Escape')
                 self.assertFalse(self.panel_open())
                 self.assertEqual(self.page.evaluate('document.activeElement.id'),'history')
+
+    def test_foliate_scroll_only_checks_the_active_sections_toc_entries(self):
+        self.open_epub(epub_with_group_headings(6,groups=2))
+        self.page.wait_for_function('()=>__toc.nav().tocEntries.length===8')
+        result = self.page.evaluate('''()=>{
+          const viewport=document.querySelector('#viewport'), top=viewport.getBoundingClientRect().top+80;
+          const article=document.querySelector('.foliate-continuous article[data-section="0"]');
+          const position=y=>()=>({top:y});
+          article.getBoundingClientRect=position(top-20);
+          const target={getBoundingClientRect:position(top-5)};
+          const after={getBoundingClientRect:position(top+5)};
+          const entry=(label,sectionIndex,props={})=>({label,sectionIndex,activate:()=>true,...props});
+          const items=[entry('first',0,{anchor:()=>target}),entry('later tie',0,{anchor:()=>target}),
+            ...Array.from({length:1000},(_,i)=>entry('other '+i,500+i))];
+          __toc.set(items);
+          const nav=()=>__toc.nav().currentChapterIndex;
+          let offSectionReads=0;
+          for(const e of __toc.nav().tocEntries.slice(2)) {
+            const n=e.sectionIndex;
+            Object.defineProperty(e,'sectionIndex',{get(){offSectionReads++;return n}});
+          }
+          __toc.syncFoliate();const tied=nav();offSectionReads=0;
+          __toc.syncFoliate();const warm=offSectionReads;
+          __toc.set([entry('different section',1),entry('fallback',0,{anchor:()=>after,target}),
+            entry('later fallback',0,{anchor:()=>after,target:after})]);
+          __toc.syncFoliate();
+          return {tied,warm,fallback:nav()};
+        }''')
+        self.assertEqual(result,dict(tied=1,warm=0,fallback=1))
 
     def test_foliate_chapter_buttons_skip_group_headings_and_keep_directory_open(self):
         self.open_epub(epub_with_group_headings(6,groups=2))

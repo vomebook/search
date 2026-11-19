@@ -25,7 +25,8 @@ export function createReaderFoliateFormat(readerContext) {
     ]);
   }
 
-  /** @param {unknown} entry @returns {entry is {sectionIndex: number, anchor?: import('../../../typings/reader-foliate-format-strict').FoliateAnchor | null, fragment?: string, target?: {getBoundingClientRect(): {top: number}} | null}} */
+  /** @typedef {{sectionIndex: number, anchor?: import('../../../typings/reader-foliate-format-strict').FoliateAnchor | null, fragment?: string, target?: {getBoundingClientRect(): {top: number}} | null}} LocationEntry */
+  /** @param {unknown} entry @returns {entry is LocationEntry} */
   function isFoliateLocationEntry(entry) {
     if (typeof entry !== "object" || entry === null || !("sectionIndex" in entry) || typeof entry.sectionIndex !== "number") return false;
     if ("anchor" in entry && entry.anchor != null && typeof entry.anchor !== "function") return false;
@@ -34,23 +35,45 @@ export function createReaderFoliateFormat(readerContext) {
     return true;
   }
 
-  function syncFoliateScrollLocation() {
-    if (!readerContext.foliateContinuous || !readerContext.navigationState.tocEntries.length) return;
-    const rows = [...document.querySelectorAll(".foliate-continuous article[data-section]")].map(row => /** @type {HTMLElement} */ (row)),
-      top = readerContext.viewport.getBoundingClientRect().top + 80;
-    let sectionIndex = -1,
-      sectionNode = null;
-    for (const row of rows)
-      if (row.getBoundingClientRect().top <= top) {
-        sectionIndex = Number(row.dataset.section);
-        sectionNode = row;
+  /** @type {unknown[] | undefined} */
+  let indexedToc;
+  /** @type {Map<number, [number, LocationEntry][]>} */
+  const locations = new Map();
+
+  /** @param {unknown[]} entries @param {number} section */
+  function sectionLocations(entries, section) {
+    // Foliate resolves sectionIndex before publishing a new TOC array.
+    if (indexedToc !== entries) {
+      indexedToc = entries;
+      locations.clear();
+      for (const [index, entry] of entries.entries()) {
+        if (!isFoliateLocationEntry(entry)) continue;
+        const key = entry.sectionIndex;
+        if (Number.isNaN(key)) continue;
+        const bucket = locations.get(key);
+        if (bucket) bucket.push([index, entry]);
+        else locations.set(key, [[index, entry]]);
       }
+    }
+    return locations.get(section) || [];
+  }
+
+  function syncFoliateScrollLocation() {
+    const toc = readerContext.navigationState.tocEntries;
+    if (!readerContext.foliateContinuous || !toc.length) return;
+    const rows = /** @type {NodeListOf<HTMLElement>} */ (document.querySelectorAll(".foliate-continuous article[data-section]")),
+      top = readerContext.viewport.getBoundingClientRect().top + 80;
+    let sectionTop = 0, sectionNode = null;
+    for (const row of rows) {
+      const rowTop = row.getBoundingClientRect().top;
+      if (rowTop <= top) { sectionTop = rowTop; sectionNode = row; }
+    }
     if (!sectionNode) return;
+    const entries = sectionLocations(toc, Number(sectionNode.dataset.section));
     let best = -1;
     let bestPosition = -Infinity;
-    for (const [index, entry] of readerContext.navigationState.tocEntries.entries()) {
-      if (!isFoliateLocationEntry(entry) || entry.sectionIndex !== sectionIndex) continue;
-      let position = sectionNode.getBoundingClientRect().top;
+    for (const [index, entry] of entries) {
+      let position = sectionTop;
       if (entry.anchor) {
         const root = readerContext.foliateSectionRoot(sectionNode);
         const anchor = entry.anchor({
@@ -73,8 +96,7 @@ export function createReaderFoliateFormat(readerContext) {
     }
     if (best < 0) {
       let firstPosition = Infinity;
-      for (const [index, entry] of readerContext.navigationState.tocEntries.entries()) {
-        if (!isFoliateLocationEntry(entry) || entry.sectionIndex !== sectionIndex) continue;
+      for (const [index, entry] of entries) {
         const position = entry.target?.getBoundingClientRect?.().top;
         if (position !== undefined && Number.isFinite(position) && position < firstPosition) {
           best = index;

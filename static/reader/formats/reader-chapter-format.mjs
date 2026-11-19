@@ -503,18 +503,26 @@ export function createReaderChapterFormat(readerContext) {
       }
       return indices;
     }
+    /** @param {number} top */
+    function chapterAtViewport(top) {
+      const marker = top + 80;
+      /** @type {{row: HTMLElement, top: number} | undefined} */
+      let next;
+      for (const row of /** @type {NodeListOf<HTMLElement>} */ (frame.querySelectorAll(":scope > [data-chapter]"))) {
+        const rect = row.getBoundingClientRect();
+        if (rect.top <= marker && rect.bottom > marker) return { row, top: rect.top };
+        if (!next && rect.top > top) next = { row, top: rect.top };
+      }
+      return next;
+    }
     function refreshChapterWindow() {
       chapterWindowFrame = 0;
       if (!chapterWindowReady || readerContext.readerAbortController.signal.aborted) return;
       const view = readerContext.viewport.getBoundingClientRect();
-      const rows = [...frame.querySelectorAll(":scope > [data-chapter]")].map(row => /** @type {HTMLElement} */ (row));
-      const current = rows.find(row => {
-        const rect = row.getBoundingClientRect();
-        return rect.top <= view.top + 80 && rect.bottom > view.top + 80;
-      }) || rows.find(row => row.getBoundingClientRect().top > view.top);
-      if (current && !chapterNavigating) chapterFocusIndex = Number(current.dataset.chapter);
-      if (!chapterNavigating && current?.classList.contains("reader-chapter-sentinel") &&
-          current.getBoundingClientRect().top < view.bottom)
+      const current = chapterAtViewport(view.top);
+      if (current && !chapterNavigating) chapterFocusIndex = Number(current.row.dataset.chapter);
+      if (!chapterNavigating && current?.row.classList.contains("reader-chapter-sentinel") &&
+          current.top < view.bottom)
         fetchChapter(/** @type {import("../../../typings/reader-chapter-format-strict").Chapter} */ (chapterAt(chapterFocusIndex))).catch(() => {});
       if (!chapterNavigating) chapterScheduler.prefetch(chapterPrefetchIndices());
       readerContext.foliateScrollAnchors.whenIdle(trimChapterWindow);
