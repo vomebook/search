@@ -611,24 +611,55 @@ process.stdout.write(stripBundledScripts(readFileSync('static/index.html','utf8'
         for route in held:
             route.fulfill(content_type='text/html', body='<body>cancelled</body>')
 
+    def _deliver_late_reader_shell(self, route, recovery):
+        # Observe the real iframe load and child message while Back is still stalled.
+        # The body must belong to the routed document, not the initial about:blank.
+        recovery.evaluate('''link => {
+          const frame = readerHost.overlay;
+          const late = window.__lateReader = {frame, link, loaded:false, delivered:false};
+          frame.addEventListener('load', function onLoad() {
+            if (frame.contentDocument?.body?.id !== 'late-reader-shell') return;
+            late.loaded = true;
+            frame.removeEventListener('load', onLoad);
+          });
+          window.addEventListener('message', function onShell(event) {
+            if (event.origin !== location.origin || event.source !== frame.contentWindow ||
+                event.data?.type !== 'voice-reader-shell') return;
+            late.delivered = true;
+            window.removeEventListener('message', onShell);
+          });
+        }''')
+        route.fulfill(content_type='text/html', body='<body id="late-reader-shell">late reader shell</body>')
+        body = route.request.frame.locator('body#late-reader-shell')
+        body.wait_for(state='attached')
+        self.page.wait_for_function('__lateReader.loaded')
+        body.evaluate('() => parent.postMessage({type:"voice-reader-shell"}, location.origin)')
+        self.page.wait_for_function('__lateReader.delivered')
+        self.assertEqual(recovery.evaluate('''link => {
+          const {frame, link: originalLink} = __lateReader;
+          const style = getComputedStyle(frame);
+          return {owned:readerHost.overlay === frame && frame.isConnected,
+                  pending:frame.classList.contains('reader-overlay-pending'),
+                  visibility:style.visibility, pointerEvents:style.pointerEvents,
+                  sameLink:link === originalLink, focused:document.activeElement === link,
+                  inert:!!link.closest('[inert]')};
+        }'''), dict(owned=True, pending=True, visibility='hidden', pointerEvents='none',
+                    sameLink=True, focused=True, inert=False))
+        self.assertTrue(recovery.is_visible(), 'late load and shell message must not dismiss recovery')
+
     def test_pending_shell_can_leave_even_when_history_traversal_stalls(self):
         held = []
         self.page.unroute('**/static/reader.html?**')
         self.page.route('**/static/reader.html?**', lambda route: held.append(route))
-        present = self.page.evaluate('''() => {window.__nativeBack=history.back;history.back=()=>{};
-          navigateToReader('/search/static/reader.html?ext=txt');
-          const button=document.querySelector('.reader-overlay-opening button');button?.click();return !!button;}''')
+        with self.page.expect_request('**/static/reader.html?**'):
+            present = self.page.evaluate('''() => {history.back=()=>{};
+              navigateToReader('/search/static/reader.html?ext=txt');
+              const button=document.querySelector('.reader-overlay-opening button');button?.click();return !!button;}''')
         self.assertTrue(present)
         recovery = self.page.get_by_role('link', name='直接打开搜索页')
         recovery.wait_for(state='visible', timeout=3000)
-        self.assertFalse(recovery.evaluate('link => !!link.closest("[inert]")'))
-        self.assertTrue(held)
-        for route in held:
-            route.fulfill(content_type='text/html', body='<body>late reader shell</body>')
-        self.page.frame_locator('.reader-overlay').locator('body').wait_for()
-        self.page.frame_locator('.reader-overlay').locator('body').evaluate(
-            '() => window.parent.postMessage({type:"voice-reader-shell"},location.origin)')
-        self.assertTrue(recovery.is_visible(), 'late load must not dismiss the recovery shell')
+        self.assertEqual(len(held), 1)
+        self._deliver_late_reader_shell(held.pop(), recovery)
         with self.page.expect_navigation(wait_until='domcontentloaded'):
             recovery.click()
         self.page.wait_for_function('STATE.results.length > 0 && !STATE.isLoading')
@@ -1091,21 +1122,7 @@ process.stdout.write(stripBundledScripts(readFileSync('static/index.html','utf8'
         self.assertEqual(self.page.evaluate('[__backCalls,__historyWrites]'), [1, 0])
         self.assertTrue(self.page.evaluate('readerClosing && readerReturnSnapshot === __returnSnapshot'))
         self.assertEqual(self.page.evaluate('({url:location.href,state:history.state})'), pending)
-        held.pop().fulfill(content_type='text/html', body='<body>late reader shell</body>')
-        frame = self.page.frame_locator('.reader-overlay').locator('body')
-        frame.wait_for()
-        self.page.evaluate('''() => {
-          window.__shellDelivered = new Promise(resolve => {
-            window.addEventListener('message', function done(event) {
-              if (event.source === readerHost.overlay.contentWindow && event.data?.type === 'voice-reader-shell') {
-                window.removeEventListener('message', done); resolve();
-              }
-            });
-          });
-        }''')
-        frame.evaluate('() => window.parent.postMessage({type:"voice-reader-shell"},location.origin)')
-        self.page.evaluate('() => window.__shellDelivered')
-        self.assertTrue(recovery.is_visible())
+        self._deliver_late_reader_shell(held.pop(), recovery)
         self.assertEqual(self.page.evaluate('[__backCalls,__historyWrites]'), [1, 0])
         self.assertTrue(self.page.evaluate('readerClosing && readerReturnSnapshot === __returnSnapshot'))
         opened = self.page.evaluate('({url:location.href,state:history.state,length:history.length})')

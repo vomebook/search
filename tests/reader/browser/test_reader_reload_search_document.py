@@ -587,8 +587,10 @@ class ReaderTrueOfflineCases:
         # offline reload above is the SW evidence; do not mislabel reuse as fetch.
         if PREFIX:
             back.click()
-            # This tests reuse after restoration: a visible input/session preview
-            # can precede input binding, initial routing, and native worker load.
+            # Forward can mount Reader over an already-ready search host. Its
+            # local search state can pass the readiness check before Back lands.
+            self.page.wait_for_url(search_url, wait_until='commit')
+            expect(self.page.locator('.reader-error, .reader-text, iframe.reader-overlay')).to_have_count(0)
             self.wait_local_search('手机')
             self.assertEqual(self.page.url, search_url)
             # A different query proves the restored native corpus can search

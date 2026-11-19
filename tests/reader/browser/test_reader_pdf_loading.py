@@ -508,6 +508,16 @@ class PdfLoadingTests(unittest.TestCase):
         self.assertEqual(self.documents, [])
         self.assertEqual(self.errors, [])
 
+    def assert_pdf_module_requests(self, requests, retries):
+        # Chromium may retry a failed modulepreload on demand at the original
+        # URL before it exposes the import error to the Reader. All Reader
+        # retries must still be ordered, bounded, and use the same module path.
+        parsed = [urllib.parse.urlsplit(url) for url in requests]
+        retry_queries = [f'reader-module-retry={attempt}' for attempt in range(1, retries + 1)]
+        queries = [url.query for url in parsed]
+        self.assertTrue(parsed and all(url.path == parsed[0].path for url in parsed), requests)
+        self.assertIn(queries, [[''] + retry_queries, ['', ''] + retry_queries])
+
     def test_first_connection_failure_recovers_with_real_pdf_engine(self):
         def serve(route):
             if 'reader-module-retry' not in route.request.url:
@@ -517,8 +527,7 @@ class PdfLoadingTests(unittest.TestCase):
         self.page.route(MODULE, serve)
         self.open()
         self.ready()
-        self.assertEqual(len(self.modules), 2)
-        self.assertIn('reader-module-retry=1', self.modules[1])
+        self.assert_pdf_module_requests(self.modules, 1)
         self.assertEqual(len(self.documents), 1)
 
     def test_http_failure_recovers_on_last_attempt(self):
@@ -527,13 +536,13 @@ class PdfLoadingTests(unittest.TestCase):
                         else route.fulfill(status=503, body='temporarily unavailable'))
         self.open()
         self.ready()
-        self.assertEqual(len(self.modules), 3)
+        self.assert_pdf_module_requests(self.modules, 2)
 
     def test_exhaustion_has_bounded_requests_and_manual_reload_recovers(self):
         self.page.route(MODULE, lambda route: route.abort('connectionreset'))
         self.open()
         self.page.locator('#reader-engine-retry').wait_for()
-        self.assertEqual(len(self.modules), 3)
+        self.assert_pdf_module_requests(self.modules, 2)
         self.assertEqual(len(self.documents), 1)
         self.assertEqual(self.page.locator('#content').get_attribute('data-error-code'), 'READER_ENGINE_NETWORK')
         self.assertNotIn('Failed to fetch', self.page.locator('.reader-error').inner_text())
@@ -548,7 +557,7 @@ class PdfLoadingTests(unittest.TestCase):
         self.page.wait_for_timeout(100)
         self.page.evaluate("() => window.dispatchEvent(new Event('pagehide'))")
         self.page.wait_for_timeout(1800)
-        self.assertEqual(len(self.modules), 1)
+        self.assert_pdf_module_requests(self.modules, 0)
         self.assertLessEqual(len(self.documents), 1)
         self.assertEqual(self.errors, [])
 
@@ -583,7 +592,9 @@ class PdfLoadingTests(unittest.TestCase):
         def serve(handler):
             if '/vendor/pdf.min.' in handler.path:
                 requests.append(handler.path)
-                if len(requests) == 1:
+                # Fail the base URL consistently, including a browser-owned
+                # retry after the failed modulepreload.
+                if not urllib.parse.urlsplit(handler.path).query:
                     handler.send_error(503)
                     return
             original(handler)
@@ -601,8 +612,7 @@ class PdfLoadingTests(unittest.TestCase):
                 dict(url=SOURCE, ext='pdf', title='Cold SW retry')))
             page.locator('.reader-page canvas.ready').wait_for(state='attached', timeout=15000)
             self.assertTrue(page.evaluate('() => !!navigator.serviceWorker.controller'))
-            self.assertEqual(len(requests), 2)
-            self.assertIn('reader-module-retry=1', requests[1])
+            self.assert_pdf_module_requests(requests, 1)
 
     def test_engine_preload_starts_while_reader_dependency_is_still_pending(self):
         held=[]
