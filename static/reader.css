@@ -1482,27 +1482,18 @@ body {
   color: #202124;
 }
 
-/* Paper texture uses only CSS; document images and the surrounding UI keep their own colors. */
+/* Calm text-reading surfaces, separate from the toolbar and fixed-layout pages. */
 @media (forced-colors: none) and (prefers-contrast: no-preference) {
   :root {
-    --reader-paper: #202123;
-    --reader-paper-wash: #ffffff05;
-    --reader-paper-fiber: #ffffff06;
+    --reader-paper: #202224;
   }
   :root[data-theme="light"] {
-    --reader-paper: #f4efe6;
-    --reader-paper-wash: #bba98a22;
-    --reader-paper-fiber: #5843270a;
+    --reader-paper: #f7f3eb;
   }
   .reader-viewport:has(> .reader-content:is([data-mode="text"], [data-mode="markdown"])),
   .reader-content[data-mode="epub-chapters"] > .epub-frame,
   .reader-content[data-mode="foliate"] > .foliate-continuous {
     background-color: var(--reader-paper);
-    background-image:
-      radial-gradient(ellipse at 12% 20%, var(--reader-paper-fiber), transparent 55%),
-      radial-gradient(ellipse at 72% 65%, var(--reader-paper-fiber), transparent 48%),
-      linear-gradient(115deg, var(--reader-paper-wash), transparent 70%);
-    background-size: 7px 5px, 13px 11px, 100% 100%;
   }
 }
 

@@ -70,16 +70,19 @@ class ReaderStyleTests(unittest.TestCase):
         self.page.locator('#zoom').dispatch_event('change')
         self.assertEqual(text.evaluate('e=>getComputedStyle(e).fontSize'), '21px')
         dark = viewport.evaluate('e=>getComputedStyle(e).backgroundColor')
-        self.assertIn('radial-gradient', viewport.evaluate('e=>getComputedStyle(e).backgroundImage'))
+        self.assertEqual(dark, 'rgb(32, 34, 36)')
+        self.assertEqual(viewport.evaluate('e=>getComputedStyle(e).backgroundImage'), 'none')
+        self.assert_contrast('.reader-text')
         self.page.locator('#history').click()
         self.page.locator('#theme-toggle').click()
         self.settle()
         light = viewport.evaluate('e=>getComputedStyle(e).backgroundColor')
-        self.assertNotEqual(dark, light)
+        self.assertEqual(light, 'rgb(247, 243, 235)')
+        self.assertEqual(viewport.evaluate('e=>getComputedStyle(e).backgroundImage'), 'none')
         self.assert_contrast('.reader-text')
         for media in ({'contrast':'more'}, {'contrast':'no-preference','forced_colors':'active'}):
             self.page.emulate_media(**media)
-            self.assertEqual(viewport.evaluate('e=>getComputedStyle(e).backgroundImage'), 'none')
+            self.assertNotEqual(viewport.evaluate('e=>getComputedStyle(e).backgroundColor'), light)
         self.page.emulate_media(contrast='no-preference', forced_colors='none')
         for mode, markup, surface in (
             ('markdown','<article class="reader-markdown">Markdown</article>','#viewport'),
@@ -90,12 +93,12 @@ class ReaderStyleTests(unittest.TestCase):
                 self.page.locator('#content').evaluate('''(e,[mode,markup])=>{
                   e.dataset.mode=mode;e.innerHTML=markup;
                 }''', [mode,markup])
-                self.assertIn('radial-gradient', self.page.locator(surface).evaluate('e=>getComputedStyle(e).backgroundImage'))
+                self.assertEqual(self.page.locator(surface).evaluate('e=>getComputedStyle(e).backgroundColor'), light)
                 self.assertEqual(self.page.locator('#content article').evaluate('e=>getComputedStyle(e).fontSize'), '21px')
         for mode in ('pdf','pdf-pages','image','html','video'):
             self.page.locator('#content').evaluate('(e,mode)=>e.dataset.mode=mode', mode)
-            self.assertEqual(viewport.evaluate('e=>getComputedStyle(e).backgroundImage'), 'none', mode)
-            self.assertEqual(self.page.locator('.foliate-continuous').evaluate('e=>getComputedStyle(e).backgroundImage'), 'none', mode)
+            self.assertEqual(viewport.evaluate('e=>getComputedStyle(e).backgroundColor'), 'rgb(233, 236, 239)', mode)
+            self.assertEqual(self.page.locator('.foliate-continuous').evaluate('e=>getComputedStyle(e).backgroundColor'), 'rgb(255, 255, 255)', mode)
 
     def test_back_and_download_icons_have_stable_browser_independent_geometry(self):
         self.page.evaluate("""() => {
