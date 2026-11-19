@@ -15,7 +15,7 @@ function install(source, context, names) {
   }
 }
 
-function createFixture(source, root) {
+function createFixture(source, root, pages) {
   let clock = 0, timerId = 0, scrollTop = 0;
   const timers = new Map(), calls = [], reads = [], appended = [], frames = [];
   const first = {File:"first"};
@@ -107,7 +107,8 @@ function createFixture(source, root) {
   for (const file of ["domain/paging-policy.js", "application/paging-controller.js"]) {
     vm.runInContext(fs.readFileSync(path.join(root, "static/search/results", file), "utf8"), context);
   }
-  install(source,context,["getSearchPageMetadata","ownsAppliedSearchRoute","ownsDisplayedSearchResults","readPagingView"]);
+  if (pages) install(source,context,["ownsAppliedSearchRoute"]);
+  install(source,context,["getSearchPageMetadata","ownsDisplayedSearchResults","readPagingView"]);
   context.pagingController = context.VoiceOfMLPagingController.create({
     policy: context.VoiceOfMLPagingPolicy,
     clock: {now:()=>clock, setTimeout:context.setTimeout, clearTimeout:context.clearTimeout},
@@ -137,7 +138,7 @@ function createFixture(source, root) {
 
 for (const {name:project,root} of searchTestProjects()) {
   const source = fs.readFileSync(path.join(root,"static/app.js"),"utf8");
-  const fixture = source => createFixture(source, root);
+  const fixture = source => createFixture(source, root, project === "github-Search");
   function sparseFixture() {
     const f=fixture(source), c=f.context;
     c.scheduleVirtualRender=()=>{};

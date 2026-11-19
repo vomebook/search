@@ -251,9 +251,24 @@ test("result actions use equal desktop heights and compact mobile column", () =>
   assert.match(css, /body\.mobile \.result-actions \{\s*flex-direction: column;\s*gap: 1px;/);
   assert.match(css, /body\.mobile \.result-action-btn \{ height: 20px;/);
   assert.match(css, /body\.mobile \.result-path \{\s*display: block;\s*white-space: normal;\s*word-break: break-all;\s*overflow-wrap: normal;/);
-  assert.match(resultRows, /folderDisplay \+ separator \+ '<\/span>'/);
-  assert.ok(resultRows.includes('role="button" tabindex="0" class="path-folder"'));
-  assert.doesNotMatch(resultRows, /'<span class="path-sep">\/<\/span><span class="path-folder"/);
+  const { create } = vm.runInNewContext(`${resultRows}\nVoiceOfMLResultRows`);
+  const rows = create({
+    readView: () => ({ mode: "global", searchFolders: true, query: "outer" }),
+    escapeHTML: String,
+    highlightText: text => text === "outer" ? "<mark>outer</mark>" : text,
+    getFileIconType: () => "file", icons: { file: "" }, formatSize: () => "",
+    getRecordLink: () => "/book", getCopyableLink: link => link,
+    getRecordPath: () => "book", getPreviewLink: () => "/preview",
+    readerAction: () => ({ url: "" }),
+  });
+  const row = rows.buildHTML({ File: "book", Repo: "VoiceOfML/Repo", Folder: ["outer", "inner"] }, 0);
+  const breadcrumb = row.match(/<div class="result-path">([\s\S]*?)<\/div>/)?.[1];
+  const button = '<span role="button" tabindex="0" class="path-folder"';
+  const slash = '<span class="path-sep">/</span>';
+  assert.equal(breadcrumb,
+    `${button} aria-label="筛选仓库路径：Repo" data-folder="" data-repo="Repo">Repo${slash}</span>` +
+    `${button} aria-label="筛选路径：outer" data-folder="outer" data-repo="Repo"><mark>outer</mark>${slash}</span>` +
+    `${button} aria-label="筛选路径：outer/inner" data-folder="outer/inner" data-repo="Repo">inner</span>`);
 });
 test("virtual results use bounded buffering", () => {
   const virtual = ["domain/heights.js", "presentation/rows.js", "application/controller.js"]
