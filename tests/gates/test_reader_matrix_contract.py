@@ -12,31 +12,45 @@ from scripts.ci import reader_matrix_contract as gate
 
 class PlaywrightDependencyRetryTests(unittest.TestCase):
     def test_bounded_attempts_and_status(self):
-        # Stub the timeout boundary, preserving the real wrapper's argv and exits.
-        for statuses, wanted in (((0, 99), 0), ((100, 0), 0), ((124, 100), 100)):
+        for statuses, wanted in (((0, 99), 0), ((100, 0), 0), ((100, 42), 42)):
             with self.subTest(statuses=statuses), tempfile.TemporaryDirectory() as tmp:
                 path = Path(tmp)
-                timeout = path / 'timeout'
-                timeout.write_text('''#!/bin/bash
-printf '%s\\n' "$*" >> "$CALLS"
-if [[ $(wc -l < "$CALLS") == 1 ]]; then exit "$FIRST"; fi
+                stubs = {
+                    'sudo': '''#!/bin/bash
+case "$*" in
+  "tee /etc/apt/apt.conf.d/zzzz-reader-ci-acquire") tee "$FIXTURE/apt.conf" ;;
+  "rm -f -- /etc/apt/apt.conf.d/zzzz-reader-ci-acquire") mv "$FIXTURE/apt.conf" "$FIXTURE/cleaned.conf" ;;
+  *) exit 99 ;;
+esac
+''',
+                    'python': '''#!/bin/bash
+[[ -s "$FIXTURE/apt.conf" ]] || exit 99
+printf '%s\\n' "$*" >> "$FIXTURE/calls"
+if [[ $(wc -l < "$FIXTURE/calls") == 1 ]]; then exit "$FIRST"; fi
 exit "$SECOND"
-''')
-                sleep = path / 'sleep'
-                sleep.write_text('#!/bin/bash\n[[ "$*" == 5 ]]\n')
-                for command in (timeout, sleep):
+''',
+                    'timeout': '#!/bin/bash\nexit 99\n',
+                    'sleep': '#!/bin/bash\n[[ "$*" == 5 ]]\n',
+                }
+                for name, source in stubs.items():
+                    command = path / name
+                    command.write_text(source)
                     command.chmod(0o755)
-                calls = path / 'calls'
-                env = {**os.environ, 'PATH': f'{path}:{os.defpath}', 'CALLS': str(calls),
+                env = {**os.environ, 'PATH': f'{path}:{os.defpath}', 'FIXTURE': str(path),
                        'FIRST': str(statuses[0]), 'SECOND': str(statuses[1])}
                 command = gate.ROOT / 'scripts/ci/install_playwright_system_deps.sh'
                 result = subprocess.run(['bash', str(command), 'chromium', 'firefox'],
                                         env=env, capture_output=True, text=True, timeout=10, check=False)
                 count = 2 if statuses[0] else 1
-                self.assertEqual(result.returncode, wanted)
-                self.assertEqual(calls.read_text().splitlines(), [
-                    '--kill-after=15s 390s python -m playwright install-deps chromium firefox',
+                self.assertEqual(result.returncode, wanted, result.stderr)
+                self.assertEqual((path / 'calls').read_text().splitlines(), [
+                    '-m playwright install-deps chromium firefox',
                 ] * count)
+                self.assertFalse((path / 'apt.conf').exists())
+                self.assertEqual((path / 'cleaned.conf').read_text(),
+                                 'Acquire::http::Timeout "10";\n'
+                                 'Acquire::https::Timeout "10";\n'
+                                 'Acquire::Retries "1";\n')
                 self.assertEqual(result.stdout.count('retrying once'), count - 1)
 
 

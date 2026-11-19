@@ -1050,14 +1050,15 @@ process.stdout.write(stripBundledScripts(readFileSync('static/index.html','utf8'
           history.replaceState({...history.state, foreignSearch:{keep:1}}, '', location.href);
           return {url:location.href, state:history.state, rows:STATE.results.map(getResultStableId)};
         }''')
-        opened = self.page.evaluate('''() => {
+        self.page.evaluate('''() => {
           const path=new URL(document.querySelector('script[src*="search/reader-host/application/navigation.js"]').src)
             .pathname.replace('search/reader-host/application/navigation.js','reader.html');
           navigateToReader(path+'?ext=txt&title=Delayed');
           history.replaceState({...history.state, foreignReader:{keep:2}}, '', location.href);
-          return {url:location.href, state:history.state, length:history.length};
         }''')
         self.page.frame_locator('.reader-overlay').locator('body').wait_for()
+        # The iframe's initial navigation can itself change the joint history length.
+        opened = self.page.evaluate('({url:location.href,state:history.state,length:history.length})')
         self.page.evaluate('''() => {
           const back=history.back.bind(history);
           window.__releaseBack=()=>{history.back=back;back();};
@@ -1083,9 +1084,13 @@ process.stdout.write(stripBundledScripts(readFileSync('static/index.html','utf8'
         self.assertEqual(self.page.evaluate('STATE.results.map(getResultStableId)'), before['rows'])
         self.assertEqual(self.page.evaluate('document.activeElement.id'), 'search-input')
         self.assertEqual(self.page.locator('.reader-overlay-opening').count(), 0)
+        writes_before_forward = self.page.evaluate('__historyWrites')
         self.page.evaluate('history.forward()')
         self.page.frame_locator('.reader-overlay').locator('body').wait_for()
-        self.assertEqual(self.page.evaluate('({url:location.href,state:history.state,length:history.length})'), opened)
+        # Remounting the iframe can change joint history independently of the host.
+        self.assertEqual(self.page.evaluate('({url:location.href,state:history.state})'),
+                         {key: opened[key] for key in ('url', 'state')})
+        self.assertEqual(self.page.evaluate('__historyWrites'), writes_before_forward)
         self.assertEqual(self.page.evaluate('readerHost.overlay.src'), opened['state']['readerUrl'])
         self.assertFalse(self.page.evaluate('readerClosing'))
         self.assertEqual(self.page.locator('.reader-overlay-opening a').count(), 0)
