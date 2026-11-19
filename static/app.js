@@ -878,7 +878,8 @@ async function doSearchAPI(params, append, requestId) {
   let data = getCachedSearchResponse(cacheKey);
   if (!data) {
     try {
-      data = await fetchSearchPage(cacheKey, base, body, params.signal, append ? APPEND_REQUEST_TIMEOUT : 10000);
+      const opening = append ? null : takeStartupSearchPage(cacheKey, params.signal);
+      data = await (opening || fetchSearchPage(cacheKey, base, body, params.signal, append ? APPEND_REQUEST_TIMEOUT : 10000));
       if (!current()) return false;
       noteApiSuccess();
       setCachedSearchResponse(cacheKey, data, append);
@@ -2636,6 +2637,57 @@ function getSearchBootstrap() {
   });
 }
 
+// This slot holds one uncommitted response while startup checks for a saved
+// viewport. Only the first ordinary API search may adopt it, by exact body key.
+/** @type {{key: string, response: Promise<VoiceOfMLSearchWindowPageData>, controller: AbortController, cleanup: () => void} | null} */
+let startupSearchPage = null;
+
+function cancelStartupSearchPage() {
+  const entry = startupSearchPage;
+  startupSearchPage = null;
+  entry?.cleanup();
+  entry?.controller.abort();
+}
+
+function startStartupSearchPage() {
+  const connection = navigator.connection;
+  if (location.pathname !== "/search/" || document.hidden || !navigator.onLine ||
+      connection?.saveData || connection?.effectiveType === "2g" || connection?.effectiveType === "slow-2g" ||
+      history.state?.voiceReaderOverlay || !apiAvailable) return;
+  const route = ROUTER.parse();
+  if (route.mode !== "global" || route.params.local !== "0") return;
+  const view = VoiceOfMLRoute.project(route.params, route.mode, false);
+  if (!view.query.trim()) return;
+  const base = getSearchApiBase();
+  const body = buildSearchApiBody({
+    q: view.query, page: 1, pageSize: STATE.pageSize, repos: view.filterRepos,
+    extensions: view.filterExtensions ?? loadStoredExtensionFilters(), folders: null,
+    minSize: route.params.min_size ? parseSizeStr(route.params.min_size) : null,
+    maxSize: route.params.max_size ? parseSizeStr(route.params.max_size) : null,
+    sort: view.sort, exact: view.exact, searchFolders: view.searchFolders,
+  });
+  const key = base + "|" + stableSearchStringify(body);
+  if (getCachedSearchResponse(key)) return;
+  const controller = new AbortController();
+  const events = ["hashchange", "popstate", "pagehide", "offline", "input", "compositionstart"];
+  const cleanup = () => events.forEach(type => window.removeEventListener(type, cancelStartupSearchPage, true));
+  events.forEach(type => window.addEventListener(type, cancelStartupSearchPage, true));
+  const response = fetchSearchPage(key, base, body, controller.signal, 10000);
+  response.catch(() => {}); // A discarded probe cannot publish errors or cache data.
+  startupSearchPage = { key, response, controller, cleanup };
+}
+
+/** @param {string} key @param {AbortSignal | undefined} signal */
+function takeStartupSearchPage(key, signal) {
+  const entry = startupSearchPage;
+  if (!entry || entry.key !== key || !signal || signal.aborted) return null;
+  startupSearchPage = null;
+  entry.cleanup();
+  const abort = () => entry.controller.abort();
+  signal.addEventListener("abort", abort, { once: true });
+  return entry.response.finally(() => signal.removeEventListener("abort", abort));
+}
+
 function canUseInitialSearchPayload() {
   return VoiceOfMLInitialPayload.eligible(readInitialSearchView());
 }
@@ -4140,6 +4192,7 @@ async function init() {
   // serializing their I/O. Route handling still waits for both to settle.
   const positionsReady = initSearchPositions();
   const restoredSession = restoreSearchSession();
+  startStartupSearchPage();
   await positionsReady;
   setupSearchPositionControls();
   setupSearchPositionSaving();
@@ -4293,7 +4346,8 @@ async function init() {
   window.setInterval(function() { warmConnection(); }, KEEPALIVE_INTERVAL_MS);
   readerAssetController.scheduling.state.delayUntilPaint = true;
   const initialDraftCurrent = initialSearchDraftIsCurrent();
-  ROUTER.apply();
+  try { ROUTER.apply(); }
+  finally { cancelStartupSearchPage(); }
   finishInitialSearchInput(initialDraftCurrent);
   restoreReaderSearchHandoff();
   restoreReaderFromSession();

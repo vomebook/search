@@ -333,6 +333,85 @@ class ApiIntegrationTest(unittest.TestCase):
         self.assertGreaterEqual(self.server_state.count("/search/data/search_data.json.gz"), 1)
         self.assertTrue(self.page.evaluate("searchPrefetchAbortController?.active.has(2)"))
 
+    def hold_startup_positions(self):
+        self.page.add_init_script('''(() => {
+          const open = indexedDB.open.bind(indexedDB);
+          const set = window.setTimeout;
+          window.setTimeout = (callback, delay, ...args) => set(callback, delay === 1500 ? 5000 : delay, ...args);
+          indexedDB.open = function(name, ...args) {
+            const request = open(name, ...args);
+            if (name !== 'voice-search-positions') return request;
+            const proxy = {};
+            for (const field of ['result','error','transaction','readyState'])
+              Object.defineProperty(proxy, field, {get: () => request[field]});
+            for (const field of ['onupgradeneeded','onerror','onblocked'])
+              Object.defineProperty(proxy, field, {set: handler => { request[field] = handler; }});
+            Object.defineProperty(proxy, 'onsuccess', {set: handler => {
+              request.onsuccess = event => { window.__releasePositionOpen = () => handler(event); };
+            }});
+            return proxy;
+          };
+        })()''')
+
+    def test_explicit_search_acquires_page_one_before_positions_without_rendering_early(self):
+        self.hold_startup_positions()
+        self.page.add_init_script("sessionStorage.setItem('voml_ext_filter:global', JSON.stringify({values:['pdf']}))")
+        with self.page.expect_response(lambda response: response.request.method == 'POST' and
+                                       '/api/search' in response.url) as fetched:
+            self.load('#/?q=first&local=0&max_size=20')
+        self.assertIsNone(fetched.value.finished())
+        self.page.wait_for_function('typeof window.__releasePositionOpen === "function"')
+        self.assertFalse(self.page.evaluate('routeInitialized'))
+        self.assertEqual(self.page.locator('#results-list .result-item').count(), 0)
+        self.page.evaluate('window.__releasePositionOpen()')
+        self.page.locator('#results-list').get_by_text('first result').wait_for()
+        self.assertEqual(self.search_requests, [{'page':1, 'page_size':100, 'q':'first', 'extensions':['pdf'],
+                                                 'max_size':20, 'sort':'relevance', 'exact':True}])
+
+    def test_startup_search_does_not_speculate_with_save_data(self):
+        self.hold_startup_positions()
+        self.page.add_init_script("Object.defineProperty(navigator,'connection',{value:{saveData:true}})")
+        self.load('#/?q=save-data&local=0')
+        self.page.wait_for_function('typeof window.__releasePositionOpen === "function"')
+        self.assertEqual(self.search_requests, [])
+        self.page.evaluate('window.__releasePositionOpen()')
+        self.page.locator('#results-list').get_by_text('save-data result').wait_for()
+        self.assertEqual([body.get('q') for body in self.search_requests], ['save-data'])
+
+    def test_pending_startup_search_is_adopted_without_another_post(self):
+        self.hold_startup_positions()
+        held = []
+        self.page.route('**/api/search', lambda route: held.append(route))
+        with self.page.expect_request(lambda request: request.method == 'POST' and '/api/search' in request.url):
+            self.load('#/?q=pending&local=0')
+        self.page.wait_for_function('typeof window.__releasePositionOpen === "function"')
+        self.page.evaluate('window.__releasePositionOpen()')
+        self.page.wait_for_function('routeInitialized && STATE.isLoading')
+        self.assertEqual(len(held), 1)
+        self.api_route(held[0])
+        self.page.locator('#results-list').get_by_text('pending result').wait_for()
+        self.assertEqual(len(held), 1)
+
+    def test_startup_search_does_not_reuse_response_after_url_changes_away_and_back(self):
+        self.hold_startup_positions()
+        with self.page.expect_response(lambda response: response.request.method == 'POST' and
+                                       '/api/search' in response.url) as fetched:
+            self.load('#/?q=first&local=0')
+        self.assertIsNone(fetched.value.finished())
+        self.page.wait_for_function('typeof window.__releasePositionOpen === "function"')
+        self.page.evaluate('''async () => {
+          const original = location.hash;
+          for (const hash of ['#/?q=next&local=0', original]) {
+            const changed = new Promise(resolve => addEventListener('hashchange', resolve, {once:true}));
+            location.hash = hash;
+            await changed;
+          }
+        }''')
+        self.search_response_override = {"page":1, "page_size":100, "total":1, "results":[result('fresh first')]}
+        self.page.evaluate('window.__releasePositionOpen()')
+        self.page.locator('#results-list').get_by_text('fresh first').wait_for()
+        self.assertEqual([body.get('q') for body in self.search_requests], ['first', 'first'])
+
     def test_local_disabled_sends_complete_api_body_and_renders_response(self):
         self.load("#/?q=body-query&local=0&ext=pdf&sort=size&search_folders=false&exact=0&min_size=10&max_size=20")
         self.page.locator("#results-list").get_by_text("body-query result").wait_for(timeout=10000)
