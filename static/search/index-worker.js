@@ -14,7 +14,7 @@ importScripts("./worker/domain/intersection.js");
 /** @typedef {{keys: string[], next: number}} PostingCompaction */
 /** @typedef {{next: number, all: PostingIndex, files: PostingIndex, folderTokens: Map<string, {parts: ReturnType<typeof tokenizeParts>, units: number}>, folderUnits: number, allVocab?: VocabularyBuild, filesVocab?: VocabularyBuild, allCompaction?: PostingCompaction, filesCompaction?: PostingCompaction}} FulltextBuild */
 /** @typedef {{name: string, path: string, children: DirectoryNode[], count: number, isRoot?: boolean, hasDirectFiles: boolean, hasChildren?: boolean, showSelfToggle?: boolean}} DirectoryNode */
-/** @typedef {{tree: DirectoryNode[], nodes: Record<string, DirectoryNode>, files: Record<string, number[]>}} DirectoryIndex */
+/** @typedef {{tree: DirectoryNode[], nodes: Record<string, DirectoryNode>, files: Record<string, number[]>, canonicalPaths: boolean}} DirectoryIndex */
 
 const WORKER_PROTOCOL_VERSION = 1;
 const MAX_PAGE_SIZE = 500;
@@ -98,6 +98,7 @@ const FULLTEXT_FOLDER_CACHE_UNITS = 65536;
 /** @type {Map<string, DirectoryIndex>} */
 const directoryIndexes = new Map();
 const DIRECTORY_INDEX_MAX = 4;
+const FOLDER_SEARCH_MAX = 4096;
 // Native file extensions understood by the Reader. Converted-only formats
 // are supplied separately by the asset sidecar, not by this pool.
 const NATIVE_READER_EXTENSIONS = new Set([
@@ -790,8 +791,7 @@ function matchesFolderFilters(recordFolders, folderPath, params, filters) {
 }
 
 /** @param {SearchParams} params @returns {((index: number) => boolean) | null} */
-function buildRecordFilter(params) {
-  const filters = buildFilterSets(params);
+function buildRecordFilter(params, filters = buildFilterSets(params)) {
   const hasFolderFilters = params.folderMatchMode === "mixed"
     ? filters.selfFolders.size || filters.subtreeFolders.size
     : !!filters.folders;
@@ -815,10 +815,66 @@ function buildRecordFilter(params) {
   };
 }
 
-/** @param {number[]} indices @param {SearchParams} params */
-function applyFilters(indices, params) {
-  const inScope = buildRecordFilter(params);
+/** @param {number[]} indices @param {SearchParams} params @param {ReturnType<typeof buildFilterSets>} [filters] */
+function applyFilters(indices, params, filters) {
+  const inScope = buildRecordFilter(params, filters);
   return inScope ? indices.filter(inScope) : indices.slice();
+}
+
+/** @param {SearchParams} params */
+function filterEmptySearch(params) {
+  const repos = params.repos;
+  if (!Array.isArray(repos) || repos.length !== 1 || typeof repos[0] !== "string" || !repos[0]) {
+    return applyFilters(recordIndices, params);
+  }
+  const repo = repos[0], scope = repoRecordIndices[repo] || [];
+  if (params.folderMatchMode !== "mixed") return applyFilters(scope, params);
+  // Peek without building an index or changing the directory LRU order.
+  const directory = directoryIndexes.get(repo);
+  if (!directory?.canonicalPaths) return applyFilters(scope, params);
+  const filters = buildFilterSets(params);
+  return applyFilters(warmFolderCandidates(directory, filters, scope.length) ?? scope, params, filters);
+}
+
+/** @param {DirectoryIndex} directory @param {ReturnType<typeof buildFilterSets>} filters @param {number} scopeSize */
+function warmFolderCandidates(directory, {selfFolders, subtreeFolders}, scopeSize) {
+  // Leave broad selections to the scan; cap both traversal and ID sorting.
+  const limit = Math.min(FOLDER_SEARCH_MAX, Math.floor(scopeSize / 4));
+  let visits = selfFolders.size + subtreeFolders.size;
+  if (!visits || visits > limit || subtreeFolders.has("")) return null;
+  const paths = new Set(selfFolders);
+  const pending = [];
+  for (const path of subtreeFolders) {
+    const node = directory.nodes[path];
+    if (!node) continue;
+    if (node.count > limit) return null;
+    pending.push(node);
+  }
+  // On canonical paths, the directory edges are exactly the component
+  // prefixes used by the predicate. Overlap is harmless and work is bounded.
+  for (const node of pending) {
+    if ((visits += node.children.length) > limit) return null;
+    paths.add(node.path);
+    for (const child of node.children) pending.push(child);
+  }
+  return collectDirectoryFiles(directory.files, paths, limit);
+}
+
+/** @param {DirectoryIndex["files"]} files @param {Set<string>} paths @param {number} limit */
+function collectDirectoryFiles(files, paths, limit) {
+  const lists = [];
+  let count = 0;
+  for (const path of paths) {
+    const ids = files[path];
+    if (!ids) continue;
+    if ((count += ids.length) > limit) return null;
+    lists.push(ids);
+  }
+  // Preflight bucket sizes before walking IDs. Each index is in one bucket;
+  // restore source order for relevance and stable name/size ties.
+  const candidates = [];
+  for (const ids of lists) for (const id of ids) candidates.push(id);
+  return candidates.sort((a, b) => a - b);
 }
 
 /** @param {unknown} path */
@@ -997,11 +1053,7 @@ function searchLocal(params, preparedExact = null) {
   } else if (!query) {
     const order = emptySearchOrder(params);
     if (order !== null) return pageResult(order, params);
-    const repos = params.repos;
-    // Repository indexes preserve source order. Restrict only an ordinary
-    // single nonempty string; other inputs keep the existing global scan.
-    matched = Array.isArray(repos) && repos.length === 1 && typeof repos[0] === "string" && repos[0]
-      ? (repoRecordIndices[repos[0]] || []).slice() : recordIndices.slice();
+    filtered = filterEmptySearch(params);
   } else if (params.exact || (literalSearch(query) && !asciiSeparatorSearch(query, params))) {
     // Whitespace separates independent literal terms, matching the HF API.
     // A term may still be a wildcard pattern; every term must match.
@@ -1212,6 +1264,16 @@ function folderContents(params) {
   };
 }
 
+/** @param {unknown[]} folders */
+function canonicalDirectoryPath(folders) {
+  // A compact folder array can be shared by many records. Older workers may
+  // not have Object.hasOwn, and a legacy array may shadow slice/constructor.
+  const own = Object.prototype.hasOwnProperty;
+  if (own.call(folders, "slice") || own.call(folders, "constructor")) return false;
+  for (const part of folders) if (typeof part !== "string" || !part || part.includes("/")) return false;
+  return true;
+}
+
 /** @param {string} repo */
 function getDirectoryIndex(repo) {
   const cached = directoryIndexes.get(repo);
@@ -1226,11 +1288,19 @@ function getDirectoryIndex(repo) {
   const nodes = Object.create(null);
   /** @type {Record<string, number[]>} */
   const directFiles = Object.create(null);
+  const checkedFolders = new WeakSet();
+  let canonicalPaths = true;
   nodes[""] = root;
   for (const index of repoRecordIndices[repo] || []) {
     const record = /** @type {SearchRecord} */ (records[index]);
     root.count++;
     const folders = record.Folder || [];
+    // The fast path needs the predicate's slice prefixes to match these edges.
+    // Prove this only for the repository whose directory is already being built.
+    if (canonicalPaths && !checkedFolders.has(folders)) {
+      canonicalPaths = canonicalDirectoryPath(folders);
+      if (canonicalPaths) checkedFolders.add(folders);
+    }
     let path = "";
     for (const part of folders) {
       // Preserve the original value; concatenation and property access coerce it.
@@ -1254,7 +1324,7 @@ function getDirectoryIndex(repo) {
     node.hasChildren = node.children.length > 0;
     node.showSelfToggle = !!(node.path && node.hasDirectFiles && node.hasChildren);
   }
-  const directory = { tree: root.count ? [root] : [], nodes, files: directFiles };
+  const directory = { tree: root.count ? [root] : [], nodes, files: directFiles, canonicalPaths };
   // Unknown repositories do not consume cache capacity. Stored file indices are
   // disjoint across repositories and therefore bounded by the loaded corpus.
   if (root.count) {

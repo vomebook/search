@@ -1431,6 +1431,177 @@ test("root folder selection includes direct files alongside child directories", 
   assert.strictEqual(mixed.ids.length, mixed.total);
 });
 
+function observeFolderSearch(worker) {
+  vm.runInContext(`
+    globalThis.folderWork = {ids: 0, predicates: 0, builds: 0};
+    const originalBuildFilter = buildRecordFilter, originalGetDirectoryIndex = getDirectoryIndex;
+    buildRecordFilter = (...args) => {
+      const test = originalBuildFilter(...args);
+      return test ? index => { folderWork.predicates++; return test(index); } : test;
+    };
+    getDirectoryIndex = repo => {
+      if (!directoryIndexes.has(repo)) folderWork.builds++;
+      return originalGetDirectoryIndex(repo);
+    };
+  `, worker.context);
+  return async params => {
+    vm.runInContext('folderWork.ids = folderWork.predicates = folderWork.builds = 0;', worker.context);
+    const result = await worker.request('local-search', params);
+    return {result, work: JSON.parse(vm.runInContext('JSON.stringify(folderWork)', worker.context))};
+  };
+}
+
+test('warm narrow mixed folder search retains scan pages and avoids scope walks or cache touches', async () => {
+  const repo = 'Repo/Tree';
+  const selected = [['narrow', 'leaf'], [], ['narrow'], ['narrow', 'leaf'], ['include'], ['narrowish']];
+  const input = Array.from({length: 8300}, (_, i) => ({...records[0],
+    Repo: i >= 8192 ? 'Other' : repo,
+    File: i % 4 ? 'Tie' : 'tie', Extension: i % 3 ? 'txt' : 'pdf', Size: i % 4,
+    Folder: i % 257 < selected.length ? selected[i % 257] : ['bulk', String(i % 32)],
+  }));
+  const {worker} = await loaded(input);
+  const searchWithWork = observeFolderSearch(worker);
+  const base = {q: '', repos: [repo], folderMatchMode: 'mixed', folders: ['ignored'],
+    folderSelfs: ['/include/', '', 'narrow/leaf', 'include'], folderSubtrees: ['narrow', '/narrow/leaf/'],
+    extensions: ['TXT'], minSize: 2, maxSize: 3, pageSize: 13,
+    anchorId: `${repo}\0narrow/leaf/Tie.txt`};
+  const variants = [
+    ...['relevance', 'name', 'size'].map(sort => ({...base, sort})),
+    {...base, folderSelfs: ['narrow'], folderSubtrees: [], extensions: null},
+    {...base, folderSelfs: ['missing'], folderSubtrees: ['missing/leaf']},
+    {...base, folderSelfs: ['narrow'], folderSubtrees: ['bulk']},
+    {...base, folderSelfs: ['bulk/0', 'bulk/1', 'bulk/2', 'bulk/3', 'bulk/4', 'bulk/5', 'bulk/6', 'bulk/7', 'bulk/8'], folderSubtrees: []},
+    {...base, folderSubtrees: ['']},
+    {...base, repos: [repo, 'Other', repo]},
+    {...base, repos: null},
+    {...base, q: '*', exact: true},
+  ];
+  const cold = [];
+  for (const params of variants) cold.push(await searchWithWork(params));
+  assert.ok(cold.every(({work}) => !work.builds && !work.ids));
+  assert.deepStrictEqual(cold.map(({work}) => work.predicates), [...Array(8).fill(8192), 8300, 8300, 8192]);
+  assert.ok(cold[0].result.anchor_index >= 0);
+  assert.strictEqual(cold[4].result.total, 0);
+  assert.strictEqual(vm.runInContext('directoryIndexes.size', worker.context), 0);
+  await worker.request('folder-tree', {repo});
+  await worker.request('folder-tree', {repo: 'Other'});
+  vm.runInContext(`
+    searchOrderCache.clear();
+    for (const ids of Object.values(directoryIndexes.get('Repo/Tree').files)) {
+      ids[Symbol.iterator] = function* () {
+        for (let i = 0; i < this.length; i++) { folderWork.ids++; yield this[i]; }
+      };
+    }
+  `, worker.context);
+  for (const [i, params] of variants.entries()) {
+    const warm = await searchWithWork(params);
+    assert.deepStrictEqual(warm.result, cold[i].result, JSON.stringify(params));
+    const eligible = [160, 160, 160, 32, 0][i];
+    assert.deepStrictEqual(warm.work, {ids: eligible ?? 0, predicates: eligible ?? cold[i].work.predicates, builds: 0});
+  }
+  assert.strictEqual(vm.runInContext('Array.from(directoryIndexes.keys()).join()', worker.context), 'Repo/Tree,Other');
+  const page = {...base, sort: 'size', page: 2, anchorId: `${repo}\0missing.txt`};
+  vm.runInContext(`searchOrderCache.clear();
+    // A narrow search must not walk or copy the scope, even before filtering.
+    const scopedIndices = repoRecordIndices['Repo/Tree'];
+    repoRecordIndices['Repo/Tree'] = new Proxy(scopedIndices, {get(target, key) {
+      if (key !== 'length') throw Error('scope read');
+      return target.length;
+    }});
+  `, worker.context);
+  const first = await searchWithWork({...base, sort: 'size'});
+  const warmPage = await searchWithWork(page);
+  assert.deepStrictEqual(first.work, {ids: 160, predicates: 160, builds: 0});
+  assert.deepStrictEqual(warmPage.work, {ids: 0, predicates: 0, builds: 0});
+  vm.runInContext(`searchOrderCache.clear(); directoryIndexes.clear();
+    repoRecordIndices['Repo/Tree'] = scopedIndices;`, worker.context);
+  assert.deepStrictEqual(warmPage.result, (await searchWithWork(page)).result);
+
+  await worker.request('folder-tree', {repo});
+  await worker.request('replace-corpus', {data: compact(input.slice().reverse().map(record => ({...record, Folder: []})))});
+  assert.strictEqual(vm.runInContext('directoryIndexes.size', worker.context), 0);
+  const next = await searchWithWork(base);
+  assert.deepStrictEqual(next.work, {ids: 0, predicates: 8192, builds: 0});
+  assert.strictEqual(next.result.generation, cold[0].result.generation + 1);
+  assert.notStrictEqual(next.result.snapshot_generation, cold[0].result.snapshot_generation);
+  assert.strictEqual(next.result.anchor_index, -1);
+  assert.ok(next.result.total > cold[0].result.total);
+});
+
+test('warm mixed paths are case-sensitive and rebuilt from the replacement corpus', async () => {
+  const repo = 'Repo/A';
+  const input = Array.from({length: 64}, (_, i) => ({...records[0], Repo: repo, File: `Row ${i}`,
+    Folder: [['Docs'], ['Docs', 'Leaf'], ['Docs', 'leaf'], ['docs'], ['docs', 'Leaf']][i] || ['bulk'],
+  }));
+  // An unrelated repository cannot disqualify a canonical directory.
+  input.push({...records[0], Repo: 'Repo/Other', Folder: ['embedded/slash']});
+  const worker = makeWorker();
+  vm.runInContext('Object.hasOwn = undefined;', worker.context);
+  const searchWithWork = observeFolderSearch(worker);
+  const search = {q: '', repos: [repo], folderMatchMode: 'mixed', folderSelfs: ['Docs'], folderSubtrees: ['docs/Leaf']};
+  async function verify(rows, files) {
+    await worker.request('replace-corpus', {data: compact(rows)});
+    assert.strictEqual(vm.runInContext('directoryIndexes.size', worker.context), 0);
+    const cold = await searchWithWork(search);
+    assert.deepStrictEqual(cold.work, {ids: 0, predicates: 64, builds: 0});
+    await worker.request('folder-tree', {repo});
+    vm.runInContext(`searchOrderCache.clear();
+      for (const ids of Object.values(directoryIndexes.get('Repo/A').files)) {
+        ids[Symbol.iterator] = function* () {
+          for (let i = 0; i < this.length; i++) { folderWork.ids++; yield this[i]; }
+        };
+      }`, worker.context);
+    const warm = await searchWithWork(search);
+    assert.deepStrictEqual(warm.result, cold.result);
+    assert.deepStrictEqual(warm.result.records.map(record => record.File), files);
+    assert.deepStrictEqual(warm.work, {ids: files.length, predicates: files.length, builds: 0});
+  }
+  await verify(input, ['Row 0', 'Row 4']);
+  await verify(input.map((record, i) => i === 0 ? {...record, Folder: ['docs']} :
+    i === 2 ? {...record, Folder: ['Docs']} : record), ['Row 2', 'Row 4']);
+});
+
+test('mixed folder narrowing bounds subtree traversal and preflights broad direct buckets', async () => {
+  const {context} = makeWorker();
+  const result = vm.runInContext(`(() => {
+    const noIds = {length: 4097, [Symbol.iterator]() { throw Error('broad IDs walked'); }};
+    const tooManyChildren = {length: 4097, [Symbol.iterator]() { throw Error('broad tree walked'); }};
+    const directory = {files: {wide: noIds}, nodes: {wide: {count: 1, children: tooManyChildren}}};
+    const direct = warmFolderCandidates(directory, buildFilterSets({folderSelfs: ['wide']}), 20000);
+    const subtree = warmFolderCandidates(directory, buildFilterSets({folderSubtrees: ['wide']}), 20000);
+    return direct === null && subtree === null;
+  })()`, context);
+  assert.strictEqual(result, true);
+});
+
+test('warm mixed folder search scans tiny and noncanonical directory scopes', async () => {
+  for (const folder of [[], ['', 'target'], ['target/part'], ['other']]) {
+    const size = folder.length ? 32 : 3;
+    const input = Array.from({length: size}, (_, i) => ({...records[0], Folder: i ? folder : ['target', 'part']}));
+    const data = compact(input);
+    if (folder[0] === 'other') data.fd[1].slice = null;
+    const worker = makeWorker();
+    await worker.request('replace-corpus', {data});
+    const base = {repos: ['Repo/A'], folderMatchMode: 'mixed', folderSelfs: ['target/part']};
+    const cold = await worker.request('local-search', base);
+    const searchWithWork = observeFolderSearch(worker);
+    await worker.request('folder-tree', {repo: 'Repo/A'});
+    vm.runInContext('searchOrderCache.clear();', worker.context);
+    assert.deepStrictEqual(await searchWithWork(base), {
+      result: cold, work: {ids: 0, predicates: size, builds: 0},
+    });
+    if (folder[0] === 'other') {
+      const result = await worker.send('local-search', {...base, folderSubtrees: ['target']});
+      assert.strictEqual(result.ok, false);
+      assert.match(result.error.message, /slice/);
+    } else if (folder[0] === '') {
+      // The directory indexes ['', 'target'] at 'target'; the predicate
+      // instead sees '/target', and the leading slash is cleaned in requests.
+      assert.strictEqual((await searchWithWork({...base, folderSelfs: [], folderSubtrees: ['target']})).result.total, 1);
+    }
+  }
+});
+
 async function namesWithCorpus(input, params) {
   const harness = await loaded(input);
   return (await harness.worker.request("local-search", params)).records.map((record) => record.File);
