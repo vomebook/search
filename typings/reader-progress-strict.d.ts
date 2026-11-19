@@ -43,7 +43,7 @@ export interface ProgressContext {
   pageInput: HTMLInputElement; updateTocCurrentMark(): void; updateProgressTools(): void;
   markerFrame: number; refreshNearbyPdfPages(): void; syncHeadingLocation(): void; scheduleSave(): void;
   beginReaderNavigation(): number; isReaderGenerationCurrent(kind: string, generation: number): boolean;
-  restoreChapterPosition(entry: ProgressState, generation: number): Promise<boolean>;
+  restoreChapterPosition(entry: ProgressState, generation: number, progressFraction?: number): Promise<boolean>;
   restoreProgressState(entry: ProgressState, generation: number): Promise<boolean>;
   restoreFoliateBookmarkPosition(entry: ProgressState, generation: number): Promise<boolean>;
   goToPage(page: number, generation: number): Promise<boolean>;
@@ -59,6 +59,6 @@ export interface ProgressContext {
   epubSeekFrame: number; epubSeekTarget: { percent: number; generation: number } | null;
   epubSeekPromise: Promise<boolean | void>; seekFoliateProgress(percent: number, generation: number): Promise<void>;
   captureProgressState(): ProgressState | null;
-  chapterManifestLoader: (((index: number) => Promise<Element | null>) & { count: number }) | null;
+  chapterManifestLoader: import('./reader-chapter-format-strict').ChapterLoader | null;
   navigateTocEntry(index: number, options: { closePanel: boolean }): Promise<void>;
 }

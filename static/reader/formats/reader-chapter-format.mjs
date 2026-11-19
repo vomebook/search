@@ -69,6 +69,44 @@ export function chapterPrefetchSize(chapter) {
   } catch (_) { return 0; }
 }
 
+/** Build one scale for the whole manifest. Sanitized HTML bytes only approximate
+ * reading length; do not mix byte weights with equal weights or measure fetched text.
+ * @param {import("../../../typings/reader-chapter-format-strict").Chapter[]} chapters */
+export function createChapterProgress(chapters) {
+  const count = chapters.length, prefix = [0];
+  let total = 0;
+  for (const chapter of chapters) {
+    const raw = chapter.bytes ?? chapter.size;
+    const weight = typeof raw === "number" || typeof raw === "string" ? Number(raw) : 0;
+    if (!Number.isSafeInteger(weight) || weight <= 0) break;
+    total += weight;
+    prefix.push(total);
+  }
+  if (prefix.length !== count + 1) {
+    for (let i = 1; i <= count; i++) prefix[i] = i;
+    total = count;
+  }
+  return {
+    /** @param {number} index @param {number} fraction */
+    at(index, fraction) {
+      const start = prefix[index - 1], end = prefix[index];
+      return start === undefined || end === undefined ? 0 : (start + (end - start) * fraction) / total;
+    },
+    /** @param {number} fraction */
+    locate(fraction) {
+      const target = total * fraction;
+      let low = 1, high = count;
+      while (low < high) {
+        const mid = (low + high) >>> 1;
+        if (target < /** @type {number} */ (prefix[mid])) high = mid;
+        else low = mid + 1;
+      }
+      const start = /** @type {number} */ (prefix[low - 1]), end = /** @type {number} */ (prefix[low]);
+      return { chapterIndex: low, fraction: (target - start) / (end - start) };
+    }
+  };
+}
+
 /** @typedef {import("../../../typings/reader-chapter-format-strict").TocEntry} ChapterTocEntry */
 
 /** @param {unknown} entry @returns {entry is ChapterTocEntry} */
@@ -83,6 +121,24 @@ function isChapterTocEntry(entry) {
 
 /** @param {import("../../../typings/reader-chapter-format-strict").ChapterFormatContext} readerContext */
 export function createReaderChapterFormat(readerContext) {
+  const markerInset = 8;
+  // Keep an explicit End seek at the bottom if late chapter content changes
+  // the scroll range. For a book that fits, this also distinguishes End from Home.
+  /** @type {{generation: number, limit: number} | null} */
+  let progressEnd = null;
+  const releaseProgressEnd = () => { progressEnd = null; };
+  const isProgressEnd = () => progressEnd !== null && readerContext.isReaderGenerationCurrent("navigation", progressEnd.generation);
+
+  /** @param {DOMRect} rect @param {number} marker @param {boolean} last */
+  function chapterProgressHeight(rect, marker, last) {
+    if (!last) return rect.height;
+    const viewport = readerContext.viewport;
+    // Map the last chapter to the line that can actually reach the marker at the
+    // scroll limit. Otherwise seeking near the end clamps to the same position.
+    const remaining = viewport.scrollHeight - viewport.clientHeight - viewport.scrollTop;
+    return Math.max(0, Math.min(rect.height, marker - rect.top + remaining));
+  }
+
   /** @param {Response | Promise<Response>} prepared */
   async function renderChapterManifest(prepared) {
     const response = await prepared;
@@ -576,9 +632,38 @@ export function createReaderChapterFormat(readerContext) {
         if (chapter) fetchChapter(chapter).catch(() => {});
       }
     }, { root: readerContext.viewport });
-    readerContext.viewport.addEventListener("scroll", scheduleChapterWindow, { passive: true });
+    const viewport = readerContext.viewport;
+    const progressScroll = () => {
+      if (progressEnd && viewport.scrollHeight - viewport.clientHeight === progressEnd.limit &&
+          progressEnd.limit - viewport.scrollTop > 1) releaseProgressEnd();
+      scheduleChapterWindow();
+    };
+    const cancelProgressEnd = () => {
+      if (!isProgressEnd()) return;
+      releaseProgressEnd();
+      if (viewport.scrollHeight === viewport.clientHeight) readerContext.updateProgressTools();
+    };
+    const scrollIntents = ["wheel", "touchstart", "pointerdown", "keydown"];
+    for (const type of scrollIntents) viewport.addEventListener(type, cancelProgressEnd, { passive: true });
+    viewport.addEventListener("scroll", progressScroll, { passive: true });
     window.addEventListener("resize", scheduleChapterWindow);
     document.addEventListener("visibilitychange", handleChapterVisibility);
+    // Chapter arrivals, images and viewport reflow can change the reading marker
+    // without a scroll event. Refresh the display without loading any content.
+    const progressLayoutObserver = typeof ResizeObserver === "function"
+      ? new ResizeObserver(() => {
+        if (progressEnd && isProgressEnd()) {
+          const limit = viewport.scrollHeight - viewport.clientHeight;
+          if (limit !== progressEnd.limit || limit - viewport.scrollTop > 1) {
+            progressEnd.limit = limit;
+            viewport.scrollTop = limit;
+            readerContext.foliateScrollAnchors.remember();
+          }
+        }
+        readerContext.updateProgressTools();
+      }) : null;
+    progressLayoutObserver?.observe(frame);
+    progressLayoutObserver?.observe(readerContext.viewport);
     let chapterCleaned = false;
     readerContext.chapterManifestCleanup = () => {
       if (chapterCleaned) return;
@@ -586,15 +671,18 @@ export function createReaderChapterFormat(readerContext) {
       navigationProtectionCleanup?.();
       chapterWindowReady = false;
       cancelAnimationFrame(chapterWindowFrame);
-      readerContext.viewport.removeEventListener("scroll", scheduleChapterWindow);
+      viewport.removeEventListener("scroll", progressScroll);
+      for (const type of scrollIntents) viewport.removeEventListener(type, cancelProgressEnd);
       window.removeEventListener("resize", scheduleChapterWindow);
       document.removeEventListener("visibilitychange", handleChapterVisibility);
       chapterScheduler.dispose();
       chapterVirtualizer.dispose();
+      progressLayoutObserver?.disconnect();
       readerContext.chapterManifestObserver?.disconnect();
       chapterPreviousObserver?.disconnect();
       readerContext.chapterManifestObserver = null;
       readerContext.chapterManifestLoader = null;
+      releaseProgressEnd();
       for (const bytes of retainedBytes.values()) chapterBudget.release(bytes);
       retainedBytes.clear();
       loaded.clear();
@@ -607,9 +695,24 @@ export function createReaderChapterFormat(readerContext) {
       chapterNavigating++;
       try { await fetchChapter(chapter, true, chapterWindowReady); }
       finally { chapterNavigating--; }
-      return frame.querySelector(`.reader-epub-chapter[data-chapter="${index}"]`);
+      return /** @type {import("../../../typings/reader-chapter-format-strict").ChapterArticle | null} */ (
+        frame.querySelector(`.reader-epub-chapter[data-chapter="${index}"]`));
     };
+    const progress = createChapterProgress(manifest.chapters);
     chapterManifestLoader.count = manifest.chapters.length;
+    chapterManifestLoader.progressTarget = progress.locate;
+    chapterManifestLoader.progressFraction = () => {
+      const current = readChapterPosition(true);
+      if (!current) return 0;
+      const end = viewport.scrollHeight - viewport.clientHeight;
+      const atEnd = end === 0 ? isProgressEnd() : viewport.scrollTop > 0 && end - viewport.scrollTop <= 1;
+      if (atEnd && frame.querySelector(`:scope > :is(.reader-epub-chapter, .reader-chapter-placeholder)[data-chapter="${manifest.chapters.length}"]`))
+        return 1;
+      const { position, rect, marker } = current;
+      const span = chapterProgressHeight(rect, marker, position.chapterIndex === manifest.chapters.length);
+      const fraction = span > 0 ? Math.max(0, Math.min(1, position.chapterOffset / span)) : 0;
+      return progress.at(position.chapterIndex, fraction);
+    };
     readerContext.chapterManifestLoader = chapterManifestLoader;
     setChapterToc();
     await readerContext.getInitialReaderRestoration();
@@ -645,38 +748,56 @@ export function createReaderChapterFormat(readerContext) {
     readerContext.status.textContent = `EPUB · ${manifest.chapters.length} 章`;
   }
 
-  function captureChapterPosition() {
+  /** @param {boolean} [includePlaceholders] */
+  function readChapterPosition(includePlaceholders = false) {
     if (readerContext.capability.mode !== "epub-chapters") return null;
-    const marker = readerContext.viewport.getBoundingClientRect().top + 8;
-    const chapters = /** @type {NodeListOf<HTMLElement>} */ (readerContext.content.querySelectorAll(".reader-epub-chapter"));
-    let chapter = null, top = 0;
+    const marker = readerContext.viewport.getBoundingClientRect().top + markerInset;
+    const chapters = /** @type {NodeListOf<HTMLElement>} */ (readerContext.content.querySelectorAll(includePlaceholders
+      ? ".epub-frame > :is(.reader-epub-chapter, .reader-chapter-placeholder)" : ".reader-epub-chapter"));
+    let chapter = null, rect = null;
     for (const node of chapters) {
-      const rect = node.getBoundingClientRect();
       chapter = node;
-      top = rect.top;
+      rect = node.getBoundingClientRect();
       if (rect.bottom > marker) break;
     }
-    return chapter ? {
-      chapterIndex: Number(chapter.dataset.chapter),
-      chapterManifest: readerContext.chapterManifestUrl || readerContext.sourceUrl,
-      chapterOffset: marker - top
+    return chapter && rect ? {
+      position: {
+        chapterIndex: Number(chapter.dataset.chapter),
+        chapterManifest: readerContext.chapterManifestUrl || readerContext.sourceUrl,
+        chapterOffset: marker - rect.top
+      }, rect, marker
     } : null;
   }
 
-  /** @param {import("../../../typings/reader-chapter-format-strict").ChapterPosition} entry @param {number} generation */
-  async function restoreChapterPosition(entry, generation) {
+  function captureChapterPosition() {
+    return readChapterPosition()?.position ?? null;
+  }
+
+  /** @param {import("../../../typings/reader-progress-strict").ProgressState} entry @param {number} generation
+   * @param {number} [progressFraction] A transient slider target, never stored in a bookmark or history entry. */
+  async function restoreChapterPosition(entry, generation, progressFraction) {
     if (
       /-epub-chapters-v5\//.test(readerContext.chapterManifestUrl || readerContext.sourceUrl) &&
       entry.chapterManifest !== (readerContext.chapterManifestUrl || readerContext.sourceUrl)
     ) return false;
-    if (!readerContext.chapterManifestLoader || !Number.isInteger(entry.chapterIndex)) return false;
-    const chapter = await readerContext.chapterManifestLoader(entry.chapterIndex);
+    const loader = readerContext.chapterManifestLoader;
+    if (!loader || entry.chapterIndex === undefined || !Number.isInteger(entry.chapterIndex) ||
+        !readerContext.isReaderGenerationCurrent("navigation", generation)) return false;
+    const chapter = await loader(entry.chapterIndex);
     if (!chapter?.isConnected || !readerContext.isReaderGenerationCurrent("navigation", generation)) return false;
-    readerContext.viewport.scrollTop +=
-      chapter.getBoundingClientRect().top -
-      readerContext.viewport.getBoundingClientRect().top -
-      8 +
-      (Number(entry.chapterOffset) || 0);
+    const viewport = readerContext.viewport, last = entry.chapterIndex === loader.count;
+    releaseProgressEnd();
+    if (progressFraction === 0 && entry.chapterIndex === 1) viewport.scrollTop = 0;
+    else if (progressFraction === 1 && last) {
+      const limit = viewport.scrollHeight - viewport.clientHeight;
+      progressEnd = { generation, limit };
+      viewport.scrollTop = limit;
+    } else {
+      const rect = chapter.getBoundingClientRect(), marker = viewport.getBoundingClientRect().top + markerInset;
+      const offset = progressFraction === undefined ? Number(entry.chapterOffset) || 0
+        : chapterProgressHeight(rect, marker, last) * progressFraction;
+      viewport.scrollTop += rect.top - marker + offset;
+    }
     readerContext.foliateScrollAnchors.remember();
     readerContext.syncHeadingLocation();
     readerContext.updateProgressTools();

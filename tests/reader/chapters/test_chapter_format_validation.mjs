@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
-import { createReaderChapterFormat, chapterPrefetchSize, isChapterSearchIndex } from '../../../static/reader/formats/reader-chapter-format.mjs';
+import { createChapterProgress, createReaderChapterFormat, chapterPrefetchSize, isChapterSearchIndex } from '../../../static/reader/formats/reader-chapter-format.mjs';
 
 const sandbox = {};
 sandbox.self = sandbox;
@@ -10,6 +10,23 @@ const validate = sandbox.VoiceOfMLReaderSecurity.validateChapterManifest;
 for (const [extra, expected] of [[{bytes:'12'}, 12], [{size:'13'}, 13], [{}, 0], [{bytes:null,size:14}, 14], [{bytes:0,size:14}, 0]]) {
   const manifest = validate({version:1, kind:'epub-chapters', chapters:[{index:1,path:'1.html',...extra}]});
   assert.equal(chapterPrefetchSize(manifest.chapters[0]), expected);
+}
+const progressFor = (...metadata) => createChapterProgress(validate({ version: 1, kind: 'epub-chapters',
+  chapters: metadata.map((extra, i) => ({ index: i + 1, path: `${i + 1}.html`, ...extra }))
+}).chapters);
+const progress = progressFor({ bytes: 10, size: 90 }, { bytes: null, size: '80' }, { bytes: 10 });
+assert.deepEqual(progress.locate(0), { chapterIndex: 1, fraction: 0 });
+assert.deepEqual(progress.locate(0.1), { chapterIndex: 2, fraction: 0 });
+assert.deepEqual(progress.locate(0.5), { chapterIndex: 2, fraction: 0.5 });
+assert.deepEqual(progress.locate(1), { chapterIndex: 3, fraction: 1 });
+for (const fraction of [0, 0.05, 0.1, 0.5, 0.9, 0.98, 1]) {
+  const target = progress.locate(fraction);
+  assert.ok(Math.abs(progress.at(target.chapterIndex, target.fraction) - fraction) < 1e-12);
+}
+for (const incomplete of [{}, { bytes: 0, size: 90 }, { bytes: 1.5 }, {bytes: true}, {size: [12]}]) {
+  const equal = progressFor({ bytes: 10 }, { bytes: 80 }, incomplete);
+  assert.deepEqual(equal.locate(0.5), { chapterIndex: 2, fraction: 0.5 });
+  assert.equal(equal.at(3, 0), 2 / 3);
 }
 const good = {path:'epub-search-index.json.gz', bytes:1, sha256:'a'.repeat(64)};
 assert.equal(isChapterSearchIndex(good), true);

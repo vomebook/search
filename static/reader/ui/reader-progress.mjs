@@ -184,6 +184,8 @@ export function createReaderProgress(readerContext) {
         ? Math.round(((position.foliateSection + fraction) / count) * 1000) / 10
         : 0;
     }
+    if (readerContext.capability.mode === "epub-chapters")
+      return Math.round((readerContext.chapterManifestLoader?.progressFraction() ?? 0) * 1000) / 10;
     if (readerContext.htmlFrame && readerContext.htmlFrame.contentDocument) {
       const doc = readerContext.htmlFrame.contentDocument.documentElement,
         win = /** @type {Window} */ (readerContext.htmlFrame.contentWindow);
@@ -447,15 +449,16 @@ export function createReaderProgress(readerContext) {
         readerContext.epubSeekFrame = 0;
         readerContext.epubSeekPromise = readerContext.seekFoliateProgress(percent, generation);
       });
-    } else if (readerContext.capability.mode === "epub-chapters" && readerContext.chapterManifestLoader?.count) {
-      const position = Math.min(0.999999, percent / 100) * readerContext.chapterManifestLoader.count;
-      readerContext.epubSeekPromise = (async () => {
-        const index = Math.floor(position) + 1;
-        const article = await (/** @type {NonNullable<import('../../../typings/reader-progress-strict').ProgressContext['chapterManifestLoader']>} */ (readerContext.chapterManifestLoader))(index);
-        if (!article?.isConnected || !readerContext.isReaderGenerationCurrent("navigation", generation)) return false;
-        return readerContext.restoreChapterPosition({chapterIndex:index,chapterManifest:readerContext.chapterManifestUrl || readerContext.sourceUrl,
-          chapterOffset:article.getBoundingClientRect().height * (position - Math.floor(position))}, generation);
-      })().catch(error => { readerContext.reportNavigationError(error, generation); return false; });
+    } else if (readerContext.capability.mode === "epub-chapters") {
+      const target = Number.isFinite(percent) ? readerContext.chapterManifestLoader?.progressTarget(percent / 100) : null;
+      if (target) {
+        readerContext.epubSeekPromise = readerContext.restoreChapterPosition({
+          chapterIndex: target.chapterIndex, chapterManifest: readerContext.chapterManifestUrl || readerContext.sourceUrl
+        }, generation, target.fraction).catch(error => {
+          readerContext.reportNavigationError(error, generation);
+          return false;
+        });
+      }
     } else if (readerContext.htmlFrame && readerContext.htmlFrame.contentWindow)
       readerContext.htmlFrame.contentWindow.scrollTo(
         0,

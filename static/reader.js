@@ -811,7 +811,7 @@ let canReturnWithHistory = false;
 readerBindings.validateReturnHistory();
 let saveTimer = 0;
 let saveDeadline = 0;
-/** @type {(((index: number) => Promise<ReaderSearchBackends.ChapterArticle | null>) & {count: number}) | null} */
+/** @type {import('../typings/reader-chapter-format-strict').ChapterLoader | null} */
 let chapterManifestLoader = null;
 /** @type {ReaderSearchBackends.ChapterConfiguration | null} */
 let chapterSearchConfiguration = null;

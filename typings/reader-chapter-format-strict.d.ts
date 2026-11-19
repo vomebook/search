@@ -6,8 +6,13 @@ export interface TocEntry {
   label: string; chapterIndex: number; fragment: string; depth: number;
   activate(generation: number): Promise<boolean>; target?: Element | null;
 }
-export interface ChapterPosition { chapterIndex: number; chapterManifest: string; chapterOffset: number }
-export type ChapterLoader = ((index: number) => Promise<Element | null>) & { count: number };
+export interface ChapterArticle extends HTMLElement { _chapterSearchHead?: Node | null }
+export interface ChapterLoader {
+  (index: number): Promise<ChapterArticle | null>;
+  count: number;
+  progressTarget(fraction: number): { chapterIndex: number; fraction: number };
+  progressFraction(): number;
+}
 export interface ChapterFormatContext {
   chapterManifestUrl: string; sourceUrl: string; viewport: HTMLElement; content: HTMLElement; status: HTMLElement;
   capability: { mode?: string | null };

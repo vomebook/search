@@ -71,6 +71,7 @@ class EbookFlowTests(unittest.TestCase):
                 load:i=>foliateSectionLoader(i),jump:i=>navigateTocEntry(i-1),
                 chapter:i=>navigationState.tocEntries[i-1].activate(beginReaderNavigation()),
                 progress:seekProgress,seekTask:()=>epubSeekPromise,
+                percent:readerProgressPercent,restoreProgress:restoreProgressState,save:saveProgress,
                 search:fullSearchFoliateMatches,searchGo:navigateFoliateSearchResult,
                 searchGeneration:()=>readerRuntime.currentGeneration('search'),
                 toc:activateFoliateTocEntry};
@@ -460,6 +461,128 @@ class EbookFlowTests(unittest.TestCase):
           finally { before.remove();real.getBoundingClientRect=originals[1]; }
         }''')
         self.assertEqual(result,[1,1])
+
+    def open_converted_progress(self, metadata, height=lambda i: 1200 + i * 30, hold=()):
+        source = ('https://voiceofml-search.hf.space/api/reader-bucket-resource?path=chapters/ebook/epub/'
+                  + 'b' * 64 + '/1234567890abcdef/chapter-manifest.json')
+        manifest = {'version': 1, 'kind': 'epub-chapters', 'chapters': [
+            {'index': i, 'path': f'chapters/chapter-{i:04d}.xhtml', **fields}
+            for i, fields in enumerate(metadata, 1)
+        ]}
+        requested, held, released = [], {}, set()
+
+        def fulfill_chapter(route, index):
+            route.fulfill(content_type='text/html', body=(
+                f'<h1>Chapter {index}</h1><p style="height:{height(index)}px">Body {index}</p>'))
+
+        def release(index):
+            released.add(index)
+            route = held.pop(index, None)
+            if route:
+                fulfill_chapter(route, index)
+
+        def resource(route):
+            if 'chapter-manifest.json' in route.request.url:
+                route.fulfill(json=manifest)
+                return
+            index = int(unquote(route.request.url).rsplit('chapter-', 1)[1].split('.', 1)[0])
+            requested.append(index)
+            if index in hold and index not in released:
+                held[index] = route
+            else:
+                fulfill_chapter(route, index)
+
+        self.expose()
+        self.page.route('**/api/reader-bucket-resource**', resource)
+        self.page.goto(self.origin + support.PREFIX + '/static/reader.html?' + urlencode(
+            dict(url=source, ext='epub-chapters')))
+        self.page.wait_for_function("()=>document.documentElement.dataset.readerPhase==='ready'")
+        return requested, release
+
+    def seek_converted(self, percent, chapter):
+        self.assertTrue(self.page.evaluate('value=>{__ebook.progress(value);return __ebook.seekTask()}', percent))
+        self.page.wait_for_function('([i,p])=>__ebook.captureChapter()?.chapterIndex===i && '
+                                    'Math.abs(__ebook.percent()-p)<0.2', arg=[chapter, percent])
+        self.assertAlmostEqual(float(self.page.locator('.reader-progress-range').input_value()), percent, delta=0.2)
+
+    def test_converted_progress_uses_manifest_weights_through_loading_and_trimming(self):
+        metadata = [{'bytes': 100} for _ in range(30)]
+        metadata[17] = {'size': 6000}
+        metadata[-1] = {'bytes': 1200}
+        requested, release = self.open_converted_progress(metadata, hold=(17,))
+        self.assertEqual(self.page.evaluate('__ebook.percent()'), 0)
+        self.page.locator('.reader-epub-chapter[data-chapter="8"]').wait_for(state='attached')
+        self.assertNotIn(18, requested)
+        self.assertNotIn(30, requested)
+        # 17% before chapter 18, plus half of its 60% share.
+        with self.page.expect_request(lambda request: 'chapter-0017.xhtml' in request.url):
+            self.seek_converted(47, 18)
+        chapter = self.page.locator('.reader-epub-chapter[data-chapter="18"]')
+        height = chapter.evaluate('node=>node.getBoundingClientRect().height')
+        saved = self.page.evaluate('__ebook.captureChapter()')
+        self.assertAlmostEqual(saved['chapterOffset'], height * 0.5, delta=2)
+        release(17)
+        self.page.locator('.reader-epub-chapter[data-chapter="17"]').wait_for(state='attached')
+        self.page.locator('.reader-chapter-placeholder').first.wait_for(state='attached')
+        self.assertEqual(self.page.evaluate('__ebook.percent()'), 47)
+        # Scroll independently of seek: move the same marker to one-quarter into chapter 18.
+        self.page.locator('#viewport').evaluate('(node,delta)=>{node.scrollTop-=delta}', height / 4)
+        self.page.wait_for_function("()=>document.querySelector('.reader-progress-percent').textContent==='32.0%'")
+        self.seek_converted(94, 30)  # Halfway through the reachable scroll span of the final chapter.
+        self.seek_converted(100, 30)
+        self.assertLessEqual(self.page.locator('#viewport').evaluate(
+            'node=>node.scrollHeight-node.clientHeight-node.scrollTop'), 1)
+        self.seek_converted(0, 1)
+        self.assertEqual(self.page.locator('#viewport').evaluate('node=>node.scrollTop'), 0)
+        self.assertTrue(self.page.evaluate('state=>__ebook.restoreProgress(state)', saved))
+        self.assertAlmostEqual(self.page.evaluate('__ebook.captureChapter().chapterOffset'), saved['chapterOffset'], delta=2)
+        self.assertEqual(self.page.evaluate('''async()=>{
+          await __ebook.save();
+          const entry = await VoiceOfMLReaderStore.get(__ebook.captureChapter().chapterManifest);
+          return entry && {chapterIndex:entry.chapterIndex, chapterOffset:entry.chapterOffset,
+                           chapterManifest:entry.chapterManifest};
+        }'''), self.page.evaluate('__ebook.captureChapter()'))
+
+    def test_converted_progress_falls_back_and_ignores_superseded_seek(self):
+        metadata = [{'bytes': 100} for _ in range(30)]
+        metadata[14] = {'bytes': 6000}
+        metadata[-1] = {}
+        _, release = self.open_converted_progress(metadata, hold=(15,))
+        # Hold the equal-weight target until the later seek owns the viewport.
+        with self.page.expect_request(lambda request: 'chapter-0015.xhtml' in request.url):
+            self.page.evaluate('''()=>{__ebook.progress(48); window.__obsoleteSeek = __ebook.seekTask();}''')
+        self.seek_converted(85, 26)
+        release(15)
+        self.assertFalse(self.page.evaluate('window.__obsoleteSeek'))
+        self.assertEqual(self.page.evaluate('__ebook.captureChapter().chapterIndex'), 26)
+        self.assertAlmostEqual(self.page.evaluate('__ebook.percent()'), 85, delta=0.2)
+
+    def test_converted_progress_end_with_short_last_chapter_and_delayed_previous(self):
+        metadata = [{'bytes': 100} for _ in range(30)]
+        _, release = self.open_converted_progress(
+            metadata, height=lambda i: 20 if i == 30 else 1500, hold=(29,))
+        self.page.locator('.reader-epub-chapter[data-chapter="8"]').wait_for(state='attached')
+        with self.page.expect_request(lambda request: 'chapter-0029.xhtml' in request.url):
+            self.assertTrue(self.page.evaluate('()=>{__ebook.progress(100);return __ebook.seekTask()}'))
+        self.page.wait_for_function("()=>document.querySelector('.reader-progress-percent').textContent==='100.0%'")
+        release(29)
+        self.page.locator('.reader-epub-chapter[data-chapter="29"]').wait_for(state='attached')
+        self.page.wait_for_function('''()=>{const v=document.querySelector('#viewport');
+          const last=document.querySelector('.reader-epub-chapter[data-chapter="30"]').getBoundingClientRect();
+          return v.scrollHeight-v.clientHeight-v.scrollTop<=1 && last.bottom<=v.getBoundingClientRect().bottom
+            && document.querySelector('.reader-progress-percent').textContent==='100.0%';}''')
+        self.page.locator('#viewport').evaluate('''node=>{
+          node.dispatchEvent(new WheelEvent('wheel', {deltaY:-500}));
+          node.scrollTop -= 500;
+        }''')
+        self.page.wait_for_function('()=>__ebook.percent()<100')
+
+    def test_converted_progress_end_when_book_fits_in_viewport(self):
+        self.open_converted_progress([{'bytes': 100}], height=lambda _: 20)
+        self.assertEqual(self.page.locator('#viewport').evaluate('node=>node.scrollHeight-node.clientHeight'), 0)
+        self.assertEqual(self.page.evaluate('__ebook.percent()'), 0)
+        self.seek_converted(100, 1)
+        self.seek_converted(0, 1)
 
     def test_chapter_jump_warms_both_sides_without_old_observer_demands(self):
         manifest={'version':1,'kind':'epub-chapters','chapters':[{'index':i,'path':f'chapters/chapter-{i:04d}.xhtml','bytes':500} for i in range(1,41)]}
