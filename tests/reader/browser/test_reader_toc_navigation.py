@@ -543,6 +543,15 @@ class TocNavigationTests(unittest.TestCase):
               s.panelView.getBoundingClientRect().top+s.panelView.scrollTop;
               s.panelView.scrollTop=offset+index*40;s.panelView.dispatchEvent(new Event('scroll'));}''',index)
             self.page.wait_for_function('index=>!!document.querySelector(`#toc-list [data-toc-index="${index}"]`)',arg=index)
+            metrics = self.page.locator(f'#toc-list [data-toc-index="{index}"]').evaluate('''row=>{
+              const rect=row.getBoundingClientRect(), range=document.createRange();
+              range.selectNodeContents(row.querySelector('.panel-item-main'));
+              const text=range.getBoundingClientRect();
+              return {height:rect.height, stride:row.nextElementSibling.getBoundingClientRect().top-rect.top,
+                above:text.top-rect.top, below:rect.bottom-text.bottom};
+            }''')
+            self.assertEqual((metrics['height'],metrics['stride']),(40,40))
+            self.assertAlmostEqual(metrics['above'],metrics['below'],delta=3)
             self.click_entry(index)
             self.assertEqual(self.landed_chapter(), index+1)
             if not self.panel_open(): self.page.locator('#history').click()

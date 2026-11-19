@@ -60,6 +60,43 @@ class ReaderStyleTests(unittest.TestCase):
             !document.getAnimations().some(animation => animation.playState === 'running')
         """)
 
+    def test_default_paper_follows_theme_and_mobile_prose_scales_with_zoom(self):
+        viewport = self.page.locator('#viewport')
+        text = self.page.locator('.reader-text').first
+        self.assertEqual(text.evaluate('e=>getComputedStyle(e).fontSize'), '17px')
+        self.page.set_viewport_size({'width':390,'height':740})
+        self.assertEqual(text.evaluate('e=>getComputedStyle(e).fontSize'), '14px')
+        self.page.locator('#zoom').fill('150')
+        self.page.locator('#zoom').dispatch_event('change')
+        self.assertEqual(text.evaluate('e=>getComputedStyle(e).fontSize'), '21px')
+        dark = viewport.evaluate('e=>getComputedStyle(e).backgroundColor')
+        self.assertIn('radial-gradient', viewport.evaluate('e=>getComputedStyle(e).backgroundImage'))
+        self.page.locator('#history').click()
+        self.page.locator('#theme-toggle').click()
+        self.settle()
+        light = viewport.evaluate('e=>getComputedStyle(e).backgroundColor')
+        self.assertNotEqual(dark, light)
+        self.assert_contrast('.reader-text')
+        for media in ({'contrast':'more'}, {'contrast':'no-preference','forced_colors':'active'}):
+            self.page.emulate_media(**media)
+            self.assertEqual(viewport.evaluate('e=>getComputedStyle(e).backgroundImage'), 'none')
+        self.page.emulate_media(contrast='no-preference', forced_colors='none')
+        for mode, markup, surface in (
+            ('markdown','<article class="reader-markdown">Markdown</article>','#viewport'),
+            ('epub-chapters','<div class="epub-frame"><article class="reader-markdown">Chapter</article></div>','.epub-frame'),
+            ('foliate','<div class="foliate-continuous"><article>Book</article></div>','.foliate-continuous'),
+        ):
+            with self.subTest(mode=mode):
+                self.page.locator('#content').evaluate('''(e,[mode,markup])=>{
+                  e.dataset.mode=mode;e.innerHTML=markup;
+                }''', [mode,markup])
+                self.assertIn('radial-gradient', self.page.locator(surface).evaluate('e=>getComputedStyle(e).backgroundImage'))
+                self.assertEqual(self.page.locator('#content article').evaluate('e=>getComputedStyle(e).fontSize'), '21px')
+        for mode in ('pdf','pdf-pages','image','html','video'):
+            self.page.locator('#content').evaluate('(e,mode)=>e.dataset.mode=mode', mode)
+            self.assertEqual(viewport.evaluate('e=>getComputedStyle(e).backgroundImage'), 'none', mode)
+            self.assertEqual(self.page.locator('.foliate-continuous').evaluate('e=>getComputedStyle(e).backgroundImage'), 'none', mode)
+
     def test_back_and_download_icons_have_stable_browser_independent_geometry(self):
         self.page.evaluate("""() => {
           document.querySelector('.page-controls').hidden = false;
@@ -593,7 +630,7 @@ class ReaderStyleTests(unittest.TestCase):
         self.page.evaluate('''()=>{
           document.querySelector('.reader-panel-folder').textContent='所在目录：Test/docs';
           document.querySelector('#toc-list').innerHTML=Array.from({length:40},(_,i)=>
-            `<div class="panel-item toc-item"><div class="panel-item-main">目录第${i+1}项</div></div>`).join('');
+            `<div class="panel-item toc-item"><div class="panel-item-main">${i===1?'长标题可以换行'.repeat(16):`目录第${i+1}项`}</div>${i===0?'<span class="toc-current-mark">✓</span>':''}</div>`).join('');
           document.querySelector('#history-list').innerHTML='<div class="panel-item"><button class="panel-item-main">历史</button></div>';
         }''')
         for width in (320, 390, 600):
@@ -607,14 +644,21 @@ class ReaderStyleTests(unittest.TestCase):
                 metrics=self.page.evaluate('''()=>{const panel=document.querySelector('#history-panel'),
                   toc=document.querySelector('#toc-panel'),path=document.querySelector('#reader-panel-location'),
                   a=document.querySelector('#toc-list .panel-item-main'),b=document.querySelector('#history-list .panel-item-main');
+                  const row=a.parentElement.getBoundingClientRect(), text=document.createRange();
+                  text.selectNodeContents(a);
+                  const bounds=text.getBoundingClientRect();
+                  text.selectNodeContents(a.parentElement.nextElementSibling.firstElementChild);
                   return {width:panel.getBoundingClientRect().width, tocFont:getComputedStyle(a).fontSize,
                     historyFont:getComputedStyle(b).fontSize, pathInToc:toc.contains(path),
-                    rowHeight:a.parentElement.getBoundingClientRect().height};}''')
+                    rowHeight:row.height, topGap:bounds.top-row.top,
+                    bottomGap:row.bottom-bounds.bottom, longLines:text.getClientRects().length};}''')
                 self.assertAlmostEqual(metrics['width'],width*.85,delta=1)
                 self.assertEqual(metrics['tocFont'],metrics['historyFont'])
                 self.assertEqual(metrics['tocFont'],'13px')
                 self.assertFalse(metrics['pathInToc'])
-                self.assertLessEqual(metrics['rowHeight'],40)
+                self.assertLessEqual(metrics['rowHeight'],33,metrics)
+                self.assertAlmostEqual(metrics['topGap'],metrics['bottomGap'],delta=3)
+                self.assertGreater(metrics['longLines'],1,metrics)
                 for tab in ('bookmarks-tab','history-tab'):
                     self.page.locator('#'+tab).click()
                     self.assertTrue(info.is_visible(),tab)

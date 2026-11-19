@@ -1209,7 +1209,7 @@ body {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   font:
-    calc(17px * var(--reader-zoom)) / 1.8 ui-monospace,
+    calc(var(--reader-prose-size, 17px) * var(--reader-zoom)) / 1.8 ui-monospace,
     monospace;
   color: #e7e9eb;
 }
@@ -1234,7 +1234,7 @@ body {
 .reader-markdown {
   margin: 0 auto;
   max-width: 76ch;
-  font-size: calc(17px * var(--reader-zoom));
+  font-size: calc(var(--reader-prose-size, 17px) * var(--reader-zoom));
   line-height: 1.75;
 }
 .reader-markdown img {
@@ -1281,7 +1281,7 @@ body {
   line-height: 1.7;
   break-before: auto !important;
   page-break-before: auto !important;
-  font-size: calc(1em * var(--reader-zoom));
+  font-size: calc(var(--reader-prose-size, 1em) * var(--reader-zoom));
 }
 /* Virtualized chapters must reserve their measured height. */
 .foliate-continuous > article.foliate-section-placeholder {
@@ -1482,6 +1482,30 @@ body {
   color: #202124;
 }
 
+/* Paper texture uses only CSS; document images and the surrounding UI keep their own colors. */
+@media (forced-colors: none) and (prefers-contrast: no-preference) {
+  :root {
+    --reader-paper: #202123;
+    --reader-paper-wash: #ffffff05;
+    --reader-paper-fiber: #ffffff06;
+  }
+  :root[data-theme="light"] {
+    --reader-paper: #f4efe6;
+    --reader-paper-wash: #bba98a22;
+    --reader-paper-fiber: #5843270a;
+  }
+  .reader-viewport:has(> .reader-content:is([data-mode="text"], [data-mode="markdown"])),
+  .reader-content[data-mode="epub-chapters"] > .epub-frame,
+  .reader-content[data-mode="foliate"] > .foliate-continuous {
+    background-color: var(--reader-paper);
+    background-image:
+      radial-gradient(ellipse at 12% 20%, var(--reader-paper-fiber), transparent 55%),
+      radial-gradient(ellipse at 72% 65%, var(--reader-paper-fiber), transparent 48%),
+      linear-gradient(115deg, var(--reader-paper-wash), transparent 70%);
+    background-size: 7px 5px, 13px 11px, 100% 100%;
+  }
+}
+
 /* Compose theme colors with drawer/filter motion instead of replacing it. */
 :root.theme-transition {
   --reader-theme-duration: 260ms;
@@ -1604,6 +1628,7 @@ body {
   :root {
     --reader-toolbar-height: 36px;
     --reader-popover-top: 78px;
+    --reader-prose-size: 14px;
   }
   .reader-panel {
     width: 85vw;
@@ -1645,7 +1670,17 @@ body {
     line-height: 1.4;
   }
   .reader-panel .toc-item {
+    min-height: 32px;
+    align-items: center;
     padding-left: calc(10px + var(--toc-depth, 0) * 12px);
+  }
+  .reader-panel .toc-item .panel-item-main {
+    align-self: stretch;
+    align-content: center;
+  }
+  .reader-panel .toc-virtual-row {
+    /* Keep the 40px virtual scroll stride; center its single-line label. */
+    padding-block: 10px;
   }
   .reader-progress-tools {
     padding: 6px 8px 8px;

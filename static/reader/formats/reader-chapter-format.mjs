@@ -1,4 +1,4 @@
-import { EBOOK_NARROW_STYLE, wrapEbookTables } from "../ui/reader-document-styles.mjs";
+import { EBOOK_LAYOUT_STYLE, wrapEbookTables } from "../ui/reader-document-styles.mjs";
 
 // The current MOBI chapter manifest for this five-volume edition contains
 // cross-volume sidebar targets that point back into volume 1. Its own verified
@@ -93,9 +93,9 @@ export function createReaderChapterFormat(readerContext) {
     const frame = document.createElement("div");
     frame.className = "epub-frame";
     frame.style.overflowAnchor = "none";
-    const narrowStyle = document.createElement("style");
-    narrowStyle.textContent = EBOOK_NARROW_STYLE;
-    frame.appendChild(narrowStyle);
+    const layoutStyle = document.createElement("style");
+    layoutStyle.textContent = EBOOK_LAYOUT_STYLE;
+    frame.appendChild(layoutStyle);
     const openingGeneration = readerContext.readerRuntime.currentGeneration("navigation");
     readerContext.content.appendChild(frame);
     const loaded = new Set(), retainedBytes = new Map(),
