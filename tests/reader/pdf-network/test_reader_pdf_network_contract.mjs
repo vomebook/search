@@ -22,6 +22,54 @@ const pdfjs = {PDFDataRangeTransport:Transport,getDocument:opts=>({
   promise:Promise.resolve(opts),destroy:async()=>{}})};
 
 try {
+  // A final startxref may point to the single aligned chunk before the
+  // standard tail. Trust the trailer only as a bounded scheduling hint.
+  for (const scenario of ['hint','demand-first','close','source-changed','malformed','deep','weak-net','save-data','older-offset','covered','linearized','suppressed-after-start']) {
+    const chunk=262144, total=32*chunk+65536, tailBegin=31*chunk, adjacent=tailBegin-chunk;
+    const owner=new AbortController(), tailGate=Promise.withResolvers(), requests=[];
+    const nav=Object.getOwnPropertyDescriptor(globalThis,'navigator');
+    Object.defineProperty(globalThis,'navigator',{configurable:true,value:{connection:{
+      saveData:scenario==='save-data',effectiveType:scenario==='weak-net'?'2g':'4g'}}});
+    const offset=scenario==='older-offset'?adjacent-1:scenario==='covered'?tailBegin:adjacent+27;
+    const ending=new TextEncoder().encode(`\nstartxref\n${offset}\n%%EOF\n${scenario==='malformed'?'garbage':''}`);
+    let fresh=scenario!=='deep';
+    globalThis.fetch=async(_url,init)=>{
+      const [,a,b]=/^bytes=(\d+)-(\d+)$/.exec(new Headers(init.headers).get('Range')).map(Number);
+      requests.push(a);
+      const data=new Uint8Array(b-a+1);
+      if (!a) data.set(new TextEncoder().encode(scenario==='linearized'?'%PDF-1.7\n1 0 obj\n<< /Linearized 1 >>':'%PDF-1.6\n'));
+      if (a===tailBegin) {data.set(ending,data.length-ending.length);await tailGate.promise;}
+      if (a===adjacent) data[27]=42;
+      return new Response(data,{status:206,headers:{'Content-Range':`bytes ${a}-${b}/${total}`,
+        ETag:a===adjacent && scenario==='source-changed' && requests.filter(n=>n===adjacent).length===1?'"B"':'"A"'}});
+    };
+    const hooks={signal:owner.signal,readBytes,limit:total,rangeCache:null,canPrefetchFirstPage:()=>fresh};
+    const input={url:options.url,rangeChunkSize:chunk};
+    try {
+      const first=await preparePdfInitialRange(input,hooks);
+      const opening=await openPdfRangeTask(pdfjs,input,{...hooks,initial:Promise.resolve(first)});
+      const transport=(await opening.promise).range;
+      if (scenario==='demand-first') transport.requestDataRange(adjacent,tailBegin);
+      if (scenario==='close') owner.abort(new DOMException('closed','AbortError'));
+      if (scenario==='suppressed-after-start') fresh=false;
+      await turn();
+      assert.equal(requests.filter(n=>n===adjacent).length,Number(scenario==='demand-first'));
+      tailGate.resolve(); await first.tail.promise; await turn();
+      const extra=['hint','source-changed','demand-first'].includes(scenario);
+      assert.equal(requests.filter(n=>n===adjacent).length,Number(extra),scenario);
+      if (scenario==='hint' || scenario==='source-changed') {
+        transport.requestDataRange(adjacent,tailBegin);
+        await turn(); await turn();
+        assert.equal(requests.filter(n=>n===adjacent).length,scenario==='hint'?1:2);
+        assert.equal(transport.received.at(-1)?.bytes[27],42);
+      }
+      await opening.destroy();
+    } finally {
+      owner.abort(); tailGate.resolve();
+      if (nav) Object.defineProperty(globalThis,'navigator',nav); else delete globalThis.navigator;
+    }
+  }
+
   // Large-flat policy joins only already requested chunks, at most 96 KiB of
   // aggregate gaps and 256 KiB per response. Published slices remain exact.
   {

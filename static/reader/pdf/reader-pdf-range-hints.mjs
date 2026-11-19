@@ -6,6 +6,20 @@ const PDF_LARGE_FLAT_HEADER_BYTES = 65536;
 const PDF_LARGE_FLAT_DICTIONARY_BYTES = 15000;
 const PDF_MIN_SPARSE_PAGES = 128;
 
+/** @param {Uint8Array} bytes @param {number} tailBegin @param {number} chunkSize */
+export function adjacentXrefChunkStart(bytes, tailBegin, chunkSize) {
+  // Only the final complete trailer can suggest reading the one missing
+  // adjacent chunk. PDF.js still locates and parses the cross-reference table.
+  if (chunkSize !== PDF_DEFAULT_CHUNK_BYTES || tailBegin < 2 * chunkSize ||
+      !(bytes instanceof Uint8Array) || bytes.length < 16) return 0;
+  const eof = new TextDecoder("latin1").decode(bytes.subarray(-2048));
+  const match = /(?:^|[\r\n])[\t ]*startxref[\t\r\n ]+(\d{1,15})[\t\r\n ]+%%EOF[\t\r\n ]*$/.exec(eof);
+  if (!match) return 0;
+  const at = Number(match[1]);
+  const begin = tailBegin - chunkSize;
+  return at >= begin && at < tailBegin ? begin : 0;
+}
+
 /** @param {Uint8Array} bytes @param {number} total @param {number} chunkSize */
 export function firstPageSectionEnd(bytes, total, chunkSize) {
   // A bounded scheduling hint, not a PDF parser. Only a direct, internally

@@ -1,6 +1,6 @@
 import { createPdfRangeCache, sharedPdfRangeCache } from "./reader-pdf-range-cache.mjs";
 import { PDF_ADAPTIVE_CHUNK_BYTES, PDF_LARGE_FLAT_CHUNK_BYTES, PDF_DEFAULT_CHUNK_BYTES, firstPageSectionEnd,
-  firstPageTailHintStart, firstImageSectionEnd, choosePdfRangeChunkSize, isFirstPageCandidate }
+  firstPageTailHintStart, firstImageSectionEnd, choosePdfRangeChunkSize, isFirstPageCandidate, adjacentXrefChunkStart }
   from "./reader-pdf-range-hints.mjs";
 export { choosePdfRangeChunkSize, isFirstPageCandidate };
 
@@ -35,7 +35,8 @@ function abortable(promise, signal) {
  * @typedef {{begin: number, end: number}} Bounds
  * @typedef {{bytes: Uint8Array}} BytesResult
  * @typedef {ReturnType<typeof preparePdfRangeHint>} RangeHint
- * @typedef {{bytes: Uint8Array, total?: number, etag?: string | null, complete?: boolean, tail?: RangeHint | null, extendedTail?: RangeHint | null, openingRanges?: RangeHint[], rangeChunkSize?: number, cancelInitial?: (reason?: unknown) => void}} InitialRange
+ * @typedef {{begin: number, end: number, hint: RangeHint | null, demanded: boolean}} AdjacentTail
+ * @typedef {{bytes: Uint8Array, total?: number, etag?: string | null, complete?: boolean, tail?: RangeHint | null, extendedTail?: RangeHint | null, xrefTail?: AdjacentTail | null, openingRanges?: RangeHint[], rangeChunkSize?: number, cancelInitial?: (reason?: unknown) => void}} InitialRange
  * @typedef {import('../../../typings/reader-pdf-engine-strict').PdfDocument} PdfDocument
  * @typedef {{promise: Promise<PdfDocument>, destroy: () => Promise<void> | void}} PdfTask
  * @typedef {{abort: () => void, requestDataRange: (begin: number, end: number) => void, onDataRange: (begin: number, bytes: Uint8Array) => void}} PdfTransport
@@ -245,6 +246,18 @@ export async function preparePdfInitialRange(options, hooks) {
       ? Math.max(options.rangeChunkSize, /** @type {RangeHint} */ (currentTail).begin - options.rangeChunkSize)
       : extraLookahead ? firstPageTailHintStart(first.bytes, rangeFirst.total, options.rangeChunkSize) : 0;
     if (tailStart && currentTail) extendedTail = preparePdfRangeHint(options, tailStart, currentTail.begin, {...hooks, signal}, rangeFirst);
+    // A wide, classic xref (or a distant xref stream) can start one chunk
+    // before the normal trailer hint. Read at most that adjacent chunk, and
+    // only after the whole trailer range has passed its byte/ETag checks.
+    /** @type {AdjacentTail | null} */
+    const xrefTail = extraLookahead && currentTail && !extendedTail && rangeChunkSize === PDF_DEFAULT_CHUNK_BYTES &&
+      !/\/Linearized\b/.test(new TextDecoder("latin1").decode(first.bytes.subarray(0, 1024)))
+      ? {begin:currentTail.begin - rangeChunkSize, end:currentTail.begin, hint:null, demanded:false} : null;
+    if (xrefTail && currentTail) void currentTail.promise.then(result => {
+      if (!result || signal.aborted || xrefTail.demanded || !hooks.canPrefetchFirstPage?.()) return;
+      const begin = adjacentXrefChunkStart(result.bytes, xrefTail.end, rangeChunkSize);
+      if (begin) xrefTail.hint = preparePdfRangeHint(options, begin, xrefTail.end, {...hooks, signal}, rangeFirst);
+    }).catch(() => {});
     const end = pageOne
       ? firstPageSectionEnd(first.bytes, rangeFirst.total, options.rangeChunkSize) ||
         (extraLookahead ? firstImageSectionEnd(first.bytes, rangeFirst.total, options.rangeChunkSize) : 0) : 0;
@@ -252,7 +265,7 @@ export async function preparePdfInitialRange(options, hooks) {
       const last = Math.min(end, begin + options.rangeChunkSize * 2);
       openingRanges.push(preparePdfRangeHint(options, begin, last, {...hooks, signal}, rangeFirst));
     }
-    return {...first, tail, extendedTail, openingRanges, rangeChunkSize, cancelInitial:/** @param {unknown} [reason] */ reason => owner.abort(reason)};
+    return {...first, tail, extendedTail, xrefTail, openingRanges, rangeChunkSize, cancelInitial:/** @param {unknown} [reason] */ reason => owner.abort(reason)};
   } catch (error) {
     owner.abort(error);
     throw error;
@@ -468,7 +481,21 @@ export async function openPdfRangeTask(pdfjs, options, {signal, readBytes, limit
       })
       : extendedTail && begin >= extendedTail.begin && end <= extendedTail.end
       ? extendedTail.read(begin, end).then(result => result || demand(begin, end))
-      : demand(begin, end);
+      : readAdjacentXref(begin, end);
+    /** @param {number} begin @param {number} end */
+    const readAdjacentXref = (begin, end) => {
+      const adjacent = first.xrefTail;
+      if (adjacent && begin < adjacent.end && end > adjacent.begin) {
+        const hint = adjacent.hint;
+        if (hint && begin >= hint.begin && end <= hint.end) {
+          hint.onFailure(fail);
+          return hint.read(begin, end).then(result => result || demand(begin, end));
+        }
+        // Do not wait for the trailer, or fetch a second copy once PDF.js asks.
+        adjacent.demanded = true;
+      }
+      return demand(begin, end);
+    };
     /** @param {number} begin @param {number} end */
     const fetchRange = (begin, end) => {
       const parts = [];
