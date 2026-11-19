@@ -443,9 +443,11 @@ class ReaderReloadSearchDocumentCases:
         reader_url = self.open_and_reload()
         self.page.evaluate("window.__sameReader = true; location.hash = 'chapter-test'")
         self.page.go_back(wait_until='domcontentloaded')
+        content = self.page.locator('.reader-text')
+        expect(content).to_contain_text('Reader history forward content.')
+        self.assertTrue(content.is_visible())
         self.assertEqual(self.page.url, reader_url)
         self.assertTrue(self.page.evaluate('window.__sameReader'))
-        self.assertIn('Reader history forward content.', self.page.locator('.reader-text').inner_text())
 
 
 class ReaderReloadSearchDocumentChromium(ReaderReloadSearchDocumentCases, unittest.TestCase):
