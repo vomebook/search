@@ -27,7 +27,7 @@ function createFixture(source, root) {
       get scrollTop(){return scrollTop;},set scrollTop(value){scrollTop=value;}}}, navigator:{onLine:true}, AbortController, DOMException,
     searchPrefetchAbortController:null, searchPagePrefetch:undefined, searchRequestId:1,
     positionRestore:null, readerHost:{overlay:null}, resultSnapshots:{cloneTask:null},
-    window:{location:{hash:'#/'}}, appliedRouteHash:'#/',
+    window:{location:{pathname:'/search/',hash:'#/'}}, appliedSearchPath:'/search/', appliedRouteHash:'#/',
     APPEND_REQUEST_TIMEOUT:5000, RECENT_SEARCH_PAGE_TTL:604800000,
     searchPageMetadata:new WeakMap([[first,{generation:"stable",total:801}]]),
     recentSearchPages:new Map(), SEARCH_CACHE_TTL:60000,
@@ -107,7 +107,7 @@ function createFixture(source, root) {
   for (const file of ["domain/paging-policy.js", "application/paging-controller.js"]) {
     vm.runInContext(fs.readFileSync(path.join(root, "static/search/results", file), "utf8"), context);
   }
-  install(source,context,["getSearchPageMetadata","ownsDisplayedSearchResults","readPagingView"]);
+  install(source,context,["getSearchPageMetadata","ownsAppliedSearchRoute","ownsDisplayedSearchResults","readPagingView"]);
   context.pagingController = context.VoiceOfMLPagingController.create({
     policy: context.VoiceOfMLPagingPolicy,
     clock: {now:()=>clock, setTimeout:context.setTimeout, clearTimeout:context.clearTimeout},

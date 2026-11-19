@@ -88,7 +88,7 @@
       if (addHistory) navigation.remember(url, /** @type {object} */ (position.scroll));
     }
     function reconcileSearchDestination() {
-      if ((deps.hashRoute ? location.pathname !== "/search/" : location.pathname.split("/").filter(Boolean).length > 1) || history.state?.voiceReaderOverlay) return;
+      if ((deps.hashRoute ? !["/search/", "/search/index.html"].includes(location.pathname) : location.pathname.split("/").filter(Boolean).length > 1) || history.state?.voiceReaderOverlay) return;
       const previous = overlay, owner = revision;
       // Apply the destination before disposal can synchronously start new work.
       if (deps.routeChanged()) deps.applyRoute(deps.hashRoute || !!previous);
@@ -121,7 +121,7 @@
         let returnUrl = deps.hashRoute ? "/search/" : "/";
         try {
           const target = new URL(new URL(/** @type {HTMLIFrameElement} */ (overlay).src, location.origin).searchParams.get("return") || returnUrl, location.origin);
-          if (target.origin === location.origin && (!deps.hashRoute || target.pathname === "/search/")) returnUrl = target.href;
+          if (target.origin === location.origin && (!deps.hashRoute || ["/search/", "/search/index.html"].includes(target.pathname))) returnUrl = target.href;
           else if (deps.hashRoute) returnUrl = new URL("/search/", location.origin).href;
         } catch (_) {}
         if (!history.state?.voiceReaderOverlay) {
@@ -165,10 +165,14 @@
     /** @param {string} rawUrl @param {string} [returnUrl] */
     function navigateToReader(rawUrl, returnUrl) {
       let target;
-      try { target = navigation.parse(deps.syncFolder(rawUrl)); }
+      try { target = navigation.parse(rawUrl); }
       catch (_) { return false; }
+      const source = location.href;
+      deps.prepareSearch();
       deps.closeMobileSidebars();
-      const url = navigation.prepare(target.href, deps.normalizeReturn(returnUrl || location.href));
+      // A captured source URL (e.g. from random discovery) still refers to this entry.
+      const destination = returnUrl && returnUrl !== source ? returnUrl : location.href;
+      const url = navigation.prepare(deps.syncFolder(target.href), deps.normalizeReturn(destination));
       deps.openOverlay(url);
       return true;
     }

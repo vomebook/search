@@ -12,11 +12,13 @@ test('outline traversal preserves order, depth and navigation', async () => {
   };
   const window = createReaderPdfPageWindow(reader);
   const entries = await window.loadPdfOutline({
+    numPages: 8,
     getOutline: async () => [{ title: '章节 ☑', dest: 'chapter', items: [{ title: '', dest: null }] }],
     getDestination: async () => [{ id: 1 }],
     getPageIndex: async () => 2
   });
-  assert.deepEqual(entries.map(({ label, depth }) => [label, depth]), [['章节 · 第 3 页', 0], ['未命名章节', 1]]);
+  assert.deepEqual(entries.map(({ label, depth, page }) => [label, depth, page]),
+    [['章节 · 第 3 页', 0, 3], ['未命名章节', 1, null]]);
   assert.equal(entries[0].activate(7), true);
   assert.equal(entries[1].activate(7), false);
   assert.deepEqual(calls, [[3, 7]]);
@@ -33,10 +35,12 @@ test('DjVu numeric outline destinations are forwarded unchanged', async () => {
   const reader = {awaitReader: p => p, assertReaderActive() {}, goToPage: () => true,
     readerAbortController: new AbortController()};
   const entries = await createReaderPdfPageWindow(reader).loadPdfOutline({
+    numPages: 3,
     getOutline: async () => [{title: 'DjVu', dest: [3], items: []}],
     getPageIndex: async ref => { seen.push(ref); return ref - 1; }
-  });
+  }, true);
   assert.deepEqual(seen, [3]);
+  assert.equal(entries[0].page, 3);
   assert.equal(entries[0].label, 'DjVu · 第 3 页');
 });
 

@@ -279,6 +279,7 @@ const readerContext = {
   get pdfSearchTextCacheBytes() { return pdfSearchTextCacheBytes; }, set pdfSearchTextCacheBytes(value) { pdfSearchTextCacheBytes = value; },
   get pdfSelectionIntersects() { return pdfSelectionIntersects; }, set pdfSelectionIntersects(value) { pdfSelectionIntersects = value; },
   get pdfShellWindow() { return pdfShellWindow; }, set pdfShellWindow(value) { pdfShellWindow = value; },
+  get pdfShellLayoutReady() { return pdfShellLayoutReady; }, set pdfShellLayoutReady(value) { pdfShellLayoutReady = value; },
   get pdfShellsReady() { return pdfShellsReady; }, set pdfShellsReady(value) { pdfShellsReady = value; },
   get pdfSourceOffset() { return pdfSourceOffset; },
   get pdfTextContent() { return pdfTextContent; },
@@ -862,6 +863,8 @@ const PDF_BOOK_SEARCH_PREFETCH_MAX_BYTES = 8 * 1024 * 1024;
 const PDF_BOOK_SEARCH_PREFETCH_DELAY = 6000;
 readerBindings.ownPdfBookSearchClient();
 let pdfActiveRenders = 0;
+/** @type {Promise<boolean> | null} */
+let pdfShellLayoutReady = null;
 let pdfShellsReady = Promise.resolve();
 /** @type {import('../typings/reader-page-window-strict').PageWindowHandle | null} */
 let pdfShellWindow = null;

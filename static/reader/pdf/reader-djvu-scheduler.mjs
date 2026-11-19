@@ -96,7 +96,7 @@ export function createDjvuScheduler(decoder, { maxBytes = 64 * 1024 * 1024, maxP
   /** @template T @param {DjvuTask} task @param {() => Promise<T>} decode @param {(value: T) => void} finish */
   function run(task, decode, finish) {
     Promise.resolve().then(() => {
-      if (closed) throw abort();
+      if (closed || !task.clients.size) throw abort();
       return decode();
     }).then(value => {
       task.settled = true;
@@ -113,7 +113,6 @@ export function createDjvuScheduler(decoder, { maxBytes = 64 * 1024 * 1024, maxP
     if (!task) return;
     pending.delete(task.page); active = task;
     if (task.kind === 'page') run(task, () => {
-      if (!task.clients.size) throw abort();
       reserve(task); return decoder.page(task.page);
     }, value => finishPage(task, value));
     else if (task.kind === 'outline') run(task, () => decoder.outline(), value => resolveClients(task.clients, value));
@@ -130,11 +129,12 @@ export function createDjvuScheduler(decoder, { maxBytes = 64 * 1024 * 1024, maxP
     if (task.kind !== 'page') throw new Error('DJVU_SCHEDULER_PROTOCOL');
     return task;
   }
-  /** @param {PageTask} task @param {AbortSignal | undefined} signal @param {number} priority
-   * @param {number | undefined} bytes @param {string | undefined} geometryKey @returns {Promise<DjvuPage>} */
-  function pageClient(task, signal, priority, bytes, geometryKey) {
+  /** @template T @param {DjvuTaskBase & {page: number | string, clients: Set<DjvuClient<T>>}} task
+   * @param {AbortSignal | undefined} signal @param {number} priority
+   * @param {number} [bytes] @param {string} [geometryKey] @returns {Promise<T>} */
+  function priorityClient(task, signal, priority, bytes, geometryKey) {
     return new Promise((resolve, reject) => {
-      /** @type {DjvuClient<DjvuPage>} */
+      /** @type {DjvuClient<T>} */
       const client = { resolve, reject, signal, priority, bytes, geometryKey };
       client.cancel = () => {
         if (client.cancel) signal?.removeEventListener("abort", client.cancel);
@@ -177,7 +177,7 @@ export function createDjvuScheduler(decoder, { maxBytes = 64 * 1024 * 1024, maxP
     if (hit) return Promise.resolve(hit);
     const task = pageTask(page,priority);
     const {bytes, geometryKey} = estimateGeometry(options.geometry);
-    const promise = pageClient(task,signal,Number(priority),bytes,geometryKey);
+    const promise = priorityClient(task,signal,Number(priority),bytes,geometryKey);
     next(); return promise;
   }
   /** @template T @param {Set<DjvuClient<T>>} clients @returns {Promise<T>} */
@@ -197,8 +197,8 @@ export function createDjvuScheduler(decoder, { maxBytes = 64 * 1024 * 1024, maxP
     const promise = passiveClient(task.clients);
     next(); return promise;
   }
-  /** @param {number} number @param {number} priority @returns {Promise<DjvuGeometry>} */
-  function requestGeometry(number, priority) {
+  /** @param {number} number @param {number} priority @param {AbortSignal | undefined} signal @returns {Promise<DjvuGeometry>} */
+  function requestGeometry(number, priority, signal) {
     const key = `geometry:${number}`;
     let task = active?.page === key && !active.settled ? active : pending.get(key);
     if (!task) {
@@ -206,7 +206,7 @@ export function createDjvuScheduler(decoder, { maxBytes = 64 * 1024 * 1024, maxP
       pending.set(key,task);
     } else task.priority = Math.max(task.priority, Number(priority) || 0);
     if (task.kind !== 'geometry') throw new Error('DJVU_SCHEDULER_PROTOCOL');
-    const promise = passiveClient(task.clients);
+    const promise = priorityClient(task,signal,Number(priority));
     next(); return promise;
   }
   /** @param {number} number @param {number} priority @returns {Promise<DjvuText>} */
@@ -221,14 +221,21 @@ export function createDjvuScheduler(decoder, { maxBytes = 64 * 1024 * 1024, maxP
     const promise = passiveClient(task.clients);
     next(); return promise;
   }
-  /** @overload @param {'geometry'} operation @param {number} number @param {number} [priority] @returns {Promise<DjvuGeometry>} */
+  /** @typedef {{signal?: AbortSignal | undefined}} GeometryRequestOptions */
+  /** @overload @param {'geometry'} operation @param {number} number @param {number} [priority]
+   * @param {GeometryRequestOptions} [options] @returns {Promise<DjvuGeometry>} */
   /** @overload @param {'text'} operation @param {number} number @param {number} [priority] @returns {Promise<DjvuText>} */
-  /** @param {'geometry' | 'text'} operation @param {number} number @param {number} [priority] */
-  function requestMetadata(operation, number, priority = 0) {
-    if (closed) return Promise.reject(abort());
-    if (!['geometry','text'].includes(operation) || !Number.isSafeInteger(number) || number < 1)
-      return Promise.reject(new Error('DJVU_PAGE_INVALID'));
-    return operation === 'geometry' ? requestGeometry(number,priority) : requestText(number,priority);
+  /** @param {'geometry' | 'text'} operation @param {number} number @param {number} [priority]
+   * @param {GeometryRequestOptions} [options] */
+  function requestMetadata(operation, number, priority = 0, options = {}) {
+    const signal = options.signal;
+    if (closed || signal?.aborted) return Promise.reject(signal?.reason || abort());
+    if (!validMetadataRequest(operation, number)) return Promise.reject(new Error('DJVU_PAGE_INVALID'));
+    return operation === 'geometry' ? requestGeometry(number,priority,signal) : requestText(number,priority);
+  }
+  /** @param {string} operation @param {number} number */
+  function validMetadataRequest(operation, number) {
+    return ['geometry','text'].includes(operation) && Number.isSafeInteger(number) && number >= 1;
   }
   function cancelSpeculation() {
     for (const [page, task] of pending) if (task.kind === 'page' && task.priority < 2) {

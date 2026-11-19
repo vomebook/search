@@ -125,6 +125,30 @@ class TocNavigationTests(unittest.TestCase):
         self.page.wait_for_function("()=>document.documentElement.dataset.readerPhase==='ready'")
         self.assert_instrumented()
 
+    def test_pdf_outline_uses_destination_page_not_title(self):
+        self.expose()
+        engine = support.ENGINE.replace('getOutline:async()=>null', '''getOutline:async()=>[
+          {title:'封面',dest:[0,{name:'Fit'}]},
+          {title:'第 1 页的旁注',dest:'named'},
+          {title:'第 1 页（无目的地）',dest:null},
+          {title:'引用',dest:[{num:7,gen:0},{name:'Fit'}]},
+          {title:'第 1 页（无效页码）',dest:[12,{name:'Fit'}]},
+        ],getDestination:async()=>[5,{name:'Fit'}],
+        getPageIndex:async ref=>{if(ref?.num!==7) throw Error('Expected a page reference'); return 8;}''')
+        self.page.unroute('**/static/vendor/pdf.min.*.mjs')
+        self.page.route('**/static/vendor/pdf.min.*.mjs', lambda route: route.fulfill(
+            content_type='text/javascript', body=engine))
+        support.PdfFollowupTests.open(self)
+        self.page.wait_for_function('()=>__toc.nav().tocEntries.length===5')
+        self.assertEqual(self.page.evaluate('__toc.nav().tocEntries.map(entry=>entry.page)'), [1, 6, None, 9, None])
+        self.assertEqual(self.page.evaluate('__toc.nav().currentChapterIndex'), 0)
+        for index, target in ((1, 6), (3, 9), (0, 1)):
+            self.page.locator(f'#toc-list [data-toc-index="{index}"] [role="link"]').dispatch_event('click')
+            self.page.wait_for_function('p=>Number(document.querySelector("#page-number").value)===p', arg=target)
+            self.assertEqual(self.page.locator('#toc-list [aria-current="location"]').evaluate(
+                'link=>Number(link.parentElement.dataset.tocIndex)'), index)
+        self.assertFalse(self.page.evaluate('()=>__toc.nav().tocEntries[2].activate()'))
+
     def test_large_pdf_toc_page_lookup_preserves_unsorted_labels_and_resets(self):
         self.expose()
         self.page.route('**/api/reader-content**',lambda route:route.fulfill(content_type='text/plain',body='text'))
@@ -135,10 +159,14 @@ class TocNavigationTests(unittest.TestCase):
           const entries=Array.from({length:3000},(_,index)=>({label:index%19===0?'分组 '+index:
             '条目 '+index+' · 第 '+(index===19?'9'.repeat(400):index===29?'8'.repeat(400):((index*97)%1800))+' 页',
             group:index%31===0,activate:()=>true}));
+          entries.push({label:'第 1 页在标题内 · 第 1000 页',page:1000,activate:()=>true},
+            {label:'第 1 页无链接',page:null,activate:()=>false});
           __toc.set(entries);__toc.setPageCount(5000);
           const actual=__toc.nav().tocEntries;
           function reference(page){let result=-1;for(const [index,entry] of actual.entries()){
-            const match=entry.label.match(/第\s*(\d+)\s*页/u);if(match&&Number(match[1])<=page)result=index;
+            const match=entry.label.match(/第\s*(\d+)\s*页/u);
+            const target=entry.page!==undefined?entry.page:match?Number(match[1]):null;
+            if(target!==null&&target<=page)result=index;
           }return result}
           const pages=[1,2,10,99,500,999,1500,1799,1800,4999,Infinity],cases=[];
           for(const page of pages){const expected=reference(page);__toc.setPage(page);cases.push({page,expected,actual:__toc.nav().currentChapterIndex})}

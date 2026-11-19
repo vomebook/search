@@ -306,7 +306,7 @@ export function createReaderToc(readerContext) {
     pageLookup = [];
     readerContext.updateNavigationState({
       tocEntries: normalizedEntries,
-      currentChapterIndex: normalizedEntries.findIndex((entry) => !entry.group)
+      currentChapterIndex: normalizedEntries.findIndex((entry) => !entry.group && entry.page !== null)
     });
     const tocTab = /** @type {HTMLElement} */ (document.querySelector("#toc-tab"));
     tocTab.hidden = false;
@@ -369,13 +369,22 @@ export function createReaderToc(readerContext) {
     );
   }
 
+  /** @param {import('../../../typings/reader-toc-strict').TocEntry} entry */
+  function tocPage(entry) {
+    // Explicit null means there is no destination. Only legacy producers
+    // without page metadata use the label for page lookup.
+    if (entry.page !== undefined) return entry.page;
+    const match = entry.label.match(/第\s*(\d+)\s*页/u);
+    return match ? Number(match[1]) : null;
+  }
+
   // The legacy scan selects the *last directory entry* whose page is at or
   // before the current page, even when the outline itself is not page-sorted.
   /** @param {import('../../../typings/reader-toc-strict').TocEntry[]} entries */
   function indexTocPages(entries) {
     pageLookup = entries.flatMap((entry, index) => {
-      const match = entry.label.match(/第\s*(\d+)\s*页/u);
-      return match ? [{page:Number(match[1]),index}] : [];
+      const page = tocPage(entry);
+      return page === null ? [] : [{page,index}];
     }).sort((a, b) => (a.page < b.page ? -1 : a.page > b.page ? 1 : a.index - b.index));
     let last = -1;
     for (const row of pageLookup) { last = Math.max(last, row.index); row.index = last; }
@@ -420,8 +429,8 @@ export function createReaderToc(readerContext) {
         if (low) pageIndex = pageLookup[low - 1].index;
       } else {
         for (const [index, entry] of entries.entries()) {
-          const match = entry.label.match(/第\s*(\d+)\s*页/u);
-          if (match && Number(match[1]) <= readerContext.documentState.page) pageIndex = index;
+          const page = tocPage(entry);
+          if (page !== null && page <= readerContext.documentState.page) pageIndex = index;
         }
       }
       if (pageIndex >= 0) readerContext.updateNavigationState({ currentChapterIndex: pageIndex });

@@ -68,6 +68,51 @@ await assert.rejects(scheduler.request(1), { name: "AbortError" });
   assert.deepEqual(await geometry,{width:1});assert.deepEqual(await text,{text:'text'});
   assert.deepEqual(work,['page:1','geometry:2','text:2']);mixed.close();
 }
+{
+  // Geometry shares one worker command, but cancellation is per consumer.
+  const starts = [], gates = new Map();
+  let closes = 0;
+  const s = createDjvuScheduler({geometry: n => {
+    starts.push(n);
+    return new Promise(resolve => gates.set(n, resolve));
+  }, close() { closes++; }});
+  const request = (page, priority, signal) => s.requestMetadata('geometry', page, priority, {signal});
+  const beforeDispatch = new AbortController();
+  const undispatched = request(1, 3, beforeDispatch.signal);
+  beforeDispatch.abort();
+  await assert.rejects(undispatched, {name: 'AbortError'});
+  const reason = new Error('already cancelled');
+  await assert.rejects(request(1, 3, AbortSignal.abort(reason)), error => error === reason);
+  await tick();
+  assert.deepEqual(starts, [], 'geometry selected but not dispatched must be skipped');
+
+  const duringRead = new AbortController();
+  const running = request(2, 3, duringRead.signal);
+  await tick();
+  duringRead.abort();
+  await assert.rejects(running, {name: 'AbortError'});
+  const joined = request(2, 2);
+  const cancel = new AbortController();
+  const dropped = request(3, 3, cancel.signal), promoted = request(4, 3, cancel.signal);
+  const survivor = request(4, 0), destination = request(5, 3);
+  cancel.abort();
+  await Promise.all([assert.rejects(dropped, {name: 'AbortError'}), assert.rejects(promoted, {name: 'AbortError'})]);
+  assert.equal(s.stats().queued, 2, 'orphaned queued geometry is removed immediately');
+  assert.deepEqual(starts, [2], 'cancel does not run a second command while the first owns the worker');
+  assert.equal(closes, 0, 'cancel does not close the worker');
+  gates.get(2)({width: 2});
+  assert.deepEqual(await joined, {width: 2});
+  await tick();
+  assert.deepEqual(starts, [2, 5], 'destination outranks the surviving low-priority client');
+  gates.get(5)({width: 5});
+  await destination;
+  await tick();
+  assert.deepEqual(starts, [2, 5, 4]);
+  gates.get(4)({width: 4});
+  assert.deepEqual(await survivor, {width: 4});
+  s.close();
+  assert.equal(closes, 1);
+}
 // Typed scheduler contracts exercise real queue ownership: deduplicated
 // metadata/outline, priority, cancellation, failures and close settlement.
 {

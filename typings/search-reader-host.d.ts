@@ -32,7 +32,7 @@ interface ReaderHostDependencies {
   getViewKey(): string; captureScroll(): ReaderReturnPosition | null; restoreScroll(): void;
   saveSnapshot(key: string): ReaderHostSnapshot | null;
   snapshotChanged(snapshot: ReaderHostSnapshot, key: string): boolean; restoreSnapshot(key: string): void;
-  routeChanged(): boolean; applyRoute(preserve: boolean): void; closeMobileSidebars(): void;
+  routeChanged(): boolean; applyRoute(preserve: boolean): void; prepareSearch(): void; closeMobileSidebars(): void;
   applyTheme(theme: "dark" | "light"): void;
   navigate(url: string): void; handleMessage(event: ReaderHostMessage): void;
   syncFolder(url: string): string; normalizeReturn(url: string): string;

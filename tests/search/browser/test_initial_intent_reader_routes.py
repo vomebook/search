@@ -396,6 +396,88 @@ class InitialIntentReaderRouteTests(unittest.TestCase):
         self.assertTrue(self.page.evaluate('document.activeElement === DOM.searchInput'))
         self.assertLessEqual(abs(self.page.evaluate('getResultScrollTop() - beforeReader.top')), 1)
 
+    def test_reader_commits_pending_first_page_under_exact_search_entry(self):
+        # Reader may be dismissed while Back is delayed. The entry (not its
+        # visibility or its explicit return hint) still owns the response.
+        for path in ('/search/', '/search/index.html'):
+            with self.subTest(path=path):
+                self.page.evaluate('''path => {
+                  history.replaceState(null, '', path + '#/?q=paging&local=0'); ROUTER.apply();
+                }''', path)
+                self.page.wait_for_function('STATE._loadedPage === 1 && !STATE.isLoading')
+                self.page.evaluate('''() => {
+                  setResultScrollTop(900);
+                  const previous = window.fetch;
+                  window.fetch = (input, options) => {
+                    const body = JSON.parse(options?.body || '{}');
+                    if (!body.q?.startsWith('reader-owned-')) return previous(input, options);
+                    return new Promise(resolve => { window.releaseOwnedPage = () => resolve(new Response(JSON.stringify({
+                      page: 1, page_size: body.page_size, total: 100,
+                      results: Array.from({length:100}, (_, i) => ({Repo:'VoiceOfML/Test',
+                        File:body.q + '-' + i, Extension:'txt', Folder:[], Size:12}))
+                    }))); });
+                  };
+                  const query = 'reader-owned-' + (location.pathname.endsWith('.html') ? 'alias' : 'root');
+                  submitSearchQuery(query, {updateInput:true});
+                  window.ownedSearch = {query, url:location.href, request:searchRequestId};
+                  if (!navigateToReader(readerUrl, searchUrl('different-return'))) throw new Error('Reader rejected');
+                }''')
+                self.page.wait_for_function("readerHost.overlay?.contentDocument?.body?.textContent === 'controlled reader'")
+                self.page.evaluate('''() => {
+                  const back = history.back;
+                  history.back = () => {};
+                  try {
+                    handleReaderMessage({origin:location.origin, source:readerHost.overlay.contentWindow,
+                      data:{type:'voice-reader-close'}});
+                  } finally { history.back = back; }
+                  releaseOwnedPage();
+                }''')
+                self.page.wait_for_function("!STATE.isLoading && STATE.results[0]?.File === ownedSearch.query + '-0'")
+                self.assertTrue(self.page.evaluate('readerHost.closing && history.state.voiceReaderOverlay'))
+                self.page.evaluate('history.back()')
+                self.page.wait_for_function('!readerHost.overlay')
+                self.assertTrue(self.page.evaluate('''location.href === ownedSearch.url &&
+                  searchRequestId === ownedSearch.request && getResultScrollTop() === 0'''))
+                self.assertIn('reader-owned-', self.page.locator('#results-list').inner_text())
+
+    def test_reader_entry_cannot_grant_ownership_to_a_different_search(self):
+        self.page.evaluate('''() => {
+          const request = () => navigateToReader(readerUrl, searchUrl('paging'));
+          // Model the window before hashchange applies a new search route.
+          history.replaceState(null, '', searchUrl('unapplied'));
+          request();
+          const rows = STATE.results, total = STATE.total;
+          window.staleReaderPage = {
+            applied: applySearchPage({page:1, results:[], total:0}, false),
+            untouched: rows === STATE.results && total === STATE.total
+          };
+        }''')
+        self.assertEqual(self.page.evaluate('staleReaderPage'), dict(applied=False, untouched=True))
+
+    def test_fresh_repo_payload_resets_scroll_without_changing_previous_snapshot(self):
+        self.page.evaluate('''() => {
+          history.replaceState(null, '', '/search/#/Test?q=paging-repo&local=0'); ROUTER.apply();
+        }''')
+        self.page.wait_for_function("STATE.repo === 'Test' && STATE._loadedPage === 1 && !STATE.isLoading")
+        self.page.evaluate('''() => {
+          setResultScrollTop(900);
+          window.repoTop = getResultScrollTop();
+          const previous = fetchJsonWithTimeout;
+          fetchJsonWithTimeout = (url, ...args) => !String(url).includes('data/initial/') ? previous(url, ...args) :
+            Promise.resolve({repo:'VoiceOfML/Fresh', total:100, results:Array.from({length:100}, (_, i) => ({
+              Repo:'VoiceOfML/Fresh', File:'fresh-' + i, Extension:'txt', Folder:[], Size:12
+            }))});
+          ROUTER.navigate('repo', 'Fresh');
+        }''')
+        self.page.wait_for_function("STATE.repo === 'Fresh' && STATE.results[0]?.File === 'fresh-0'")
+        self.assertGreater(self.page.evaluate('repoTop'), 800)
+        self.assertEqual(self.page.evaluate('DOM.resultsContainer.scrollTop'), 0)
+        self.assertEqual(self.page.evaluate('getResultScrollTop()'), 0)
+        self.assertTrue(self.page.locator('.result-item[data-index="0"]').is_visible())
+        self.page.evaluate('history.back()')
+        self.page.wait_for_function("STATE.repo === 'Test' && STATE.results[0]?.File === 'paging-0'")
+        self.assertLessEqual(abs(self.page.evaluate('getResultScrollTop() - repoTop')), 1)
+
     def test_reader_timeout_reconciles_changed_return_destination(self):
         self.create_search_history()
         self.page.evaluate('''() => {

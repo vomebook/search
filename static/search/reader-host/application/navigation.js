@@ -247,12 +247,29 @@
       } catch (_) {}
       return url;
     }
-    /** @param {URL} url @param {object} returnScroll @param {boolean} [replace] */
-    function remember(url, returnScroll, replace = false) {
-      const pending = titleMount;
+    /** @param {URL} url */
+    function shareLocation(url) {
       const share = new URL(url.href);
       share.searchParams.delete("return");
       share.searchParams.delete("nav");
+      return share;
+    }
+    function searchLocation() {
+      // A Reader's return parameter is a navigation hint, not the prior history entry.
+      // Only substitute the prior URL while the matching Reader entry owns the tab.
+      const state = history.state;
+      if (!state?.voiceReaderOverlay || typeof state.searchUrl !== "string") return null;
+      try {
+        if (shareLocation(parse(state.readerUrl)).href !== location.href) return null;
+        const url = new URL(state.searchUrl);
+        return url.origin === location.origin ? url : null;
+      } catch (_) { return null; }
+    }
+    /** @param {URL} url @param {object} returnScroll @param {boolean} [replace] */
+    function remember(url, returnScroll, replace = false) {
+      const pending = titleMount;
+      const share = shareLocation(url);
+      const searchUrl = replace ? searchLocation()?.href : location.href;
       try {
         sessionStorage.setItem(
           sessionKey,
@@ -264,7 +281,7 @@
         );
       } catch (_) {}
       history[replace ? "replaceState" : "pushState"](
-        { voiceReaderOverlay: true, readerUrl: url.href },
+        { voiceReaderOverlay: true, readerUrl: url.href, searchUrl },
         "",
         share.href
       );
@@ -399,7 +416,8 @@
       try {
         const candidate = new URL(raw, location.origin);
         if (candidate.origin === location.origin && !candidate.username && !candidate.password &&
-            (searchPath === "/" ? candidate.pathname.split("/").filter(Boolean).length <= 1 : candidate.pathname === searchPath))
+            (searchPath === "/" ? candidate.pathname.split("/").filter(Boolean).length <= 1 :
+              candidate.pathname === searchPath || candidate.pathname === searchPath + "index.html"))
           target = candidate;
       } catch (_) {}
       if (!opening) {
@@ -551,6 +569,7 @@
       clear,
       prepare,
       remember,
+      searchLocation,
       mount,
       dismiss,
       showCloseRecovery,

@@ -1,5 +1,7 @@
 export interface TocEntry {
   label: string;
+  /** One-based destination; null means there is no destination. */
+  page?: number | null;
   href?: string;
   chapterIndex?: number;
   sectionIndex?: number;

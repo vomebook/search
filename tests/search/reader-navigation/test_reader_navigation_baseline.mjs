@@ -21,19 +21,21 @@ function fixture(readerDestination = readerPath, document = {readyState: 'loadin
     removeItem(key) { data.delete(key); }
   };
   const root = new EventTarget();
+  const location = new URL(origin + '/search/#/');
   const crypto = {randomUUID: () => 'fixed-token'};
   const history = {
-    pushState(...args) { calls.push(['push', ...args]); },
-    replaceState(...args) { calls.push(['replace', ...args]); }
+    state: null,
+    pushState(...args) { calls.push(['push', ...args]); history.state = args[0]; location.href = args[2]; },
+    replaceState(...args) { calls.push(['replace', ...args]); history.state = args[0]; location.href = args[2]; }
   };
   // Supply location and storage through the global as in browsers. Unrelated
   // DOM and asynchronous Reader services remain intentionally unstubbed.
   const context = vm.createContext({self: root, window: root, document, sessionStorage: storage,
-    localStorage: storage, location: new URL(origin + '/search/#/'), URL, URLSearchParams,
+    localStorage: storage, location, URL, URLSearchParams,
     crypto, history, console, HTMLElement: ShellElement, Event, CustomEvent,
     setInterval: () => 1, clearInterval() {}});
   vm.runInContext(source, context, {filename});
-  return {nav: root.VoiceOfMLReaderNavigation.createNavigation(readerDestination, options), data, storage, crypto, calls, context};
+  return {nav: root.VoiceOfMLReaderNavigation.createNavigation(readerDestination, options), data, storage, crypto, calls, context, location};
 }
 
 const json = value => JSON.parse(JSON.stringify(value));
@@ -324,7 +326,8 @@ test('close recovery validates both search routes without changing history or pr
     assert.equal(document.title, 'Search');
     const valid = destination === readerPath ? '/search/#/Repo?q=book' : '/Repo?q=book';
     for (const [raw, expected] of [
-      [valid, valid], ['https://other.example/', search], ['javascript:alert(1)', search],
+      [valid, valid], ...(destination === readerPath ? [['/search/index.html#/Repo', '/search/index.html#/Repo']] : []),
+      ['https://other.example/', search], ['javascript:alert(1)', search],
       ['/static/reader.html', search], ['/elsewhere/page', search], ['http://[', search],
       ['https://user:password@search.example' + search, search]
     ]) {
@@ -439,7 +442,8 @@ test('prepare tolerates unavailable storage or token generation without skipping
 });
 
 test('remember stores a private reader URL but exposes a sanitized history URL', () => {
-  const {nav, data, calls} = fixture();
+  const {nav, data, calls, location} = fixture();
+  const searchUrl = location.href;
   const url = new URL(origin + readerPath + '?url=book&return=%2Fsearch%2F&nav=secret&ext=txt');
   const scroll = {top: 125, key: 'entry'};
   nav.remember(url, scroll);
@@ -448,10 +452,13 @@ test('remember stores a private reader URL but exposes a sanitized history URL',
   assert.deepEqual(json(nav.saved()), {shareUrl: share, readerUrl: url.href, returnScroll: scroll});
   assert.equal(data.has('reader-navigation-current'), true);
   assert.deepEqual(json(calls), [
-    ['push', {voiceReaderOverlay: true, readerUrl: url.href}, '', share],
-    ['replace', {voiceReaderOverlay: true, readerUrl: url.href}, '', share]
+    ['push', {voiceReaderOverlay: true, readerUrl: url.href, searchUrl}, '', share],
+    ['replace', {voiceReaderOverlay: true, readerUrl: url.href, searchUrl}, '', share]
   ]);
   assert.equal(url.searchParams.get('nav'), 'secret');
+  assert.equal(nav.searchLocation()?.href, searchUrl);
+  location.hash = '#/unrelated';
+  assert.equal(nav.searchLocation(), null, 'unmatched visible URL does not confer ownership');
 });
 
 test('remember still updates history when storage fails and saved rejects malformed JSON', () => {

@@ -30,7 +30,7 @@
       return ownership.draftIsCurrent(state.owner, deps.getHref(), deps.getEntryKey());
     }
     function debounce() {
-      if (disposed || state.composing || !state.ready) return;
+      if (disposed || state.composing || !state.ready || !deps.canSubmit()) return;
       const token = cancelTimer();
       // Publication may synchronously cancel, replace or dispose this operation.
       if (disposed || token !== timerGeneration || state.composing || !state.ready) return;
@@ -40,7 +40,7 @@
         if (disposed || token !== timerGeneration) return;
         state.timer = null;
         publish();
-        if (disposed || token !== timerGeneration || state.composing ||
+        if (disposed || token !== timerGeneration || state.composing || !deps.canSubmit() ||
             !ownership.visitIsCurrent(owner, state.generation, null)) return;
         deps.submit(input.value.trim());
       }, 100);

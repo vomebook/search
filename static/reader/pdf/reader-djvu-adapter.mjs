@@ -150,34 +150,36 @@ export async function openDjvuDocument({ workerUrl, bytes, pageMap, signal, cach
     let closed=false;
     /** @type {Map<number, Awaited<ReturnType<typeof worker.geometry>>>} */
     const geometries=new Map();
-    /** @type {Map<number, Promise<Awaited<ReturnType<typeof worker.geometry>>>>} */
-    const geometryPending=new Map();
-    /** @param {number} number @returns {Promise<Awaited<ReturnType<typeof worker.geometry>>>} */
-    function getGeometry(number) {
+    /** @param {number} number @param {number} [priority] @param {AbortSignal} [signal] */
+    async function getGeometry(number, priority = 2, signal) {
       const cached=geometries.get(number);
       if (cached) {
-        geometries.delete(number);geometries.set(number,cached);return Promise.resolve(cached);
+        geometries.delete(number);geometries.set(number,cached);return cached;
       }
-      let pending=geometryPending.get(number);
-      if (!pending) {
-        pending=scheduler.requestMetadata('geometry',number,2).then(value=>{
-          geometries.set(number,value);
-          while(geometries.size>128) {
-            const oldest=geometries.keys().next().value;
-            if (oldest===undefined) break;
-            geometries.delete(oldest);
-          }
-          return value;
-        }).finally(()=>geometryPending.delete(number));
-        geometryPending.set(number,pending);
+      // Deduplicate the worker read in the scheduler, not the client promise:
+      // renders and independent page/text consumers have different lifetimes.
+      const value=await scheduler.requestMetadata('geometry',number,priority,{signal});
+      if (!closed) {
+        geometries.set(number,value);
+        while(geometries.size>128) {
+          const oldest=geometries.keys().next().value;
+          if (oldest===undefined) break;
+          geometries.delete(oldest);
+        }
       }
-      return pending;
+      return value;
     }
     /** @param {number} number */
-    async function getPage(number) {
+    function assertPage(number) {
       if (closed || !Number.isInteger(number) || number<1 || number>count) throw new Error('DJVU_PAGE_INVALID');
+    }
+    /** @param {number} number @param {number} [priority] @param {AbortSignal} [signal] */
+    async function loadPage(number, priority, signal) {
+      assertPage(number);
+      signal?.throwIfAborted();
       const map=pages[number-1];
-      const native = map ? null : await getGeometry(number);
+      const native = map ? null : await getGeometry(number,priority,signal);
+      signal?.throwIfAborted();
       if (closed) throw new DOMException('DjVu document closed','AbortError');
       const geometry = map ? map : native ? {width:native.width*72/native.dpi,height:native.height*72/native.dpi} : null;
       if (!geometry) throw new Error('DJVU_PAGE_GEOMETRY_INVALID');
@@ -225,7 +227,11 @@ export async function openDjvuDocument({ workerUrl, bytes, pageMap, signal, cach
       }
       return outlineTree(flat,count);
     }
-    return {numPages:count,getPage, getOutline, getPageIndex:async (/** @type {number} */ page)=>page-1,
+    return {numPages:count,
+      getPage: (/** @type {number} */ number) => loadPage(number),
+      getPageForRender: (/** @type {number} */ number, /** @type {number} */ priority, /** @type {AbortSignal} */ signal) =>
+        loadPage(number,priority,signal),
+      getOutline, getPageIndex:async (/** @type {number} */ page)=>page-1,
       outlineNeedsFullSource:worker.outlineNeedsFullSource,
       readerRenderScaleLimit: Infinity, readerMaxCanvasPixels: 16_000_000,
       destroy(){if(!closed){closed=true;geometries.clear();scheduler.close();}},

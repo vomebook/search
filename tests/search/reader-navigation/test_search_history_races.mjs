@@ -117,7 +117,7 @@ function inputFixture({submit = () => {}, schedule = () => {}, early} = {}) {
     clock: {setTimeout(fn, delay) { assert.equal(delay, 100); callbacks.set(++next, fn); schedule(); return next; },
       clearTimeout(id) { cancelled.push(id); }},
     getHref: () => c.href, getEntryKey: () => c.entry, getViewKey: () => c.key,
-    syncInput: () => c.syncs++, submit, onState: state => {
+    syncInput: () => c.syncs++, canSubmit: () => !c.readerOpen, submit, onState: state => {
       c.state = {...state};
       c.onState?.(state);
     }
@@ -465,6 +465,7 @@ test('app adapter publishes readable input state and delegates submit with histo
   const c = fixture(['setupSearchInput', 'initialSearchDraftIsCurrent', 'finishInitialSearchInput', 'cancelPendingSearchControls'], {
     VoiceOfMLSearchInput: modules.VoiceOfMLSearchInput, VoiceOfMLSearchInputOwnership: modules.VoiceOfMLSearchInputOwnership,
     DOM: {searchInput: input}, window: navigation, location: {href: 'https://example.test/A'},
+    readerHost: {overlay:null}, ownsAppliedSearchRoute: () => true,
     routeInitialized: true, getSearchViewKey: () => 'A', syncSearchInputState() {}, clearTimeout() {},
     filterSearchTimer: null, sizeFilterTimer: null,
     submitSearchQuery(query, options) { queries.push([query, {...options}]); }

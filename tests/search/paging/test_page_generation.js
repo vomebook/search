@@ -237,7 +237,8 @@ for (const {name: project, root} of searchTestProjects()) {
     const old = [{File: "A1"}], next = [{File: "A2"}];
     const state = {results: old, page: 2, _loadedPage: 1, _pageCache: {2: next}, total: 2, hasMore: true};
     let release, activeKey = "B", calls = 0;
-    const context = vm.createContext({STATE: state, window: {location: {hash: '#/B'}}, appliedRouteHash: '#/B',
+    const context = vm.createContext({STATE: state, window: {location: {pathname: '/search/', hash: '#/B'}},
+      appliedSearchPath: '/search/', appliedRouteHash: '#/B',
       displayedSearchView: {key: "A", results: old}, getSearchViewKey: () => activeKey,
       searchId: 1, searchRequestId: 1, searchIntentId: 1, positionEntryId: 1, positionRestore: null,
       saveSearchViewSnapshot() {}, cancelActiveSearch: () => true, cancelPositionRestore() {}, prepareReturnPosition() {},
@@ -247,7 +248,7 @@ for (const {name: project, root} of searchTestProjects()) {
       getResultScrollTop: () => 90, getVirtualTotalHeight: () => 100, DOM: {resultsContainer: {clientHeight: 10}},
       document: {hidden: false}, readerHost: {overlay: null}, VSCROLL: {isDraggingThumb: false},
       appendSearchResults() { calls++; return false; }});
-    for (const name of ['ownsDisplayedSearchResults', 'searchWithInitialFallback', 'consumeCachedAppendPage', 'readPagingView', 'doSearch'])
+    for (const name of ['ownsAppliedSearchRoute', 'ownsDisplayedSearchResults', 'searchWithInitialFallback', 'consumeCachedAppendPage', 'readPagingView', 'doSearch'])
       vm.runInContext(source.match(new RegExp('^(?:async )?function ' + name + '\\([^]*?^}', 'm'))[0], context);
     const restoring = context.searchWithInitialFallback();
     assert.equal(typeof release, 'function');
@@ -295,7 +296,7 @@ for (const {name: project, root} of searchTestProjects()) {
     const source = fs.readFileSync(path.join(root, "static/app.js"), "utf8");
     const records = [{File: 7, Extension: ["pdf"], Folder: [42]}, null];
     const state = {results: [], _pageCache: {}, total: 0};
-    const context = {STATE: state, window: {location: {hash: '#/'}}, appliedRouteHash: '#/', rememberSearchPageMetadata() {}};
+    const context = {STATE: state, ownsAppliedSearchRoute: () => true, rememberSearchPageMetadata() {}};
     vm.createContext(context);
     vm.runInContext(source.match(/^function applySearchPage\([^]*?^}/m)[0], context);
     context.page = {results: records, page: 1, total: 2};
@@ -311,7 +312,7 @@ for (const {name: project, root} of searchTestProjects()) {
       const old = [{File:"old"}], next = [{File:"new"}];
       const metadata = new WeakMap([[old[0],{generation:"A",total:2}], [next[0],{generation:"B",total:2}]]);
       const context = {STATE:{results:old,total:2,_loadedPage:1,_pageCache:{2:next},_resultBackend:"api"},
-        window:{location:{hash:'#/'}}, appliedRouteHash:'#/', ownsDisplayedSearchResults:()=>true,
+        ownsAppliedSearchRoute:()=>true, ownsDisplayedSearchResults:()=>true,
         VSCROLL:{isDraggingThumb:true}, searchPageMetadata:metadata,
         resultSnapshots:{remove(){}}, getSearchViewKey:()=>"query", captureReaderReturnScroll:()=>({index:0,offset:12}),
         getResultStableId:r=>r.File, getReturnPositionTarget:()=>null, setReturnPositionTarget(){},

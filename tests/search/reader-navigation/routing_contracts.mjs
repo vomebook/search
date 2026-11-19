@@ -23,7 +23,7 @@ function fixture(route = '', overrides = {}) {
   const history = {state:{entry:7},replaceState(data,unused,url){events.push(['replace',data,url]);location.href=new URL(url,location).href;},
     pushState(data,unused,url){events.push(['push',data,url]);location.href=new URL(url,location).href;}};
   const c = vm.createContext({URLSearchParams,window:{location},location,history,STATE:state,DOM:dom,readerHost:{overlay:null},
-    routeInitialized:false,appliedRouteHash:location.hash,appliedSearchRoute:location.pathname+location.search,routeNavigation:undefined,
+    routeInitialized:false,appliedRouteHash:location.hash,appliedSearchPath:location.pathname,appliedSearchRoute:location.pathname+location.search,routeNavigation:undefined,
     searchComposing:false,initialSearchDraft:false,routeRenderId:2,searchId:10,folderContentsCache:{clear(){}},sidebarFolderTree:undefined,API:{},
     fmtSizeUrl:value=>value===1024?'1KB':String(value),parseSizeStr:value=>value==='1KB'?1024:Number(value),bytesToDisplay:value=>({value:String(value),unit:'B'}),
     mergeFolderFilters:(a,b)=>[...new Set([...a,...b])],showToast:text=>events.push(['toast',text]),

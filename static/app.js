@@ -236,7 +236,9 @@ const readerHost = VoiceOfMLReaderHost.create({
   buildParams: () => buildSearchURLParams({ includeQuery: false, displaySizes: true }),
   readQuery: () => DOM.searchInput ? DOM.searchInput.value : STATE.query,
   currentParams: () => currentReaderSearchParams(),
-  getViewKey: () => getSearchViewKey(), captureScroll: () => captureReaderReturnScroll(),
+  getViewKey: () => getSearchViewKey(),
+  // A pending first page may still be showing the previous query's rows.
+  captureScroll: () => STATE._loadedPage && ownsDisplayedSearchResults() ? captureReaderReturnScroll() : null,
   restoreScroll: () => restoreReaderReturnScroll(), saveSnapshot: key => saveSearchViewSnapshot(key),
   snapshotChanged: (snapshot, key) => {
     const source = resultSnapshots.source(snapshot), current = displayedSearchView;
@@ -245,8 +247,9 @@ const readerHost = VoiceOfMLReaderHost.create({
       (STATE.results.length !== snapshot.results.length || STATE._loadedPage !== snapshot.loadedPage);
   },
   restoreSnapshot: key => restoreSearchViewSnapshot(key, false),
-  routeChanged: () => location.hash !== appliedRouteHash,
+  routeChanged: () => location.pathname !== appliedSearchPath || location.hash !== appliedRouteHash,
   applyRoute: preserve => ROUTER.apply(preserve),
+  prepareSearch: () => prepareReaderSearch(),
   closeMobileSidebars: () => {
     if (STATE.isMobile && (STATE.leftSidebarOpen || STATE.rightSidebarOpen)) {
       STATE.leftSidebarOpen = false;
@@ -860,10 +863,12 @@ function noteSearchApiFailure(error) {
 
 /** @param {PagesSearchParams} params @param {boolean | undefined} append @param {number} requestId */
 async function doSearchAPI(params, append, requestId) {
-  if (requestId !== searchRequestId) return false;
+  const key = getSearchViewKey();
+  const current = () => requestId === searchRequestId && !params.signal?.aborted &&
+    ownsAppliedSearchRoute() && key === getSearchViewKey();
+  if (!current()) return false;
   if (append && STATE._pageCache[params.page]) {
-    applySearchPage({ page: params.page, results: STATE._pageCache[params.page], total: STATE.total }, true);
-    return true;
+    return applySearchPage({ page: params.page, results: STATE._pageCache[params.page], total: STATE.total }, true);
   }
   const base = getSearchApiBase();
   const body = buildSearchApiBody(params);
@@ -872,15 +877,16 @@ async function doSearchAPI(params, append, requestId) {
   if (!data) {
     try {
       data = await fetchSearchPage(cacheKey, base, body, params.signal, append ? APPEND_REQUEST_TIMEOUT : 10000);
-      if (requestId !== searchRequestId || (params.signal && params.signal.aborted)) return false;
+      if (!current()) return false;
       noteApiSuccess();
       setCachedSearchResponse(cacheKey, data, append);
     } catch (error) {
-      if (requestId === searchRequestId && !(params.signal && params.signal.aborted)) noteSearchApiFailure(error);
+      if (!current()) return false;
+      noteSearchApiFailure(error);
       throw error;
     }
   }
-  if (requestId !== searchRequestId) return false;
+  if (!current()) return false;
   return applySearchPage(data, append);
 }
 
@@ -932,7 +938,7 @@ function checkSearchPageAppend(data) {
 
 /** @param {{results: unknown[], total: number, page: number, page_size?: number, generation?: string}} data @param {boolean | undefined} append */
 function applySearchPage(data, append) {
-  if (window.location.hash !== appliedRouteHash) return false;
+  if (!ownsAppliedSearchRoute()) return false;
   if (append && (!ownsDisplayedSearchResults() || !checkSearchPageAppend(data))) return false;
   rememberSearchPageMetadata(data);
   STATE.total = data.total;
@@ -1372,6 +1378,7 @@ let routeInitialized = false;
 // Keep track of the last hash reflected in STATE, including normal state-driven
 // replaceState updates, so a pending hashchange is not mistaken for that state.
 let appliedRouteHash = window.location.hash;
+let appliedSearchPath = window.location.pathname;
 
 function updateSidebarExpandButton() {
   if (!DOM.sidebarExpandBtn || !DOM.leftSidebar) return;
@@ -1414,6 +1421,7 @@ const ROUTER = {
   navigate: (mode, repo, folder) => getRouteNavigation().navigate(mode, repo, folder),
   apply: function(preserveSameView = false) {
     appliedRouteHash = window.location.hash;
+    appliedSearchPath = window.location.pathname;
     const route = this.parse();
     const prevMode = STATE.mode;
     const prevRepo = STATE.repo;
@@ -2655,6 +2663,7 @@ function commitInitialSearchPage(data) {
 }
 
 function renderInitialSearchPage() {
+  DOM.resultsContainer.scrollTop = 0;
   resetVirtualScrollState();
   clearResultsSkeleton();
   if (STATE.results.length === 0) {
@@ -2820,6 +2829,18 @@ function submitSearchQuery(query, { restore = false, record = false, refreshHist
   return result;
 }
 
+function prepareReaderSearch() {
+  if (readerHost.overlay || !ownsAppliedSearchRoute()) return;
+  if (searchTimer !== null && !searchComposing) {
+    searchInputController?.cancelTimer();
+    submitSearchQuery(DOM.searchInput.value.trim(), { record: true, refreshHistory: true });
+  }
+  if (sizeFilterTimer !== null || filterSearchTimer !== null) {
+    doFilterSearch();
+    syncStateToURL();
+  }
+}
+
 function initialSearchDraftIsCurrent() {
   return searchInputController?.draftIsCurrent() ?? false;
 }
@@ -2837,6 +2858,7 @@ function setupSearchInput() {
     getEntryKey: () => /** @type {Window & {navigation?: {currentEntry?: {key?: string} | null}}} */ (window).navigation?.currentEntry?.key,
     getViewKey: () => routeInitialized ? getSearchViewKey() : null,
     syncInput: syncSearchInputState,
+    canSubmit: () => !readerHost.overlay && ownsAppliedSearchRoute(),
     submit: query => { submitSearchQuery(query, { record: true, refreshHistory: true }); },
     onState: state => {
       searchTimer = state.timer;
@@ -2905,8 +2927,16 @@ function buildLocalSearchParams(page) {
   };
 }
 
+function ownsAppliedSearchRoute() {
+  // Reader owns the visible URL, but only its actual search entry may own this request.
+  const current = window.location;
+  if (current.pathname === appliedSearchPath && current.hash === appliedRouteHash) return true;
+  const underlying = readerHost.overlay && readerHost.navigation.searchLocation();
+  return !!underlying && underlying.pathname === appliedSearchPath && underlying.hash === appliedRouteHash;
+}
+
 function ownsDisplayedSearchResults() {
-  return window.location.hash === appliedRouteHash &&
+  return ownsAppliedSearchRoute() &&
     displayedSearchView?.key === getSearchViewKey() && displayedSearchView.results === STATE.results;
 }
 

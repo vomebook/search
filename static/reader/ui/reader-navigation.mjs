@@ -110,6 +110,9 @@ export function createReaderNavigation(readerContext) {
       if (!readerContext.documentState.pageCount || !readerContext.isReaderGenerationCurrent("navigation", generation))
         return false;
       const page = VoiceOfMLReader.clampNumber(value, 1, readerContext.documentState.pageCount, 1);
+      if (readerContext.pdfShellLayoutReady &&
+          (!(await readerContext.pdfShellLayoutReady) || !readerContext.isReaderGenerationCurrent("navigation", generation)))
+        return false;
       readerContext.pdfShellWindow?.ensure(page);
       const findShell = () => /** @type {HTMLElement | null} */ (readerContext.content.querySelector(
         `.reader-page[data-page="${page}"]`

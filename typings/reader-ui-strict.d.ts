@@ -22,6 +22,7 @@ export interface NavigationContext {
   isReaderGenerationCurrent(kind: string, generation: number): boolean;
   pdfShellWindow: { ensure(page: number): void; schedule(): void } | null;
   content: HTMLElement;
+  pdfShellLayoutReady: Promise<boolean> | null;
   pdfShellsReady: Promise<unknown>;
   capability: { mode?: string | null };
   prioritizePdfManifestPrefetch(url: string | undefined): void;

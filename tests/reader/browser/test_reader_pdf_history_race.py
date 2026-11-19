@@ -10,6 +10,88 @@ class PdfHistoryRaceTests(unittest.TestCase):
     setUpClass = classmethod(support.PdfFirstPageTests.setUpClass.__func__)
     open = support.PdfFirstPageTests.open
 
+    def hold_first_draw(self, page, initial_page):
+        def hold(route):
+            response = route.fetch()
+            script = response.text()
+            anchor = 'await readerContext.measurePdf(readerContext.awaitReader(rendering.promise, renderController.signal), "draw", Number(shell.dataset.page));'
+            self.assertEqual(script.count(anchor), 1)
+            route.fulfill(response=response, body=script.replace(anchor, '''
+              if (Number(shell.dataset.page) === INITIAL_PAGE && !window.__firstDrawHeld) {
+                window.__firstDrawHeld = true;
+                await readerContext.awaitReader(new Promise(() => {}), renderController.signal);
+              }
+            '''.replace('INITIAL_PAGE', str(initial_page)) + anchor))
+        page.route('**/static/reader/pdf/reader-pdf-renderer.mjs*', hold)
+
+    def test_windowed_pdf_startup_yields_to_manual_navigation(self):
+        for hold_at in ('draw', 'geometry', 'dispose'):
+            with self.subTest(hold_at=hold_at), support.range_source(support.sparse_pdf(count=300, stride=4096)) as (source, state, lock):
+                state['block'].set()
+                with self.browser.new_context(service_workers='block') as context:
+                    page = context.new_page()
+                    errors = []
+                    page.on('pageerror', lambda error: errors.append(str(error)))
+                    page.route('**/static/reader/core/reader-store.js*', lambda route: route.fulfill(
+                        content_type='text/javascript', body='''window.VoiceOfMLReaderStore={
+                          get:async()=>({page:190,pageCount:300,pageOffset:28,zoom:100}),
+                          put:async(entry)=>{(window.__savedPages ||= []).push(entry.page);},
+                          list:async()=>[],listBookmarks:async()=>[],listAllBookmarks:async()=>[]};'''))
+
+                    def hold_geometry(route):
+                        response = route.fetch()
+                        script = response.text()
+                        anchor = 'const firstPage = await readerContext.measurePdf(readerContext.awaitReader(pdf.getPage(initialPage)), "page", initialPage);'
+                        self.assertEqual(script.count(anchor), 1)
+                        route.fulfill(response=response, body=script.replace(anchor, '''
+                          const firstPage = await readerContext.measurePdf(readerContext.awaitReader(
+                            pdf.getPage(initialPage).then(async result => {
+                              await new Promise(resolve => {window.__releaseGeometry = resolve;});
+                              return result;
+                            })), "page", initialPage);
+                        '''))
+
+                    if hold_at == 'draw':
+                        self.hold_first_draw(page, 190)
+                    else:
+                        page.route('**/static/reader/pdf/reader-pdf-page-window.mjs*', hold_geometry)
+                    self.open(page, source)
+                    page.wait_for_function('()=>window.__firstDrawHeld || !!window.__releaseGeometry', timeout=10000)
+                    self.assertEqual(page.locator('#page-number').get_attribute('max'), '300')
+                    self.assertEqual(page.locator('.reader-pdf-opening').count(), 0)
+                    self.assertFalse(page.evaluate('!!window.__savedPages'))
+                    if hold_at == 'draw':
+                        self.assertEqual(page.locator('.reader-pdf-chunk').count(), 10)
+                        self.assertEqual(page.locator('.reader-page[data-page="190"] canvas.ready').count(), 0)
+                    else:
+                        self.assertEqual(page.locator('.reader-page').count(), 0)
+                    # Both numbers are entered while startup is held. Only the latest
+                    # intent may land, and it must not be replaced by saved history.
+                    for target in (65, 12):
+                        page.locator('#page-number').fill(str(target))
+                        page.locator('#page-number').dispatch_event('change')
+                    if hold_at == 'dispose':
+                        page.evaluate('dispatchEvent(new Event("voice-reader-dispose")); window.__releaseGeometry()')
+                        page.wait_for_function("()=>document.documentElement.dataset.readerPhase==='disposed'")
+                        page.evaluate('()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))')
+                        self.assertEqual(page.locator('.reader-page').count(), 0)
+                        self.assertFalse(page.evaluate('!!window.__savedPages'))
+                    else:
+                        if hold_at == 'geometry':
+                            page.evaluate('window.__releaseGeometry()')
+                        target = page.locator('.reader-page[data-page="12"]')
+                        target.locator('canvas.ready').wait_for(timeout=10000)
+                        page.wait_for_function("()=>document.documentElement.dataset.readerPhase==='ready'")
+                        self.assertEqual(page.locator('#page-number').input_value(), '12')
+                        self.assertEqual(page.locator('.reader-page[data-page="190"]').count(), 0)
+                        offset = target.evaluate('node=>node.getBoundingClientRect().top-document.querySelector("#viewport").getBoundingClientRect().top')
+                        self.assertAlmostEqual(offset, 0, delta=3)
+                        page.wait_for_function('()=>window.__savedPages?.length > 0')
+                        self.assertEqual(page.evaluate('[...new Set(window.__savedPages)]'), [12])
+                    with lock:
+                        self.assertTrue(state['requests'])
+                    self.assertEqual(errors, [])
+
     def test_ordinary_pdf_first_canvas_does_not_wait_for_other_shell_batches(self):
         for saved_page, preempt in [(1, False), (1, True), (48, False)]:
             with self.subTest(saved_page=saved_page, preempt=preempt), support.range_source(support.sparse_pdf(count=48, stride=32768)) as (source, state, _lock):
@@ -18,18 +100,7 @@ class PdfHistoryRaceTests(unittest.TestCase):
                 try:
                     page = context.new_page()
                     if preempt:
-                        def hold_first_draw(route):
-                            response = route.fetch()
-                            script = response.text()
-                            anchor = 'await readerContext.measurePdf(readerContext.awaitReader(rendering.promise, renderController.signal), "draw", Number(shell.dataset.page));'
-                            self.assertEqual(script.count(anchor), 1)
-                            route.fulfill(response=response, body=script.replace(anchor, '''
-                              if (shell.dataset.page === "1" && !window.__firstDrawHeld) {
-                                window.__firstDrawHeld = true;
-                                await readerContext.awaitReader(new Promise(() => {}), renderController.signal);
-                              }
-                            '''+anchor))
-                        page.route('**/static/reader/pdf/reader-pdf-renderer.mjs*', hold_first_draw)
+                        self.hold_first_draw(page, 1)
                     store = ('window.VoiceOfMLReaderStore={get:async()=>%s,put:async()=>{window.__progressWritten=true;},'
                              'list:async()=>[],listBookmarks:async()=>[],listAllBookmarks:async()=>[]};' % (
                                  'null' if saved_page == 1 else '({page:48,pageCount:48,zoom:100})'))

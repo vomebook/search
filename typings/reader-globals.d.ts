@@ -184,7 +184,7 @@ interface VoiceOfMLInputDependencies {
   input: VoiceOfMLInputElement; navigation: EventTarget; ownership: typeof VoiceOfMLSearchInputOwnership;
   clock: {setTimeout(callback: () => void, delay: number): number; clearTimeout(timer: number): void};
   getHref(): string; getEntryKey(): string | undefined; getViewKey(): string | null;
-  syncInput(): void; submit(query: string): void; onState(state: Readonly<VoiceOfMLInputState>): void;
+  syncInput(): void; canSubmit(): boolean; submit(query: string): void; onState(state: Readonly<VoiceOfMLInputState>): void;
 }
 interface VoiceOfMLInputController {
   mount(): void; dispose(): void; debounce(): void; cancelTimer(): void; invalidateVisit(): void;
@@ -497,6 +497,7 @@ interface SearchReaderNavigationApi {
     clear(url: URL): void;
     prepare(raw: string, returnUrl: string): URL;
     remember(url: URL, returnScroll: object, replace?: boolean): void;
+    searchLocation(): URL | null;
     mount(url: URL, deferTitle?: boolean): HTMLIFrameElement | null;
     unmount(keepSpeech?: boolean): HTMLElement | null;
     dismiss(): void;

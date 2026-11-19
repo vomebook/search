@@ -17,6 +17,7 @@ export interface PdfOutlineItem {
   items?: PdfOutlineItem[];
 }
 export interface PdfOutlineDocument {
+  numPages: number;
   getOutline?: () => Promise<PdfOutlineItem[] | null>;
   getDestination?: (name: string) => Promise<readonly unknown[] | null>;
   getPageIndex(ref: object): Promise<number>;
@@ -27,6 +28,7 @@ export interface DjvuOutlineDocument extends Omit<PdfOutlineDocument, 'getPageIn
 export interface PdfOutlineEntry {
   label: string;
   depth: number;
+  page?: number | null;
   activate(generation: number): Promise<boolean> | boolean;
 }
 export interface PdfPreviewViewport { width: number; height: number }
@@ -36,7 +38,6 @@ export interface PdfPreviewPage {
   render(options: {canvasContext: CanvasRenderingContext2D | null; viewport: PdfPreviewViewport; transform: number[] | null; readerPriority?: number}): {promise: Promise<unknown>; cancel?: () => void};
 }
 export interface PdfPreviewDocument extends PdfOutlineDocument {
-  numPages: number;
   isPureXfa?: boolean;
   sourceSha256?: string;
   outlineNeedsFullSource?: boolean;
@@ -105,6 +106,7 @@ export interface PageWindowContext {
   pdfV3Repository: PageWindowRepository | null;
   pdfOcrManifest: unknown; pdfOcrManifestPromise: Promise<unknown> | null; ocrManifestUrl: string;
   pdfDocument: PdfPreviewDocument | DirectDjvuDocument | null; pdfManifestShells: (WindowShell | undefined)[];
+  pdfShellLayoutReady: Promise<boolean> | null;
   pdfShellWindow: PageWindowHandle | null; pdfShellsReady: Promise<void>; pdfUserHasScrolled: boolean; pageNavigationLockUntil: number;
   getInitialReaderRestoration(): Promise<unknown>; initialReaderPage(total: number): number;
   pdfManifestSource(): PageWindowSource | null; preloadPdfFirstPage(total: number): Promise<void>;

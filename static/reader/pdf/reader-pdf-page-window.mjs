@@ -49,7 +49,7 @@ export function createReaderPdfPageWindow(readerContext) {
   let pdfPagesBook = { seedRatio: 0 };
 
   /** @param {import('../../../typings/reader-page-window-strict').PdfOutlineDocument | import('../../../typings/reader-page-window-strict').DjvuOutlineDocument} pdf */
-  async function loadPdfOutline(pdf) {
+  async function loadPdfOutline(pdf, isDjvu = false) {
     if (typeof pdf?.getOutline !== "function") return;
     try {
       const outline = await readerContext.awaitReader(pdf.getOutline());
@@ -64,23 +64,28 @@ export function createReaderPdfPageWindow(readerContext) {
       const append = async (items, depth = 0) => {
         for (const item of items || []) {
           readerContext.assertReaderActive();
-          let destination = item.dest,
-            page = 0;
-          if (typeof destination === "string") destination = await /** @type {(name: string) => Promise<readonly unknown[] | null>} */ (pdf.getDestination)(destination);
-          if (destination && destination[0]) {
-            try {
-              // Preserve the original call for malformed destinations as well:
-              // each adapter receives the unmodified destination and may reject it.
-              const ref = destination[0];
-              page = (await (typeof ref === "number"
-                ? /** @type {import('../../../typings/reader-page-window-strict').DjvuOutlineDocument} */ (pdf).getPageIndex(ref)
-                : /** @type {import('../../../typings/reader-page-window-strict').PdfOutlineDocument} */ (pdf).getPageIndex(/** @type {object} */ (ref)))) + 1;
-            } catch (_) {}
-          }
+          /** @type {number | null} */
+          let page = null;
+          try {
+            const destination = typeof item.dest === "string" ? await pdf.getDestination?.(item.dest) : item.dest;
+            const ref = destination?.[0];
+            let index = -1;
+            if (typeof ref === "number" && Number.isInteger(ref)) {
+              // PDF.js numeric destinations are already zero-based indices.
+              // DjVu uses one-based page numbers and normalizes via its adapter.
+              index = isDjvu
+                ? await /** @type {import('../../../typings/reader-page-window-strict').DjvuOutlineDocument} */ (pdf).getPageIndex(ref)
+                : ref;
+            } else if (!isDjvu && ref && typeof ref === "object") {
+              index = await /** @type {import('../../../typings/reader-page-window-strict').PdfOutlineDocument} */ (pdf).getPageIndex(ref);
+            }
+            if (Number.isSafeInteger(index) && index >= 0 && index < pdf.numPages) page = index + 1;
+          } catch (_) { /* A broken destination does not discard the remaining outline. */ }
           entries.push({
-            label: page ? `${cleanLabel(item.title)} · 第 ${page} 页` : cleanLabel(item.title),
+            label: page === null ? cleanLabel(item.title) : `${cleanLabel(item.title)} · 第 ${page} 页`,
             depth,
-            activate: (generation) => (page ? readerContext.goToPage(page, generation) : false)
+            page,
+            activate: (generation) => page === null ? false : readerContext.goToPage(page, generation)
           });
           await append(item.items, depth + 1);
         }
@@ -495,6 +500,7 @@ export function createReaderPdfPageWindow(readerContext) {
         manifest.toc.map((item) => ({
           label: `${item.title} · 第 ${item.page} 页`,
           depth: item.depth,
+          page: item.page,
           activate: (generation) => readerContext.goToPage(item.page, generation)
         }))
       );
@@ -634,13 +640,15 @@ export function createReaderPdfPageWindow(readerContext) {
     })));
   }
 
-  /** @param {import('../../../typings/reader-page-window-strict').PdfPreviewDocument | import('../../../typings/reader-page-window-strict').DirectDjvuDocument | Promise<import('../../../typings/reader-page-window-strict').PdfPreviewDocument | import('../../../typings/reader-page-window-strict').DirectDjvuDocument>} prepared */
+  /** @typedef {import('../../../typings/reader-page-window-strict').PdfPreviewDocument | import('../../../typings/reader-page-window-strict').DirectDjvuDocument} VerifiedPdf */
+  /** @typedef {{page: number, top: number | null}} PreviewAnchor */
+  /** @param {VerifiedPdf | Promise<VerifiedPdf>} prepared */
   async function renderPdf(prepared) {
     const pdf = await prepared;
     readerContext.assertReaderActive();
     /** @type {import('../../../typings/reader-page-window-strict').WindowShell | null} */
     let previewShell = null;
-    /** @type {{page: number, top: number | null} | null} */
+    /** @type {PreviewAnchor | null} */
     let previewAnchor = null;
     /** @type {HTMLDivElement | null} */
     let previewPadding = null;
@@ -1111,6 +1119,36 @@ export function createReaderPdfPageWindow(readerContext) {
       }
       if (previewAnchor && !previewPages.has(previewAnchor.page) && !previewNavigationChanged) previewAnchor = null;
     }
+    // Publish a pending layout before the verified count enables page jumps.
+    // Navigation can wait for shell lookup without waiting for a canvas draw.
+    const layout = Promise.withResolvers();
+    readerContext.pdfShellLayoutReady = layout.promise;
+    try {
+      await renderVerifiedPdf(pdf, previewShell, previewAnchor, previewPages, previewPadding, () => {
+        readerContext.pdfShellLayoutReady = null;
+        layout.resolve(true);
+      });
+    } catch (error) {
+      readerContext.assertReaderActive();
+      // A live opening failure must not be mistaken for reader disposal.
+      if (/** @type {{name?: string} | null} */ (error)?.name === "AbortError")
+        throw new Error("PDF 页面加载中断，请重试。", { cause: error });
+      throw error;
+    } finally {
+      readerContext.pdfShellLayoutReady = null;
+      layout.resolve(false);
+    }
+  }
+
+  /** @param {VerifiedPdf} pdf
+   * @param {import('../../../typings/reader-page-window-strict').WindowShell | null} previewShell
+   * @param {PreviewAnchor | null} previewAnchor
+   * @param {Map<number, import('../../../typings/reader-page-window-strict').WindowShell>} previewPages
+   * @param {HTMLDivElement | null} previewPadding
+   * @param {() => void} publishLayout */
+  async function renderVerifiedPdf(pdf, previewShell, previewAnchor, previewPages, previewPadding, publishLayout) {
+    const openingNavigation = readerContext.readerRuntime.currentGeneration("navigation");
+    const ownsOpeningPosition = () => readerContext.isReaderGenerationCurrent("navigation", openingNavigation);
     readerContext.pdfDocument = pdf;
     readerContext.updateDocumentState({ pageCount: pdf.numPages });
     if (pdf.sourceSha256 && readerContext.ocrManifestUrl) {
@@ -1132,7 +1170,6 @@ export function createReaderPdfPageWindow(readerContext) {
     readerContext.status.textContent = `${pdf.numPages} 页`;
     await readerContext.getInitialReaderRestoration();
     const initialPage = previewAnchor?.page || readerContext.initialReaderPage(pdf.numPages);
-    const openingNavigation = readerContext.readerRuntime.currentGeneration("navigation");
     let initialRenderGate = true;
     const firstPage = await readerContext.measurePdf(readerContext.awaitReader(pdf.getPage(initialPage)), "page", initialPage);
     readerContext.assertReaderActive();
@@ -1238,18 +1275,19 @@ export function createReaderPdfPageWindow(readerContext) {
       ? Promise.resolve() : readerContext.appendShellsBatched(createShell, pdf.numPages, 24, mounted
         ? endPage => { if (endPage >= initialPage) mounted.resolve(undefined); } : undefined);
     shellsReady.catch(() => {});
+    publishLayout();
     let releaseObservers = !drawWhileBatching;
     try {
-      const targetShell = readerContext.pdfShellWindow
-        ? readerContext.pdfShellWindow.ensure(initialPage)
-        : drawWhileBatching && initialPage === 1
-          ? firstShell
+      const targetShell = !ownsOpeningPosition() || (drawWhileBatching && initialPage === 1)
+        ? firstShell
+        : readerContext.pdfShellWindow
+          ? readerContext.pdfShellWindow.ensure(initialPage)
           : (await (mounted ? Promise.race([mounted.promise, shellsReady]) : shellsReady),
             readerContext.content.querySelector(`.reader-page[data-page="${initialPage}"]`));
       readerContext.assertReaderActive();
       if (!targetShell) throw new Error("PDF initial page shell missing");
-      (/** @type {HTMLDivElement | null} */ (previewPadding))?.remove();
-      if (previewAnchor) {
+      previewPadding?.remove();
+      if (previewAnchor && ownsOpeningPosition()) {
         const anchor = readerContext.content.querySelector(`.reader-page[data-page="${previewAnchor.page}"]`);
         if (anchor) {
           readerContext.viewport.scrollTop += anchor.getBoundingClientRect().top - /** @type {number} */ (previewAnchor.top);
@@ -1261,21 +1299,21 @@ export function createReaderPdfPageWindow(readerContext) {
         }
       }
       readerContext.markReaderContentReady();
-      const ownsOpeningPosition = () => !drawWhileBatching ||
-        readerContext.isReaderGenerationCurrent("navigation", openingNavigation);
       const shouldDraw = ownsOpeningPosition();
       if (!previewShell && shouldDraw) readerContext.viewport.scrollTop = readerContext.readerPageScrollTop(targetShell);
       try {
         if (shouldDraw) await readerContext.renderPdfShell(targetShell, false, true);
       } catch (error) {
-        // A newer visible demand can cancel this now-offscreen canvas without
-        // closing the document. Do not swallow an actual render failure.
-        const cancelled = /** @type {import('../../../typings/reader-page-window-strict').WindowShell} */ (targetShell)._pdfRenderCancelled;
-        if (!drawWhileBatching || readerContext.readerAbortController.signal.aborted || !cancelled ||
-            !(error instanceof Error && error.name === "AbortError")) throw error;
+        // New visible demand can preempt the first draw, and a virtual-window
+        // jump can evict its shell entirely. Neither is a document failure.
+        const shell = /** @type {import('../../../typings/reader-page-window-strict').WindowShell} */ (targetShell);
+        const cancelled = shell._pdfRenderCancelled || !shell.isConnected;
+        if (readerContext.readerAbortController.signal.aborted || !cancelled ||
+            /** @type {{name?: string} | null} */ (error)?.name !== "AbortError") throw error;
       }
       readerContext.markReaderContentReady();
-      if (!previewShell && !drawWhileBatching) readerContext.viewport.scrollTop = readerContext.readerPageScrollTop(targetShell);
+      if (!previewShell && !drawWhileBatching && targetShell.isConnected && ownsOpeningPosition())
+        readerContext.viewport.scrollTop = readerContext.readerPageScrollTop(targetShell);
       await shellsReady;
       readerContext.assertReaderActive();
       // A short last mounted slice can clamp the initial scroll. Correct it
@@ -1286,6 +1324,7 @@ export function createReaderPdfPageWindow(readerContext) {
     } finally {
       if (releaseObservers && !readerContext.readerAbortController.signal.aborted) releaseInitialRenderGate();
     }
+    const isDjvu = readerContext.extension === "djvu" || readerContext.pdfV3Manifest?.primary.kind === "djvu";
     if (pdf.outlineNeedsFullSource) {
       // An ambiguous range index may hide document-level NAVM after page
       // components. Keep first paint fast; fetch the whole original only when
@@ -1296,7 +1335,7 @@ export function createReaderPdfPageWindow(readerContext) {
         if (requested) return false;
         requested=true;
         try {
-          const entries=await loadPdfOutline(pdf);
+          const entries=await loadPdfOutline(pdf, isDjvu);
           if (!readerContext.isReaderGenerationCurrent("navigation",generation)) return false;
           readerContext.setToc(entries || [outlineEntry("原件目录加载失败，点击重试")]);
         } finally { requested=false; }
@@ -1304,7 +1343,7 @@ export function createReaderPdfPageWindow(readerContext) {
       }});
       readerContext.setToc([outlineEntry("加载原件目录")]);
     } else {
-      const outlineReady = loadPdfOutline(pdf).then((entries) => {
+      const outlineReady = loadPdfOutline(pdf, isDjvu).then((entries) => {
         if (entries?.length) readerContext.setToc(entries);
       });
       outlineReady.catch(() => {});

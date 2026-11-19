@@ -39,7 +39,12 @@ export interface PdfRendererContext {
   downloadUrl: string;
   documentState: { page: number; zoom: number; restorationReady: boolean };
   pdfScrollDirection: number;
-  pdfDocument: { getPage(page: number): Promise<PdfPage>; readerRenderScaleLimit?: number; readerMaxCanvasPixels?: number } | null;
+  pdfDocument: {
+    getPage(page: number): Promise<PdfPage>;
+    getPageForRender?(page: number, priority: number, signal: AbortSignal): Promise<PdfPage>;
+    readerRenderScaleLimit?: number;
+    readerMaxCanvasPixels?: number;
+  } | null;
   readerRuntime: { currentGeneration(kind: string): number };
   ocrManifestUrl: string;
   imageLoader: { load(image: HTMLImageElement, url: string, signal: AbortSignal): Promise<unknown> };

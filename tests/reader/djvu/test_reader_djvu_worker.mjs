@@ -1,12 +1,14 @@
 import assert from 'node:assert/strict';
 import {createDjvuWorkerAdapter} from '../../../static/reader/pdf/reader-djvu-worker.mjs';
 import {openDjvuDocument} from '../../../static/reader/pdf/reader-djvu-adapter.mjs';
+import {createReaderLifecycle} from '../../../static/reader/core/reader-lifecycle.mjs';
+import {createReaderPdfRenderer} from '../../../static/reader/pdf/reader-pdf-renderer.mjs';
 
 globalThis.ImageData = class ImageData {
   constructor(data,width,height) { this.data=data; this.width=width; this.height=height; }
 };
 function fakeEngine({count=2, width=10, height=20, dpi=300, rotation=0, hang=false,
-  entries=[], badData=false, openError=null, outlineError=null} = {}) {
+  entries=[], badData=false, openError=null, outlineError=null, defer} = {}) {
   let instance;
   const createWorker = () => instance = {
     terminated:false, sends:[],
@@ -22,7 +24,8 @@ function fakeEngine({count=2, width=10, height=20, dpi=300, rotation=0, hang=fal
             {t:'Hello',x:0,y:0,w:5,h:5},{t:'world',x:5,y:0,w:5,h:5}]}
         : {id:message.id,ok:true,width,height,dpi,rotation,
            pixels:new ArrayBuffer(badData ? 1 : width*height*4)};
-      queueMicrotask(()=>this.onmessage({data:result}));
+      const reply=()=>queueMicrotask(()=>this.onmessage({data:result}));
+      if (!defer?.(message,reply)) reply();
     },
     terminate() { this.terminated=true; }
   };
@@ -468,5 +471,71 @@ for(const type of ['error','messageerror','cancel']) {
     assert.equal(drawn,1);assert.equal(bitmap.width,0);assert.equal(bitmap.height,0);pdf.destroy();
   } finally {if(previous===undefined)delete globalThis.OffscreenCanvas;else globalThis.OffscreenCanvas=previous;
     if(oldDocument===undefined)delete globalThis.document;else globalThis.document=oldDocument;}
+}
+{
+  // Drive the actual renderer, native document adapter and scheduler. Hold the
+  // first worker reply so all stale/demand geometry is queued before dispatch.
+  const tick=()=>new Promise(resolve=>setImmediate(resolve));
+  let release;
+  const fake=fakeEngine({count:5,defer(message,reply){
+    if (message.operation !== 'geometry' || message.page !== 1) return false;
+    release=reply;
+    return true;
+  }});
+  const pdf=await openDjvuDocument({workerUrl:'/worker',createWorker:fake.createWorker,bytes:bytes()});
+  const geometryReads=()=>fake.instance.sends.filter(({message})=>message.operation==='geometry')
+    .map(({message})=>message.page);
+  const draws=[];
+  const readerAbortController=new AbortController();
+  const reader={pdfDocument:pdf,readerAbortController,readerResources:new Set(),
+    readerRuntime:{currentGeneration:()=>0,isCurrent:()=>true,state:{lifecycle:{disposed:false}}},
+    acquirePdfRenderSlot:async()=>{},releasePdfRenderSlot(){},measurePdf:promise=>promise,
+    pdfPagePriority:shell=>shell.priority,renderPdfText:async()=>{},trimPdfSurfaces(){},trimPdfCanvases(){}};
+  Object.assign(reader,createReaderLifecycle(reader),createReaderPdfRenderer(reader));
+  const render=(page,priority)=>{
+    const canvas={style:{},classList:new Set()};
+    canvas.classList.remove=canvas.classList.delete;
+    canvas.getContext=()=>({canvas,clearRect(){},drawImage(){draws.push(page);}});
+    const shell={dataset:{page:String(page)},style:{},clientWidth:20,priority,
+      querySelector:selector=>selector==='canvas' ? canvas : null};
+    const promise=reader.renderPdfShell(shell,false,priority);
+    promise.catch(()=>{});
+    return {shell,promise};
+  };
+  const {window:oldWindow,matchMedia:oldMatchMedia,OffscreenCanvas:oldCanvas}=globalThis;
+  globalThis.window={devicePixelRatio:1};
+  globalThis.matchMedia=()=>({matches:false});
+  globalThis.OffscreenCanvas=class {getContext(){return {putImageData(){}}}};
+  try {
+    const blocker=pdf.getPage(1);
+    blocker.catch(()=>{});
+    await tick();
+    assert.deepEqual(geometryReads(),[1]);
+    const stale=render(2,3),shared=render(3,3),speculative=render(4,1);
+    await tick();
+    const independent=pdf.getPage(3).then(page=>page.getTextContent());
+    independent.catch(()=>{});
+    assert.equal(pdf.scheduler.stats().queued,3);
+    stale.shell._renderCancel();shared.shell._renderCancel();
+    await Promise.all([assert.rejects(stale.promise,{name:'AbortError'}),assert.rejects(shared.promise,{name:'AbortError'})]);
+    assert.equal(pdf.scheduler.stats().queued,2,'aborting the only render consumer must remove its queued read');
+    const destination=render(5,3);
+    await tick();
+    assert.deepEqual(geometryReads(),[1],'a render abort must not interrupt the active worker command');
+    assert.equal(fake.instance.terminated,false);
+    release();
+    await Promise.all([blocker,speculative.promise,destination.promise]);
+    assert.equal((await independent).readerTextZones.length,2);
+    assert.deepEqual(geometryReads(),[1,5,3,4],
+      'destination geometry comes first; independent text survives, stale geometry never runs');
+    assert.deepEqual(draws,[5,4]);
+    assert.equal(destination.shell.dataset.renderState,'rendered');
+    assert.equal(stale.shell.dataset.renderState,'idle');
+  } finally {
+    pdf.destroy();
+    if (oldWindow===undefined) delete globalThis.window; else globalThis.window=oldWindow;
+    if (oldMatchMedia===undefined) delete globalThis.matchMedia; else globalThis.matchMedia=oldMatchMedia;
+    if (oldCanvas===undefined) delete globalThis.OffscreenCanvas; else globalThis.OffscreenCanvas=oldCanvas;
+  }
 }
 console.log('DjVu Worker bounds, errors, timeout, cancellation and geometry checks passed');

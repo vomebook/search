@@ -16,7 +16,7 @@ function fixture() {
     filterMinSize:null,filterMaxSize:null,mode:'repo',repo:'A /中',repoFull:'VoiceOfML/A /中',pageSize:50,results:[]};
   const location = {hash:'#/A'};
   let text = null;
-  const c = vm.createContext({STATE:state,DOM:{sortSelect:{value:'relevance'},resultsLoading:{style:{}},
+  const c = vm.createContext({STATE:state,DOM:{sortSelect:{value:'relevance'},resultsLoading:{style:{}},resultsContainer:{scrollTop:900},
     resultsList:{innerHTML:'old',classList:{remove:x=>events.push(['remove',x])}},emptyState:{style:{}}},
     window:{location},appliedRouteHash:location.hash,readerHost:{overlay:null},INITIAL_BASE_URL:'/initial',
     embeddedInitialPayload:null, embeddedInitialAcquiredAt:Date.now(), SEARCH_CACHE_TTL:480000,

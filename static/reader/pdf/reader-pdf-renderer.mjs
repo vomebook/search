@@ -361,8 +361,14 @@ export function createReaderPdfRenderer(readerContext) {
         do {
           delete shell.dataset.pendingRerender;
           const generation = readerContext.readerRuntime.currentGeneration("pdf"),
-            pageNumber = Number(shell.dataset.page),
-            page = await readerContext.measurePdf(readerContext.awaitReader(pdf.getPage(pageNumber), renderController.signal), "page", pageNumber);
+            pageNumber = Number(shell.dataset.page);
+          // PDF.js has no cancelable getPage. Native DjVu geometry is queued
+          // on the same worker as decoding, so cancel the request, not just the wait.
+          const pageRequest = pdf.getPageForRender
+            ? pdf.getPageForRender(pageNumber, Math.max(Number(priority), readerContext.pdfPagePriority(shell)),
+              AbortSignal.any([renderController.signal, readerContext.readerAbortController.signal]))
+            : pdf.getPage(pageNumber);
+          const page = await readerContext.measurePdf(readerContext.awaitReader(pageRequest, renderController.signal), "page", pageNumber);
           readerContext.assertReaderActive();
           if (renderController.signal.aborted) throw readerContext.readerAbortError();
           const base = page.getViewport({ scale: 1 }),
