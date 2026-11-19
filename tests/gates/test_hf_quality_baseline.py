@@ -139,7 +139,7 @@ class ReaderWorkflowParallelTests(unittest.TestCase):
         for job, browsers in ((github, 'chromium firefox'), (firefox, 'firefox')):
             for command in ('python-version: "3.15.2"', 'playwright==1.65.2', 'pypdf==7.1.1',
                             'npm ci --ignore-scripts --no-audit --no-fund', 'install -y qpdf',
-                            f'playwright install-deps {browsers}', f'playwright install {browsers}',
+                            f'install_playwright_system_deps.sh {browsers}', f'playwright install {browsers}',
                             'fetch_foliate_reader.mjs', 'copy_reader_vendor.mjs'):
                 self.assertIn(command, job)
             for cache in ('~/.cache/pip', '~/.npm', '~/.cache/ms-playwright',
@@ -150,7 +150,7 @@ class ReaderWorkflowParallelTests(unittest.TestCase):
         for command in ('python -m pip install -r requirements.txt -r config/dependencies/static-check.txt '
                         'playwright==1.65.2 Pillow==13.0.0 httpx==0.28.1',
                         'npm ci --ignore-scripts --no-audit --no-fund',
-                        'playwright install-deps chromium firefox', 'playwright install chromium firefox',
+                        'install_playwright_system_deps.sh chromium firefox', 'playwright install chromium firefox',
                         'fetch_foliate_reader.mjs', 'copy_reader_vendor.mjs',
                         "hashFiles('huggingface-search/requirements.txt', 'huggingface-search/config/dependencies/static-check.txt')",
                         "hashFiles('huggingface-search/package-lock.json')", '${{ steps.distro.outputs.version }}-1.65.2'):
@@ -158,7 +158,7 @@ class ReaderWorkflowParallelTests(unittest.TestCase):
         for job in (github, firefox, hf):
             self.assertIn('runs-on: ubuntu-24.04', job)
             mirror = 'python3 -B scripts/ci/ci_ubuntu_mirror.py'
-            self.assertLess(job.index(mirror), job.index('playwright install-deps'))
+            self.assertLess(job.index(mirror), job.index('install_playwright_system_deps.sh'))
             scope = "        if: ${{ matrix.shard != 'static' }}\n" if job != firefox else ''
             self.assertIn('name: Install Playwright system dependencies\n' + scope + '        timeout-minutes: 15', job)
         for job, project, following in ((github, 'github', 'python -B -m unittest -v tests.seo.test_seo_catalog'),

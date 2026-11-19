@@ -1,10 +1,43 @@
 """Regression and adversarial tests for the real Reader matrix gate."""
 import copy
 import json
+import os
+import subprocess
+import tempfile
 import unittest
 from pathlib import Path
 
 from scripts.ci import reader_matrix_contract as gate
+
+
+class PlaywrightDependencyRetryTests(unittest.TestCase):
+    def test_bounded_attempts_and_status(self):
+        # Stub the timeout boundary, preserving the real wrapper's argv and exits.
+        for statuses, wanted in (((0, 99), 0), ((100, 0), 0), ((124, 100), 100)):
+            with self.subTest(statuses=statuses), tempfile.TemporaryDirectory() as tmp:
+                path = Path(tmp)
+                timeout = path / 'timeout'
+                timeout.write_text('''#!/bin/bash
+printf '%s\\n' "$*" >> "$CALLS"
+if [[ $(wc -l < "$CALLS") == 1 ]]; then exit "$FIRST"; fi
+exit "$SECOND"
+''')
+                sleep = path / 'sleep'
+                sleep.write_text('#!/bin/bash\n[[ "$*" == 5 ]]\n')
+                for command in (timeout, sleep):
+                    command.chmod(0o755)
+                calls = path / 'calls'
+                env = {**os.environ, 'PATH': f'{path}:{os.defpath}', 'CALLS': str(calls),
+                       'FIRST': str(statuses[0]), 'SECOND': str(statuses[1])}
+                command = gate.ROOT / 'scripts/ci/install_playwright_system_deps.sh'
+                result = subprocess.run(['bash', str(command), 'chromium', 'firefox'],
+                                        env=env, capture_output=True, text=True, timeout=10, check=False)
+                count = 2 if statuses[0] else 1
+                self.assertEqual(result.returncode, wanted)
+                self.assertEqual(calls.read_text().splitlines(), [
+                    '--kill-after=15s 390s python -m playwright install-deps chromium firefox',
+                ] * count)
+                self.assertEqual(result.stdout.count('retrying once'), count - 1)
 
 
 class ReaderMatrixContractTests(unittest.TestCase):
@@ -25,9 +58,19 @@ class ReaderMatrixContractTests(unittest.TestCase):
         self.assertNotIn(True, self.workflow)
         self.assertEqual(len(self.contract['matrix_jobs']['github-search']['steps']), 47)
 
+    def test_playwright_setup_cannot_drop_browsers_or_mask_failure(self):
+        for job in (*gate.JOBS, 'firefox-staged-pdf'):
+            for mask_failure in (False, True):
+                with self.subTest(job=job, mask_failure=mask_failure):
+                    self.workflow = gate.parse(self.text)
+                    step = next(s for s in self.workflow['jobs'][job]['steps']
+                                if s.get('name') == 'Install Playwright system dependencies')
+                    step['run'] = step['run'] + ' || true' if mask_failure else step['run'].rsplit(' ', 1)[0]
+                    with self.assertRaisesRegex(gate.ContractError, 'setup changed|job changed'):
+                        self.check()
+
     def test_against_git_baseline_when_available(self):
         import hashlib
-        import subprocess
         root = str(gate.ROOT)
         proc = subprocess.run(['git', '-c', f'safe.directory={root}', '-C', root, 'show', f'{gate.ORIGINAL_COMMIT}:.github/workflows/reader-refactor.yml'], capture_output=True, check=False)
         if proc.returncode:

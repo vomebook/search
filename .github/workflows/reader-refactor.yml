@@ -79,7 +79,7 @@ jobs:
       - name: Install Playwright system dependencies
         if: ${{ matrix.shard != 'static' }}
         timeout-minutes: 15
-        run: python -m playwright install-deps chromium firefox
+        run: bash scripts/ci/install_playwright_system_deps.sh chromium firefox
       - name: Install Playwright browsers
         if: ${{ matrix.shard != 'static' }}
         timeout-minutes: 10
@@ -424,7 +424,7 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y qpdf
       - name: Install Playwright system dependencies
         timeout-minutes: 15
-        run: python -m playwright install-deps firefox
+        run: bash scripts/ci/install_playwright_system_deps.sh firefox
       - name: Install Playwright browsers
         timeout-minutes: 10
         run: python -m playwright install firefox
@@ -590,7 +590,7 @@ jobs:
         if: ${{ matrix.shard != 'static' }}
         timeout-minutes: 15
         working-directory: huggingface-search
-        run: python -m playwright install-deps chromium firefox
+        run: bash ../scripts/ci/install_playwright_system_deps.sh chromium firefox
       - name: Install Playwright browsers
         if: ${{ matrix.shard != 'static' }}
         timeout-minutes: 10

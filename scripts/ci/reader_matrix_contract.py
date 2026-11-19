@@ -177,6 +177,17 @@ def backend_selection(run):
     return names, run[:match.start(1)] + run[match.end(1):]
 
 
+def playwright_install_step(setup, *, hf=False):
+    """Allow only the bounded retry wrapper around the original browser list."""
+    if setup.get('name') != 'Install Playwright system dependencies':
+        return setup
+    browsers = 'chromium firefox' if setup['run'].endswith(' chromium firefox') else 'firefox'
+    require(setup['run'] == f'python -m playwright install-deps {browsers}',
+            'unexpected baseline Playwright system dependency command')
+    prefix = '../' if hf else ''
+    return {**setup, 'run': f'bash {prefix}scripts/ci/install_playwright_system_deps.sh {browsers}'}
+
+
 def execution_policy(job, records, historical_steps):
     """Apply reviewed CI optimizations without rewriting the historical evidence."""
     original = {step['name']: step for step in historical_steps if 'name' in step}
@@ -193,7 +204,8 @@ def execution_policy(job, records, historical_steps):
     browser_setup = {'Cache Playwright browsers', 'Install Playwright system dependencies', 'Install Playwright browsers'}
     for record in records:
         if 'setup' in record:
-            setup = record['setup']
+            setup = playwright_install_step(record['setup'], hf=job == 'huggingface-search')
+            record = {**record, 'setup': setup}
             name = setup.get('name')
             condition = None
             if name in browser_setup:
@@ -307,6 +319,8 @@ def validate(workflow, contract, original_bytes=None):
     # Fixed jobs include the summary and capture jobs in full. In particular,
     # summary's exact reviewed command enforces all four success results.
     for name, expected in contract['fixed_jobs'].items():
+        if name == 'firefox-staged-pdf':
+            expected = {**expected, 'steps': [playwright_install_step(step) for step in expected['steps']]}
         require(name in jobs and jobs[name] == expected, f'{name}: job changed')
     require(set(contract['fixed_jobs']) == set(jobs) - set(JOBS), 'incomplete fixed jobs contract')
     manifest = summary_manifest(jobs['summary'])
