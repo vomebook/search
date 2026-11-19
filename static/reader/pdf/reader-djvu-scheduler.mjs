@@ -209,8 +209,8 @@ export function createDjvuScheduler(decoder, { maxBytes = 64 * 1024 * 1024, maxP
     const promise = priorityClient(task,signal,Number(priority));
     next(); return promise;
   }
-  /** @param {number} number @param {number} priority @returns {Promise<DjvuText>} */
-  function requestText(number, priority) {
+  /** @param {number} number @param {number} priority @param {AbortSignal | undefined} signal @returns {Promise<DjvuText>} */
+  function requestText(number, priority, signal) {
     const key = `text:${number}`;
     let task = active?.page === key && !active.settled ? active : pending.get(key);
     if (!task) {
@@ -218,20 +218,20 @@ export function createDjvuScheduler(decoder, { maxBytes = 64 * 1024 * 1024, maxP
       pending.set(key,task);
     } else task.priority = Math.max(task.priority, Number(priority) || 0);
     if (task.kind !== 'text') throw new Error('DJVU_SCHEDULER_PROTOCOL');
-    const promise = passiveClient(task.clients);
+    const promise = priorityClient(task,signal,Number(priority));
     next(); return promise;
   }
   /** @typedef {{signal?: AbortSignal | undefined}} GeometryRequestOptions */
   /** @overload @param {'geometry'} operation @param {number} number @param {number} [priority]
    * @param {GeometryRequestOptions} [options] @returns {Promise<DjvuGeometry>} */
-  /** @overload @param {'text'} operation @param {number} number @param {number} [priority] @returns {Promise<DjvuText>} */
+  /** @overload @param {'text'} operation @param {number} number @param {number} [priority] @param {GeometryRequestOptions} [options] @returns {Promise<DjvuText>} */
   /** @param {'geometry' | 'text'} operation @param {number} number @param {number} [priority]
    * @param {GeometryRequestOptions} [options] */
   function requestMetadata(operation, number, priority = 0, options = {}) {
     const signal = options.signal;
     if (closed || signal?.aborted) return Promise.reject(signal?.reason || abort());
     if (!validMetadataRequest(operation, number)) return Promise.reject(new Error('DJVU_PAGE_INVALID'));
-    return operation === 'geometry' ? requestGeometry(number,priority,signal) : requestText(number,priority);
+    return operation === 'geometry' ? requestGeometry(number,priority,signal) : requestText(number,priority,signal);
   }
   /** @param {string} operation @param {number} number */
   function validMetadataRequest(operation, number) {

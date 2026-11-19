@@ -7,7 +7,7 @@ interface SearchExecutionView {
 }
 interface SearchExecutionPatch {
   page?: number; _pendingPage?: number; _resultBackend?: "api" | "local";
-  dataLoaded?: boolean; isLoading?: boolean; resultsSkeletonActive?: boolean;
+  dataLoaded?: boolean; isLoading?: boolean; resultsSkeletonActive?: boolean; hasMore?: boolean;
 }
 interface SearchExecutionParams {
   [key: string]: unknown;

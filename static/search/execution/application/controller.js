@@ -110,10 +110,6 @@
       }).catch(err => {
         if (!current(id, intent)) return;
         pagingError = err.name === "AbortError" ? null : err;
-        if (err.message === "API_TIMEOUT") {
-          console.warn("API timeout");
-          return apiFailure(append, id, intent);
-        }
         if (err.name === "AbortError") {
           deps.update({ isLoading: false });
           if (append) deps.update({ page: Math.max(1, deps.readView()._loadedPage) });
@@ -121,13 +117,18 @@
           return;
         }
         console.warn("API search failed:", err);
-        return apiFailure(append, id, intent);
+        return apiFailure(append, id, intent).then(() => {
+          // A successful local fallback transfers search ownership. If no
+          // fallback could run, keep a bounded retry of the requested page.
+          if (!append && current(id, intent) && !deps.readView()._loadedPage)
+            deps.update({ hasMore: true });
+        });
       }).finally(() => {
         if (current(id, intent)) {
           deps.update({ _pendingPage: 0, isLoading: false, resultsSkeletonActive: false });
           if (!append) deps.visualLoading(false);
           else deps.updateStatus();
-          if (append && !deps.readView()._deferredAppendWhileDragging && (pagingSucceeded || pagingError)) deps.finishPaging(pagingSucceeded, pagingError);
+          if (!deps.readView()._deferredAppendWhileDragging && (pagingSucceeded || pagingError)) deps.finishPaging(pagingSucceeded, pagingError);
           else deps.updatePaging();
         }
       });

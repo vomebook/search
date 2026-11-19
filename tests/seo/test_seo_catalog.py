@@ -137,11 +137,25 @@ class CatalogTests(unittest.TestCase):
     def test_missing_or_growing_pilot_never_silently_truncates(self):
         pilot = copy.deepcopy(self.pilot)
         pilot["samples"][0][1] = "missing.pdf"
-        with self.assertRaises(ValueError): self.build(pilot=pilot)
+        self.assertEqual(self.build(pilot=pilot)["manifest"]["folder_count"], 1)
         child = {**self.records[0], "Folder": ["资料", "新增子目录"]}
-        with self.assertRaises(ValueError): self.build(records=[*self.records, child])
         many = [{**self.records[0], "File": f"book{i}"} for i in range(65)]
-        with self.assertRaises(ValueError): self.build(records=[*self.records, *many])
+        for records in ([*self.records, child], [*self.records, *many], self.records[2:]):
+            for project in ("pages", "hf"):
+                result = self.build(project, records=records)
+                self.assertEqual(result["manifest"]["folder_count"], 0)
+                self.assertFalse(any(path.startswith("catalog/folders/") for path in result["files"]))
+                self.assertIn("catalog/index.html", result["files"])
+                self.assertNotIn("一个完整叶目录", result["files"]["catalog/index.html"])
+
+    def test_duplicate_folder_records_and_reserved_routes(self):
+        result = self.build(records=[*self.records, *[self.records[0]] * 70])
+        self.assertEqual(result["manifest"]["folder_count"], 1)
+        folder = next(body for path, body in result["files"].items() if path.startswith("catalog/folders/"))
+        self.assertIn("完整列出该叶目录的 2 个文件", folder)
+        for name in ("catalog", "book", "folders", "static", "data", "api", "icons"):
+            with self.subTest(name=name), self.assertRaisesRegex(ValueError, "reserved route"):
+                self.build(records=[{**self.records[0], "Repo": "VoiceOfML/" + name}])
 
     def test_paths_and_conflicting_identity_fail_closed(self):
         with self.assertRaises(ValueError): seo.relative_path({**self.records[0], "Folder": [".."]})

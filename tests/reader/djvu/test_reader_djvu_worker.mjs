@@ -538,4 +538,28 @@ for(const type of ['error','messageerror','cancel']) {
     if (oldCanvas===undefined) delete globalThis.OffscreenCanvas; else globalThis.OffscreenCanvas=oldCanvas;
   }
 }
+{
+  // Drive the range-wait deadline deterministically without a real five-minute wait.
+  const originalSet=globalThis.setTimeout,originalClear=globalThis.clearTimeout;
+  const timers=new Map();let sequence=0;
+  globalThis.setTimeout=(callback,delay)=>{const id=++sequence;timers.set(id,{callback,delay});return id;};
+  globalThis.clearTimeout=id=>timers.delete(id);
+  try {
+    let closed=0;
+    const rangeReader={total:100,read:()=>new Promise(()=>{}),close(){closed++;}};
+    const worker=createDjvuWorkerAdapter('/worker',{rangeReader,timeoutMs:100,createWorker:()=>({
+      postMessage(message){if(message.operation==='open-range')queueMicrotask(()=>this.onmessage({data:{
+        id:message.id,operation:'range',rangeId:1,offset:0,length:8}}));},terminate(){}
+    })});
+    const opening=worker.openRange();opening.catch(()=>{});
+    await new Promise(resolve=>setImmediate(resolve));
+    const deadline=[...timers.values()].find(timer=>timer.delay===5*60_000);
+    assert.ok(deadline);deadline.callback();
+    await assert.rejects(opening,/DJVU_WORKER_TIMEOUT/);assert.equal(closed,1);
+    const lifetime=createDjvuWorkerAdapter('/worker',{timeoutMs:100,createWorker:()=>({postMessage(){},terminate(){}})});
+    const stuck=lifetime.open(bytes());stuck.catch(()=>{});
+    const limit=[...timers.values()].find(timer=>timer.delay===30*60_000);
+    assert.ok(limit);limit.callback();await assert.rejects(stuck,/DJVU_WORKER_TIMEOUT/);
+  } finally {globalThis.setTimeout=originalSet;globalThis.clearTimeout=originalClear;}
+}
 console.log('DjVu Worker bounds, errors, timeout, cancellation and geometry checks passed');

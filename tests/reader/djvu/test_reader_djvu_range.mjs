@@ -58,4 +58,14 @@ for(const etag of ['', 'W/"weak"']) await assert.rejects(open({fetchResponse:tra
     })});
   await waiting;controller.abort();await assert.rejects(opening,{name:'AbortError'});
 }
+{
+  // Cleanup must not wait for a response stream whose cancel never settles;
+  // exercise both successful and rejected asynchronous cancellation callbacks.
+  for (const cancel of [() => new Promise(() => {}), () => Promise.reject(Error('cancel failed'))]) {
+    let count=0;
+    const response={status:200,body:{cancel(){count++;return cancel();}}};
+    await assert.rejects(open({fetchResponse:async()=>response}),/DJVU_RANGE_UNSUPPORTED/);
+    await Promise.resolve();assert.ok(count>=1);
+  }
+}
 console.log('DjVu range bounds, identity, retries, caching and cancellation passed');

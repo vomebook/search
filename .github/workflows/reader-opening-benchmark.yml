@@ -39,7 +39,15 @@ jobs:
           python-version: '3.15.2'
       - name: Get shared benchmark and install browser
         run: |
-          git clone --depth=1 https://huggingface.co/spaces/VoiceOfML/Search huggingface-search
+          set -euo pipefail
+          url=https://huggingface.co/spaces/VoiceOfML/Search
+          refs=$(git ls-remote --exit-code --heads "$url" refs/heads/main)
+          [[ "$refs" =~ ^([0-9a-f]{40})[[:space:]]+refs/heads/main$ ]]
+          revision=${BASH_REMATCH[1]}
+          python3 -I -B scripts/verify_hf_source_revision.py "$revision"
+          git clone --single-branch --branch main --no-checkout "$url" huggingface-search
+          git -C huggingface-search checkout --detach "$revision"
+          test "$(git -C huggingface-search rev-parse HEAD)" = "$revision"
           python -m pip install playwright==1.65.2
           python -m playwright install --with-deps chromium
       - name: Benchmark production HF

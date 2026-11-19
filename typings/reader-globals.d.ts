@@ -509,6 +509,8 @@ interface SearchReaderNavigationApi {
     persistProgress(progress: {url?: unknown; closeTime?: unknown} | null | undefined): void;
     disposeBackground(): void;
     readonly backgroundReader: HTMLIFrameElement | null;
+    readonly readerUrl: string | null;
+    readonly reusedMount: boolean;
     readonly returnFocus: HTMLElement | null;
   };
 }

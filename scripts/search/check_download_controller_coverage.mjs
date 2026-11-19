@@ -41,9 +41,10 @@ const required = [
   "abort during browser handoff cannot erase the shared uncertain result",
   "uncertain feedback belongs to each live non-quiet shared subscriber",
   "single uncertain handoff is retained and a later batch failure is visible but not retried",
-  "retry workers recheck uncertainty when consuming queued items, unlike explicit batches",
+  "all batch workers recheck uncertainty when consuming queued items",
   "legacy launch scheduler preserves pacing, cancellation and recovery after throws",
   "batch owns two quiet workers, deduplicates in order and cancels queued work",
+  "cancelled batch retries only the retained subset, never started items",
   "ledger restore filters records, tolerates storage failure and preserves acknowledgement order"
 ].map(name => ({name}));
 if (result.status !== 0 || rows.length !== 1 || rows[0].some((value, index) => value < minimum[index]) ||

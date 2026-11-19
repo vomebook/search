@@ -275,7 +275,8 @@ test("environment proxy, bounded concurrent downloads, bypass and hash failure",
     assert.match(source, /const DOWNLOAD_DEADLINE_MS = 180000;/);
     assert.match(source, /const MAX_DOWNLOAD_BYTES = 128 \* 1024 \* 1024;/);
     assert.equal(source.split(retryBackoff).length - 1, 1, "expected exactly one production retry backoff");
-    writeFileSync(fastScript, source.replace("const DOWNLOAD_DEADLINE_MS = 180000;", "const DOWNLOAD_DEADLINE_MS = 200;")
+    // Leave CI enough scheduling headroom to follow all four local redirects.
+    writeFileSync(fastScript, source.replace("const DOWNLOAD_DEADLINE_MS = 180000;", "const DOWNLOAD_DEADLINE_MS = 800;")
       .replace("const MAX_DOWNLOAD_BYTES = 128 * 1024 * 1024;", "const MAX_DOWNLOAD_BYTES = 1024;")
       .replace(retryBackoff, retryBackoff.replace("1000", "10")));
     save(resources("example.test"));

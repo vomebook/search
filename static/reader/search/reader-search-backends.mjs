@@ -186,18 +186,20 @@ export function createReaderSearchBackends(readerContext) {
     if (!resolved || !readerContext.isReaderGenerationCurrent("navigation", generation)) return false;
     const section = readerContext.epubBook?.sections?.[resolved.index],
       sections = readerContext.epubBook?.sections?.filter((item) => item.linear !== "no") || [],
-      visibleIndex = section ? sections.indexOf(section) : -1;
-    if (visibleIndex < 0 || !readerContext.foliateSectionLoader) return false;
-    let node = await readerContext.foliateSectionLoader(visibleIndex);
+      visibleIndex = section ? sections.indexOf(section) : -1,
+      destinationIndex = visibleIndex >= 0 ? visibleIndex : -resolved.index - 1;
+    if (!section || !readerContext.foliateSectionLoader) return false;
+    let node = await readerContext.foliateSectionLoader(destinationIndex);
     if (!readerContext.isReaderGenerationCurrent("navigation", generation)) return false;
     await readerContext.waitForReader(0, true);
     if (!readerContext.isReaderGenerationCurrent("navigation", generation)) return false;
-    if (!node?.isConnected) node = await readerContext.foliateSectionLoader(visibleIndex);
+    if (!node?.isConnected) node = await readerContext.foliateSectionLoader(destinationIndex);
     if (!node?.isConnected || !readerContext.isReaderGenerationCurrent("navigation", generation)) return false;
     readerContext.clearFullSearchMarks();
     let target;
     if (typeof resolved.anchor === "function" && node._resolveSearchAnchor) {
-      const parts = node._resolveSearchAnchor(resolved.anchor);
+      let parts;
+      try { parts = node._resolveSearchAnchor(resolved.anchor); } catch (_) { return false; }
       if (!parts?.length) return false;
       [target] = readerContext.highlightTextParts(parts);
     } else {
@@ -225,7 +227,7 @@ export function createReaderSearchBackends(readerContext) {
         (readerContext.viewport.clientHeight - targetRect.height) / 2
     );
     const tocIndex = readerContext.navigationState.tocEntries.findIndex(
-      (entry) => typeof entry === "object" && entry !== null && "sectionIndex" in entry && entry.sectionIndex === visibleIndex
+      (entry) => typeof entry === "object" && entry !== null && "sectionIndex" in entry && entry.sectionIndex === destinationIndex
     );
     if (tocIndex >= 0) {
       readerContext.updateNavigationState({ currentChapterIndex: tocIndex });

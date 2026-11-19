@@ -361,6 +361,61 @@ process.stdout.write(stripBundledScripts(readFileSync('static/index.html','utf8'
         self.assertTrue(result['reused'])
         self.assertTrue(result['freshNav'])
 
+    def test_parked_reuse_uses_new_identity_for_replace_and_close_recovery(self):
+        self.page.evaluate('navigateToReader("/search/static/reader.html?id=parked-nav&ext=txt")')
+        self.page.frame_locator('.reader-overlay').locator('body').wait_for()
+        self.page.wait_for_function('() => !document.querySelector(".reader-overlay-opening")')
+        result = self.page.evaluate('''() => {
+          const frame=readerHost.overlay, old=frame.src;
+          frame.contentWindow.CCRDSpeech={state:()=>({active:true,playing:true}),reveal:()=>{}};
+          closeReaderOverlay();
+          const search=new URL('/search/#/?q=latest',location.origin).href;
+          history.replaceState(null,'',search);
+          navigateToReader(old);
+          const reused=readerHost.overlay===frame, fresh=history.state.readerUrl;
+          const different=new URL(fresh).searchParams.get('nav')!==new URL(old).searchParams.get('nav');
+          const originalBack=history.back; history.back=()=>{};
+          handleReaderMessage({origin:location.origin,source:frame.contentWindow,data:{type:'voice-reader-close'}});
+          history.back=originalBack;
+          return {reused,different,search,fresh,old};
+        }''')
+        self.assertTrue(result['reused'])
+        self.assertTrue(result['different'])
+        recovery = self.page.get_by_role('link', name='直接打开搜索页')
+        recovery.wait_for(state='visible', timeout=3000)
+        self.assertEqual(recovery.get_attribute('href'), result['search'])
+        # Capture the native recovery handoff without leaving this test page.
+        handoff = recovery.evaluate('''link => {
+          link.addEventListener('click', event => event.preventDefault()); link.click();
+          return JSON.parse(sessionStorage.getItem('reader-navigation-restore'));
+        }''')
+        self.assertEqual(handoff['readerUrl'], result['fresh'])
+        self.assertEqual(handoff['returnUrl'], result['search'])
+        self.page.evaluate('closeReaderOverlay(); readerNavigation.disposeBackground()')
+
+    def test_parked_reuse_inherits_new_token_when_opening_another_book(self):
+        path = '/search/static/reader.html' if self.page.evaluate("location.pathname.startsWith('/search/')") else '/static/reader.html'
+        self.page.evaluate('path => navigateToReader(path + "?id=parked-replace&ext=txt")', path)
+        self.page.frame_locator('.reader-overlay').locator('body').wait_for()
+        self.page.wait_for_function('() => !document.querySelector(".reader-overlay-opening")')
+        result = self.page.evaluate('''path => {
+          const frame=readerHost.overlay, old=frame.src;
+          frame.contentWindow.CCRDSpeech={state:()=>({active:true,playing:true}),reveal:()=>{}};
+          closeReaderOverlay();
+          const search=location.href;
+          navigateToReader(old);
+          const fresh=history.state.readerUrl, reused=readerHost.overlay===frame;
+          handleReaderMessage({origin:location.origin,source:frame.contentWindow,
+            data:{type:'voice-reader-open',url:path+'?id=next-book&ext=txt'}});
+          const next=new URL(history.state.readerUrl), current=new URL(fresh), original=new URL(old);
+          const result={reused, fresh:current.searchParams.get('nav')!==original.searchParams.get('nav'),
+            token:next.searchParams.get('nav')===current.searchParams.get('nav'),
+            returnUrl:next.searchParams.get('return')===current.searchParams.get('return'),
+            historySearch:history.state.searchUrl===search};
+          closeReaderOverlay(); readerNavigation.disposeBackground(); return result;
+        }''', path)
+        self.assertTrue(all(result.values()), result)
+
     def test_foreground_opened_from_parked_reader_keeps_search_title(self):
         self.page.evaluate('navigateToReader("/search/static/reader.html?id=first-speech&ext=txt")')
         self.page.frame_locator('.reader-overlay').locator('body').wait_for()

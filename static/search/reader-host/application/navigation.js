@@ -61,6 +61,7 @@
     // A fresh object identifies each mount, even when reusing a parked frame.
     /** @type {{frame: HTMLIFrameElement; url: string; title: string; deferred: boolean} | null} */
     let titleMount = null;
+    let reusedMount = false;
     function restoreTitle() {
       if (searchTitle !== null) document.title = searchTitle;
     }
@@ -323,6 +324,7 @@
         const { frame: kept } = /** @type {NonNullable<ReturnType<typeof releaseParked>>} */ (releaseParked());
         returnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
         frame = kept;
+        reusedMount = true;
         searchTitle = document.title;
         titleDismissed = false;
         titleMount = { frame: kept, url: url.href, title: "", deferred: deferTitle };
@@ -359,6 +361,7 @@
       next.classList.add("reader-overlay-pending");
       returnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
       frame = next;
+      reusedMount = false;
       titleMount = { frame: next, url: url.href, title: "", deferred: deferTitle };
       showTitle(next, initialTitle(url));
       opening = document.createElement("div");
@@ -436,7 +439,7 @@
         // of the outstanding Back. Reuse the validated focus/scroll handoff.
         try {
           sessionStorage.setItem("reader-navigation-restore", JSON.stringify({
-            readerUrl: frame?.src, returnUrl: target.href
+            readerUrl: (reusedMount ? titleMount?.url : frame?.src) || frame?.src, returnUrl: target.href
           }));
         } catch (_) {}
       });
@@ -487,7 +490,7 @@
     /** @param {string} raw @param {object} returnScroll @returns {HTMLIFrameElement | null} */
     function replace(raw, returnScroll) {
       const next = parse(raw);
-      const current = new URL(/** @type {HTMLIFrameElement} */ (frame).src);
+      const current = new URL((reusedMount && titleMount?.url) || /** @type {HTMLIFrameElement} */ (frame).src);
       for (const key of ["return", "nav"])
         if (!next.searchParams.get(key) && current.searchParams.get(key))
           next.searchParams.set(key, /** @type {string} */ (current.searchParams.get(key)));
@@ -581,6 +584,8 @@
       get backgroundReader() {
         return parked?.frame || null;
       },
+      get readerUrl() { return (reusedMount && titleMount?.url) || frame?.src || null; },
+      get reusedMount() { return reusedMount; },
       get returnFocus() {
         return returnFocus;
       }

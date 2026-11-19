@@ -18,6 +18,14 @@
       "kind": "direct",
       "source": ".github/workflows/reader-refactor.yml"
     },
+    "tests/gates/test_pages_freshness.py": {
+      "kind": "script",
+      "source": "scripts/ci/check_pages_source.sh"
+    },
+    "tests/gates/test_pages_generation.py": {
+      "kind": "script",
+      "source": "scripts/ci/check_pages_source.sh"
+    },
     "tests/gates/test_package_resolution.py": {
       "kind": "direct",
       "source": ".github/workflows/reader-refactor.yml"
@@ -289,6 +297,14 @@
     "tests/reader/core/test_reader_warming.js": {
       "kind": "direct",
       "source": ".github/workflows/reader-refactor.yml"
+    },
+    "tests/reader/djvu/test_reader_djvu_audit.mjs": {
+      "kind": "script",
+      "source": "scripts/reader/check_reader_djvu_contracts.mjs"
+    },
+    "tests/reader/djvu/test_reader_djvu_text_runtime.mjs": {
+      "kind": "script",
+      "source": "scripts/reader/check_reader_djvu_contracts.mjs"
     },
     "tests/reader/djvu/test_reader_djvu_only.mjs": {
       "kind": "direct",

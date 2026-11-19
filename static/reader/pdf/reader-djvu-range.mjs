@@ -53,7 +53,7 @@ export async function openDjvuRange({url, signal, fetchResponse = fetch,
         requests++;
         response = await fetchResponse(address, {headers:{Range:`bytes=${start}-${end}`,...(!first ? {'If-Range':etag} : {})}, signal:controller.signal, cache:'no-store'});
         if (first && response.status === 200) {
-          await response.body?.cancel();
+          void response.body?.cancel().catch(() => {});
           throw Object.assign(new Error('DJVU_RANGE_UNSUPPORTED'), {code:'DJVU_RANGE_UNSUPPORTED'});
         }
         if ([408,429,500,502,503,504].includes(response.status))
@@ -79,7 +79,7 @@ export async function openDjvuRange({url, signal, fetchResponse = fetch,
         check();transferred += bytes.byteLength;
         return {bytes,total:size,etag:identity};
       } catch (error) {
-        await response?.body?.cancel().catch(() => {});
+        void response?.body?.cancel().catch(() => {});
         if (abortSignal.aborted || closed) throw failure || cancelled();
         const timedOut = controller.signal.aborted && controller.signal.reason?.name === 'TimeoutError';
         const detail = /** @type {{retryable?: boolean, name?: string} | null | undefined} */ (error);

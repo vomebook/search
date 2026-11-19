@@ -214,6 +214,54 @@ class ReaderSpeechTest(unittest.TestCase):
         finally:
             context.close()
 
+    def test_chapter_load_failure_retries_without_losing_offsets(self):
+        context, page, posts, errors = self.open("txt", TEXT.encode(), "text/plain; charset=utf-8")
+        try:
+            result = page.evaluate('''async () => {
+              const module = await import('./reader/ui/reader-speech.mjs');
+              const original = window.CCRDSpeech;
+              let published, phase, calls = [];
+              const content = document.createElement('div');
+              const chapters = ['First chapter.', 'Second chapter.', 'Third chapter.'].map(text => {
+                const node = document.createElement('div'); node.textContent = text; return node;
+              });
+              let failures = 2;
+              const loader = async number => {
+                calls.push(number);
+                if (number === 2 && failures-- > 0) throw new Error('temporary chapter failure');
+                return chapters[number - 1];
+              };
+              loader.count = 3;
+              window.CCRDSpeech = {previewClosed(){}, previewLoaded(value){published=value.adapter}};
+              try {
+                const speech = module.createReaderSpeech({capability:{mode:'epub-chapters'}, content,
+                  viewport:document.querySelector('#viewport'), chapterManifestLoader:loader,
+                  readerRuntime:{events:{on(_name, callback){phase=callback}}}}, async()=>{});
+                speech.installReaderSpeech(); phase({phase:'ready'});
+                await published.ensureUnit(0);
+                const before = {text:published.text, offset:published.offsetOf({unit:0,offset:6})};
+                let failed = false;
+                try { await published.ensureUnit(1); } catch (_) { failed = true; }
+                const afterFailure = {text:published.text, offset:published.offsetOf({unit:0,offset:6}), done:published.done};
+                await published.ensureUnit(2);
+                return {before, afterFailure, failed, text:published.text,
+                  first:published.offsetOf({unit:0,offset:6}), second:published.offsetOf({unit:1,offset:3}),
+                  third:published.offsetOf({unit:2,offset:0}), done:published.done, calls};
+              } finally { window.CCRDSpeech=original; }
+            }''')
+            self.assertTrue(result['failed'])
+            self.assertEqual(result['before'], {'text': 'First chapter.', 'offset': 6})
+            self.assertEqual(result['afterFailure'], {'text': 'First chapter.', 'offset': 6, 'done': False})
+            self.assertEqual(result['text'], 'First chapter.\nSecond chapter.\nThird chapter.')
+            self.assertEqual(result['first'], 6)
+            self.assertEqual(result['second'], len('First chapter.\n') + 3)
+            self.assertEqual(result['third'], len('First chapter.\nSecond chapter.\n'))
+            self.assertTrue(result['done'])
+            self.assertEqual(result['calls'], [1, 2, 2, 2, 3])
+            self.assertFalse(errors, errors)
+        finally:
+            context.close()
+
     def test_text_markdown_and_html_read_rendered_text(self):
         cases = (("txt", TEXT.encode(), "text/plain; charset=utf-8", "第0段"),
                  ("md", ("# 标题\n\n" + TEXT).encode(), "text/markdown; charset=utf-8", "标题"),

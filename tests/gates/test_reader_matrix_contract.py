@@ -241,7 +241,7 @@ class ReaderMatrixContractTests(unittest.TestCase):
                 steps = workflow['jobs'][job]['steps']
                 self.assertNotIn('Run chapter-search browser gate', [s.get('name') for s in steps])
                 step = next(s for s in steps if s.get('name') == 'Run full Reader refactor suite')
-                step['run'] = step['run'].replace('-v ', '-v -k chapter_search ')
+                step['run'] = step['run'].replace(' tests.reader.browser.test_reader_refactor', ' --require tests.reader.browser.test_reader_refactor.Missing.test_case tests.reader.browser.test_reader_refactor')
                 with self.assertRaisesRegex(gate.ContractError, 'business step changed'):
                     gate.validate(workflow, self.contract)
         omitted = {

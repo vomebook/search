@@ -55,11 +55,12 @@ function isRetiredAsset(pathname) {
     (/\.[0-9a-f]{12}\.(js|mjs|css)$/.test(pathname) || /^\/search\/static\/(?:(?:reader|search)\/[^?]+|[^/]+)\.(js|mjs|css)$/.test(pathname)) &&
     !CURRENT_HASHED_ASSETS.includes(pathname);
 }
-// Keep the actual previous cache for one release, including immutable assets
-// written by its worker after takeover. Install never changes this pointer.
+// Retain a bounded history of serving generations for older open clients.
+// Install never changes this pointer.
+const RETAINED_GENERATIONS = 3;
 const METADATA_CACHE = CACHE_PREFIX + "metadata";
 const ACTIVE_KEY = "/search/.sw-active-generation";
-/** @typedef {{ active: string, previous: string | null }} GenerationState */
+/** @typedef {{ active: string, previous: string | null, history: string[] }} GenerationState */
 /** @param {unknown} name @returns {name is string} */
 function isGenerationName(name) {
   return typeof name === "string" && name.startsWith(CACHE_PREFIX) && name !== METADATA_CACHE;
@@ -68,9 +69,14 @@ function isGenerationName(name) {
 async function activeGeneration() {
   const response = await (await caches.open(METADATA_CACHE)).match(ACTIVE_KEY);
   if (!response) return null;
-  const state = await response.json();
-  return state && isGenerationName(state.active)
-    ? { active: state.active, previous: isGenerationName(state.previous) ? state.previous : null } : null;
+  try {
+    const state = await response.json();
+    if (!state || !isGenerationName(state.active)) return null;
+    const history = Array.isArray(state.history) ? state.history.filter(isGenerationName) : [];
+    if (isGenerationName(state.previous)) history.unshift(state.previous);
+    return { active: state.active, previous: isGenerationName(state.previous) ? state.previous : null,
+      history: [...new Set(history)].filter(name => name !== state.active).slice(0, RETAINED_GENERATIONS) };
+  } catch (_) { return null; }
 }
 /** @param {URL} url @returns {boolean} */
 function isImmutableURL(url) {
@@ -82,9 +88,14 @@ async function previousAsset(url) {
   if (!isImmutableURL(url)) return undefined;
   try {
     const state = await activeGeneration();
-    if (!state || state.active !== CACHE_NAME || !state.previous || state.previous === CACHE_NAME ||
-        !(await caches.keys()).includes(state.previous)) return undefined;
-    return await (await caches.open(state.previous)).match(url.href, { ignoreVary: true });
+    if (!state || state.active !== CACHE_NAME) return undefined;
+    const names = await caches.keys();
+    for (const name of state.history) {
+      if (!names.includes(name)) continue;
+      const response = await (await caches.open(name)).match(url.href, { ignoreVary: true });
+      if (response && response.ok && response.status !== 206) return response;
+    }
+    return undefined;
   } catch (_) { return undefined; }
 }
 /** @param {string} name @returns {Promise<void>} */
@@ -222,7 +233,7 @@ readerWorkerScope.addEventListener("install", (event) => {
       const state = await activeGeneration();
       // Reinstalling the serving generation must not replace its shell/data.
       // Rollback to a retained cache still refreshes the complete core atomically.
-      if (!existed || !state || state.active !== CACHE_NAME) {
+      if (!existed || (state && state.active !== CACHE_NAME)) {
         const cache = await caches.open(CACHE_NAME);
         await cache.addAll(PRECACHE_URLS.map(revalidatedRequest));
       }
@@ -239,17 +250,20 @@ readerWorkerScope.addEventListener("activate", (event) => {
   event.waitUntil((async () => {
     const names = await caches.keys();
     const state = await activeGeneration();
-    const legacy = CACHE_PREFIX + "v1.0.0";
-    const previous = state ? (state.active === CACHE_NAME ? state.previous : state.active)
-      : names.includes(legacy) ? legacy : null;
-    const previousName = previous && previous !== CACHE_NAME && names.includes(previous) ? previous : null;
-    // A single metadata write replaces stale rollback state before any cleanup.
-    // Failed/unactivated candidates never become a previous generation.
+    // With unreadable/missing metadata we cannot identify the serving worker.
+    // Preserve existing caches during recovery rather than guessing and deleting it.
+    const history = state
+      ? [...new Set([...(state.active === CACHE_NAME ? [] : [state.active]), ...state.history])]
+          .filter(name => name !== CACHE_NAME && names.includes(name)).slice(0, RETAINED_GENERATIONS)
+      : names.filter(name => isGenerationName(name) && name !== CACHE_NAME)
+          .slice(-RETAINED_GENERATIONS).reverse();
     await (await caches.open(METADATA_CACHE)).put(ACTIVE_KEY,
-      new Response(JSON.stringify({ active: CACHE_NAME, previous: previousName })));
-    if (previousName) await prunePreviousGeneration(previousName).catch(() => {});
-    const oldNames = names.filter(name => isGenerationName(name) && name !== CACHE_NAME && name !== previousName);
-    await Promise.all(oldNames.map(name => caches.delete(name).catch(() => false)));
+      new Response(JSON.stringify({ active: CACHE_NAME, previous: history[0] || null, history })));
+    if (state) for (const name of history) await prunePreviousGeneration(name).catch(() => {});
+    if (state) {
+      const oldNames = names.filter(name => isGenerationName(name) && name !== CACHE_NAME && !history.includes(name));
+      await Promise.all(oldNames.map(name => caches.delete(name).catch(() => false)));
+    }
     await readerWorkerScope.clients.claim();
   })());
 });

@@ -13,7 +13,7 @@ export interface PdfShell extends HTMLElement {
 export interface PrefetchRecord { image: HTMLImageElement; url: string; timeout: number }
 export interface RenderWaiter { shell: PdfShell | null; priority: number; resolve(): void; reject(error: unknown): void }
 export interface PreviewWaiter { shell: PdfShell | null; priority: number; resolve(): void }
-export interface TextRequest { demanded: boolean; generation: number | null; page: number }
+export interface TextRequest { demanded: boolean; generation: number | null; page: number; controller: AbortController | null }
 export interface TextWaiter { priority: boolean; request: TextRequest | null; resolve(background: boolean): void; reject(error: unknown): void }
 export interface SchedulerContext {
   documentState: { restorationReady: boolean; page: number; pageCount: number; zoom: number };

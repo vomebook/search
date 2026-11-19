@@ -19,6 +19,7 @@ function fixture() {
   const c = vm.createContext({STATE:state,DOM:{sortSelect:{value:'relevance'},resultsLoading:{style:{}},resultsContainer:{scrollTop:900},
     resultsList:{innerHTML:'old',classList:{remove:x=>events.push(['remove',x])}},emptyState:{style:{}}},
     window:{location},appliedRouteHash:location.hash,readerHost:{overlay:null},INITIAL_BASE_URL:'/initial',
+    selectedIndices:{0:true},lastSelectedIndex:0,
     embeddedInitialPayload:null, embeddedInitialAcquiredAt:Date.now(), SEARCH_CACHE_TTL:480000,
     cloneSearchData:data=>({...data,results:data.results.slice()}), getCachedSearchResponse:()=>null, searchResponseStore:{identities:new WeakMap()},
     searchIntentId:0,searchBootstrap:undefined,initialPayloadCache:new Map(),searchPageMetadata:new WeakMap(),
@@ -40,7 +41,8 @@ function fixture() {
     const match=source.match(new RegExp('^(?:async )?function '+name+'\\([^]*?^}', 'm'));
     if(match) vm.runInContext(match[0],c);
   }
-  const payload = (name='first') => ({repo:state.repoFull,total:2,results:[{File:name}]});
+  const payload = (name='first') => ({repo:state.repoFull,page:1,page_size:state.pageSize,total:state.pageSize+1,
+    results:Array.from({length:state.pageSize}, (_, index)=>({File:index ? `file ${index}` : name}))});
   return {c,state,events,flights,location,payload,inline(value){text=value;try{c.embeddedInitialPayload=JSON.parse(value);}catch{c.embeddedInitialPayload=null;}}};
 }
 
@@ -73,7 +75,16 @@ test('bootstrap validates payload and mode before cancellation; cancellation ree
   for(const data of [null,{}, {results:[],repo:'wrong'}]) {const f=fixture();assert.equal(f.c.applyInitialSearchPayload(data),false);assert.deepEqual(f.events,[]);}
   const f=fixture();f.state.mode='global';assert.equal(f.c.applyInitialSearchPayload(f.payload()),false);
   f.c.cancelActiveSearch=()=>{f.c.searchIntentId++;return true;};
-  assert.equal(f.c.applyInitialSearchPayload({results:[],mode:'global'}),false);assert.equal(f.state.total,undefined);
+  assert.equal(f.c.applyInitialSearchPayload({...f.payload(),mode:'global'}),false);assert.equal(f.state.total,undefined);
+});
+
+test('bootstrap rejects incompatible paging and never transfers selection to replacement rows',()=>{
+  for (const fields of [{page_size:25}, {page:2}, {results:[{File:'short'}]}, {total:-1}]) {
+    const f=fixture();assert.equal(f.c.applyInitialSearchPayload({...f.payload(),...fields}),false);
+    assert.equal(f.c.selectedIndices[0],true);assert.equal(f.state.results.length,0);
+  }
+  const f=fixture();assert.equal(f.c.applyInitialSearchPayload(f.payload('new record')),true);
+  assert.deepEqual(Object.keys(f.c.selectedIndices),[]);assert.equal(f.c.lastSelectedIndex,-1);
 });
 
 test('bootstrap applies copied results, exact effect order and site metadata/route policy',()=>{
@@ -91,6 +102,15 @@ test('bootstrap applies copied results, exact effect order and site metadata/rou
     f.c.applyInitialSearchPayload(f.payload());assert.equal(f.events.some(e=>e[0]==='sync'),false);
     assert.equal(f.events.some(e=>e[0]==='persist'),!overlay);
   }
+});
+
+test('bad bootstrap response cannot poison a later retry', async()=>{
+  const f=fixture();const first=f.c.searchWithInitialFallbackFresh();
+  f.flights[0].resolve({...f.payload(),page_size:25});await first;
+  assert.equal(f.c.initialPayloadCache.size,0);assert.deepEqual(f.events,[['search']]);
+  const second=f.c.searchWithInitialFallbackFresh();assert.equal(f.flights.length,2);
+  f.flights[1].resolve(f.payload('valid corrected data'));await second;
+  assert.equal(f.state.results[0].File,'valid corrected data');
 });
 
 test('bootstrap stale completion never writes cache, applies or falls back, including same-key new intent',async()=>{

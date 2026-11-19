@@ -363,7 +363,7 @@ jobs:
         run: python3 -B -m unittest -v tests.reader.browser.test_reader_layout tests.reader.browser.test_reader_lifecycle tests.reader.browser.test_reader_djvu_engine_bootstrap tests.reader.browser.test_reader_speech tests.search.browser.test_recent_search_pages tests.search.browser.test_segmented_scroll tests.search.browser.test_download_lifecycle tests.search.browser.test_api_integration tests.search.browser.test_paging_recovery tests.search.browser.test_position_window tests.search.browser.test_scroll_stability
       - name: Run full Reader refactor suite
         if: ${{ !cancelled() && steps.setup-complete.outputs.ready == 'true' && matrix.shard == 'navigation' }}
-        run: python3 -B -m unittest -v tests.reader.browser.test_reader_refactor
+        run: python3 -B scripts/ci/run_unittest_suite.py tests.reader.browser.test_reader_refactor
       - name: Check Reader JavaScript syntax
         if: ${{ !cancelled() && steps.setup-complete.outputs.ready == 'true' && matrix.shard == 'static' }}
         run: |
@@ -961,7 +961,7 @@ jobs:
       - name: Run full Reader refactor suite
         if: ${{ !cancelled() && steps.setup-complete.outputs.ready == 'true' && matrix.shard == 'navigation' }}
         working-directory: huggingface-search
-        run: python3 -B -m unittest -v tests.reader.browser.test_reader_refactor
+        run: python3 -B ../scripts/ci/run_unittest_suite.py tests.reader.browser.test_reader_refactor
       - name: Check Reader JavaScript syntax
         if: ${{ !cancelled() && steps.setup-complete.outputs.ready == 'true' && matrix.shard == 'static' }}
         working-directory: huggingface-search

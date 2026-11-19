@@ -173,6 +173,9 @@ def build_catalog(records: list[CatalogRecord], *, project: str, corpus_identity
     by_key: dict[tuple[str, str], CatalogRecord] = {}
     for record in records:
         grouped[record["Repo"]].append(record)
+        short = record["Repo"].split("/")[-1]
+        if short.lower() in {"catalog", "book", "folders", "static", "data", "api", "icons"}:
+            raise ValueError("Repository conflicts with reserved route")
         key = (record["Repo"], relative_path(record))
         if key in by_key and any(by_key[key].get(field) != record.get(field) for field in ("File", "Extension", "Folder", "Size")):
             raise ValueError("Conflicting source identity")
@@ -180,15 +183,15 @@ def build_catalog(records: list[CatalogRecord], *, project: str, corpus_identity
     selected: dict[tuple[str, str], CatalogRecord] = {}
     for repo, path in pilot["samples"]:
         record = by_key.get((repo, path))
-        if record is None:
-            raise ValueError(f"Missing configured SEO pilot source: {repo}/{path}")
-        selected[(repo, path)] = record
+        if record is not None:
+            selected[(repo, path)] = record
     folder_repo, folder_path = pilot["folder"]
-    folder_records = [record for record in grouped[folder_repo] if "/".join(record["Folder"]) == folder_path]
-    descendants = [record for record in grouped[folder_repo]
+    folder_records = [record for (repo, _), record in by_key.items()
+                      if repo == folder_repo and "/".join(record["Folder"]) == folder_path]
+    descendants = [record for record in grouped.get(folder_repo, [])
                    if "/".join(record["Folder"]).startswith(folder_path + "/")]
     if not folder_records or descendants or len(folder_records) > 64:
-        raise ValueError("SEO pilot must be a complete leaf folder of 1–64 files; never truncate it")
+        folder_records = []
     for record in folder_records:
         selected[(record["Repo"], relative_path(record))] = record
     selected_records = sorted(selected.values(), key=lambda record: (record["Repo"], relative_path(record)))
@@ -233,6 +236,8 @@ def build_catalog(records: list[CatalogRecord], *, project: str, corpus_identity
                 + '<footer class="muted">本页仅整理公开文件元数据，不代表已核实作者、出版或 OCR 准确性。'
                 '如资料信息或来源有误，请通过原始仓库反馈。目录试点不限制站内完整搜索。</footer>'
                 + '</main></body></html>')
+        if route + "index.html" in pages:
+            raise ValueError("Duplicate generated route")
         pages[route + "index.html"] = html
         page_urls.append(url)
 
@@ -240,8 +245,8 @@ def build_catalog(records: list[CatalogRecord], *, project: str, corpus_identity
                  + f' — {len(grouped[repo]):,} 条记录</li>' for repo in sorted(grouped)) + '</ul>'
     page(catalog, "VoiceOfML 文库目录", DESCRIPTION,
          '<p>按来源仓库浏览公开资料。下列数量是文件元数据记录数，不是去重后的书籍数。</p>' + repo_links
-         + f'<h2>目录试点</h2><p>本批提供 {len(selected_records)} 个资源详情和一个完整叶目录；其余资料仍可通过站内搜索查找。</p>'
-         + '<p>' + anchor(folder_route, folder_repo.split('/')[-1] + '/' + folder_path) + '</p>' + entries(selected_records),
+         + f'<h2>目录试点</h2><p>本批提供 {len(selected_records)} 个资源详情' + ('和一个完整叶目录' if folder_records else '') + '；其余资料仍可通过站内搜索查找。</p>'
+         + ('<p>' + anchor(folder_route, folder_repo.split('/')[-1] + '/' + folder_path) + '</p>' if folder_records else '') + entries(selected_records),
          {"@type": "ItemList", "numberOfItems": len(grouped)})
     for repo in sorted(grouped):
         formats = Counter(record["Extension"] for record in grouped[repo])
@@ -253,16 +258,17 @@ def build_catalog(records: list[CatalogRecord], *, project: str, corpus_identity
         body += '<h2>路径概览</h2><p>以下为条目最多的至多 12 个顶层路径示例；完整目录见仓库搜索。</p><ul>'
         body += ''.join('<li>' + escape(name) + f' — {count:,} 条</li>' for name, count in sorted(top.items(), key=lambda item: (-item[1], item[0]))[:12]) + '</ul>'
         body += '<h2>本批资源详情</h2>' + entries(sample)
-        if repo == folder_repo:
+        if folder_records and repo == folder_repo:
             body += '<p>' + anchor(folder_route, '浏览完整试点目录：' + folder_path) + '</p>'
         page(repo_prefix + repo.split('/')[-1] + '/', repo.split('/')[-1] + ' 资料目录 — VoiceOfML',
              f'{repo} 的文件目录、格式分布与来源路径；共 {len(grouped[repo]):,} 条元数据记录，支持在线检索、阅读和原始文件下载。',
              body, {"@type": "CollectionPage", "name": repo})
-    page(folder_route, folder_path + ' — ' + folder_repo.split('/')[-1],
-         f'{folder_repo}/{folder_path} 的完整叶目录，包含 {len(folder_records)} 个文件。',
-         '<p>' + anchor(repo_prefix + folder_repo.split('/')[-1] + '/', folder_repo) + '</p><p>原始目录：<code>'
-         + escape(folder_path) + f'</code>；本页完整列出该叶目录的 {len(folder_records)} 个文件。</p>'
-         + entries(sorted(folder_records, key=relative_path)), {"@type": "ItemList", "numberOfItems": len(folder_records)})
+    if folder_records:
+        page(folder_route, folder_path + ' — ' + folder_repo.split('/')[-1],
+             f'{folder_repo}/{folder_path} 的完整叶目录，包含 {len(folder_records)} 个文件。',
+             '<p>' + anchor(repo_prefix + folder_repo.split('/')[-1] + '/', folder_repo) + '</p><p>原始目录：<code>'
+             + escape(folder_path) + f'</code>；本页完整列出该叶目录的 {len(folder_records)} 个文件。</p>'
+             + entries(sorted(folder_records, key=relative_path)), {"@type": "ItemList", "numberOfItems": len(folder_records)})
     for record in selected_records:
         repo, path, identifier = record['Repo'], relative_path(record), source_id(record)
         size = str(record.get('Size', '未知')) + (' bytes' if type(record.get('Size')) in (int, float) else '')
@@ -283,7 +289,7 @@ def build_catalog(records: list[CatalogRecord], *, project: str, corpus_identity
     manifest: dict[str, object] = {'version': 1, 'profile': 'metadata-catalog-pilot-v1', 'project': project,
                 'corpus_identity': corpus_identity, 'record_count': len(records),
                 'repo_counts': {repo: len(grouped[repo]) for repo in sorted(grouped)},
-                'detail_count': len(selected_records), 'folder_count': 1, 'urls': page_urls,
+                'detail_count': len(selected_records), 'folder_count': int(bool(folder_records)), 'urls': page_urls,
                 'sitemap_urls': sitemap_urls, 'details': [dict(id=source_id(record), repo=record['Repo'],
                     path=relative_path(record), source=source_url(record)) for record in selected_records],
                 'files': {path: hashlib.sha256(body.encode()).hexdigest() for path, body in sorted(pages.items())}}

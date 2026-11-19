@@ -20,10 +20,9 @@ for (const [input, value, unit] of [
 for (const [text, expected] of [
   [null, null], [undefined, null], ["", null], ["0", 0], ["0B", 0],
   ["1 KB", 1024], ["0.5kB", 512], ["1.5MB", 1572864], ["1gb", 1073741824],
-  ["3B", 3], ["12 bytes", 12], ["1e3", 1], ["-1", -1], ["garbage", null],
-  [" 3MB", 3], ["1.2.3MB", 1258291]
+  ["3B", 3], ["12 bytes", 12], ["1e3", null], ["-1", null], ["garbage", null],
+  [" 3MB", 3 * 1048576], ["1.2.3MB", null], [".", null], ["9007199254740992B", null]
 ]) assert.equal(parseSizeStr(text), expected, String(text));
-assert.ok(Number.isNaN(parseSizeStr(".")));
 assert.equal(fmtSizeUrl(null), null); assert.equal(fmtSizeUrl(undefined), null);
 assert.equal(fmtSizeUrl(0), "0B"); assert.equal(fmtSizeUrl(1024), "1KB");
 assert.equal(fmtSizeUrl(1025), "1025B"); assert.equal(fmtSizeUrl(1048577), "1048577B");
@@ -31,5 +30,5 @@ for (const bytes of [0, 1, 1023, 1024, 1025, 1048576, 1048577, 1073741824, 10737
   assert.equal(parseSizeStr(fmtSizeUrl(bytes)), bytes, `URL size round trip: ${bytes}`);
 // Preserve the original capture lookup if String.prototype.match is rebound.
 vm.runInContext('String.prototype.match = function() { return []; };', sandbox);
-assert.ok(Number.isNaN(parseSizeStr("1")));
-console.log("search size formatting, parser compatibility and URL round trips passed");
+assert.equal(parseSizeStr("1"), null);
+console.log("search size formatting, strict bounds and URL round trips passed");

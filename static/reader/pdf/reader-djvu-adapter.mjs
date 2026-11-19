@@ -184,17 +184,23 @@ export async function openDjvuDocument({ workerUrl, bytes, pageMap, signal, cach
       const geometry = map ? map : native ? {width:native.width*72/native.dpi,height:native.height*72/native.dpi} : null;
       if (!geometry) throw new Error('DJVU_PAGE_GEOMETRY_INVALID');
       return {
+        readerDjvuText: true,
         /** @param {{scale: number}} options */
         getViewport({scale}) {return {width:geometry.width*scale,height:geometry.height*scale,scale,
           transform:[scale,0,0,-scale,0,geometry.height*scale],
           convertToViewportPoint:(/** @type {number} */ x,/** @type {number} */ y)=>[x*scale,(geometry.height-y)*scale]};},
-        async getTextContent() {
+        async getTextContent(options = /** @type {{signal?: AbortSignal}} */ ({})) {
           // A page map describes geometry, not text. Fetch embedded text from
           // the original even when a separately verified page map is present.
-          const textGeometry = native || await getGeometry(number);
+          options.signal?.throwIfAborted();
+          const textGeometry = native || await getGeometry(number,-1,options.signal);
+          options.signal?.throwIfAborted();
           if (closed) throw new DOMException('DjVu document closed','AbortError');
           if (map) validateTextGeometry(map,textGeometry);
-          return textContent(await scheduler.requestMetadata('text',number,-1),textGeometry,geometry.height);
+          const text=await scheduler.requestMetadata('text',number,-1,{signal:options.signal});
+          options.signal?.throwIfAborted();
+          if (closed) throw new DOMException('DjVu document closed','AbortError');
+          return textContent(text,textGeometry,geometry.height);
         },
         /** @param {{canvasContext: CanvasRenderingContext2D, readerPriority?: number}} options */
         render({canvasContext, readerPriority=0}) {
@@ -213,17 +219,23 @@ export async function openDjvuDocument({ workerUrl, bytes, pageMap, signal, cach
         }
       };
     }
+    /** @type {Promise<DjvuOutlineNode[]> | null} */
+    let fallbackPromise = null;
+    async function fullOutline() {
+      const full=await /** @type {() => Promise<DjvuOutlineDocument>} */ (outlineFallback)();
+      try {
+        if (closed || full.numPages !== count) throw new Error('DJVU_PAGE_COUNT_MISMATCH');
+        const outline=await full.getOutline();
+        return closed ? [] : outline;
+      } finally { full.destroy(); }
+    }
     async function getOutline() {
       let flat;
       try { flat=await scheduler.requestOutline(); }
       catch(error) {
         if (!isRecord(error) || error.message !== 'DJVU_LAZY_OUTLINE_UNCERTAIN' || typeof outlineFallback !== 'function') throw error;
-        const full=await outlineFallback();
-        try {
-          if (closed || full.numPages !== count) throw new Error('DJVU_PAGE_COUNT_MISMATCH');
-          const outline=await full.getOutline();
-          return closed ? [] : outline;
-        } finally { full.destroy(); }
+        if (!fallbackPromise) fallbackPromise=fullOutline().finally(()=>{fallbackPromise=null;});
+        return fallbackPromise;
       }
       return outlineTree(flat,count);
     }

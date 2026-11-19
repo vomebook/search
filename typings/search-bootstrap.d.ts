@@ -1,12 +1,12 @@
 interface SearchBootstrapView {
-  page: number; query: string; sort: string; searchFolders: boolean; exact: boolean;
+  page: number; pageSize: number; query: string; sort: string; searchFolders: boolean; exact: boolean;
   repoFilters: number; extensionFilters: number; folderFilters: number;
   folderSelfFilters: number; folderSubtreeFilters: number;
   minSize: number | null; maxSize: number | null;
   mode: string; repo: string | null; repoFull: string | null;
 }
 interface SearchInitialPayload {
-  results: unknown[]; total?: number; generation?: unknown; mode?: string; repo?: string;
+  results: unknown[]; page?: number; page_size?: number; total?: number; generation?: unknown; mode?: string; repo?: string;
 }
 interface SearchInitialPage {
   results: unknown[]; total: number; page: number; page_size: number; generation: unknown;

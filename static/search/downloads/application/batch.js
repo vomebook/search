@@ -58,6 +58,7 @@
       batch = current;
       render();
       Promise.all([runWorker(current), runWorker(current)]).then(() => {
+        for (const item of current.items.slice(current.next)) current.failed.push(item);
         current.done = true;
         render();
       });
@@ -66,7 +67,7 @@
     async function runWorker(current) {
       while (!current.cancelled && current.next < current.items.length) {
         const item = /** @type {SearchDownloadItem} */ (current.items[current.next++]);
-        if (current.retry && current.uncertain.some(previous => previous.link === item.link)) {
+        if (current.uncertain.some(previous => previous.link === item.link)) {
           current.skippedUncertain.push(item);
           render();
           continue;
@@ -74,6 +75,7 @@
         const result = await deps.downloadFileDetailed(item.filename, item.link, { quiet: true, batch: current });
         if (result === "started") current.started++;
         else if (result === "uncertain" && !current.uncertain.some(previous => previous.link === item.link)) current.uncertain.push(item);
+        else if (result === "cancelled") current.failed.push(item);
         else if (result === "failed") {
           if (current.uncertain.some(previous => previous.link === item.link)) current.blockedFailures.push(item);
           else current.failed.push(item);

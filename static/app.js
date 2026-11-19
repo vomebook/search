@@ -1449,7 +1449,6 @@ const ROUTER = {
     const projected = VoiceOfMLRoute.project(route.params, STATE.mode, routeInitialized);
     STATE.query = projected.query;
     if (projected.queryTruncated) showToast("搜索内容已限制为 256 个字符");
-    if (!searchComposing && !initialSearchDraft) setSearchInputValue(STATE.query);
     STATE.filterRepos = projected.filterRepos;
     STATE.filterExtensions = projected.filterExtensions === null ? loadStoredExtensionFilters() : projected.filterExtensions;
     if (projected.filterExtensions !== null) saveStoredExtensionFilters();
@@ -1502,6 +1501,9 @@ const ROUTER = {
     STATE.leftSidebarOpen = keepMobileSidebarOpen || projected.leftSidebarOpen;
     STATE.rightSidebarOpen = projected.rightSidebarOpen;
     const sameSearchView = previousSearchKey === getSearchViewKey();
+    const directoryOnly = sameSearchView && STATE.mode === "repo" && previousPath !== STATE.browserPath;
+    if (directoryOnly && searchComposing) searchInputController?.invalidateVisit();
+    if (!directoryOnly && !searchComposing && !initialSearchDraft) setSearchInputValue(STATE.query);
     if (!sameSearchView) {
       if (routeInitialized) searchInputController?.invalidateVisit();
       cancelPendingSearchControls();
@@ -2042,6 +2044,7 @@ function showPositionRestoreStatus(message, retry = false) {
   DOM.retryPositionBtn.hidden = !retry;
   DOM.positionRestoreStatus.title = retry ? message : "";
   updateSearchPositionControls();
+  updateLoadInfo();
 }
 
 function cancelPositionRestore() {
@@ -2494,7 +2497,7 @@ function restoreSearchViewSnapshot(key, restoreScroll = true, preserveRestore = 
   const owner = searchId;
   if (!preserveRestore) cancelPositionRestore();
   if (owner !== searchId) return false;
-  cancelPendingSearchControls();
+  if (!preserveRestore) cancelPendingSearchControls();
   // Cloning preserves sparse slots and existing records without validating their fields.
   STATE.results = /** @type {(PagesSearchRecord | null | undefined)[]} */ (resultSnapshots.restoreResults(snapshot, key, STATE.pageSize, restoreScroll, preserveRestore));
   STATE.total = snapshot.total;
@@ -2591,6 +2594,7 @@ function buildSearchApiBody(params) {
 
 function readInitialSearchView() {
   return {
+    pageSize: STATE.pageSize,
     page: STATE.page, query: STATE.query, sort: STATE.sort || "relevance",
     searchFolders: STATE.searchFolders, exact: STATE.exact,
     repoFilters: STATE.filterRepos.length, extensionFilters: STATE.filterExtensions.length,
@@ -2644,6 +2648,9 @@ function applyInitialSearchPayload(data, intent = searchIntentId, acquiredAt = D
 
 /** @param {SearchInitialPayload} data */
 function commitInitialSearchPage(data) {
+  selectedIndices = {};
+  lastSelectedIndex = -1;
+  if (DOM.multiSelectToggle?.checked) updateSelectionUI();
   STATE.total = data.total || 0;
   STATE.page = 1;
   // Initial payload acceptance only checks the results array, not record fields.
@@ -2944,7 +2951,8 @@ function ownsDisplayedSearchResults() {
 function doSearch(append, fromStart = false, restorePosition = false) {
   if (append && STATE._loadedPage && !ownsDisplayedSearchResults()) return;
   if (append && resultWindow) { loadResultWindowPage(STATE._loadedPage + 1); return; }
-  if (append && !STATE._loadedPage) append = false;
+  const recoveringFirstPage = !!append && !STATE._loadedPage;
+  if (recoveringFirstPage) append = false;
   if (!append) searchIntentId++;
   if (!append && !cancelActiveSearch()) return;
   const owner = searchId;
@@ -2967,7 +2975,7 @@ function doSearch(append, fromStart = false, restorePosition = false) {
   updatePagingStatus();
   setSearchVisualLoading(false);
   if (!append) {
-    resetPagingRecovery();
+    if (!recoveringFirstPage) resetPagingRecovery();
     if (!canUseInitialSearchPayload()) STATE._initialActive = false;
     if (STATE.results.length === 0) DOM.emptyState.style.display = "none";
     selectedIndices = {};
@@ -3410,7 +3418,8 @@ function updateCurrentResultPosition() {
 }
 
 function updateLoadInfo() {
-  if (STATE.total === 0 && STATE.results.length === 0) {
+  if (STATE.total === 0 && STATE.results.length === 0 && DOM.retryPositionBtn?.hidden !== false
+      && (!STATE.hasMore || pagingFailures < 2)) {
     DOM.loadInfo.style.display = "none";
     return;
   }
@@ -3668,7 +3677,8 @@ function readPagingView() {
     generation: searchRequestId, loadedPage: STATE._loadedPage, page: STATE.page,
     resultCount: STATE.results.length, hasMore: STATE.hasMore, loading: STATE.isLoading,
     suspended: !!resultSnapshots.cloneTask || !!positionRestore ||
-      (STATE._loadedPage > 0 && !ownsDisplayedSearchResults()),
+      (STATE._loadedPage ? !ownsDisplayedSearchResults() :
+        searchTimer !== null || filterSearchTimer !== null || sizeFilterTimer !== null || searchComposing),
     inactive: document.hidden || !!readerHost.overlay, dragging: VSCROLL.isDraggingThumb,
     scrollTop: getResultScrollTop(), loadedHeight: getVirtualTotalHeight(),
     viewportHeight: DOM.resultsContainer ? DOM.resultsContainer.clientHeight : 0,
@@ -3692,6 +3702,8 @@ const pagingController = VoiceOfMLPagingController.create({
   onState: recovery => {
     pagingFailures = recovery.failures;
     pagingStatus.render(readPagingView(), recovery);
+    if (!STATE._loadedPage && recovery.failures >= 2 && STATE.hasMore && !STATE.isLoading && DOM.loadInfo)
+      DOM.loadInfo.style.display = "";
   }
 });
 function updatePagingStatus() {
@@ -3724,7 +3736,7 @@ function consumeDeferredSearchAppend() {
 function recoverScrollState() {
   cancelQuickScroll();
   expireSearchRequests();
-  if (!STATE.isLoading) resetPagingRecovery();
+  if (!STATE.isLoading && STATE._loadedPage > 0) resetPagingRecovery();
   scrollRecoveryTimer = null;
   if (VSCROLL.renderFrame) cancelAnimationFrame(VSCROLL.renderFrame);
   VSCROLL.renderFrame = 0;
@@ -3740,7 +3752,8 @@ function recoverScrollState() {
   renderVisible();
   updateScrollTrack();
   prefetchNextPage();
-  scheduleScrollLoad(0);
+  if (!STATE._loadedPage && pagingController.readRecovery().failures === 1) scheduleBottomLoad();
+  else scheduleScrollLoad(0);
   recoverSidebarState();
 }
 

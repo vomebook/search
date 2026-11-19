@@ -190,3 +190,49 @@ test('scheduled saves coalesce and cancellation leaves no delayed flush', () => 
   for (const callback of timers.values()) callback();
   assert.equal(calls, 1);
 });
+
+
+test('upgrade preserves compatible saved data and rejects malformed and incompatible entries', async () => {
+  await new Promise((resolve, reject) => { const r = indexedDB.deleteDatabase('voice-search-positions'); r.onsuccess = resolve; r.onerror = reject; });
+  const key = JSON.stringify({pageSize: 2});
+  const position = {version: 1, key, index: 0, offset: 0, anchorId: 'book', loadedPage: 1, savedAt: Date.now()};
+  const viewport = {key, savedAt: Date.now(), total: 1, records: [[0, {File: 'book'}, 20]]};
+  const page = {id: [key, 1], key, page: 1, page_size: 2, total: 1, generation: 'gen', results: [{File: 'book'}], savedAt: Date.now()};
+  const db = await new Promise((resolve, reject) => {
+    const r = indexedDB.open('voice-search-positions', 3);
+    r.onupgradeneeded = () => {
+      const positions = r.result.createObjectStore('positions', {keyPath: 'key'});
+      positions.put(position); positions.put({...position, key: 'bad', version: 99});
+      const views = r.result.createObjectStore('viewports', {keyPath: 'key'}); views.put(viewport);
+      const pages = r.result.createObjectStore('recent-pages', {keyPath: 'id'}); pages.put(page);
+    };
+    r.onsuccess = () => resolve(r.result); r.onerror = reject;
+  });
+  db.close();
+  const f = fixture(); await f.controller.init();
+  assert.equal(f.controller.getPosition(key).anchorId, 'book');
+  assert.equal(f.controller.getPosition('bad'), undefined);
+  const savedViewport = await f.storage.read('viewports', key);
+  const savedPage = await f.storage.read('recent-pages', [key, 1]);
+  assert.equal(savedViewport.records[0][1].File, 'book');
+  assert.equal(savedPage.results[0].File, 'book');
+  assert.equal(f.context.VoiceOfMLPositionPolicy.validViewport(savedViewport, position, r => r.File), true);
+  assert.equal(f.context.VoiceOfMLPositionPolicy.validViewport({...savedViewport, records: [[0, {}, 20]]}, position, r => r.File), false);
+  const expected = {generation: 'gen', total: 1, query: {pageSize: 2}};
+  assert.equal(f.context.VoiceOfMLPositionPolicy.validRecentPage(savedPage, key, 1, expected), true);
+  assert.equal((await f.controller.readRecentPage(key, 1, expected)).generation, 'gen');
+  assert.equal(await f.controller.readRecentPage(key, 1, {...expected, generation: 'wrong'}), null);
+  assert.equal(f.context.VoiceOfMLPositionPolicy.validRecentPage({...savedPage, results: [{}]}, key, 1, expected), false);
+  f.storage.close();
+  await new Promise((resolve, reject) => { const r = indexedDB.deleteDatabase('voice-search-positions'); r.onsuccess = resolve; r.onerror = reject; });
+  const incompatible = await new Promise((resolve, reject) => {
+    const r = indexedDB.open('voice-search-positions', 3);
+    r.onupgradeneeded = () => { r.result.createObjectStore('positions', {keyPath: 'wrong'}).put({wrong: 'x'}); };
+    r.onsuccess = () => resolve(r.result); r.onerror = reject;
+  });
+  incompatible.close();
+  const g = fixture(); await g.controller.init();
+  assert.equal(g.storage.database.transaction('positions').objectStore('positions').keyPath, 'key');
+  assert.equal(g.controller.positions.size, 0);
+  g.storage.close();
+});

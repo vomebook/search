@@ -1,5 +1,4 @@
-// File size display and URL parsing. Keep the established parser behavior for
-// existing links, including its fallback for non-standard numeric strings.
+// File size display and URL parsing. Invalid bounds must never become a different filter.
 {
 /** @param {number} bytes @returns {{value: string, unit: "B" | "KB" | "MB" | "GB"}} */
 function sizeBytesToRoundedDisplay(bytes) {
@@ -28,15 +27,16 @@ function sizeFmtSizeUrl(bytes) {
 /** @param {string | null | undefined} str @returns {number | null} */
 function sizeParseSizeStr(str) {
   if (!str) return null;
-  var m = String(str).match(/^([\d.]+)\s*(GB|MB|KB|B)?$/i);
-  if (!m) return parseInt(str) || null;
+  var m = String(str).trim().match(/^(\d+(?:\.\d*)?|\.\d+)\s*(GB|MB|KB|B|bytes?)?$/i);
+  if (!m) return null;
   // A native successful match contains capture 1; do not change lookup order.
   var val = parseFloat(/** @type {string} */ (m[1]));
   var unit = (m[2] || "B").toUpperCase();
   if (unit === "GB") val *= 1073741824;
   else if (unit === "MB") val *= 1048576;
   else if (unit === "KB") val *= 1024;
-  return Math.round(val);
+  const rounded = Math.round(val);
+  return Number.isSafeInteger(rounded) ? rounded : null;
 }
 // Result labels deliberately retain their legacy cache/coercion semantics;
 // unlike URL sizes, they use fixed display precision and omit zero.

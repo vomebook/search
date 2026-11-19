@@ -71,11 +71,17 @@ export function createDjvuWorkerAdapter(workerUrl, { maxPixels = 50_000_000, tim
   let fatal = null;
   /** @type {DjvuTask | null} */
   let active = null;
+  /** @type {ReturnType<typeof setTimeout> | undefined} */
+  let timer;
+  /** @type {ReturnType<typeof setTimeout> | undefined} */
+  let lifetimeTimer;
+  function armTimer() { clearTimeout(timer); timer = setTimeout(() => close(new Error('DJVU_WORKER_TIMEOUT')), timeoutMs); }
   const abort = () => new DOMException('DjVu task cancelled', 'AbortError');
   /** @param {unknown} [reason] */
   function close(reason = abort()) {
     if (closed) return;
     closed = true; fatal = reason;
+    clearTimeout(timer); clearTimeout(lifetimeTimer);
     worker.terminate();rangeReader?.close();
     active?.reject(reason);
     active = null;
@@ -90,15 +96,20 @@ export function createDjvuWorkerAdapter(workerUrl, { maxPixels = 50_000_000, tim
     }
     const {id, rangeId, offset, length} = data;
     outstandingRange=rangeId;
+    // The range reader owns its bounded per-attempt deadlines and retries.
+    clearTimeout(timer);
+    timer = setTimeout(() => close(new Error('DJVU_WORKER_TIMEOUT')), Math.max(timeoutMs, 5 * 60_000));
     Promise.resolve().then(()=>reader.read(offset,length)).then(bytes=>{
       if (closed || active?.id !== id) return;
       const buffer=bytes.buffer.slice(bytes.byteOffset,bytes.byteOffset+bytes.byteLength);
       outstandingRange=0;
+      armTimer();
       worker.postMessage({id,operation:'range-result',rangeId,ok:true,bytes:buffer},[buffer]);
     }).catch(error=>{
       if (closed || active?.id !== id) return;
       const code=rangeErrorCode(error);
       outstandingRange=0;
+      armTimer();
       worker.postMessage({id,operation:'range-result',rangeId,ok:false,error:code});
       if (reader.failure) close(reader.failure);
     });
@@ -130,14 +141,13 @@ export function createDjvuWorkerAdapter(workerUrl, { maxPixels = 50_000_000, tim
     const { signal, transfer = [] } = options;
     checkAvailable(signal);
     const id = ++sequence;
-    /** @type {ReturnType<typeof setTimeout> | undefined} */
-    let timer;
     /** @type {(() => void) | undefined} */
     let onAbort;
     try {
       return await new Promise((resolve, reject) => {
         active = { id, resolve, reject };
-        timer = setTimeout(() => close(new Error('DJVU_WORKER_TIMEOUT')), timeoutMs);
+        armTimer();
+        lifetimeTimer = setTimeout(() => close(new Error('DJVU_WORKER_TIMEOUT')), Math.max(timeoutMs, 30 * 60_000));
         onAbort = () => close(signal?.reason || abort());
         signal?.addEventListener('abort', onAbort, { once: true });
         if (signal?.aborted) { onAbort(); return; }
@@ -145,7 +155,7 @@ export function createDjvuWorkerAdapter(workerUrl, { maxPixels = 50_000_000, tim
         catch (error) { close(Object.assign(new Error('DJVU_WORKER_FAILED'), { cause: error })); }
       });
     } finally {
-      clearTimeout(timer); if (onAbort) signal?.removeEventListener('abort', onAbort);
+      clearTimeout(timer); clearTimeout(lifetimeTimer); if (onAbort) signal?.removeEventListener('abort', onAbort);
       clearTask(id);
     }
   }

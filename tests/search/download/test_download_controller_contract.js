@@ -611,7 +611,7 @@ test("batch retries only definite failures and reports uncertainty", async () =>
   const start = source.indexOf("const downloadBatches =");
   const end = source.indexOf("function setupDownloadIntentWarming() {", start);
   assert.ok(start >= 0 && end > start);
-  const outcomes = {a: "started", b: "failed", c: "uncertain", d: "cancelled"};
+  const outcomes = {a: "started", b: "failed", c: "uncertain"};
   const dom = batchDomFixture();
   const {status, buttons, panel, uncertainList, click} = dom;
   const sandbox = {
@@ -757,48 +757,21 @@ test("single uncertain handoff is retained and a later batch failure is visible 
   assert.deepEqual(JSON.parse(dom.sessionStorage.getItem("uncertain-downloads")), [{filename: "single.txt", link: "x"}]);
   sandbox.start([{filename: "single.txt", link: "x"}, {filename: "other.txt", link: "y"}]);
   await flush();
-  assert.equal(f.requests.length, 2);
+  assert.equal(f.requests.length, 1);
+  assert.equal(f.requests[0].url, "/api/download/check?link=y");
   f.requests[0].resolve(response({ok: false}, false, 404));
-  f.requests[1].resolve(response({ok: false}, false, 404));
   await flush();
-  assert.deepEqual(Array.from(sandbox.current().blockedFailures, item => item.link), ["x"]);
+  assert.deepEqual(Array.from(sandbox.current().skippedUncertain, item => item.link), ["x"]);
   assert.deepEqual(Array.from(sandbox.current().failed, item => item.link), ["y"]);
-  assert.match(status.textContent, /本次失败但此前状态不确定（不自动重试） 1："single.txt"（"x"）/);
-  click({target: {dataset: {queue: "retry"}}});
-  await flush();
-  assert.deepEqual(Array.from(sandbox.current().items, item => item.link), ["y"]);
-  assert.equal(f.requests.length, 3);
-  assert.equal(f.requests[2].url, "/api/download/check?link=y");
-  f.requests[2].resolve(response({ok: false}, false, 404));
-  await flush();
-  // Reproduce a blocked failure, then explicitly acknowledge it through its
-  // rendered button. Only that acknowledgement makes it eligible for retry.
-  sandbox.start([{filename: "single.txt", link: "x"}]);
-  await flush();
-  assert.equal(uncertainList.children[0].children[1].disabled, true);
+  assert.match(status.textContent, /因状态不确定跳过重试 1/);
   click({target: uncertainList.children[0].children[1]});
-  assert.deepEqual(Array.from(sandbox.current().uncertain, item => item.link), ["x"]);
-  f.requests[3].resolve(response({ok: false}, false, 404));
-  await flush();
-  assert.deepEqual(Array.from(sandbox.current().blockedFailures, item => item.link), ["x"]);
-  assert.equal(buttons.retry.hidden, true);
-  assert.equal(uncertainList.children[0].children[1].disabled, false);
-  click({target: uncertainList.children[0].children[1]});
-  assert.deepEqual(Array.from(sandbox.current().blockedFailures), []);
-  assert.deepEqual(Array.from(sandbox.current().failed, item => item.link), ["x"]);
-  assert.equal(buttons.retry.hidden, false);
-  assert.equal(uncertainList.children.length, 0);
+  assert.deepEqual(Array.from(sandbox.current().failed, item => item.link), ["y", "x"]);
   assert.deepEqual(JSON.parse(dom.sessionStorage.getItem("uncertain-downloads")), []);
-  click({target: {dataset: {queue: "retry"}}});
-  await flush();
-  assert.equal(f.requests[4].url, "/api/download/check?link=x");
-  f.requests[4].resolve(response({ok: false}, false, 404));
-  await flush();
-  assert.deepEqual(Array.from(sandbox.current().failed, item => item.link), ["x"]);
+  assert.equal(buttons.retry.hidden, false);
 });
 
 
-test("retry workers recheck uncertainty when consuming queued items, unlike explicit batches", async () => {
+test("all batch workers recheck uncertainty when consuming queued items", async () => {
   const source = fs.readFileSync(path.join(__dirname, "../../../static/app.js"), "utf8");
   const start = source.indexOf("const downloadBatches =");
   const end = source.indexOf("function setupDownloadIntentWarming() {", start);
@@ -845,11 +818,8 @@ test("retry workers recheck uncertainty when consuming queued items, unlike expl
   assert.deepEqual(JSON.parse(dom.sessionStorage.getItem("uncertain-downloads")), [{filename: "x", link: "x"}]);
   sandbox.start([{filename: "x", link: "x"}]);
   await flush();
-  assert.equal(f.requests.length, 6);
-  assert.equal(f.requests[5].url, "/api/download/check?link=x");
-  f.requests[5].resolve(response({ok: false}, false, 404));
-  await flush();
-  assert.deepEqual(Array.from(sandbox.current().blockedFailures, item => item.link), ["x"]);
+  assert.equal(f.requests.length, 5);
+  assert.deepEqual(Array.from(sandbox.current().skippedUncertain, item => item.link), ["x"]);
 
   // An all-skipped retry must regain its retry control after acknowledgement,
   // while the other file remains uncertain and no request or handoff starts.
@@ -870,7 +840,7 @@ test("retry workers recheck uncertainty when consuming queued items, unlike expl
   const acknowledgeX = uncertainList.children[0].children[1];
   click({target: acknowledgeX});
   await flush();
-  assert.equal(f.requests.length, 6);
+  assert.equal(f.requests.length, 5);
   assert.equal(handoffs, 2);
   assert.equal(sandbox.current(), skippedBatch);
   assert.deepEqual(Array.from(skippedBatch.failed, item => item.link), ["x"]);
@@ -898,15 +868,15 @@ test("retry workers recheck uncertainty when consuming queued items, unlike expl
   assert.equal(uncertainList.children.length, 0);
   assert.equal(buttons.retry.hidden, false);
   assert.equal(buttons.close.hidden, false);
-  assert.equal(f.requests.length, 6);
+  assert.equal(f.requests.length, 5);
   assert.equal(handoffs, 2);
 
   click({target: {dataset: {queue: "retry"}}});
   await flush();
   assert.deepEqual(Array.from(sandbox.current().items, item => item.link), ["x", "y"]);
-  assert.deepEqual(f.requests.slice(6).map(request => request.url), ["/api/download/check?link=x", "/api/download/check?link=y"]);
+  assert.deepEqual(f.requests.slice(5).map(request => request.url), ["/api/download/check?link=x", "/api/download/check?link=y"]);
+  f.requests[5].resolve(response({ok: false}, false, 404));
   f.requests[6].resolve(response({ok: false}, false, 404));
-  f.requests[7].resolve(response({ok: false}, false, 404));
   await flush();
   assert.equal(sandbox.current().done, true);
   assert.deepEqual(Array.from(sandbox.current().failed, item => item.link), ["x", "y"]);
@@ -945,7 +915,7 @@ test("batch owns two quiet workers, deduplicates in order and cancels queued wor
   await flush();
   assert.equal(pending.length, 2);
   assert.equal(current.done, true);
-  assert.equal(current.failed.length, 0);
+  assert.deepEqual(Array.from(current.failed, item => item.link), ["a", "b", "c"]);
   assert.equal(batches.isActive(), false);
   assert.match(dom.status.textContent, /已取消待下载/);
   assert.equal(dom.buttons.cancel.hidden, true);
@@ -953,6 +923,30 @@ test("batch owns two quiet workers, deduplicates in order and cancels queued wor
   dom.click({target: {dataset: {queue: "close"}}});
   assert.equal(batches.batch, null);
   assert.equal(dom.document.getElementById("download-queue"), null);
+});
+
+test("cancelled batch retries only the retained subset, never started items", async () => {
+  const dom = batchDomFixture(), pending = [];
+  const sandbox = {AbortController, document: dom.document, sessionStorage: dom.sessionStorage};
+  installBatchModules(sandbox);
+  const batches = sandbox.VoiceOfMLDownloadBatch.create({render: sandbox.VoiceOfMLDownloadQueue.render, showToast() {},
+    downloadFileDetailed: (_name, link) => new Promise(resolve => pending.push({link, resolve}))});
+  batches.start(["a", "b", "c", "d"].map(link => ({filename: link, link})));
+  pending[0].resolve("started");
+  await flush();
+  batches.cancel();
+  pending[1].resolve("cancelled"); pending[2].resolve("cancelled");
+  await flush();
+  assert.equal(batches.batch.started, 1);
+  assert.deepEqual(Array.from(batches.batch.failed, item => item.link), ["b", "c", "d"]);
+  batches.retry();
+  assert.deepEqual(pending.slice(3).map(item => item.link), ["b", "c"]);
+  pending[3].resolve("started"); pending[4].resolve("started");
+  await flush();
+  assert.equal(pending[5].link, "d");
+  pending[5].resolve("started");
+  await flush();
+  assert.equal(batches.batch.started, 3);
 });
 
 test("ledger restore filters records, tolerates storage failure and preserves acknowledgement order", () => {

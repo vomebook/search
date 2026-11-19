@@ -17,7 +17,7 @@ const lines = text.split(/\r?\n/);
 const rows = lines.filter(line =>
   /^\s*#\s*size-format\.js\s*\|\s*100(?:\.0+)?\s*\|\s*100(?:\.0+)?\s*\|\s*100(?:\.0+)?\s*\|/.test(line));
 const required = [
-  {name: "tests/search/size/test_search_size_format.js", marker: "search size formatting, parser compatibility and URL round trips passed"},
+  {name: "tests/search/size/test_search_size_format.js", marker: "search size formatting, strict bounds and URL round trips passed"},
   ...["display preserves binary boundaries and historical precision", "display retains original coercion and empty-value behavior",
     "display retains prototype and normalized cache behavior"].map(name => ({name}))
 ];

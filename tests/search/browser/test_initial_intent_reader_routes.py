@@ -228,7 +228,7 @@ class InitialIntentReaderRouteTests(unittest.TestCase):
                 File:file,Extension:'txt',Folder:[],Size:12}]}),
                 {headers:{'Content-Type':'application/json'}}))}));
           };
-          window.payload = file => ({mode:'global',total:1,
+          window.payload = file => ({mode:'global',page:1,page_size:STATE.pageSize,total:1,
             results:[{Repo:'VoiceOfML/Test',File:file,Extension:'txt',Folder:[],Size:12}]});
           window.oldInitial = searchWithInitialFallbackFresh();
         }''')
@@ -343,7 +343,7 @@ class InitialIntentReaderRouteTests(unittest.TestCase):
         self.assertEqual(self.page.evaluate('repoInitialRequests'), 1)
         self.assertTrue(self.page.evaluate('searchIntentId === repoInitialIntent'))
         self.evaluate_bounded('''async () => {
-          releaseRepo({repo:'VoiceOfML/Test',total:1,results:[{Repo:'VoiceOfML/Test',
+          releaseRepo({repo:'VoiceOfML/Test',page:1,page_size:STATE.pageSize,total:1,results:[{Repo:'VoiceOfML/Test',
             File:'path initial',Extension:'txt',Folder:[],Size:12}]});
           await pendingRepo;
         }''')
@@ -464,7 +464,7 @@ class InitialIntentReaderRouteTests(unittest.TestCase):
           window.repoTop = getResultScrollTop();
           const previous = fetchJsonWithTimeout;
           fetchJsonWithTimeout = (url, ...args) => !String(url).includes('data/initial/') ? previous(url, ...args) :
-            Promise.resolve({repo:'VoiceOfML/Fresh', total:100, results:Array.from({length:100}, (_, i) => ({
+            Promise.resolve({repo:'VoiceOfML/Fresh', page:1, page_size:STATE.pageSize, total:100, results:Array.from({length:100}, (_, i) => ({
               Repo:'VoiceOfML/Fresh', File:'fresh-' + i, Extension:'txt', Folder:[], Size:12
             }))});
           ROUTER.navigate('repo', 'Fresh');

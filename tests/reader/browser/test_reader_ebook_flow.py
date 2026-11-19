@@ -70,7 +70,10 @@ class EbookFlowTests(unittest.TestCase):
                 begin:beginReaderNavigation,anchor:foliateScrollAnchors,
                 load:i=>foliateSectionLoader(i),jump:i=>navigateTocEntry(i-1),
                 chapter:i=>navigationState.tocEntries[i-1].activate(beginReaderNavigation()),
-                progress:seekProgress,seekTask:()=>epubSeekPromise};
+                progress:seekProgress,seekTask:()=>epubSeekPromise,
+                search:fullSearchFoliateMatches,searchGo:navigateFoliateSearchResult,
+                searchGeneration:()=>readerRuntime.currentGeneration('search'),
+                toc:activateFoliateTocEntry};
             ''')
         self.page.route('**/static/reader.js*', instrument)
 
@@ -89,6 +92,64 @@ class EbookFlowTests(unittest.TestCase):
         self.page.route('**/api/reader-content**',lambda route:route.fulfill(content_type='application/epub+zip',body=stream.getvalue(),headers={'Access-Control-Allow-Origin':'*'}))
         self.expose()
         self.page.goto(self.origin+support.PREFIX+'/static/reader.html?'+urlencode(dict(url='https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/flow.epub',ext='epub')),wait_until='domcontentloaded')
+
+    def test_native_supplement_navigation_bookmark_and_resources(self):
+        with zipfile.ZipFile(io.BytesIO(epub_with_many_chapters(count=2))) as archive:
+            files = {name: archive.read(name) for name in archive.namelist()}
+        files['OEBPS/content.opf'] = files['OEBPS/content.opf'].replace(
+            b'</manifest>', b'<item id="extra" href="extra.xhtml" media-type="application/xhtml+xml"/></manifest>'
+        ).replace(b'</spine>', b'<itemref idref="extra" linear="no"/></spine>')
+        files['OEBPS/nav.xhtml'] = files['OEBPS/nav.xhtml'].replace(
+            b'</ol>', b'<li><a href="extra.xhtml#note">Supplement</a></li></ol>')
+        files['OEBPS/chapter-1.xhtml'] = files['OEBPS/chapter-1.xhtml'].replace(
+            b'</body>', b'<a id="note-link" href="extra.xhtml#note">Note link</a></body>')
+        files['OEBPS/extra.xhtml'] = b'''<html xmlns="http://www.w3.org/1999/xhtml"><body>
+          <h1 id="note">Supplement target</h1><p>uniqueSupplementNeedle</p>
+          <a id="back" href="chapter-1.xhtml#chapter-1">Back</a>
+          <img id="safe" src="images/picture.png#view%20one"/>
+          <img id="unsafe" src="https://evil.invalid/a.png#x"/>
+          <img id="badfragment" src="images/picture.png#%XX"/>
+          </body></html>'''
+        packed = io.BytesIO()
+        with zipfile.ZipFile(packed, 'w', zipfile.ZIP_DEFLATED) as archive:
+            for name, body in files.items(): archive.writestr(name, body)
+        self.page.route('**/api/reader-content**', lambda route: route.fulfill(
+            content_type='application/epub+zip', body=packed.getvalue(), headers={'Access-Control-Allow-Origin':'*'}))
+        self.expose()
+        self.page.goto(self.origin+support.PREFIX+'/static/reader.html?'+urlencode(dict(
+            url='https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/supplement.epub', ext='epub')))
+        self.page.wait_for_function("()=>document.documentElement.dataset.readerPhase==='ready'")
+        self.page.get_by_role('link', name='Supplement', exact=True).wait_for()
+        self.assertEqual(self.page.locator('article[data-supplement]').count(), 0)
+        self.page.get_by_role('link', name='Supplement', exact=True).click()
+        extra = self.page.locator('article[data-supplement]')
+        extra.wait_for()
+        self.assertEqual(extra.locator('#note').text_content(), 'Supplement target')
+        self.assertIn('path=OEBPS%2Fimages%2Fpicture.png#view%20one', extra.locator('#safe').get_attribute('src'))
+        self.assertIsNone(extra.locator('#unsafe').get_attribute('src'))
+        self.assertIsNone(extra.locator('#badfragment').get_attribute('src'))
+        saved = self.page.evaluate('__ebook.capture()')
+        self.assertLess(saved['foliateSection'], 0)
+        extra.locator('#back').click()
+        self.page.wait_for_function("()=>!document.querySelector('article[data-supplement]')")
+        self.assertTrue(self.page.evaluate('p=>__ebook.restore(p,__ebook.begin())', saved))
+        self.assertEqual(self.page.evaluate('__ebook.capture().foliateSection'), saved['foliateSection'])
+        self.assertEqual(self.page.locator('article[data-supplement]').count(), 1)
+        extra.locator('#back').click()
+        self.page.wait_for_function("()=>!document.querySelector('article[data-supplement]')")
+        result = self.page.evaluate("async()=> (await __ebook.search('uniqueSupplementNeedle',__ebook.searchGeneration()))[0]")
+        self.assertIsNotNone(result)
+        self.assertTrue(self.page.evaluate('r=>__ebook.searchGo(r,__ebook.begin())', result))
+        self.assertEqual(self.page.locator('article[data-supplement] mark.full-search-highlight').count(), 1)
+        self.assertTrue(self.page.evaluate("async()=>{const book=document.querySelector('foliate-view').book;"
+            "const resolve=book.resolveHref.bind(book);book.resolveHref=async href=>{const t=await resolve('OEBPS/extra.xhtml#note');"
+            "return t&&{...t,anchor:()=>{throw Error('bad anchor')}}};"
+            "try{return await __ebook.toc({href:'extra.xhtml#%XX'},__ebook.begin());}"
+            "finally{book.resolveHref=resolve}}"))
+        self.page.locator('article[data-supplement] #back').click()
+        self.page.wait_for_function("()=>!document.querySelector('article[data-supplement]')")
+        self.page.locator('#note-link').click()
+        self.page.locator('article[data-supplement] #note').wait_for()
 
     def test_ebook_prose_stays_in_paper_and_wide_blocks_scroll(self):
         body = '''<h1>Ebook layout</h1>

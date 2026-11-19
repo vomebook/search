@@ -109,6 +109,23 @@ async function names(params) {
   return (await search(params)).records.map((record) => record.File);
 }
 
+test('size filters distinguish zero from missing and unknown sizes', async () => {
+  const {worker} = await loaded([
+    {Repo: 'A', File: 'zero', Extension: 'txt', Folder: [], Size: 0},
+    {Repo: 'A', File: 'one', Extension: 'txt', Folder: [], Size: 1},
+    {Repo: 'A', File: 'missing', Extension: 'txt', Folder: []},
+    {Repo: 'A', File: 'unknown', Extension: 'txt', Folder: [], Size: 'unknown'},
+  ]);
+  for (const [params, expected] of [
+    [{minSize: 1}, ['one', 'missing', 'unknown']],
+    [{maxSize: 0}, ['zero', 'missing', 'unknown']],
+    [{minSize: 0, maxSize: 0}, ['zero', 'missing', 'unknown']],
+  ]) {
+    const result = await worker.request('local-search', params);
+    assert.deepStrictEqual(result.records.map(record => record.File), expected);
+  }
+});
+
 test('JSON corpus install preserves stable IDs, collisions, and snapshot stamps', async () => {
   const data = {v: 2, rp: ['Repo/A', {name: 'legacy'}, null],
     fd: [[], [''], ['', 'A'], ['A', '', 'B'], ['A/B'], ['A', 'B'], [null, 0, ['Nested']]],
@@ -1639,7 +1656,7 @@ test("exact and wildcard searches cover file repository and folder metadata", as
 });
 test("repository extension and size filters compose", async () => {
   assert.deepStrictEqual(await names({ q: "", repos: ["Repo/A"], extensions: ["pdf"], minSize: 400, maxSize: 600 }), ["beta alpha"]);
-  assert.deepStrictEqual(await names({ q: "", minSize: 1, maxSize: 10 }), ["手机资料", "手。机"]);
+  assert.deepStrictEqual(await names({ q: "", minSize: 1, maxSize: 10 }), ["手。机"]);
 });
 test("prefix exact root and mixed folder filters retain semantics", async () => {
   assert.deepStrictEqual(await names({ q: "", folders: ["docs"], folderMatchMode: "prefix" }), ["alpha guide", "beta alpha", "delta", "same"]);

@@ -91,6 +91,7 @@
             return resp.json();
           })
           .then(function(data) {
+            if (browserApiPending.get(cacheKey) !== promise) return null;
             if (data) {
               deps.noteApiSuccess();
               setBrowserApiCache(cacheKey, data);
@@ -98,12 +99,12 @@
             return data;
           })
           .catch(function(error) {
-            if (!error || error.name !== "AbortError") deps.noteApiFailure();
+            if (browserApiPending.get(cacheKey) === promise && (!error || error.name !== "AbortError")) deps.noteApiFailure();
             return null;
           })
           .finally(function() {
             clearTimeout(timeoutId);
-            browserApiPending.delete(cacheKey);
+            if (browserApiPending.get(cacheKey) === promise) browserApiPending.delete(cacheKey);
           });
         browserApiPending.set(cacheKey, promise);
         return await promise;

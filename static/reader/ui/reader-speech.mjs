@@ -134,7 +134,11 @@ export function createReaderSpeech(readerContext, loadPlayer) {
       const root = (index) => readerContext.content.querySelector(`.reader-epub-chapter[data-chapter="${index + 1}"]`);
       return {
         units: chapterCount(), first: 0, root,
-        load: async (index) => rootText(root(index) || await loader?.(index + 1)),
+        load: async (index) => {
+          const chapter = root(index) || await loader?.(index + 1);
+          if (!chapter) throw new Error("Chapter unavailable");
+          return rootText(chapter);
+        },
         locate: (index) => loader?.(index + 1)
       };
     }
@@ -201,8 +205,15 @@ export function createReaderSpeech(readerContext, loadPlayer) {
     const parts = [];
     let text = "", next = base, done = base >= sourceInfo.units, chain = Promise.resolve();
     function loadNext() {
-      const unit = next++;
-      return Promise.resolve(sourceInfo.load(unit)).catch(() => "").then((raw) => {
+      const unit = next;
+      const attempt = async () => {
+        for (let tries = 0; ; tries++) {
+          try { return await sourceInfo.load(unit); }
+          catch (error) { if (tries >= 1) throw error; }
+        }
+      };
+      return attempt().then((raw) => {
+        next++;
         raw = String(raw || "");
         if (raw.trim()) {
           // One separator character joins units so offsets never shift.
@@ -226,14 +237,14 @@ export function createReaderSpeech(readerContext, loadPlayer) {
       },
       root: null,
       ensure(length) {
-        chain = chain.then(async () => {
+        chain = chain.catch(() => {}).then(async () => {
           for (let guard = 0; !done && text.length < length && guard < 400; guard++) await loadNext();
         });
         return chain;
       },
       // Load through `unit` (the unit the reader is looking at).
       ensureUnit(unit) {
-        chain = chain.then(async () => {
+        chain = chain.catch(() => {}).then(async () => {
           for (let guard = 0; !done && next <= unit && guard < 400; guard++) await loadNext();
         });
         return chain;
@@ -584,11 +595,13 @@ export function createReaderSpeech(readerContext, loadPlayer) {
       // probed once its text is extracted (see attach).
       if (!probeSeen.has(unit) && info.ready && !info.ready(unit)) continue;
       if (!probeSeen.has(unit)) {
-        const text = Promise.resolve(info.load(unit)).then((value) => String(value || ""), () => "");
+        const text = Promise.resolve().then(() => info.load(unit)).then((value) => String(value || ""));
         probeText.set(unit, text);
         probeSeen.set(unit, text.then((value) => !!value.trim()));
       }
-      const found = await probeSeen.get(unit);
+      let found;
+      try { found = await probeSeen.get(unit); }
+      catch (_) { probeSeen.delete(unit); probeText.delete(unit); continue; }
       if (owner !== generation) return null;
       if (found) return from;
     }

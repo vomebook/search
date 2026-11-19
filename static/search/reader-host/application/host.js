@@ -120,8 +120,14 @@
         navigation.dismiss();
         let returnUrl = deps.hashRoute ? "/search/" : "/";
         try {
-          const target = new URL(new URL(/** @type {HTMLIFrameElement} */ (overlay).src, location.origin).searchParams.get("return") || returnUrl, location.origin);
-          if (target.origin === location.origin && (!deps.hashRoute || ["/search/", "/search/index.html"].includes(target.pathname))) returnUrl = target.href;
+          const current = new URL(navigation.readerUrl || /** @type {HTMLIFrameElement} */ (overlay).src, location.origin);
+          // The actual prior entry wins over a stale iframe return hint.
+          const state = history.state;
+          const share = new URL(current.href);
+          share.searchParams.delete("nav"); share.searchParams.delete("return");
+          const prior = navigation.reusedMount && state?.voiceReaderOverlay && state.readerUrl === current.href && share.href === location.href ? state.searchUrl : null;
+          const target = new URL(prior || current.searchParams.get("return") || returnUrl, location.origin);
+          if (target.origin === location.origin && !target.username && !target.password && (deps.hashRoute || target.pathname.split("/").filter(Boolean).length <= 1) && (!deps.hashRoute || ["/search/", "/search/index.html"].includes(target.pathname))) returnUrl = target.href;
           else if (deps.hashRoute) returnUrl = new URL("/search/", location.origin).href;
         } catch (_) {}
         if (!history.state?.voiceReaderOverlay) {

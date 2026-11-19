@@ -1710,7 +1710,7 @@ const options = {signal: undefined};
         render.write_text(original)
         formatted = self.root / paths[2]
         formatted_source = formatted.read_text()
-        marker = 'search size formatting, parser compatibility and URL round trips passed'
+        marker = 'search size formatting, strict bounds and URL round trips passed'
         self.assertEqual(formatted_source.count(marker), 1)
         formatted.write_text(formatted_source.replace(marker, 'missing size completion marker'))
         self.assert_check(self.run_check(*check), False, "passing named tests")
@@ -2982,6 +2982,9 @@ const options = {signal: undefined};
                             directory / f'test_reader_djvu_{name}.mjs')
         boundary = directory / 'test_reader_djvu_range_boundaries.mjs'
         shutil.copyfile(ROOT / 'tests/reader/djvu/test_reader_djvu_range_boundaries.mjs', boundary)
+        for name in ('audit', 'text_runtime'):
+            filename = f'test_reader_djvu_{name}.mjs'
+            shutil.copyfile(ROOT / 'tests/reader/djvu' / filename, directory / filename)
         # Only the explicit test scripts change in these live negatives; their
         # shared Reader dependencies, cwd and environment stay fixed. Capture
         # successful child results on the clean run, then use that cache read-only.

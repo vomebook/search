@@ -229,6 +229,10 @@ def execution_policy(job, records, historical_steps):
             run = original[name]['run']
             require(run.endswith(' ' + toc), 'unexpected duplicate TOC invocation')
             record = {**record, 'argv': simple_commands(run.removesuffix(' ' + toc))}
+        if name == full:
+            prefix = '../' if job == 'huggingface-search' else ''
+            record = {**record, 'argv': simple_commands(
+                f'python3 -B {prefix}scripts/ci/run_unittest_suite.py tests.reader.browser.test_reader_refactor')}
         if name in UNITTEST_RUNS:
             record = {**record, 'argv': UNITTEST_RUNS[name]}
         if job == 'huggingface-search' and name == 'Check backend coverage and quality inventory':

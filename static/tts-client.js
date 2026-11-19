@@ -305,9 +305,11 @@ if (typeof document !== "undefined") /** @type {Window & {CCRDSpeech?: unknown}}
   /** @param {SpeechSnapshot} snapshot @param {number} offset @param {SpeechOwner} value */
   function grow(snapshot, offset, value) {
     if (!more(snapshot) || snapshot.growing) return;
-    snapshot.growing = Promise.resolve((/** @type {NonNullable<SpeechSnapshot['adapter']>} */ (snapshot.adapter)).ensure(offset + LOOKAHEAD)).catch(() => {}).finally(() => {
+    snapshot.growing = Promise.resolve((/** @type {NonNullable<SpeechSnapshot['adapter']>} */ (snapshot.adapter)).ensure(offset + LOOKAHEAD)).catch(() => {
+      if (value && live(value)) { value.blocked = true; notice("正文载入失败 · 点击继续重试，进度保留"); }
+    }).finally(() => {
       snapshot.growing = null;
-      if (value && live(value) && value.wantsPlay) { advance(value); pump(value); }
+      if (value && live(value) && value.wantsPlay && !value.blocked) { advance(value); pump(value); }
       controls();
     });
   }
@@ -990,11 +992,14 @@ if (typeof document !== "undefined") /** @type {Window & {CCRDSpeech?: unknown}}
         const text = token === starting && (/** @type {NonNullable<SpeechSnapshot['adapter']>} */ (snapshot.adapter)).progress?.();
         if (text) notice(text); else if (token !== starting) clearInterval(progress);
       }, 500);
-      Promise.resolve((/** @type {NonNullable<SpeechSnapshot['adapter']>} */ (snapshot.adapter)).ensure(offset + NEED)).catch(() => {}).then(() => {
+      Promise.resolve((/** @type {NonNullable<SpeechSnapshot['adapter']>} */ (snapshot.adapter)).ensure(offset + NEED)).then(() => {
         clearInterval(progress);
         if (token !== starting) return;
         if (!snapshot.text.trim()) { notice("这份文档没有可朗读的文字"); return; }
         start(snapshot, Math.min(offset, snapshot.text.length), playing, skipHistory);
+      }, () => {
+        clearInterval(progress);
+        if (token === starting) notice("正文载入失败 · 点击继续重试，进度保留");
       });
       return;
     }
@@ -1033,9 +1038,9 @@ if (typeof document !== "undefined") /** @type {Window & {CCRDSpeech?: unknown}}
       // paged document is not read from its first loaded unit.
       const token = ++starting;
       if (!owner || chosen) { notice("正在定位当前阅读位置…"); show(); }
-      Promise.resolve(preview.adapter.locateTop()).catch(() => 0).then((found) => {
+      Promise.resolve(preview.adapter.locateTop()).then((found) => {
         if (token === starting && preview?.adapter) fromPreview(plan.safe(preview.text, Number(found) || 0), chosen);
-      });
+      }, () => { if (token === starting) notice("正文载入失败 · 点击继续重试，进度保留"); });
       return;
     }
     if (offset === undefined) offset = visibleOffset();

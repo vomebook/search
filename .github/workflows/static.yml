@@ -39,36 +39,22 @@ jobs:
     permissions:
       contents: read
       actions: read
-    outputs:
-      reuse: ${{ steps.code-proof.outputs.reuse }}
     steps:
       - uses: actions/checkout@v7
-      - name: Look up exact full-code proof for a data transition
-        id: code-proof
-        if: github.event_name == 'workflow_dispatch' && inputs.search_transition != '' && inputs.search_generation != ''
-        env:
-          GH_TOKEN: ${{ github.token }}
-          DATA_GENERATION: ${{ inputs.search_generation }}
-          DATA_OPERATION: ${{ inputs.search_transition }}
-        run: python3 -B scripts/ci/reuse_pages_code_checks.py
       - uses: actions/setup-node@v7
-        if: steps.code-proof.outputs.reuse != 'true'
         with:
           node-version: '26.13.1'
           cache: npm
       - uses: actions/setup-python@v7
-        if: steps.code-proof.outputs.reuse != 'true'
         with:
           python-version: '3.15.2'
           cache: pip
           cache-dependency-path: config/dependencies/static-check.txt
       - name: Install pinned static checkers
-        if: steps.code-proof.outputs.reuse != 'true'
         run: |
           npm ci --ignore-scripts --no-audit --no-fund
           python -m pip install -r config/dependencies/static-check.txt
       - name: Run production Pages source gates
-        if: steps.code-proof.outputs.reuse != 'true'
         run: bash scripts/ci/check_pages_source.sh
   # Single deploy job since we're just deploying
   deploy:
@@ -80,14 +66,6 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v7
-      - name: Reject reuse on a partial rerun
-        env:
-          REUSE_CODE_PROOF: ${{ needs.source-checks.outputs.reuse }}
-        run: |
-          if [[ "$REUSE_CODE_PROOF" == 'true' && "$GITHUB_RUN_ATTEMPT" != '1' ]]; then
-            echo 'Rerun all jobs to run full code checks before deploying.' >&2
-            exit 1
-          fi
       - name: Setup Node
         uses: actions/setup-node@v7
         with:
@@ -104,6 +82,7 @@ jobs:
           node --check static/reader/pdf/reader-pdf-text.js
           node --check static/sw.js
       - name: Build static site
+        id: build
         env:
           SEARCH_GENERATION: ${{ inputs.search_generation || vars.SEARCH_DATA_GENERATION }}
           SEARCH_INPUT_GENERATION: ${{ inputs.search_generation }}
@@ -116,6 +95,8 @@ jobs:
             [[ "$SEARCH_INPUT_GENERATION" =~ ^[0-9a-f]{64}$ ]]
             [[ "$SEARCH_GENERATION" == "$SEARCH_INPUT_GENERATION" ]]
           fi
+          [[ "$SEARCH_GENERATION" =~ ^[0-9a-f]{64}$ ]]
+          echo "generation=$SEARCH_GENERATION" >> "$GITHUB_OUTPUT"
           mkdir -p _site/static
           cp static/index.html static/manifest.json static/sw.js _site/
           cp -a static/icons _site/icons
@@ -141,18 +122,19 @@ jobs:
           node scripts/build/build_static_assets.mjs
           python3 scripts/build/seo.py --project pages --corpus _site/data/search_data.json.gz --output _site
           node scripts/build/check_reader_release.mjs --project github --root "$GITHUB_WORKSPACE" --artifact-root "$GITHUB_WORKSPACE/_site"
+      - name: Record candidate artifact fingerprint
+        env:
+          SELECTED_GENERATION: ${{ steps.build.outputs.generation }}
+        run: python3 -B scripts/ci/pages_artifact_proof.py record _site "$RUNNER_TEMP/pages-artifact-proof.json"
       - name: Cache PDF Python package downloads
-        if: needs.source-checks.outputs.reuse != 'true'
         uses: actions/cache@v6
         with:
           path: ~/.cache/pip
           key: ${{ runner.os }}-${{ runner.arch }}-pdf-pip-playwright-1.65.2-pypdf-7.1.1
       - name: Install PDF Python dependencies
-        if: needs.source-checks.outputs.reuse != 'true'
         timeout-minutes: 10
         run: python3 -m pip install playwright==1.65.2 pypdf==7.1.1
       - name: Configure official Ubuntu mirrors
-        if: needs.source-checks.outputs.reuse != 'true'
         run: |
           set -euo pipefail
           if python3 -B scripts/ci/ci_ubuntu_mirror.py; then
@@ -165,29 +147,23 @@ jobs:
             echo "::warning::Unrecognized runner mirror configuration; keeping default mirrors"
           fi
       - name: Install qpdf system dependency
-        if: needs.source-checks.outputs.reuse != 'true'
         timeout-minutes: 10
         run: sudo apt-get update && sudo apt-get install -y qpdf
       - name: Install Playwright Chromium system libraries
-        if: needs.source-checks.outputs.reuse != 'true'
         timeout-minutes: 15
         run: python3 -m playwright install-deps chromium
       - name: Identify runner distribution
-        if: needs.source-checks.outputs.reuse != 'true'
         id: pdf-distro
         run: echo "version=$(. /etc/os-release; echo "$ID-$VERSION_ID")" >> "$GITHUB_OUTPUT"
       - name: Cache Playwright Chromium binaries
-        if: needs.source-checks.outputs.reuse != 'true'
         uses: actions/cache@v6
         with:
           path: ~/.cache/ms-playwright
           key: ${{ runner.os }}-${{ runner.arch }}-${{ steps.pdf-distro.outputs.version }}-playwright-1.65.2-chromium
       - name: Install Playwright Chromium browser
-        if: needs.source-checks.outputs.reuse != 'true'
         timeout-minutes: 15
         run: python3 -m playwright install chromium
       - name: Check content-addressed PDF opening
-        if: needs.source-checks.outputs.reuse != 'true'
         timeout-minutes: 30
         run: |
           READER_BUILT_SITE="$GITHUB_WORKSPACE/_site" READER_BUILT_PROJECT=github python3 -B scripts/ci/run_unittest_suite.py \
@@ -200,6 +176,10 @@ jobs:
             tests.reader.browser.test_reader_pdf_first_page.PdfFirstPageTests.test_unknown_or_missing_child_never_commits_count \
             tests.reader.browser.test_reader_pdf_first_page.PdfFirstPageTests.test_full_text_search_waits_for_verified_count \
             tests.reader.browser.test_reader_pdf_first_page.PdfFirstPageTests.test_progress_panel_cannot_add_bookmark_during_validation
+      - name: Verify tested artifact fingerprint
+        env:
+          SELECTED_GENERATION: ${{ steps.build.outputs.generation }}
+        run: python3 -B scripts/ci/pages_artifact_proof.py verify _site "$RUNNER_TEMP/pages-artifact-proof.json"
       - name: Setup Pages
         uses: actions/configure-pages@v6
       - name: Upload artifact
@@ -214,6 +194,12 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           UPLOADED_ARTIFACT_ID: ${{ steps.upload.outputs.artifact_id }}
         run: python3 -B scripts/ci/wait_pages_artifact.py
+      - name: Require exact Reader matrix and current source before deployment
+        timeout-minutes: 46
+        env:
+          REQUIRE_READER_MATRIX: '1'
+          GH_TOKEN: ${{ github.token }}
+        run: python3 -B scripts/ci/check_pages_freshness.py
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v5

@@ -225,12 +225,41 @@ test("content-addressed DjVu decoder survives activation and reuses cached bytes
   assert.ok(!instance.stores.get(CACHE_NAME).has(url), 'activation does not copy bodies');
   assert.ok(instance.stores.get('vomebook-search-v1.0.0').has(url));
   assert.ok(instance.stores.get('vomebook-search-v1.0.0').has(old));
-  assert.deepStrictEqual(await generationState(instance.stores), { active: CACHE_NAME, previous: 'vomebook-search-v1.0.0' });
+  assert.deepStrictEqual(await generationState(instance.stores), { active: CACHE_NAME, previous: 'vomebook-search-v1.0.0', history: ['vomebook-search-v1.0.0'] });
   const result = await dispatchFetch(instance, url);
   assert.strictEqual(result.body, "cached-decoder");
   await Promise.all(instance.operations.lifetimes);
   assert.deepStrictEqual(instance.operations.fetch, []);
 });
+for (const [site, workerSource, prefix] of [['Pages', source, '/search/static/'], ['HF', hfSource, '/static/']]) {
+  test(`${site} malformed metadata recovery preserves unknown serving caches and bounds future history`, async () => {
+    const asset = prefix + 'app.111111111111.js';
+    const release = version => workerSource.replace('"development"', JSON.stringify(version))
+      .replace('const CURRENT_HASHED_ASSETS = []', 'const CURRENT_HASHED_ASSETS = ' + JSON.stringify([prefix + 'app.222222222222.js']));
+    const old = cacheName(release('serving'));
+    const firstSource = release('recovery');
+    const h = harness({source: firstSource, fetch: () => Promise.reject(new Error('offline'))});
+    const metadata = cacheName(firstSource).replace('recovery', 'metadata');
+    const key = site === 'Pages' ? ACTIVE_KEY : '/.sw-active-generation';
+    const shell = 'https://example.test' + prefix + 'reader.html';
+    h.stores.set(old, new Map([[shell, response('serving shell')], ['https://example.test' + asset, response('old bytes')]]));
+    h.stores.set(metadata, new Map([[key, response('{broken')]]));
+    await lifecycle(h.listeners.install);
+    assert.strictEqual(h.stores.get(old).get(shell).body, 'serving shell');
+    await lifecycle(h.listeners.activate);
+    assert.strictEqual(h.stores.get(old).get(shell).body, 'serving shell');
+    assert.strictEqual((await dispatchFetch(h, 'https://example.test' + asset)).body, 'old bytes');
+    await assert.rejects(dispatchFetch(h, shell, 'navigate'));
+    let latest = h;
+    for (let i = 1; i <= 3; i++) {
+      latest = harness({source: release('upgrade' + i), stores: h.stores, fetch: () => Promise.reject(new Error('offline'))});
+      await lifecycle(latest.listeners.install); await lifecycle(latest.listeners.activate);
+      if (i < 3) assert.strictEqual((await dispatchFetch(latest, 'https://example.test' + asset)).body, 'old bytes');
+    }
+    assert.ok(!h.stores.has(old), 'oldest generation is eventually collected');
+    await assert.rejects(dispatchFetch(latest, 'https://example.test' + asset));
+  });
+}
 test("registers install activate and fetch listeners", () => {
   const instance = harness();
   assert.deepStrictEqual(Object.keys(instance.listeners).sort(), ["activate", "fetch", "install"]);
@@ -265,7 +294,7 @@ test("only pinned static hashes ignore Origin Vary mismatches", async () => {
     assert.deepStrictEqual(instance.operations.fetch, [ordinary]);
   }
 });
-test("retains only the actual previous cache for one release without copying bodies", async () => {
+test("retains a bounded history without copying bodies", async () => {
   const prefix = '/search/static/';
   const paths = ['111111111111', '222222222222', '333333333333'].map(hash => prefix + 'app.' + hash + '.js');
   const source1 = generationSource('development', [paths[0]]);
@@ -282,7 +311,7 @@ test("retains only the actual previous cache for one release without copying bod
   assert.strictEqual(values.size, paths.length + excluded.length + 1, 'install leaves the active cache untouched');
   await lifecycle(offline.listeners.activate);
   const current = offline.stores.get(CACHE_NAME);
-  assert.deepStrictEqual([...values.keys()].sort(), [...paths, nested].map(path => 'https://example.test' + path).sort());
+  assert.deepStrictEqual([...values.keys()].sort(), [...paths, nested, ...excluded].map(path => 'https://example.test' + path).sort(), 'unknown serving cache stays intact');
   assert.ok(![...current.keys()].some(key => key.startsWith('https:')), 'no snapshot copies');
   assert.strictEqual((await dispatchFetch(offline, 'https://example.test' + paths[1])).body, 'asset ' + paths[1]);
   await assert.rejects(dispatchFetch(offline, 'https://example.test' + prefix + 'app.js'));
@@ -296,10 +325,10 @@ test("retains only the actual previous cache for one release without copying bod
   const later = harness({source: nextSource, stores: offline.stores, fetch: () => Promise.reject(new Error('offline'))});
   await lifecycle(later.listeners.install);
   await lifecycle(later.listeners.activate);
-  assert.ok(!later.stores.has(legacy));
+  assert.ok(later.stores.has(legacy));
   assert.ok(later.stores.has(CACHE_NAME));
-  assert.deepStrictEqual(await generationState(later.stores), { active: cacheName(nextSource), previous: CACHE_NAME });
-  await assert.rejects(dispatchFetch(later, 'https://example.test' + paths[1]));
+  assert.deepStrictEqual(await generationState(later.stores), { active: cacheName(nextSource), previous: CACHE_NAME, history: [CACHE_NAME, legacy] });
+  assert.strictEqual((await dispatchFetch(later, 'https://example.test' + paths[1])).body, 'asset ' + paths[1]);
 });
 for (const [site, workerSource, prefix] of [
   ['Pages', source, '/search/static/'],
@@ -807,7 +836,7 @@ for (const [site, workerSource, prefix] of [
     ['domain/stable-stringify.6ddaa7dbe262.js', 'shared/domain/stable-stringify.6ddaa7dbe262.js'],
     ['presentation/sidebar-render.be37a947a2ef.js', 'sidebar/presentation/markup.be37a947a2ef.js'],
   ]) {
-  test(`${site} relocated classic module ${historical} keeps its historical hashed URL for one previous generation`, async () => {
+  test(`${site} relocated classic module ${historical} keeps its historical hashed URL across upgrades`, async () => {
     // These paths and digests were emitted by the prior release on both sites.
     const oldPath = prefix + 'search/' + historical;
     const newPath = prefix + 'search/' + canonical;
@@ -829,9 +858,8 @@ for (const [site, workerSource, prefix] of [
       const third = harness({source: release('following-release', newPath), stores: first.stores, fetch: network});
       await lifecycle(third.listeners.install);
       await lifecycle(third.listeners.activate);
-      assert.ok(!third.stores.has(cacheName(oldSource)));
-      if (offline) await assert.rejects(dispatchFetch(third, 'https://example.test' + oldPath), /offline/);
-      else assert.strictEqual((await dispatchFetch(third, 'https://example.test' + oldPath)).status, 404);
+      assert.ok(third.stores.has(cacheName(oldSource)));
+      assert.strictEqual((await dispatchFetch(third, 'https://example.test' + oldPath)).body, 'original module bytes');
     }
   });
   }
@@ -873,8 +901,8 @@ for (const [site, workerSource, prefix] of [
       const third = harness({source: thirdSource, stores: first.stores, fetch: () => Promise.reject(new Error('offline'))});
       await lifecycle(third.listeners.install);
       await lifecycle(third.listeners.activate);
-      assert.ok(!third.stores.has(cacheName(firstSource)), 'retired Ruffle generation expires after one release');
-      for (const path of retired) await assert.rejects(dispatchFetch(third, url(path)), /offline/);
+      assert.ok(third.stores.has(cacheName(firstSource)));
+      for (const path of retired) assert.strictEqual((await dispatchFetch(third, url(path))).body, 'bytes:' + path);
       for (const path of current) assert.strictEqual((await dispatchFetch(third, url(path))).body, 'bytes:' + path);
       await Promise.all(third.operations.lifetimes);
     }
@@ -902,7 +930,7 @@ for (const [site, workerSource, prefix] of [
     const third = harness({source: thirdSource, stores: first.stores, fetch: () => Promise.reject(new Error('offline'))});
     await lifecycle(third.listeners.install);
     await lifecycle(third.listeners.activate);
-    assert.ok(!third.stores.has(cacheName(firstSource)), 'original cache was collected');
+    assert.ok(third.stores.has(cacheName(firstSource)), 'original cache is retained');
     assert.strictEqual((await dispatchFetch(third, url)).body, 'unchanged bytes');
     await Promise.all(third.operations.lifetimes);
     assert.strictEqual(third.stores.get(cacheName(thirdSource)).get(url).body, 'unchanged bytes');
@@ -994,7 +1022,7 @@ test("activation selects the recorded active generation over a newer unactivated
   const next = harness({source: nextSource, stores: active.stores, fetch: () => Promise.reject(new Error('offline'))});
   await lifecycle(next.listeners.install);
   await lifecycle(next.listeners.activate);
-  assert.deepStrictEqual(await generationState(next.stores), { active: cacheName(nextSource), previous: cacheName(activeSource) });
+  assert.deepStrictEqual(await generationState(next.stores), { active: cacheName(nextSource), previous: cacheName(activeSource), history: [cacheName(activeSource)] });
   assert.ok(!next.stores.has(cacheName(candidateSource)));
   assert.strictEqual((await dispatchFetch(next, 'https://example.test' + path)).body, 'actual active');
 });
@@ -1015,9 +1043,9 @@ test("rollback to an existing generation replaces previous metadata and reinstal
   const rollback = harness({source: sourceA, stores: a.stores, fetch: () => Promise.reject(new Error('offline'))});
   await lifecycle(rollback.listeners.install);
   assert.strictEqual(rollback.operations.addAll.length, 1);
-  assert.deepStrictEqual(await generationState(rollback.stores), { active: cacheName(sourceB), previous: cacheName(sourceA) });
+  assert.deepStrictEqual(await generationState(rollback.stores), { active: cacheName(sourceB), previous: cacheName(sourceA), history: [cacheName(sourceA)] });
   await lifecycle(rollback.listeners.activate);
-  assert.deepStrictEqual(await generationState(rollback.stores), { active: cacheName(sourceA), previous: cacheName(sourceB) });
+  assert.deepStrictEqual(await generationState(rollback.stores), { active: cacheName(sourceA), previous: cacheName(sourceB), history: [cacheName(sourceB)] });
   assert.ok(rollback.stores.get(cacheName(sourceA)).has('/search/'));
   assert.strictEqual((await dispatchFetch(rollback, 'https://example.test' + pathB)).body, 'B');
   assert.strictEqual((await dispatchFetch(rollback, 'https://example.test' + pathA)).body, 'A');
@@ -1033,7 +1061,7 @@ test("reinstalling the active generation preserves serving bytes and its previou
   await lifecycle(reinstall.listeners.activate);
   assert.deepStrictEqual(reinstall.operations.addAll, []);
   assert.strictEqual(first.stores.get(CACHE_NAME).get('/search/'), shell);
-  assert.deepStrictEqual(await generationState(first.stores), { active: CACHE_NAME, previous: 'vomebook-search-v1.0.0' });
+  assert.deepStrictEqual(await generationState(first.stores), { active: CACHE_NAME, previous: 'vomebook-search-v1.0.0', history: ['vomebook-search-v1.0.0'] });
 });
 test("late old-worker writes remain available only at exact immutable URLs", async () => {
   const oldPath = '/search/static/reader/late.111111111111.mjs';
@@ -1069,7 +1097,8 @@ test("late old-worker writes remain available only at exact immutable URLs", asy
 });
 test("failed reinstall never deletes an existing current cache", async () => {
   const instance = harness({ cacheEntries: [['/search/', response('active')]], addAllError: new Error('offline') });
-  await assert.rejects(lifecycle(instance.listeners.install), /offline/);
+  await lifecycle(instance.listeners.install);
+  assert.deepStrictEqual(instance.operations.addAll, []);
   assert.strictEqual(instance.stores.get(CACHE_NAME).get('/search/').body, 'active');
   assert.deepStrictEqual(instance.operations.deleted, []);
 });
@@ -1096,9 +1125,9 @@ test("same-host requests on another origin bypass the cache", () => {
 test("activation deletes only this site's old caches and claims clients", async () => {
   const instance = harness({ oldCaches: ["vomebook-search-v1.0.0", "vomebook-search-old", "reader-documents", "voiceofml-search-hf-release"] });
   await lifecycle(instance.listeners.activate);
-  assert.deepStrictEqual(instance.operations.deleted, ["vomebook-search-old"]);
+  assert.deepStrictEqual(instance.operations.deleted, []);
   assert.ok(instance.stores.has('vomebook-search-v1.0.0'));
-  assert.deepStrictEqual(await generationState(instance.stores), { active: CACHE_NAME, previous: 'vomebook-search-v1.0.0' });
+  assert.deepStrictEqual(await generationState(instance.stores), { active: CACHE_NAME, previous: 'vomebook-search-old', history: ['vomebook-search-old', 'vomebook-search-v1.0.0'] });
   assert.ok(instance.stores.has('reader-documents'));
   assert.ok(instance.stores.has('voiceofml-search-hf-release'));
   assert.strictEqual(instance.operations.claim, 1);

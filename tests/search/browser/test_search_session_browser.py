@@ -121,7 +121,7 @@ class SearchSessionBrowserTests(unittest.TestCase):
         self.page.wait_for_function('!!positionStorage.database', timeout=8000)
         result = self.page.evaluate('''async () => {
           positionStorage.close();
-          const request=indexedDB.open('voice-search-positions',4);
+          const request=indexedDB.open('voice-search-positions',5);
           const blocker=await new Promise((resolve,reject)=>{request.onsuccess=()=>resolve(request.result);request.onerror=()=>reject(request.error)});
           const deletion=indexedDB.deleteDatabase('voice-search-positions');
           let deleted=false; deletion.onsuccess=()=>{deleted=true};

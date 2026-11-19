@@ -168,6 +168,7 @@ export function createReaderBookmarks(readerContext) {
     /** @type {{article: HTMLElement, top: number} | null} */
     let following = null, last = null;
     for (const article of rows) {
+      if (article.hidden) continue;
       const { top, bottom } = article.getBoundingClientRect();
       last = { article, top };
       if (top <= marker && bottom > marker) { following = last; break; }

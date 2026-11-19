@@ -15,7 +15,10 @@
   }
   /** @param {SearchInitialPayload | null} data @param {SearchBootstrapView} view */
   function accepts(data, view) {
-    return !!data && Array.isArray(data.results)
+    const total = data?.total;
+    return !!data && Array.isArray(data.results) && data.page === 1 && data.page_size === view.pageSize
+      && typeof total === "number" && Number.isSafeInteger(total) && total >= 0
+      && data.results.length === Math.min(total, view.pageSize)
       && (view.mode !== "repo" || data.repo === view.repoFull)
       && (view.mode !== "global" || data.mode === "global");
   }

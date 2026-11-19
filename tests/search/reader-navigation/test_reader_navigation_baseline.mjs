@@ -107,6 +107,50 @@ function parkSpeakingReader(nav, url) {
   return {frame, reveals: () => reveals};
 }
 
+test('parked reuse keeps the new navigation identity through replacement and recovery', () => {
+  const {nav, context, input, shell} = shellFixture();
+  const first = new URL(origin + readerPath + '?id=book&nav=old&return=%2Fold');
+  const parked = parkSpeakingReader(nav, first);
+  input.focus();
+  const fresh = new URL(origin + readerPath + '?id=book&nav=new&return=%2Fsearch%2F%3Fq%3Dlatest');
+  assert.equal(nav.mount(fresh, true), parked.frame);
+  assert.equal(nav.readerUrl, fresh.href);
+  assert.equal(nav.reusedMount, true);
+  assert.equal(nav.returnFocus, input);
+  assert.equal(parked.reveals(), 1);
+  nav.remember(fresh, {});
+  nav.dismiss();
+  nav.showCloseRecovery('/search/?q=latest');
+  const link = shell().children[1];
+  link.dispatchEvent(new Event('click'));
+  assert.equal(JSON.parse(context.sessionStorage.getItem('reader-navigation-restore')).readerUrl, fresh.href);
+  const next = nav.replace(readerPath + '?id=next', {});
+  const nextUrl = new URL(next.src);
+  assert.equal(nextUrl.searchParams.get('nav'), 'new');
+  assert.equal(nextUrl.searchParams.get('return'), '/search/?q=latest');
+  assert.equal(nav.returnFocus, input);
+  assert.equal(nav.reusedMount, false);
+  assert.equal(nav.readerUrl, next.src);
+  assert.equal(context.history.state.searchUrl, origin + '/search/#/');
+  nav.unmount(false);
+});
+
+test('ordinary frames expose a changed src and replacement rejects unowned history', () => {
+  const {nav, context, location} = shellFixture();
+  const frame = nav.mount(new URL(origin + readerPath + '?id=ordinary&nav=original'));
+  nav.remember(new URL(frame.src), {});
+  frame.src = origin + readerPath + '?id=ordinary&nav=updated&return=%2Fsearch%2F%3Fq%3Dchanged';
+  assert.equal(nav.reusedMount, false);
+  assert.equal(nav.readerUrl, frame.src);
+  // The visible address no longer matches the history entry: do not trust it.
+  location.hash = '#unrelated';
+  const next = nav.replace(readerPath + '?id=next', {});
+  assert.equal(new URL(next.src).searchParams.get('nav'), 'updated');
+  assert.equal(new URL(next.src).searchParams.get('return'), '/search/?q=changed');
+  assert.equal(context.history.state.searchUrl == null, true);
+  nav.unmount(false);
+});
+
 test('explicit fragment and bookmark opens bypass parked reuse without stopping speech', () => {
   for (const target of ['#chapter%202', '&bookmark=saved&bookmark_source=https%3A%2F%2Ffiles.example%2Fbook.md']) {
     const {nav, document, mini} = shellFixture();

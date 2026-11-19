@@ -177,7 +177,7 @@ export function createReaderPdfTextRuntime(readerContext) {
     const cached = readerContext.cachedPdfTextContent(page);
     if (cached) { recordNativePdfTextEvidence(sourcePdf, page, cached); return Promise.resolve(cached); }
     const pending = readerContext.pdfTextContentPromises.get(page);
-    if (pending) {
+    if (pending && !pending.request.controller?.signal.aborted) {
       if (generation === null) pending.request.demanded = true;
       else pending.request.generation = generation;
       readerContext.drainPdfTextWaiters();
@@ -185,13 +185,16 @@ export function createReaderPdfTextRuntime(readerContext) {
     }
     // Rendering and search share extraction, but retain their own cancellation
     // and result ownership. Only active work lives here, not another text cache.
-    const request = { demanded: generation === null, generation, page };
+    const request = { demanded: generation === null, generation, page,
+      controller: pdfPage.readerDjvuText === true ? new AbortController() : null };
     const task = Object.assign(Promise.resolve().then(async () => {
       const background = await readerContext.acquirePdfTextSlot(request.demanded, request);
       try {
         readerContext.assertReaderActive();
         if (!request.demanded && !readerContext.isReaderGenerationCurrent("search", request.generation)) throw readerContext.readerAbortError();
-        const text = await readerContext.awaitReader(pdfPage.getTextContent());
+        const text = await readerContext.awaitReader(request.controller
+          ? pdfPage.getTextContent({signal: request.controller.signal}) : pdfPage.getTextContent());
+        request.controller?.signal.throwIfAborted();
         readerContext.cachePdfTextContent(page, text);
         recordNativePdfTextEvidence(sourcePdf, page, text);
         return text;

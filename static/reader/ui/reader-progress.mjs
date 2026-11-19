@@ -174,6 +174,12 @@ export function createReaderProgress(readerContext) {
               )
             )
           : 0;
+      if (position && position.foliateSection < 0) {
+        const index = -position.foliateSection - 1, spine = readerContext.epubBook?.sections || [];
+        if (!spine[index]) return 0;
+        const preceding = spine.slice(0, index).filter(item => item.linear !== "no").length;
+        return count ? Math.round((preceding / count) * 1000) / 10 : 0;
+      }
       return count && position
         ? Math.round(((position.foliateSection + fraction) / count) * 1000) / 10
         : 0;

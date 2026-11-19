@@ -497,7 +497,8 @@ export function createReaderBindings(readerContext) {
       event.preventDefault();
       const generation = readerContext.beginReaderNavigation(),
         index = Number(article.dataset.section),
-        section = readerContext.epubRendition.book.sections.filter((item) => item.linear !== "no")[index];
+        section = index < 0 ? readerContext.epubRendition.book.sections[-index - 1]
+          : readerContext.epubRendition.book.sections.filter((item) => item.linear !== "no")[index];
       let href = raw;
       try {
         href = section?.resolveHref?.(raw) || raw;

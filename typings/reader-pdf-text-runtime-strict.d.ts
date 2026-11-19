@@ -8,10 +8,10 @@ export interface TextLayer { kind: 'pdf-text-layer'; text: string; geometry: {wi
 export type OcrPayload = OcrPage | TextLayer;
 export interface TextItem { str?: string; transform?: number[] }
 export interface TextContent { items: TextItem[]; styles: Record<string, object>; readerTextZones?: {text: string; start: number; end: number; box: number[]}[] }
-export interface PdfPage { getTextContent(): Promise<TextContent>; getViewport(options: {scale: number}): {height: number; convertToViewportPoint?: (x: number, y: number) => number[]} }
+export interface PdfPage { readerDjvuText?: boolean; getTextContent(options?: {signal: AbortSignal}): Promise<TextContent>; getViewport(options: {scale: number}): {height: number; convertToViewportPoint?: (x: number, y: number) => number[]} }
 export interface PdfDocument { numPages: number; _pdfInfo?: {readerPageCountPending?: boolean}; readerNativeTextEvidence?: {count: number; pages: Set<number>; hasText: boolean}; readerNoSearchableText?: boolean }
 export interface Shell extends HTMLElement { _ocrPromise?: Promise<void>; _textEpoch?: number; _bookmarkTextItems?: {text: string | undefined; y: number}[] }
-export interface Request { demanded: boolean; generation: number | null; page: number }
+export interface Request { demanded: boolean; generation: number | null; page: number; controller: AbortController | null }
 export type TextTask = Promise<TextContent> & {request: Request};
 export interface Repository { read(ref: Resource): Promise<unknown>; dispose(): void; textIndex(ref: Resource): Promise<import('./reader-v3-strict').TextIndex>; textPage(ref: Resource, page: number): Promise<import('./reader-v3-strict').TextLayer> }
 export interface Context {

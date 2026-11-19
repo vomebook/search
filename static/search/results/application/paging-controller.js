@@ -65,7 +65,7 @@
         timer = null;
         const current = readView();
         if (disposed || token !== timerRevision || current.generation !== view.generation || !policy.acceptsReadyPage(current, readyPage)) return;
-        maybeLoad(!readyPage);
+        maybeLoad(!readyPage, !current.loadedPage && recovery.failures > 0);
       }, Math.max(delay, recovery.retryAt - clock.now()));
     }
     /** @param {boolean} success @param {boolean} [terminal] */

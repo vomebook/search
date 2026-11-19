@@ -51,7 +51,7 @@ class SearchPositionTests(unittest.TestCase):
         # Leave the app first so pagehide cannot overwrite the corrupt disk entry.
         self.page.goto(self.fixture.origin + '/search/manifest.json')
         persisted = self.page.evaluate('''({key, afterAnchor}) => new Promise((resolve,reject) => {
-          const request=indexedDB.open('voice-search-positions',4);
+          const request=indexedDB.open('voice-search-positions',5);
           request.onerror=()=>reject(request.error);
           request.onsuccess=()=>{
             const db=request.result,tx=db.transaction(['positions','viewports'],'readwrite');
@@ -164,7 +164,7 @@ class SearchPositionTests(unittest.TestCase):
         }''')
         self.assertEqual(checks, [])
 
-    def test_old_database_is_reset_without_importing_legacy_positions(self):
+    def test_old_database_preserves_compatible_positions(self):
         self.page.goto(self.fixture.origin + '/search/manifest.json')
         self.page.evaluate('''async saved => {
           await new Promise((resolve,reject)=>{const r=indexedDB.deleteDatabase('voice-search-positions');r.onsuccess=resolve;r.onerror=()=>reject(r.error);});
@@ -176,9 +176,12 @@ class SearchPositionTests(unittest.TestCase):
           });
         }''', self.saved)
         self.page.goto(self.fixture.origin + '/search/#/?q=paging-original&local=0')
-        self.page.wait_for_function('positionStorage.database?.version === 4 && !STATE.isLoading')
-        self.assertEqual(self.page.evaluate('findVirtualIndex(getResultScrollTop())'), 0)
-        self.page.evaluate('setResultScrollTop(getVirtualOffset(25)+10);saveSearchPosition()')
+        self.page.wait_for_function('positionStorage.database?.version === 5 && !STATE.isLoading')
+        self.page.wait_for_function('key => positionPersistence.positions.has(key)', arg=self.saved['key'])
+        self.assertEqual(self.page.evaluate('key => positionPersistence.positions.get(key)', self.saved['key']), self.saved)
+        self.page.evaluate('returnToSavedPosition()')
+        self.assert_position()
+        self.page.evaluate('setReturnPositionTarget();setResultScrollTop(getVirtualOffset(25)+10);saveSearchPosition()')
         self.page.wait_for_function('positionPersistence.positions.get(getSearchViewKey())?.index === 25')
         self.saved = self.page.evaluate('positionPersistence.positions.get(getSearchViewKey())')
         # Memory updates precede IndexedDB commit; assert persistence before reload.

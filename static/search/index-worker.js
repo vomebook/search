@@ -817,7 +817,7 @@ function buildRecordFilter(params, filters = buildFilterSets(params)) {
       const folderPath = recordFolders.join("/");
       if (!matchesFolderFilters(recordFolders, folderPath, params, filters)) return false;
     }
-    if (typeof record.Size === "number" && record.Size > 0) {
+    if (typeof record.Size === "number" && record.Size >= 0) {
       if (params.minSize !== null && record.Size < /** @type {number} */ (params.minSize)) return false;
       if (params.maxSize !== null && record.Size > /** @type {number} */ (params.maxSize)) return false;
     }

@@ -61,7 +61,36 @@ for (const {name: project, root} of searchTestProjects()) {
     await f.flush();assert.strictEqual(f.view.page,1);assert.strictEqual(f.view.isLoading,false);
     assert(!f.effects.includes('toast'));assert(!f.effects.some(e=>Array.isArray(e)&&e[0]==='finish'));
   });
+  test(project + ' focus recovery cannot discard cold first-page retry state', () => {
+    const context=vm.createContext({}), source=fs.readFileSync(path.join(root,'static/app.js'),'utf8');
+    for (const file of ['domain/paging-policy.js','application/paging-controller.js'])
+      vm.runInContext(fs.readFileSync(path.join(root,'static/search/results',file),'utf8'), context);
+    const view={generation:1,loadedPage:0,hasMore:true,resultCount:0,viewportHeight:600,
+      scrollTop:0,loadedHeight:0,loading:false};
+    let now=100, timer, attempts=0, scrollSchedules=0;
+    const paging=context.VoiceOfMLPagingController.create({policy:context.VoiceOfMLPagingPolicy,
+      clock:{now:()=>now,setTimeout(fn){timer=fn;return 1;},clearTimeout(){timer=null;}},
+      readView:()=>view,append(page){assert.strictEqual(page,1);attempts++;},expireRequests(){},onState(){}});
+    Object.assign(context,{pagingController:paging,STATE:{_loadedPage:0,isLoading:false},DOM:{},VSCROLL:{},
+      cancelQuickScroll(){},expireSearchRequests(){},resetPagingRecovery:()=>paging.reset(),
+      scrollRecoveryTimer:null,scrollLoadTimer:null,consumeDeferredSearchAppend:()=>false,
+      renderVisible(){},updateScrollTrack(){},prefetchNextPage(){},recoverSidebarState(){},
+      scheduleBottomLoad:()=>paging.schedule(),scheduleScrollLoad(){scrollSchedules++;}});
+    vm.runInContext(source.match(/^function recoverScrollState\([^]*?^}/m)[0], context);
+    paging.finish(false);context.recoverScrollState();
+    assert.strictEqual(paging.readRecovery().failures,1);assert.strictEqual(scrollSchedules,0);
+    now+=751;timer();assert.strictEqual(attempts,1);
+    paging.finish(false);context.recoverScrollState();
+    assert.strictEqual(paging.readRecovery().failures,2);assert.strictEqual(attempts,1);
+  });
   if(pages) {
+    test(project + ' failed cold API search retains retry after its local fallback fails', async()=>{
+      const f=executionFixture(root,true);Object.assign(f.view,{page:1,_loadedPage:0});
+      f.start(false);f.calls[0].reject(Error('API_TIMEOUT'));await f.flush();
+      f.calls[1].resolve(false);await f.flush();
+      assert.strictEqual(f.view.hasMore,true);assert.strictEqual(f.view.isLoading,false);
+      assert(f.effects.some(e=>Array.isArray(e)&&e[0]==='finish'&&!e[1]&&e[2]==='API_TIMEOUT'));
+    });
     test(project + ' append backend and initial continuity override changed mode preferences', () => {
       const f=executionFixture(root,true), policy=f.context.VoiceOfMLSearchExecutionPolicy;
       for(const apiAvailable of [false,true]) for(const useLocalMode of [false,true]) {

@@ -18,6 +18,11 @@ const result = spawnSync(process.execPath, ['--test', '--test-concurrency=1', '-
 if (result.stdout) process.stdout.write(result.stdout);
 if (result.stderr) process.stderr.write(result.stderr);
 if (result.error) throw result.error;
+const audit = spawnSync(process.execPath, ['--test', '--test-reporter=tap',
+  'tests/reader/djvu/test_reader_djvu_audit.mjs', 'tests/reader/djvu/test_reader_djvu_text_runtime.mjs'], {encoding: 'utf8'});
+if (audit.error) throw audit.error;
+const auditComplete = audit.status === 0 && hasCompleteFlatTapReport(audit.stdout || '');
+if (!auditComplete) process.stderr.write((audit.stdout || '') + (audit.stderr || ''));
 const lines = (result.stdout || '').split(/\r?\n/);
 const complete = contracts.every(([name, marker]) => {
   const subtest = `# Subtest: tests/reader/djvu/test_reader_djvu_${name}.mjs`;
@@ -154,7 +159,7 @@ const loaderComplete = loader.status === 0 && hasPassingTapContracts(loader.stdo
   hasCompleteFlatTapReport(loader.stdout || '') &&
   ['# start of coverage report', '# end of coverage report'].every(marker => loaderLines.filter(line => line === marker).length === 1) &&
   loaderRows.length === 1 && loaderRows[0].every((value, index) => value >= loaderMinimum[index]);
-if (result.status !== 0 || !complete || !hasPassingTapContracts(result.stdout || '', required) ||
+if (result.status !== 0 || !complete || !auditComplete || !hasPassingTapContracts(result.stdout || '', required) ||
     !boundaryComplete || !workerComplete || !schedulerComplete || !adapterComplete || !identityComplete || !loaderComplete ||
     !hasCompleteFlatTapReport(result.stdout || '')) {
   console.error('DjVu contracts require seven named scripts, completion markers and zero skipped/TODO');

@@ -46,13 +46,23 @@
         const finish = () => { expired = true; clearTimeout(timer); resolve(); };
         const timer = setTimeout(finish, 1500);
         try {
-          const request = indexedDB.open("voice-search-positions", 4);
+          const request = indexedDB.open("voice-search-positions", 5);
           request.onupgradeneeded = () => {
             const db = request.result;
-            for (const name of Array.from(db.objectStoreNames)) db.deleteObjectStore(name);
             for (const name of ["positions", "viewports", "recent-pages"]) {
-              const store = db.createObjectStore(name, {keyPath: name === "recent-pages" ? "id" : "key"});
-              store.createIndex("savedAt", "savedAt");
+              const keyPath = name === "recent-pages" ? "id" : "key";
+              let store = db.objectStoreNames.contains(name) ? /** @type {IDBTransaction} */ (request.transaction).objectStore(name) : null;
+              // An incompatible key ABI cannot safely be read or rewritten in place.
+              if (store && (store.keyPath !== keyPath || store.autoIncrement)) {
+                db.deleteObjectStore(name);
+                store = null;
+              }
+              if (!store) store = db.createObjectStore(name, {keyPath});
+              if (store.indexNames.contains("savedAt")) {
+                const index = store.index("savedAt");
+                if (index.keyPath !== "savedAt" || index.unique || index.multiEntry) store.deleteIndex("savedAt");
+              }
+              if (!store.indexNames.contains("savedAt")) store.createIndex("savedAt", "savedAt");
             }
           };
           request.onerror = request.onblocked = finish;

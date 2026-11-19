@@ -45,11 +45,15 @@
         if (!entry) {
           const data = await deps.fetchJSON(url, 6000);
           if (!current()) return false;
-          if (!data) return false;
+          if (!data || !policy.accepts(data, deps.view())) return false;
           entry = { data, time: Date.now() };
           deps.cache.set(url, entry);
         }
         if (!current()) return false;
+        if (!policy.accepts(entry.data, deps.view())) {
+          if (deps.cache.get(url) === entry) deps.cache.delete(url);
+          return false;
+        }
         return deps.applyPayload(entry.data, intent, entry.time);
       } catch (e) {
         return false;

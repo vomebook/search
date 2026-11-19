@@ -65,6 +65,7 @@ export function createReaderFoliateFormat(readerContext) {
       top = readerContext.viewport.getBoundingClientRect().top + 80;
     let sectionTop = 0, sectionNode = null;
     for (const row of rows) {
+      if (row.hidden) continue;
       const rowTop = row.getBoundingClientRect().top;
       if (rowTop <= top) { sectionTop = rowTop; sectionNode = row; }
     }
@@ -74,21 +75,23 @@ export function createReaderFoliateFormat(readerContext) {
     let bestPosition = -Infinity;
     for (const [index, entry] of entries) {
       let position = sectionTop;
-      if (entry.anchor) {
-        const root = readerContext.foliateSectionRoot(sectionNode);
-        const anchor = entry.anchor({
-          getElementById: (id) => root.querySelector(`[id="${CSS.escape(id)}"]`),
-          querySelector: (selector) => root.querySelector(selector)
-        });
-        if (anchor) position = anchor.getBoundingClientRect().top;
-      }
-      if (entry.fragment) {
-        const anchor = readerContext.foliateSectionQuery(
-          sectionNode,
-          `[id="${CSS.escape(entry.fragment)}"], [name="${CSS.escape(entry.fragment)}"]`
-        );
-        if (anchor) position = anchor.getBoundingClientRect().top;
-      }
+      try {
+        if (entry.anchor) {
+          const root = readerContext.foliateSectionRoot(sectionNode);
+          const anchor = entry.anchor({
+            getElementById: (id) => root.querySelector(`[id="${CSS.escape(id)}"]`),
+            querySelector: (selector) => root.querySelector(selector)
+          });
+          if (anchor) position = anchor.getBoundingClientRect().top;
+        }
+        if (entry.fragment) {
+          const anchor = readerContext.foliateSectionQuery(
+            sectionNode,
+            `[id="${CSS.escape(entry.fragment)}"], [name="${CSS.escape(entry.fragment)}"]`
+          );
+          if (anchor) position = anchor.getBoundingClientRect().top;
+        }
+      } catch (_) { continue; }
       if (position <= top && (position > bestPosition || (position === bestPosition && index > best))) {
         best = index;
         bestPosition = position;
@@ -97,7 +100,8 @@ export function createReaderFoliateFormat(readerContext) {
     if (best < 0) {
       let firstPosition = Infinity;
       for (const [index, entry] of entries) {
-        const position = entry.target?.getBoundingClientRect?.().top;
+        let position;
+        try { position = entry.target?.getBoundingClientRect?.().top; } catch (_) { continue; }
         if (position !== undefined && Number.isFinite(position) && position < firstPosition) {
           best = index;
           firstPosition = position;
@@ -121,7 +125,8 @@ export function createReaderFoliateFormat(readerContext) {
   }
 
   function trimFoliateSections() {
-    if (!readerContext.foliateContinuous || !readerContext.foliateSectionVirtualizer) return;
+    if (!readerContext.foliateContinuous || !readerContext.foliateSectionVirtualizer ||
+        readerContext.content.querySelector(".foliate-supplement-active")) return;
     const marker = readerContext.viewport.getBoundingClientRect().top + 80,
       rows = [...document.querySelectorAll(".foliate-continuous article[data-section]")].map(row => /** @type {HTMLElement} */ (row)),
       current =
@@ -146,17 +151,18 @@ export function createReaderFoliateFormat(readerContext) {
     const book = readerContext.epubRendition?.book,
       href = String(entry.href || ""),
       target = await readerContext.epubRendition?.book?.resolveHref(href);
-    if (!book || !readerContext.isReaderGenerationCurrent("navigation", generation)) return false;
+    if (!book || !target || !readerContext.isReaderGenerationCurrent("navigation", generation)) return false;
     const section = target && book.sections[target.index],
       sections = book.sections.filter((item) => item.linear !== "no"),
-      visibleIndex = section ? sections.indexOf(section) : -1;
-    if (!section || visibleIndex < 0 || !readerContext.foliateSectionLoader) return false;
-    let node = await readerContext.foliateSectionLoader(visibleIndex);
+      visibleIndex = section ? sections.indexOf(section) : -1,
+      destinationIndex = visibleIndex >= 0 ? visibleIndex : -target.index - 1;
+    if (!section || !readerContext.foliateSectionLoader) return false;
+    let node = await readerContext.foliateSectionLoader(destinationIndex);
     if (!readerContext.isReaderGenerationCurrent("navigation", generation)) return false;
     // Background neighbors are not part of a demanded TOC destination.
     await readerContext.waitForReader(0, true);
     if (!readerContext.isReaderGenerationCurrent("navigation", generation)) return false;
-    if (!node?.isConnected) node = await readerContext.foliateSectionLoader(visibleIndex);
+    if (!node?.isConnected) node = await readerContext.foliateSectionLoader(destinationIndex);
     if (!node?.isConnected || !readerContext.isReaderGenerationCurrent("navigation", generation)) return false;
     const root = readerContext.foliateSectionRoot(node),
       /** @type {import('../../../typings/reader-foliate-format-strict').FoliateAnchorDocument} */
@@ -169,9 +175,11 @@ export function createReaderFoliateFormat(readerContext) {
       anchor = typeof target.anchor === "function" ? target.anchor(anchorDocument) : null;
     } catch (_) {}
     if (!anchor) {
-      const fragment = href.split("#")[1] || "",
-        id = fragment ? decodeURIComponent(fragment) : "";
-      anchor = id ? root.querySelector(`[id="${CSS.escape(id)}"], [name="${CSS.escape(id)}"]`) : null;
+      try {
+        const fragment = href.split("#")[1] || "",
+          id = fragment ? decodeURIComponent(fragment) : "";
+        anchor = id ? root.querySelector(`[id="${CSS.escape(id)}"], [name="${CSS.escape(id)}"]`) : null;
+      } catch (_) {}
     }
     const destination = anchor || node;
     readerContext.foliateScrollAnchors.invalidate();
@@ -295,9 +303,16 @@ export function createReaderFoliateFormat(readerContext) {
       /^(?:blob:|data:image\/(?:gif|png|jpe?g|webp);)/i.test(String(value || "").trim());
     /** @param {string | null | undefined} value */
     const archiveResourceUrl = (value) => {
-      const raw = String(value || "").trim();
-      if (!raw || raw.startsWith("#") || raw.includes("#") || safeEmbeddedValue(raw))
-        return safeEmbeddedValue(raw) ? raw : null;
+      const valueText = String(value || "").trim();
+      if (!valueText || valueText.startsWith("#") || safeEmbeddedValue(valueText))
+        return safeEmbeddedValue(valueText) ? valueText : null;
+      const hash = valueText.indexOf("#"),
+        raw = hash < 0 ? valueText : valueText.slice(0, hash);
+      let fragment = "";
+      try {
+        if (hash >= 0) fragment = `#${encodeURIComponent(decodeURIComponent(valueText.slice(hash + 1)))}`;
+      } catch (_) { return null; }
+      if (!raw || /[?#\\\x00-\x1f\x7f]/.test(raw)) return null;
       if (/^(?:[a-z][a-z0-9+.-]*:|\/\/|\/)/i.test(raw)) return null;
       try {
         const resolved = String(
@@ -312,7 +327,7 @@ export function createReaderFoliateFormat(readerContext) {
           resolved.split("/").some((part) => !part || part === "." || part === "..")
         )
           return null;
-        return `https://voiceofml-search.hf.space/api/reader-resource?book=${encodeURIComponent(readerContext.sourceUrl)}&path=${encodeURIComponent(resolved)}`;
+        return `https://voiceofml-search.hf.space/api/reader-resource?book=${encodeURIComponent(readerContext.sourceUrl)}&path=${encodeURIComponent(resolved)}${fragment}`;
       } catch (_) {
         return null;
       }
@@ -372,7 +387,7 @@ export function createReaderFoliateFormat(readerContext) {
     for (const link of doc.querySelectorAll(/** @type {'a'} */ ("a[href]"))) {
       const href = link.getAttribute("href") || "";
       // An in-book link to a packaged image opens the image itself, not a dead chapter URL.
-      if (/\.(?:gif|png|jpe?g|webp)$/i.test(href)) {
+      if (/\.(?:gif|png|jpe?g|webp)(?:#.*)?$/i.test(href)) {
         const resource = archiveResourceUrl(href);
         if (resource) {
           link.setAttribute("href", resource);
@@ -463,6 +478,7 @@ export function createReaderFoliateFormat(readerContext) {
       const placeholder = document.createElement("article");
       placeholder.className = "foliate-section-placeholder";
       placeholder.dataset.section = String(index);
+      placeholder.hidden = stream.classList.contains("foliate-supplement-active");
       placeholder.style.setProperty("--foliate-placeholder-height", `${Math.max(400, readerContext.viewport.clientHeight)}px`);
       placeholder.setAttribute("aria-label", `加载第 ${index + 1} 节`);
       const next = [...stream.children].find(node => Number(/** @type {HTMLElement} */ (node).dataset.section) > index);
@@ -478,7 +494,7 @@ export function createReaderFoliateFormat(readerContext) {
       scheduler.prefetch(document.hidden ? [] : indices);
     };
     const refresh = () => {
-      if (readerContext.readerAbortController.signal.aborted) return;
+      if (readerContext.readerAbortController.signal.aborted || stream.classList.contains("foliate-supplement-active")) return;
       const marker = readerContext.viewport.getBoundingClientRect().top + 80;
       const rows = [...stream.children];
       const current = rows.find(node => {
@@ -505,6 +521,7 @@ export function createReaderFoliateFormat(readerContext) {
             next = [...stream.querySelectorAll("article[data-section]")].find(
               (item) => Number(/** @type {HTMLElement} */ (item).dataset.section) > index
             );
+          if (stream.classList.contains("foliate-supplement-active")) article.hidden = true;
           if (placeholder) {
             observer.unobserve(placeholder);
             placeholder.replaceWith(article);
@@ -565,7 +582,32 @@ export function createReaderFoliateFormat(readerContext) {
       release: (index) => readerContext.foliateChapterRepository?.release(index) ?? false,
       preserve: (change) => readerContext.foliateScrollAnchors.preserve(change)
     });
+    // Negative indices encode the original spine index, preserving existing linear
+    // bookmark indices while keeping supplemental sections out of progression.
+    let supplementGeneration = 0;
     readerContext.foliateSectionLoader = /** @type {import('../../../typings/reader-foliate-format-strict').FoliateLoader} */ (index => {
+      if (index < 0) {
+        const source = readerContext.epubBook?.sections[-index - 1];
+        if (!Number.isInteger(index) || !source || source.linear !== "no") return Promise.resolve(null);
+        const generation = ++supplementGeneration;
+        const present = existing(index);
+        const task = present ? Promise.resolve(present) : readerContext.createFoliateSection(source, index);
+        return task.then(article => {
+          if (generation !== supplementGeneration || readerContext.readerAbortController.signal.aborted) return null;
+          for (const old of stream.querySelectorAll("article[data-supplement]")) if (old !== article) old.remove();
+          article.dataset.supplement = "true";
+          if (!article.isConnected) stream.append(article);
+          for (const row of stream.children) if (row !== article) /** @type {HTMLElement} */ (row).hidden = true;
+          stream.classList.add("foliate-supplement-active");
+          return article;
+        });
+      }
+      ++supplementGeneration;
+      if (stream.classList.contains("foliate-supplement-active")) {
+        for (const row of stream.children) /** @type {HTMLElement} */ (row).hidden = false;
+        for (const old of stream.querySelectorAll("article[data-supplement]")) old.remove();
+        stream.classList.remove("foliate-supplement-active");
+      }
       focus = index;
       targetPending = true;
       const task = existing(index) ? Promise.resolve(existing(index)) : scheduler.load(index, true, true);
@@ -632,10 +674,11 @@ export function createReaderFoliateFormat(readerContext) {
           const target = await view.book.resolveHref(entry.href),
             section = target && view.book.sections[target.index];
           readerContext.assertReaderActive();
-          entry.sectionIndex = section ? sectionIndices.get(section) ?? -1 : -1;
+          entry.sectionIndex = section ? sectionIndices.get(section) ?? -target.index - 1 : -1;
           entry.anchor = typeof target?.anchor === "function" ? target.anchor : null;
           const fragment = entry.href.split("#")[1] || "";
-          entry.fragment = fragment ? decodeURIComponent(fragment) : "";
+          try { entry.fragment = fragment ? decodeURIComponent(fragment) : ""; }
+          catch (_) { entry.fragment = ""; }
         } catch (_) {
           readerContext.assertReaderActive();
           entry.sectionIndex = -1;
@@ -673,7 +716,8 @@ export function createReaderFoliateFormat(readerContext) {
     const sections = view.book.sections.filter((section) => section.linear !== "no");
     await readerContext.getInitialReaderRestoration();
     const savedSection = Number(readerContext.readerRestorationEntry?.foliateSection);
-    const initialSection = Number.isInteger(savedSection)
+    const initialSection = Number.isInteger(savedSection) && savedSection < 0 && view.book.sections[-savedSection - 1]?.linear === "no"
+      ? 0 : Number.isInteger(savedSection)
       ? Math.max(0, Math.min(sections.length - 1, savedSection))
       : 0;
     readerContext.initialReaderTargetSection = readerContext.readerRestorationEntry?.foliateSection == null ? null : initialSection;
@@ -681,6 +725,8 @@ export function createReaderFoliateFormat(readerContext) {
     const repository = readerContext.foliateChapterRepository;
     if (!repository) throw new Error("Foliate chapter repository not initialized");
     if (sections[initialSection]) await repository.load(initialSection);
+    if (savedSection < 0 && view.book.sections[-savedSection - 1]?.linear === "no")
+      await readerContext.foliateSectionLoader?.(savedSection);
     readerContext.assertReaderActive();
     readerContext.markReaderContentReady();
     // Restoration targets the selected section; an unrelated slow previous

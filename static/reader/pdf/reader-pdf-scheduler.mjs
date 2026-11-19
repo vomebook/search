@@ -442,6 +442,16 @@ export function createReaderPdfScheduler(readerContext) {
   function drainPdfTextWaiters() {
     if (readerContext.readerAbortController.signal.aborted) return;
     const limit = matchMedia("(max-width: 700px)").matches ? 2 : 3;
+    // Remove ownership before aborting so a new generation cannot join a
+    // retiring DjVu extraction, even during synchronous abort listeners.
+    for (const [page, task] of readerContext.pdfTextContentPromises) {
+      const request = task.request;
+      if (request.controller && !request.demanded &&
+          (request.generation === null || !readerContext.isReaderGenerationCurrent("search", request.generation))) {
+        readerContext.pdfTextContentPromises.delete(page);
+        request.controller.abort(readerContext.readerAbortError());
+      }
+    }
     for (let index = readerContext.pdfTextWaiters.length - 1; index >= 0; index--) {
       const request = readerContext.pdfTextWaiters[index].request;
       if (request && !request.demanded && (request.generation === null || !readerContext.isReaderGenerationCurrent("search", request.generation))) {

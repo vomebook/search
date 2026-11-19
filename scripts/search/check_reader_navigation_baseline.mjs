@@ -19,6 +19,8 @@ const rows = text.split(/\r?\n/).flatMap(line => {
   return match ? [match.slice(1).map(Number)] : [];
 });
 const required = [
+  'parked reuse keeps the new navigation identity through replacement and recovery',
+  'ordinary frames expose a changed src and replacement rejects unowned history',
   'parse accepts only the same-origin reader pathname',
   'ordinary query merging replaces only selected keys and keeps repeated values',
   'hash query merging preserves route and unrelated query components',
