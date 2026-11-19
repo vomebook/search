@@ -41,7 +41,8 @@ class ReaderOptimizationTests(unittest.TestCase):
               window.__markerPage = () => pageAtMarker()?.dataset.page;
               window.__restoreText = top => restoreProgressState({scrollTop:top});
               window.__cancelNavigation = () => beginReaderNavigation();
-              window.__headingTools = {set:setToc,sync:syncHeadingLocation,index:()=>navigationState.currentChapterIndex};
+              window.__headingTools = {set:setToc,sync:syncHeadingLocation,index:()=>navigationState.currentChapterIndex,
+                hasCache:()=>!!headingLocationCache};
               window.__pdfTools = {trim: trimPdfSurfaces, pixels: pdfRetainedPixels, budget: pdfPixelBudget,
                 prefetch: pdfManifestPrefetches, setPage: page => updateDocumentState({page})};
               window.__pdfRenderContext = readerContext;
@@ -854,6 +855,25 @@ class ReaderOptimizationTests(unittest.TestCase):
         self.assertEqual(result['total'],1,result)
         self.assertEqual(result['workers'],2,result)
         self.assertLess(result['elapsed'],4000,result)
+
+    def test_heading_geometry_cache_only_exists_for_nonempty_directory(self):
+        self.expose()
+        self.serve('heading-free fixture')
+        self.open(self.reader_url('txt'))
+        result=self.page.evaluate('''()=>{
+          const tools=__headingTools, v=document.querySelector('#viewport'), rect=v.getBoundingClientRect;
+          let emptyReads=0;
+          v.getBoundingClientRect=function(){emptyReads++;return rect.call(this)};
+          const quiet=()=>{emptyReads=0; for(let i=0;i<10;i++)tools.sync();return [tools.hasCache(),emptyReads];};
+          const before=quiet(), target=document.createElement('h2');target.textContent='Late heading';
+          document.querySelector('#content').prepend(target);
+          const entries=[{target,label:'Late heading',activate:()=>true}];
+          tools.set(entries);tools.sync();const late=tools.hasCache() && tools.index()===0;
+          tools.set([]);const cleared=quiet();
+          tools.set(entries);tools.sync();
+          return {before,late,cleared,restored:tools.hasCache() && tools.index()===0};
+        }''')
+        self.assertEqual(result,dict(before=[False,0],late=True,cleared=[False,0],restored=True))
 
     def test_many_headings_reuse_geometry_and_refresh_after_content_changes(self):
         self.expose()

@@ -163,22 +163,22 @@ export function createReaderBookmarks(readerContext) {
 
   function captureFoliateBookmarkPosition() {
     if (!readerContext.foliateContinuous) return null;
-    const marker = readerContext.viewport.getBoundingClientRect().top + 8,
-      rows = [...document.querySelectorAll(".foliate-continuous article[data-section]")].map(row => /** @type {HTMLElement} */ (row));
-    const article =
-      rows.find((row) => {
-        const rect = row.getBoundingClientRect();
-        return rect.top <= marker && rect.bottom > marker;
-      }) ||
-      rows.find((row) => row.getBoundingClientRect().top > marker) ||
-      rows[rows.length - 1];
-    return article
-      ? {
-          foliateSection: Number(article.dataset.section),
-          foliateOffset: marker - article.getBoundingClientRect().top,
-          foliateTocIndex: readerContext.navigationState.currentChapterIndex
-        }
-      : null;
+    const marker = readerContext.viewport.getBoundingClientRect().top + 8;
+    const rows = /** @type {NodeListOf<HTMLElement>} */ (document.querySelectorAll(".foliate-continuous article[data-section]"));
+    /** @type {{article: HTMLElement, top: number} | null} */
+    let following = null, last = null;
+    for (const article of rows) {
+      const { top, bottom } = article.getBoundingClientRect();
+      last = { article, top };
+      if (top <= marker && bottom > marker) { following = last; break; }
+      if (!following && top > marker) following = last;
+    }
+    const current = following || last;
+    return current ? {
+      foliateSection: Number(current.article.dataset.section),
+      foliateOffset: marker - current.top,
+      foliateTocIndex: readerContext.navigationState.currentChapterIndex
+    } : null;
   }
 
   /** @param {import('../../../typings/reader-progress-strict').ProgressState} entry @param {number} [generation] */

@@ -97,6 +97,13 @@ export function createReaderToc(readerContext) {
   }
 
   function syncHeadingLocation() {
+    if (!readerContext.navigationState.tocEntries.length) {
+      if (readerContext.headingLocationCache) {
+        readerContext.headingLocationCache.dispose();
+        readerContext.headingLocationCache = null;
+      }
+      return;
+    }
     const marker = readerContext.htmlFrame ? 8 : readerContext.viewport.getBoundingClientRect().top + 8;
     const root = readerContext.htmlFrame?.contentDocument?.body || readerContext.content;
     if (!["foliate", "epub-chapters"].some(mode => mode === readerContext.capability.mode)) {

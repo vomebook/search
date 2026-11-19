@@ -613,17 +613,19 @@ export function createReaderChapterFormat(readerContext) {
   function captureChapterPosition() {
     if (readerContext.capability.mode !== "epub-chapters") return null;
     const marker = readerContext.viewport.getBoundingClientRect().top + 8;
-    const chapters = [...readerContext.content.querySelectorAll(".reader-epub-chapter")];
-    const chapter =
-      chapters.find((node) => node.getBoundingClientRect().bottom > marker) ||
-      chapters[chapters.length - 1];
-    return chapter
-      ? {
-          chapterIndex: Number(/** @type {HTMLElement} */ (chapter).dataset.chapter),
-          chapterManifest: readerContext.chapterManifestUrl || readerContext.sourceUrl,
-          chapterOffset: marker - chapter.getBoundingClientRect().top
-        }
-      : null;
+    const chapters = /** @type {NodeListOf<HTMLElement>} */ (readerContext.content.querySelectorAll(".reader-epub-chapter"));
+    let chapter = null, top = 0;
+    for (const node of chapters) {
+      const rect = node.getBoundingClientRect();
+      chapter = node;
+      top = rect.top;
+      if (rect.bottom > marker) break;
+    }
+    return chapter ? {
+      chapterIndex: Number(chapter.dataset.chapter),
+      chapterManifest: readerContext.chapterManifestUrl || readerContext.sourceUrl,
+      chapterOffset: marker - top
+    } : null;
   }
 
   /** @param {import("../../../typings/reader-chapter-format-strict").ChapterPosition} entry @param {number} generation */

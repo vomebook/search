@@ -25,7 +25,8 @@ class EbookFlowTests(unittest.TestCase):
             response = route.fetch()
             script=response.text()
             route.fulfill(response=response, body=script+'''
-              window.__ebook={restore:restoreFoliateBookmarkPosition,seek:seekFoliateProgress,
+              window.__ebook={restore:restoreFoliateBookmarkPosition,capture:captureFoliateBookmarkPosition,
+                captureChapter:captureChapterPosition,seek:seekFoliateProgress,
                 begin:beginReaderNavigation,anchor:foliateScrollAnchors,
                 load:i=>foliateSectionLoader(i),jump:i=>navigateTocEntry(i-1),
                 chapter:i=>navigationState.tocEntries[i-1].activate(beginReaderNavigation()),
@@ -195,6 +196,28 @@ class EbookFlowTests(unittest.TestCase):
         self.assertLess(abs(article.evaluate('node=>node.getBoundingClientRect().top-document.querySelector("#viewport").getBoundingClientRect().top')),20)
         self.assertGreaterEqual(self.page.locator('#viewport').evaluate('node=>node.scrollTop'),before)
 
+    def test_native_position_reads_each_section_once_and_keeps_gap_fallback(self):
+        self.native()
+        self.page.wait_for_function("()=>document.documentElement.dataset.readerPhase==='ready'")
+        result=self.page.evaluate('''()=>{
+          const host=document.querySelector('.foliate-continuous'), orig=host.className;
+          host.classList.remove('foliate-continuous');
+          const stream=document.createElement('div');stream.className='foliate-continuous';document.body.append(stream);
+          const top=document.querySelector('#viewport').getBoundingClientRect().top+8;
+          const rows=[0,1,2].map(i=>{
+            const row=document.createElement('article');row.dataset.section=i;stream.append(row);return row;
+          });
+          try {
+            return [[[-50,-10],[20,30],[45,70]], [[-30,8],[15,25],[35,80]], [[-90,-70],[-65,-35],[-30,-5]]].map(rects=>{
+              const reads=[0,0,0];
+              rows.forEach((row,i)=>{row.getBoundingClientRect=()=>{reads[i]++;return {top:top+rects[i][0],bottom:top+rects[i][1]}}});
+              return [__ebook.capture(),reads];
+            });
+          } finally {stream.remove();host.className=orig;}
+        }''')
+        self.assertEqual([(v['foliateSection'],v['foliateOffset'],reads) for v,reads in result],
+                         [(1,-20,[1,1,1]),(0,30,[1,0,0]),(2,30,[1,1,1])])
+
     def test_native_jump_keeps_previous_chapter_reachable_and_position_stable(self):
         self.native()
         self.page.wait_for_function("()=>document.querySelectorAll('#toc-list .toc-item').length===14")
@@ -247,6 +270,33 @@ class EbookFlowTests(unittest.TestCase):
           return {before,after:line.getBoundingClientRect().top};
         }''')
         self.assertAlmostEqual(result['before'],result['after'],delta=2)
+
+    def test_converted_position_reads_each_chapter_once_and_preserves_identity(self):
+        self.expose()
+        source='https://voiceofml-search.hf.space/api/reader-bucket-resource?path=chapters/ebook/epub/'+'a'*64+'/1234567890abcdef/chapter-manifest.json'
+        body='<h1>Hello</h1><p>Text</p>'
+        manifest={'version':1,'kind':'epub-chapters','chapters':[{'index':1,'path':'chapters/chapter-0001.xhtml','bytes':len(body)}]}
+        self.page.route('**/api/reader-bucket-resource**',lambda route:route.fulfill(json=manifest) if 'chapter-manifest' in route.request.url
+            else route.fulfill(content_type='text/html',body=body))
+        self.page.goto(self.origin+support.PREFIX+'/static/reader.html?'+urlencode(dict(url=source,ext='epub-chapters')))
+        self.page.wait_for_function("()=>document.documentElement.dataset.readerPhase==='ready'")
+        result=self.page.evaluate('''()=>{
+          const frame=document.querySelector('.epub-frame'), first=frame.querySelector('.reader-epub-chapter');
+          const second=document.createElement('article');second.className=first.className;second.dataset.chapter='2';
+          frame.append(second);
+          const restore=first.getBoundingClientRect;
+          const top=document.querySelector('#viewport').getBoundingClientRect().top+8;
+          try {
+            return [[[-20,-3],[30,40]],[[-20,-3],[-30,-10]],[[-3,6],[10,20]]].map(rects=>{
+              const reads=[0,0];
+              [first,second].forEach((row,i)=>{row.getBoundingClientRect=()=>{reads[i]++;return {top:top+rects[i][0],bottom:top+rects[i][1]}}});
+              return [__ebook.captureChapter(),reads];
+            });
+          } finally { first.getBoundingClientRect=restore;second.remove(); }
+        }''')
+        self.assertEqual([(v['chapterIndex'],v['chapterOffset'],reads) for v,reads in result],
+                         [(2,-30,[1,1]),(2,30,[1,1]),(1,3,[1,0])])
+        self.assertEqual([v['chapterManifest'] for v,_ in result],[source]*3)
 
     def test_chapter_window_reuses_geometry_when_marker_is_in_a_gap(self):
         def expose_window(route):
