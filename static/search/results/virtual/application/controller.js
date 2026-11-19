@@ -190,8 +190,8 @@ function refreshVirtualAfterAppend(updateView = true) {
   if (updateView && !deps.restoring() && deps.loadedPage() >= 1) rememberDisplayedSearchView();
   const previousLength = VSCROLL.heights.length;
   ensureVirtualHeights(deps.results().length);
-  const topSpacer = DOM.resultsList.querySelector(".virtual-spacer-top");
-  const bottomSpacer = DOM.resultsList.querySelector(".virtual-spacer-bottom");
+  const topSpacer = /** @type {HTMLElement | null} */ (DOM.resultsList.querySelector(".virtual-spacer-top"));
+  const bottomSpacer = /** @type {HTMLElement | null} */ (DOM.resultsList.querySelector(".virtual-spacer-bottom"));
   if (!topSpacer || !bottomSpacer || VSCROLL.renderStart < 0 || VSCROLL.renderEnd <= VSCROLL.renderStart) {
     VSCROLL.renderStart = -1;
     VSCROLL.renderEnd = -1;
@@ -203,7 +203,7 @@ function refreshVirtualAfterAppend(updateView = true) {
   const endH = getVirtualOffset(VSCROLL.renderEnd);
   const totalH = getVirtualTotalHeight();
   const logicalTop = getResultScrollTop(), previousOrigin = scroll.origin;
-  layoutResultScrollSegment(topH, endH, totalH, logicalTop);
+  layoutResultScrollSegment(topSpacer, bottomSpacer, topH, endH, totalH, logicalTop);
   if (previousOrigin !== scroll.origin) DOM.resultsContainer.scrollTop = logicalTop - scroll.origin;
   if (updateView) {
     const viewH = DOM.resultsContainer.clientHeight, estimate = VSCROLL.estimatedHeight || 60;

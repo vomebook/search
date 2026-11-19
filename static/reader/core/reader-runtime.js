@@ -23,6 +23,10 @@
         if (!set.size) listeners.delete(type);
       };
     }
+    /** @param {string} type */
+    function hasListeners(type) {
+      return !disposed && (listeners.has(type) || listeners.has("*"));
+    }
     /** @param {string} type @param {unknown} detail */
     function emit(type, detail) {
       if (disposed) return;
@@ -36,6 +40,7 @@
     return Object.freeze({
       on,
       emit,
+      hasListeners,
       dispose,
       get disposed() {
         return disposed;
@@ -43,9 +48,10 @@
     });
   }
 
-  /** @param {{events?: ReturnType<typeof createEventBus>, initialState?: Partial<RuntimeState>}} [options] */
+  /** @param {{events?: Readonly<ReaderEventBus>, initialState?: Partial<RuntimeState>}} [options] */
   function createReaderRuntime(options = {}) {
-    const events = options.events || createEventBus();
+    const localBus = options.events ? null : createEventBus();
+    const events = localBus || /** @type {Readonly<ReaderEventBus>} */ (options.events);
     /** @type {RuntimeState} */
     const state = {
       lifecycle: { phase: "startup", stage: "startup", disposed: false, errorCode: "" },
@@ -97,8 +103,11 @@
     function update(domain, patch) {
       if (state.lifecycle.disposed && domain !== "lifecycle") return false;
       Object.assign(/** @type {object} */ (state[domain]), patch);
+      const type = `state:${domain}`;
+      // Custom buses retain their original contract, even without subscriptions.
+      if (localBus && !localBus.hasListeners(type) && !localBus.hasListeners("state")) return true;
       const current = snapshot();
-      events.emit(`state:${domain}`, current);
+      events.emit(type, current);
       events.emit("state", current);
       return true;
     }

@@ -15,14 +15,12 @@ function getResultScrollOrigin(totalH, logicalTop, viewport) {
   }
   return scroll.origin;
 }
-/** @param {number} topH @param {number} endH @param {number} totalH @param {number} logicalTop @param {number} [viewport] */
-function layoutResultScrollSegment(topH, endH, totalH, logicalTop, viewport = DOM.resultsContainer.clientHeight) {
+/** @param {HTMLElement} top @param {HTMLElement} bottom @param {number} topH @param {number} endH @param {number} totalH @param {number} logicalTop @param {number} [viewport] */
+function layoutResultScrollSegment(top, bottom, topH, endH, totalH, logicalTop, viewport = DOM.resultsContainer.clientHeight) {
   const limit = RESULT_SCROLL_SEGMENT_HEIGHT;
   scroll.origin = getResultScrollOrigin(totalH, logicalTop, viewport);
-  const top = /** @type {HTMLElement | null} */ (DOM.resultsList.querySelector('.virtual-spacer-top'));
-  const bottom = /** @type {HTMLElement | null} */ (DOM.resultsList.querySelector('.virtual-spacer-bottom'));
-  if (top) top.style.height = Math.max(0, topH - scroll.origin) + 'px';
-  if (bottom) bottom.style.height = Math.max(0, Math.min(totalH, scroll.origin + limit) - endH) + 'px';
+  top.style.height = Math.max(0, topH - scroll.origin) + 'px';
+  bottom.style.height = Math.max(0, Math.min(totalH, scroll.origin + limit) - endH) + 'px';
 }
 
 /** @param {(VoiceOfMLResultRecord | null | undefined)[]} items @param {number} start @param {number} end @param {number} topH @param {number} bottomH @param {number} [viewport] */
@@ -49,7 +47,7 @@ function reconcileVirtualRows(items, start, end, topH, bottomH, viewport = DOM.r
     DOM.resultsList.append(bottomSpacer);
   }
   const endH = getVirtualOffset(end);
-  layoutResultScrollSegment(topH, endH, endH + bottomH, logicalTop, viewport);
+  layoutResultScrollSegment(topSpacer, bottomSpacer, topH, endH, endH + bottomH, logicalTop, viewport);
 
   /** @type {Map<number, HTMLElement>} */
   const existing = new Map();

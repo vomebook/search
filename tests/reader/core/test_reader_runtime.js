@@ -7,7 +7,39 @@ const sandbox = { self: {}, setTimeout, clearTimeout, requestAnimationFrame: (ca
 sandbox.self = sandbox;
 for (const file of ["reader/core/reader-contract.js", "reader/core/reader-runtime.js", "reader/formats/reader-format-adapters.js"]) vm.runInNewContext(fs.readFileSync(path.join(__dirname, "../../../static", file), "utf8"), sandbox);
 
+function testSnapshotOnlyWhenObserved() {
+  let snapshots = 0;
+  const runtime = sandbox.VoiceOfMLReaderRuntime.createReaderRuntime({initialState: {formats: {
+    get pdf() { snapshots++; return {}; }
+  }}});
+  runtime.events.on('state:panel', () => assert.fail('unrelated event'));
+  for (let page = 1; page <= 100; page++) runtime.update('document', {page});
+  assert.strictEqual(runtime.state.document.page, 100);
+  assert.strictEqual(snapshots, 0, 'no document observer');
+  const received = [];
+  const off = runtime.events.on('state:document', state => {
+    assert.ok(Object.isFrozen(state) && Object.isFrozen(state.document));
+    received.push(['specific', state.document.page]);
+    runtime.events.on('state', next => received.push(['late', next.document.page]));
+  });
+  const wildcard = runtime.events.on('*', (state, kind) => received.push([kind, state.document.page]));
+  runtime.update('document', {page: 101});
+  assert.strictEqual(snapshots, 1);
+  assert.deepStrictEqual(received, [['specific',101], ['state:document',101], ['late',101], ['state',101]]);
+  off(); wildcard();
+  runtime.events.dispose();
+  runtime.update('document', {page: 102});
+  assert.strictEqual(snapshots, 1);
+  const emitted = [];
+  const injected = sandbox.VoiceOfMLReaderRuntime.createReaderRuntime({events: {
+    emit(type, state) { emitted.push([type, state.document.page]); }
+  }});
+  injected.update('document', {page: 9});
+  assert.deepStrictEqual(emitted, [['state:document',9], ['state',9]]);
+}
+
 async function main() {
+  testSnapshotOnlyWhenObserved();
   const events = [];
   const runtime = sandbox.VoiceOfMLReaderRuntime.createReaderRuntime();
   runtime.events.on("*", (_detail, type) => events.push(type));

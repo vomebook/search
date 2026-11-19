@@ -141,6 +141,32 @@ test('render reuses rows and restores the same focused control after content inv
   assert.equal(document.activeElement, f.container); assert.equal(c.keyboardResultIndex, -1);
 });
 
+test('reconciliation and append each locate the current spacers just once', {
+  skip: !!process.env.VIRTUAL_BASELINE_SOURCE,
+}, () => {
+  const {c, list} = fixture(), select = list.querySelector;
+  let lookups = 0;
+  list.querySelector = function (selector) {
+    if (selector === '.virtual-spacer-top' || selector === '.virtual-spacer-bottom') lookups++;
+    return select.call(this, selector);
+  };
+  c.renderVisible();
+  assert.equal(lookups, 2, 'cold reconciliation');
+  const row = select.call(list, '.result-item[data-index="2"]');
+  lookups = 0; c.VSCROLL.renderStart = c.VSCROLL.renderEnd = -1; c.renderVisible();
+  assert.equal(lookups, 2, 'warm reconciliation');
+  assert.equal(select.call(list, '.result-item[data-index="2"]'), row);
+  lookups = 0; c.refreshVirtualAfterAppend(false);
+  assert.equal(lookups, 2, 'append');
+  select.call(list, '.virtual-spacer-bottom').remove();
+  lookups = 0; c.refreshVirtualAfterAppend(false);
+  assert.equal(lookups, 2, 'missing spacer');
+  assert.equal(c.VSCROLL.renderEnd, -1);
+  lookups = 0; c.renderVisible();
+  assert.equal(lookups, 2, 'recreating the missing spacer');
+  assert.ok(select.call(list, '.virtual-spacer-bottom'));
+});
+
 test('measured heights compensate one anchor and drag keeps geometry frozen', () => {
   const f = fixture(), {c, list, container} = f;
   c.renderVisible(); container.scrollTop = 125;
