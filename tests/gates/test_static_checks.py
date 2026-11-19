@@ -2008,6 +2008,7 @@ class StaticGateTests(unittest.TestCase):
                  "tests/reader/layout/test_reader_scroll_anchor.js"]
         boundary_paths = ["static/reader/pdf/reader-djvu-loader.mjs",
                           "static/reader/formats/reader-chapter-format.mjs",
+                          "static/reader/ui/reader-document-styles.mjs",
                           "static/reader/formats/reader-format-controller.mjs",
                           "static/reader/core/reader-source.mjs", "static/reader/core/reader-lifecycle.mjs", "static/reader/pdf/reader-pdf-text.js",
                           "tests/reader/chapters/test_chapter_format_validation.mjs",
