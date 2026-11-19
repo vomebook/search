@@ -42,10 +42,27 @@ class SearchPositionTests(unittest.TestCase):
         self.assertEqual(self.fixture.errors, [])
 
     def test_reload_rebuilds_pages_from_indexeddb(self):
+        # Wrap the fixture fetch before app startup, regardless of init script order.
+        self.page.add_init_script('''window.addEventListener('DOMContentLoaded', () => {
+          const fixtureFetch = window.fetch;
+          window.reloadSearchRequests = [];
+          window.fetch = (input, options) => {
+            if (String(input).includes('/api/search') && options?.body) {
+              const body = JSON.parse(options.body);
+              if (body.q === 'paging-original') reloadSearchRequests.push(body);
+            }
+            return fixtureFetch(input, options);
+          };
+        }, {capture: true, once: true})''')
         self.page.reload(wait_until='domcontentloaded')
         self.assert_position()
-        self.assertEqual(self.page.evaluate('pagingRequests.slice(0,2)'), [1, 2])
-        self.assertGreaterEqual(self.page.evaluate('STATE.results.length'), 200)
+        requests = self.page.evaluate('reloadSearchRequests')
+        # An optional plain page-one probe cannot replace the anchored lookup.
+        restoration = [body for body in requests if body['page'] != 1 or 'anchor_id' in body]
+        self.assertEqual([body['page'] for body in restoration[:2]], [1, 2])
+        self.assertEqual([body['anchor_id'] for body in restoration if body['page'] == 1], [self.saved['anchorId']])
+        self.assertEqual(self.page.evaluate('STATE.results.slice(0, 200).map(row => row?.ID)'),
+                         [str(i) for i in range(200)])
 
     def check_corrupt_viewport_reload(self, after_anchor):
         # Leave the app first so pagehide cannot overwrite the corrupt disk entry.
