@@ -39,5 +39,6 @@ export interface ChapterFormatContext {
   reportNavigationError(error: unknown, generation: number): void;
   trackReaderResource(cleanup: () => void): unknown;
   getInitialReaderRestoration(): Promise<unknown>;
+  awaitReader<T>(promise: Promise<T>): Promise<T>;
   markReaderContentReady(): void;
 }

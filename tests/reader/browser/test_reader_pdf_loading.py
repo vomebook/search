@@ -1,5 +1,7 @@
 """Actual module imports and PDF.js with cold cache and transport faults."""
 import contextlib
+import gzip
+import hashlib
 import json
 from pathlib import Path
 import re
@@ -11,10 +13,12 @@ from unittest.mock import patch
 
 from tests.support.browser_support import local_server
 from tests.support.browser_support import SearchHandler
-from tests.performance.test_reader_performance import sync_playwright, PlaywrightError, minimal_pdf
+from tests.performance.test_reader_performance import PDF_MODULE, sync_playwright, PlaywrightError, minimal_pdf
 
 MODULE = '**/static/vendor/pdf.min.*.mjs*'
 SOURCE = 'https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/cold-retry.pdf'
+HIT_PROJECTION = '**/static/reader/search/reader-pdf-hit-projection*.mjs*'
+BOOK_VALIDATE = '**/static/reader/search/reader-pdf-book-validate*.mjs*'
 
 
 @unittest.skipIf(sync_playwright is None, 'Playwright is unavailable')
@@ -53,6 +57,125 @@ class PdfLoadingTests(unittest.TestCase):
     def ready(self):
         self.page.locator('.reader-page canvas.ready').wait_for(state='attached')
         self.assertEqual(self.page.locator('#status').text_content(), '1 页')
+        self.assertEqual(self.errors, [])
+
+    def open_ocr_hit(self):
+        # A result only the OCR worker can find; native PDF text cannot mask failures.
+        text, sha = '索引独有文字', 'a' * 64
+        root = f'objects/aa/{sha}/' + 'b' * 16
+        manifest_path, book_path = root + '/ocr-manifest.json', root + '/ocr/book-text.json.gz'
+        book = gzip.compress(json.dumps({'version': 2, 'kind': 'pdf-book-text', 'complete': True,
+            'offset_unit': 'unicode-codepoint', 'source_sha256': sha, 'page_count': 1,
+            'pages': [{'page': 1, 'text': text, 'layout': {'offset_unit': 'unicode-codepoint'},
+                'text_spans': [{'start': 0, 'end': len(text), 'box': [0.1, 0.2, 0.4, 0.3]}]}]}).encode())
+        manifest = {'version': 1, 'kind': 'pdf-ocr', 'complete': True, 'source_sha256': sha,
+            'profile': 'test-layout-v1-index', 'page_count': 1,
+            'pages': [{'p': 1, 'o': root + '/ocr/page-000001.json.gz'}],
+            'book_text': {'path': book_path, 'bytes': len(book), 'sha256': hashlib.sha256(book).hexdigest()}}
+
+        def resource(route):
+            path = urllib.parse.parse_qs(urllib.parse.urlsplit(route.request.url).query)['path'][0]
+            headers = {'Access-Control-Allow-Origin': '*'}
+            if path == manifest_path:
+                route.fulfill(json=manifest, headers=headers)
+            elif path == book_path:
+                route.fulfill(content_type='application/gzip', body=book, headers=headers)
+            else:
+                route.fulfill(status=404, headers=headers)
+
+        self.page.route(MODULE, lambda route: route.fulfill(content_type='text/javascript',
+            body=PDF_MODULE.replace('numPages: 30', 'numPages: 1')))
+        self.page.route('**/api/reader-bucket-resource**', resource)
+        params = urllib.parse.urlencode(dict(url=SOURCE, ext='pdf', title='OCR hit',
+            ocr_manifest='https://voiceofml-search.hf.space/api/reader-bucket-resource?path=' + manifest_path))
+        self.page.goto(self.origin + '/search/static/reader.html?' + params)
+        self.ready()
+        self.assertEqual(self.page.evaluate('''() => performance.getEntriesByType('resource')
+            .filter(entry => /reader-(book-text|pdf-book-validate|pdf-hit-projection)\\./.test(entry.name))
+            .map(entry => entry.name)'''), [])
+        self.page.locator('#history').click()
+        self.page.locator('#full-search-toggle').click()
+        self.page.locator('#full-search-input').fill('索引独有')
+        self.page.wait_for_function("() => document.querySelector('#full-search-status').textContent === '1 个结果'")
+        self.page.evaluate('() => { window.pdfHitTestDocument = true; }')
+        return self.page.locator('.full-search-result')
+
+    def test_pdf_hit_projection_cold_success_has_one_request(self):
+        result = self.open_ocr_hit()
+        attempts = []
+
+        def observe_leaf(route):
+            attempts.append(route.request.url)
+            route.continue_()
+
+        self.page.route(HIT_PROJECTION, observe_leaf)
+        result.click()
+        self.page.locator('.reader-text-hit-box').wait_for(state='attached')
+        self.assertEqual([urllib.parse.urlsplit(url).query for url in attempts], [''])
+        self.assertEqual(self.errors, [])
+
+    def test_pdf_hit_projection_retries_with_rejected_validator_in_document(self):
+        result = self.open_ocr_hit()
+        validator = []
+
+        def fail_validator(route):
+            validator.append(route.request.url)
+            route.fulfill(status=503)
+
+        # Poison only the document's module map, not the already successful Worker.
+        validator_url = self.origin + '/search/static/reader/search/reader-pdf-book-validate.mjs'
+        self.page.route(BOOK_VALIDATE, fail_validator)
+        imports = '''async url => { try { await import(url); return true; } catch { return false; } }'''
+        self.assertFalse(self.page.evaluate(imports, validator_url))
+        self.page.unroute(BOOK_VALIDATE)
+        self.assertEqual(validator, [validator_url])
+        self.assertFalse(self.page.evaluate(imports, validator_url))
+
+        attempts = []
+
+        def recover_leaf(route):
+            attempts.append(route.request.url)
+            if len(attempts) == 1:
+                route.abort('connectionreset')
+            elif len(attempts) == 2:
+                route.fulfill(status=503)
+            else:
+                route.continue_()
+
+        self.page.route(HIT_PROJECTION, recover_leaf)
+        result.click()
+        mark = self.page.locator('.reader-page[data-page="1"] .reader-text-hit-box')
+        mark.wait_for(state='attached')
+        self.assertEqual(mark.count(), 1)
+        self.assertEqual(mark.get_attribute('data-mapping-precision'), 'block')
+        parsed = [urllib.parse.urlsplit(url) for url in attempts]
+        self.assertEqual([url.query for url in parsed], ['', 'reader-module-retry=1', 'reader-module-retry=2'])
+        self.assertEqual(len({url.path for url in parsed}), 1)
+        self.assertTrue(self.page.evaluate('window.pdfHitTestDocument'))
+        self.assertEqual(self.errors, [])
+
+    def test_pdf_hit_projection_exhaustion_does_not_mint_more_urls(self):
+        result = self.open_ocr_hit()
+        attempts = []
+
+        def fail_leaf(route):
+            attempts.append(route.request.url)
+            route.fulfill(status=503)
+
+        self.page.route(HIT_PROJECTION, fail_leaf)
+        result.click()
+        failure = '搜索结果定位失败，请重试'
+        self.page.wait_for_function('(failure) => document.querySelector("#full-search-status").textContent === failure',
+                                    arg=failure)
+        # Observe a second completed activation, not the status from the first.
+        self.page.locator('#full-search-status').evaluate("node => { node.textContent = ''; }")
+        result.click()
+        self.page.wait_for_function('(failure) => document.querySelector("#full-search-status").textContent === failure',
+                                    arg=failure)
+        self.assertEqual([urllib.parse.urlsplit(url).query for url in attempts],
+                         ['', 'reader-module-retry=1', 'reader-module-retry=2'])
+        self.assertEqual(self.page.locator('.reader-text-hit-box').count(), 0)
+        self.assertTrue(self.page.evaluate('window.pdfHitTestDocument'))
         self.assertEqual(self.errors, [])
 
     def test_cold_success_uses_one_module_request(self):

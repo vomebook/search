@@ -56,10 +56,6 @@ declare namespace ReaderPdfSearch {
   }
 }
 interface Navigator { readonly connection?: { readonly saveData?: boolean; readonly effectiveType?: string; readonly downlink?: number; readonly rtt?: number } }
-declare module "*/reader-book-text.js" {
-  export const hitBoxes: typeof import('../static/reader/search/reader-book-text.js').hitBoxes;
-  export const paintTextHit: typeof import('../static/reader/search/reader-book-text.js').paintTextHit;
-}
 declare module "*/reader-pdf-book-search.mjs" { export const createPdfBookSearch: ReaderPdfSearch.Module["createPdfBookSearch"]; }
 declare module "*/reader-pdf-text-store.mjs" {
   export const pdfTextStoreKey: ReaderPdfSearch.StoreModule["pdfTextStoreKey"];

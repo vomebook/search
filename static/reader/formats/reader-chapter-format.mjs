@@ -99,6 +99,9 @@ export function createReaderChapterFormat(readerContext) {
     layoutStyle.textContent = EBOOK_LAYOUT_STYLE;
     frame.appendChild(layoutStyle);
     const openingGeneration = readerContext.readerRuntime.currentGeneration("navigation");
+    const openingLanding = Promise.withResolvers();
+    /** @type {Promise<unknown> | null} */
+    let pendingOpeningJump = null;
     readerContext.content.appendChild(frame);
     const loaded = new Set(), retainedBytes = new Map(),
       manifestBase = readerContext.trustedReaderAssetManifestUrl(readerContext.chapterManifestUrl || readerContext.sourceUrl);
@@ -378,6 +381,8 @@ export function createReaderChapterFormat(readerContext) {
     };
     /** @param {import("../../../typings/reader-chapter-format-strict").Chapter} chapter @param {number} generation @param {string | {fragment?: string}} destination */
     const activateChapter = async (chapter, generation, destination = "") => {
+      const openingJump = !chapterWindowReady ? Promise.withResolvers() : null;
+      if (openingJump) pendingOpeningJump = openingJump.promise;
       chapterFocusIndex = chapter.index;
       navigationProtectionCleanup?.();
       navigationTargetChapter = chapter.index;
@@ -420,8 +425,13 @@ export function createReaderChapterFormat(readerContext) {
         readerContext.syncHeadingLocation();
         readerContext.updateProgressTools();
         readerContext.scheduleSave();
+        openingLanding.resolve(undefined);
         return true;
       } finally {
+        if (openingJump) {
+          if (pendingOpeningJump === openingJump.promise) pendingOpeningJump = null;
+          openingJump.resolve(undefined);
+        }
         chapterNavigating--;
         if (!landingProtected && navigationTargetChapter === chapter.index && !navigationProtectionCleanup)
           navigationTargetChapter = 0;
@@ -611,9 +621,14 @@ export function createReaderChapterFormat(readerContext) {
     chapterFocusIndex = initial.index;
     if (initialChapter > 0) ensureSentinel(/** @type {import("../../../typings/reader-chapter-format-strict").Chapter} */ (manifest.chapters[initialChapter - 1]), true);
     try {
-      const firstChapter = fetchChapter(initial);
+      const firstChapter = fetchChapter(initial).catch(async error => {
+        // If an explicit destination is still resolving, give it the chance
+        // to take ownership before treating an obsolete chapter as fatal.
+        while (pendingOpeningJump) await pendingOpeningJump;
+        throw error;
+      });
       chapterScheduler.prefetch(chapterPrefetchIndices());
-      await firstChapter;
+      await readerContext.awaitReader(Promise.race([firstChapter, openingLanding.promise]));
     } catch (error) {
       if (readerContext.readerRestorationEntry?.chapterIndex == null) throw error;
       throw Object.assign(new Error("阅读位置恢复失败，原进度已保留，请重试加载。", { cause: error }), {

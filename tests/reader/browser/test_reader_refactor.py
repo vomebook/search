@@ -540,6 +540,89 @@ class ReaderRefactorTest(unittest.TestCase):
         self.assertEqual(self.page.locator('#page-number').input_value(), str(count))
         self.page.locator(f'.reader-page[data-page="{count}"] img.ready').wait_for(state='visible')
 
+    def image_pages_fixture(self, count, data, hold_first=False):
+        prefix = 'pages/image/tiff/' + 'a' * 64 + '/'
+        source = 'https://voiceofml-search.hf.space/api/reader-bucket-resource?' + urllib.parse.urlencode(
+            {'path': prefix + 'page-manifest.json'})
+        manifest = dict(version=1, kind='image-page-stream', page_count=count,
+                        pages=[dict(path=f'pages/page-{i:06}.webp') for i in range(1, count + 1)])
+        held = []
+        def resource(route):
+            path = urllib.parse.parse_qs(urllib.parse.urlsplit(route.request.url).query)['path'][0]
+            if path.endswith('page-manifest.json'):
+                route.fulfill(json=manifest)
+            elif hold_first and path == prefix + 'pages/page-000001.webp' and not held:
+                held.append(route)
+            else:
+                route.fulfill(content_type='image/webp', body=data)
+        self.page.route('**/api/reader-bucket-resource**', resource)
+        self.page.add_init_script('''Object.defineProperty(navigator,'connection',{value:{saveData:true}})''')
+        self.page.route('**/static/reader/core/reader-store.js', lambda route: route.fulfill(
+            content_type='text/javascript', body=support.STORE_SCRIPT.replace(
+                'new Promise((resolve) => setTimeout(() => resolve(null), 300))', 'Promise.resolve(null)')))
+        self.page.goto(self.reader_url('image-pages', url=source), wait_until='domcontentloaded')
+        return held
+
+    def test_image_jump_can_finish_open_and_save_while_old_page_is_stalled(self):
+        held = self.image_pages_fixture(12, support.IMAGE_FIXTURES['webp'][1], hold_first=True)
+        self.page.locator('.reader-page[data-page="1"] img').wait_for(state='attached')
+        field = self.page.locator('#page-number')
+        field.fill('12')
+        field.dispatch_event('change')
+        self.page.locator('.reader-page[data-page="12"] img.ready').wait_for(state='visible')
+        self.page.wait_for_function("()=>document.documentElement.dataset.readerPhase==='ready'")
+        self.page.wait_for_function("()=>window.__savedReaderProgress?.page===12")
+        self.assertEqual(len(held), 1)
+        held[0].abort()
+
+    def test_late_first_image_does_not_reset_wheel_position(self):
+        data = support.IMAGE_FIXTURES['webp'][1]
+        held = self.image_pages_fixture(6, data, hold_first=True)
+        second = self.page.locator('.reader-page[data-page="2"]')
+        second.wait_for(state='attached')
+        self.page.wait_for_function("()=>!!document.querySelector('.reader-page img')")
+        offset = self.page.locator('.reader-page[data-page="1"]').evaluate('n => n.getBoundingClientRect().height + 50')
+        self.page.mouse.move(400, 400)
+        self.page.mouse.wheel(0, offset)
+        self.page.wait_for_function('height => document.querySelector("#viewport").scrollTop >= height - 1', arg=offset)
+        self.assertEqual(len(held), 1)
+        held[0].fulfill(content_type='image/webp', body=data)
+        self.page.wait_for_function("()=>document.documentElement.dataset.readerPhase==='ready'")
+        self.assertGreater(self.page.locator('#viewport').evaluate('n => n.scrollTop'), 100)
+
+    def test_image_pages_save_last_landscape_page_at_scroll_end(self):
+        self.page.set_viewport_size({'width': 1100, 'height': 900})
+        landscape = self.page.evaluate('''() => {
+            const canvas = document.createElement('canvas'); canvas.width = 1000; canvas.height = 200;
+            return canvas.toDataURL('image/webp').split(',')[1];
+        }''')
+        self.image_pages_fixture(6, base64.b64decode(landscape))
+        self.page.wait_for_function("()=>document.documentElement.dataset.readerPhase==='ready'")
+        field = self.page.locator('#page-number')
+        field.fill('6')
+        field.dispatch_event('change')
+        self.page.locator('.reader-page[data-page="6"] img.ready').wait_for(state='visible')
+        viewport = self.page.locator('#viewport')
+        viewport.focus()
+        self.page.wait_for_function('''()=>{
+            const end=document.querySelector('#viewport'), first=document.querySelector('.reader-page[data-page="4"]');
+            return end.scrollHeight-end.clientHeight>2 && first?.querySelector('img.ready') &&
+                document.querySelectorAll('.reader-page > img.ready').length===6;
+        }''')
+        viewport.evaluate('n => { n.scrollTop = n.scrollHeight; }')
+        self.page.wait_for_function('()=>window.__savedReaderProgress?.page===6')
+        # After the page-jump lock expires, a fresh scroll/save must still pick 6.
+        self.page.wait_for_timeout(550)
+        viewport.evaluate('n => { n.scrollTop -= 30; }')
+        self.page.wait_for_function('''()=>{const n=document.querySelector('#viewport');return n.scrollHeight-n.clientHeight-n.scrollTop>=25;}''')
+        viewport.evaluate('n => { n.scrollTop = n.scrollHeight; }')
+        self.page.wait_for_function('''()=>{
+            const n=document.querySelector('#viewport'), saved=window.__savedReaderProgress;
+            return saved?.page===6 && saved.scrollTop===n.scrollTop &&
+                n.scrollHeight-n.clientHeight-n.scrollTop<=2 &&
+                document.querySelector('#page-number').value==='6';
+        }''')
+
     def test_missing_image_manifest_or_page_recovers_original_without_changing_book_identity(self):
         prefix = 'pages/image/bmp/' + 'a' * 64 + '/'
         source = 'https://voiceofml-search.hf.space/api/reader-bucket-resource?' + urllib.parse.urlencode({'path':prefix+'page-manifest.json'})

@@ -2448,6 +2448,7 @@ class StaticGateTests(unittest.TestCase):
                         'static/reader/search/reader-pdf-partition-requests.mjs',
                         'static/reader/search/reader-pdf-book-compact.mjs',
                         'static/reader/search/reader-book-text.js',
+                        'static/reader/search/reader-pdf-hit-projection.mjs',
                         'static/reader/search/reader-pdf-book-validate.mjs',
                         'static/reader/core/reader-security.js']
         for path in dependencies:

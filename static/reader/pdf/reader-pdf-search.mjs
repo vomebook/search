@@ -9,6 +9,26 @@ const PDF_SEARCH_CHECKPOINT_BYTES = 4 * 1024 * 1024;
 
 /** @param {ReaderPdfSearch.Context} readerContext */
 export function createReaderPdfSearch(readerContext) {
+  /** @type {Promise<typeof import('../search/reader-pdf-hit-projection.mjs')> | undefined} */
+  let hitProjection;
+
+  async function loadHitProjection() {
+    const source = "/search/static/reader/search/reader-pdf-hit-projection.mjs";
+    for (let attempt = 0; ; attempt++) {
+      if (attempt) await readerContext.waitForReader(attempt * 500);
+      readerContext.assertReaderActive();
+      // This is a leaf: a fresh URL bypasses Chromium's rejected module entry
+      // without leaving a failed static dependency (such as the validator).
+      const url = attempt ? `${source}?reader-module-retry=${attempt}` : source;
+      try {
+        return await readerContext.awaitReader(/** @type {Promise<typeof import('../search/reader-pdf-hit-projection.mjs')>} */ (import(url)));
+      } catch (error) {
+        if (attempt === 2 || !(error instanceof TypeError) ||
+            !/failed to fetch dynamically imported module|error loading dynamically imported module|importing a module script failed/i.test(error.message)) throw error;
+      }
+    }
+  }
+
   /** @param {ReaderPdfSearch.Manifest} manifest */
   async function ensurePdfBookSearchClient(manifest) {
     let textUrl = "";
@@ -101,8 +121,8 @@ export function createReaderPdfSearch(readerContext) {
           readerContext.content.querySelectorAll(".reader-text-hit-box").forEach(node => node.remove());
           const shell = /** @type {HTMLElement | null} */ (readerContext.content.querySelector(`.reader-page[data-page="${hit.page}"]`));
           if (shell && (hit.boxes.length || hit.textGeneration)) {
-            // PDF hit projection isn't needed to open or paint a document.
-            const { hitBoxes, paintTextHit } = await readerContext.awaitReader(import("/search/static/reader/search/reader-book-text.js"));
+            // Share the bounded attempts across clicks; open/render don't need them.
+            const { hitBoxes, paintTextHit } = await (hitProjection ||= loadHitProjection());
             if (!readerContext.isReaderGenerationCurrent("navigation", nav)) return false;
             let boxes = hit.boxes;
             if (hit.textGeneration) {

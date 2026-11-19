@@ -12,6 +12,46 @@ class EbookFlowTests(unittest.TestCase):
     setUpClass = classmethod(support.PdfFollowupTests.setUpClass.__func__)
     setUp = support.PdfFollowupTests.setUp
 
+    def test_successful_toc_jump_owns_open_before_old_chapter_fails(self):
+        source = ('https://voiceofml-search.hf.space/api/reader-bucket-resource?path=chapters/ebook/epub/'
+                  + 'a' * 64 + '/1234567890abcdef/chapter-manifest.json')
+        manifest = {'version': 1, 'kind': 'epub-chapters', 'chapters': [
+            {'index': i, 'path': f'chapters/chapter-{i:04d}.xhtml', 'bytes': 100} for i in range(1, 21)
+        ], 'toc': [{'title': f'Target {i}', 'chapter': i, 'depth': 0, 'fragment': ''} for i in range(1, 21)]}
+        first, arriving = [], []
+
+        def resource(route):
+            if 'chapter-manifest.json' in route.request.url:
+                route.fulfill(json=manifest)
+                return
+            index = int(unquote(route.request.url).rsplit('chapter-', 1)[1].split('.', 1)[0])
+            if index == 1:
+                first.append(route)
+            elif index == 15:
+                arriving.append(route)
+            else:
+                route.fulfill(content_type='text/html', body=f'<h1>Chapter {index}</h1><p style="height:1500px">Text</p>')
+
+        self.page.route('**/api/reader-bucket-resource**', resource)
+        self.page.goto(self.origin + support.PREFIX + '/static/reader.html?' + urlencode(
+            dict(url=source, ext='epub-chapters')), wait_until='domcontentloaded')
+        self.page.locator('.reader-epub-chapter[data-chapter="3"]').wait_for(state='attached')
+        self.page.get_by_role('link', name='Target 15', exact=True).click()
+        self.page.wait_for_function("()=>document.documentElement.dataset.readerPhase==='prepare'")
+        self.assertEqual(len(first), 1)
+        self.assertEqual(len(arriving), 1)
+        # The obsolete request can fail even before the newer jump lands.
+        first[0].fulfill(status=404)
+        arriving[0].fulfill(content_type='text/html', body='<h1>Chapter 15</h1><p style="height:1500px">Readable target</p>')
+        self.page.wait_for_function("()=>document.documentElement.dataset.readerPhase==='ready'")
+        heading = self.page.locator('.reader-epub-chapter[data-chapter="15"] h1')
+        self.assertEqual(heading.text_content(), 'Chapter 15')
+        self.assertTrue(heading.evaluate('''node=>{
+            const r=node.getBoundingClientRect(),v=document.querySelector('#viewport').getBoundingClientRect();
+            return r.top<v.bottom && r.bottom>v.top;
+        }'''))
+        self.assertEqual(self.page.locator('.reader-error').count(), 0)
+
     def expose(self):
         def instrument_foliate(route):
             response = route.fetch()
@@ -113,6 +153,7 @@ class EbookFlowTests(unittest.TestCase):
 
         self.page.route('**/reader/search/reader-book-text*.js*', pdf_only)
         self.page.route('**/reader/search/reader-pdf-book-validate*.mjs*', pdf_only)
+        self.page.route('**/reader/search/reader-pdf-hit-projection*.mjs*', pdf_only)
         source = ('https://voiceofml-search.hf.space/api/reader-bucket-resource?path=chapters/ebook/epub/'
                   + 'a' * 64 + '/1234567890abcdef/chapter-manifest.json')
         chapter = '<h1>Visible converted chapter</h1><p>Opening ebook text</p>'

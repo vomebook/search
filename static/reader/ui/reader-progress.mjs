@@ -207,7 +207,7 @@ export function createReaderProgress(readerContext) {
     if (!count) return null;
     const y = readerContext.bookmarkRibbon.getBoundingClientRect().bottom;
     const end = readerContext.viewport.scrollHeight - readerContext.viewport.clientHeight;
-    if (["pdf", "pdf-pages"].includes(/** @type {string} */ (readerContext.capability.mode)) && end > 2 && readerContext.viewport.scrollTop > 0 &&
+    if (["pdf", "pdf-pages", "image-pages"].includes(/** @type {string} */ (readerContext.capability.mode)) && end > 2 && readerContext.viewport.scrollTop > 0 &&
         end - readerContext.viewport.scrollTop <= 2) {
       const last = /** @type {HTMLElement} */ (pages[count - 1]), rect = last.getBoundingClientRect(), view = readerContext.viewport.getBoundingClientRect();
       if (rect.bottom > view.top && rect.top < view.bottom) return last;

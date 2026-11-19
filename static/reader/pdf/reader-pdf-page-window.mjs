@@ -488,6 +488,26 @@ export function createReaderPdfPageWindow(readerContext) {
    * @param {import('../../../typings/reader-security-strict').ValidatedPdfPageManifest['toc']} [toc]
    */
   async function renderImagePageWindow(totalPages, book, toc) {
+    const openingNavigation = readerContext.readerRuntime.currentGeneration("navigation");
+    const layout = Promise.withResolvers();
+    readerContext.pdfShellLayoutReady = layout.promise;
+    try {
+      await mountImagePageWindow(totalPages, book, toc,
+        () => readerContext.isReaderGenerationCurrent("navigation", openingNavigation),
+        () => {
+          readerContext.pdfShellLayoutReady = null;
+          layout.resolve(true);
+        });
+    } finally {
+      readerContext.pdfShellLayoutReady = null;
+      layout.resolve(false);
+    }
+  }
+
+  /** @param {number} totalPages @param {{seedRatio: number}} book
+   * @param {import('../../../typings/reader-security-strict').ValidatedPdfPageManifest['toc']} toc
+   * @param {() => boolean} ownsOpeningPosition @param {() => void} publishLayout */
+  async function mountImagePageWindow(totalPages, book, toc, ownsOpeningPosition, publishLayout) {
     readerContext.assertReaderActive();
     const source = readerContext.pdfManifestSource();
     if (!source?.pageUrl) throw new Error("PDF_MANIFEST_INVALID");
@@ -599,25 +619,40 @@ export function createReaderPdfPageWindow(readerContext) {
     }, book.seedRatio || 1.414);
     readerContext.pdfShellsReady = readerContext.pdfShellWindow ? Promise.resolve() : readerContext.appendShellsBatched(createShell, totalPages, 250);
     readerContext.pdfShellsReady.catch(() => {});
+    publishLayout();
     try {
-      const targetShell = readerContext.pdfShellWindow
-        ? readerContext.pdfShellWindow.ensure(initialPage)
-        : initialPage === 1
-          ? firstShell
-          : (await readerContext.pdfShellsReady, readerContext.content.querySelector(`.reader-page[data-page="${initialPage}"]`));
-      if (!targetShell) throw new Error("PDF initial page shell missing");
-      readerContext.viewport.scrollTop = readerContext.readerPageScrollTop(targetShell);
-      await readerContext.renderPdfImageShell(targetShell, false, true);
-      readerContext.markReaderContentReady();
-      readerContext.viewport.scrollTop = readerContext.readerPageScrollTop(targetShell);
-      // Page one is already mounted and can paint before the remaining shells.
+      if (ownsOpeningPosition()) {
+        if (!readerContext.pdfShellWindow && initialPage !== 1) await readerContext.pdfShellsReady;
+        readerContext.assertReaderActive();
+        if (ownsOpeningPosition()) {
+          const openingShell = readerContext.pdfShellWindow?.ensure(initialPage) || (initialPage === 1
+            ? firstShell : readerContext.content.querySelector(`.reader-page[data-page="${initialPage}"]`));
+          if (!openingShell) throw new Error("PDF initial page shell missing");
+          await drawOpeningImagePage(openingShell, ownsOpeningPosition);
+        }
+      }
     } finally {
       // Restore or fall back only after the batch stops mutating the layout.
       // Keep the original image error if the abandoned batch also fails.
       await readerContext.pdfShellsReady.catch(() => {});
-      releaseInitialRenderGate();
+      if (!readerContext.readerAbortController.signal.aborted) releaseInitialRenderGate();
     }
     await readerContext.pdfShellsReady;
+  }
+
+  /** @param {Element} target @param {() => boolean} ownsOpeningPosition */
+  async function drawOpeningImagePage(target, ownsOpeningPosition) {
+    readerContext.viewport.scrollTop = readerContext.readerPageScrollTop(target);
+    try {
+      await readerContext.renderPdfImageShell(target, false, true);
+    } catch (error) {
+      readerContext.assertReaderActive();
+      // A newer jump can cancel or supersede this image, not the Reader.
+      if (ownsOpeningPosition()) throw error;
+    }
+    readerContext.markReaderContentReady();
+    if (ownsOpeningPosition() && target.isConnected)
+      readerContext.viewport.scrollTop = readerContext.readerPageScrollTop(target);
   }
 
   /** @param {Response | Promise<Response>} prepared */
