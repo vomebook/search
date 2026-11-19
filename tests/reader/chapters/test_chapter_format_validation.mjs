@@ -20,7 +20,7 @@ assert.equal(chapterPrefetchSize({index:1,path:'1',bytes:Symbol()}), 0);
 // Exercise the actual TOC fallback with unvalidated chapter metadata.
 globalThis.VoiceOfMLReaderSecurity = sandbox.VoiceOfMLReaderSecurity;
 globalThis.location = {href:'https://example.test/'};
-globalThis.document = {createElement:()=>({style:{}, addEventListener(){}}), addEventListener(){}};
+globalThis.document = {createElement:()=>({style:{}, appendChild(){}, addEventListener(){}}), addEventListener(){}};
 globalThis.window = {addEventListener(){}};
 globalThis.IntersectionObserver = class { observe() {} };
 globalThis.VoiceOfMLReaderChapters = {createChapterScheduler:()=>({})};

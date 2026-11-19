@@ -1,3 +1,5 @@
+import { EBOOK_NARROW_STYLE, wrapEbookTables } from "../ui/reader-document-styles.mjs";
+
 /** @param {import('../../../typings/reader-foliate-format-strict').FoliateFormatContext} readerContext */
 export function createReaderFoliateFormat(readerContext) {
   /** @param {Element} article */
@@ -381,6 +383,7 @@ export function createReaderFoliateFormat(readerContext) {
     article.dataset.section = String(index);
     const shadow = article.attachShadow({ mode: "open" }),
       baseStyle = document.createElement("style"),
+      narrowStyle = document.createElement("style"),
       sectionBody = document.createElement("div");
     // Chapter styles live in a shadow root, so document-level preferences cannot reach them.
     baseStyle.textContent = `
@@ -411,8 +414,10 @@ export function createReaderFoliateFormat(readerContext) {
     // nested anchors lets HTML's adoption rules reorder footnotes and citations.
     if (body)
       sectionBody.append(...[...body.childNodes].map((node) => document.importNode(node, true)));
+    wrapEbookTables(sectionBody);
     article._resolveSearchAnchor = readerContext.foliateSearchAnchor(source, sourceNodes, body, sectionBody);
-    shadow.append(baseStyle, ...styles, sectionBody);
+    narrowStyle.textContent = EBOOK_NARROW_STYLE;
+    shadow.append(baseStyle, ...styles, narrowStyle, sectionBody);
     for (const image of sectionBody.querySelectorAll("img")) {
       image.loading = priority === "high" ? "eager" : "lazy";
       image.fetchPriority = priority;

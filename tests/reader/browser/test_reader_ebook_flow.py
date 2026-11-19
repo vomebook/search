@@ -49,6 +49,65 @@ class EbookFlowTests(unittest.TestCase):
         self.expose()
         self.page.goto(self.origin+support.PREFIX+'/static/reader.html?'+urlencode(dict(url='https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/flow.epub',ext='epub')),wait_until='domcontentloaded')
 
+    def test_mobile_ebook_prose_stays_in_paper_and_wide_blocks_scroll(self):
+        body = '''<h1>Mobile ebook</h1>
+          <div id="fixed" style="width:720px;min-width:680px">
+            <p id="line" style="white-space:nowrap;overflow-wrap:normal">%s</p></div>
+          <table id="wide-table" style="min-width:850px"><caption>Table caption</caption>
+            <tbody><tr><td>First column</td><td>Last column</td></tr></tbody></table>
+          <pre id="wide-pre">%s</pre>
+          <svg id="figure" xmlns="http://www.w3.org/2000/svg" width="900" height="100" viewBox="0 0 900 100"
+            style="min-width:800px"><rect width="900" height="100" fill="blue"/></svg>
+          <p id="after">正文仍可阅读</p>''' % ('unbroken' * 55, '0123456789 ' * 50)
+        with zipfile.ZipFile(io.BytesIO(epub_with_many_chapters(count=1))) as archive:
+            files = {name:archive.read(name) for name in archive.namelist()}
+        files['OEBPS/nav.xhtml'] = files['OEBPS/nav.xhtml'].replace(b'</body>', body.encode() + b'</body>')
+        packed = io.BytesIO()
+        with zipfile.ZipFile(packed, 'w', zipfile.ZIP_DEFLATED) as archive:
+            for name, data in files.items(): archive.writestr(name, data)
+        source = 'https://voiceofml-search.hf.space/api/reader-bucket-resource?path=chapters/ebook/chm/' + 'a'*64 + '/1234567890abcdef/chapter-manifest.json'
+        manifest = {'version':1,'kind':'epub-chapters','chapters':[{'index':1,'path':'chapters/chapter-0001.xhtml','bytes':len(body.encode())}]}
+        self.page.route('**/api/reader-content**', lambda route:route.fulfill(content_type='application/epub+zip',
+            body=packed.getvalue(),headers={'Access-Control-Allow-Origin':'*'}))
+        self.page.route('**/api/reader-bucket-resource**', lambda route:route.fulfill(json=manifest) if 'chapter-manifest' in route.request.url
+            else route.fulfill(content_type='text/html', body=body,headers={'Access-Control-Allow-Origin':'*'}))
+        self.page.set_viewport_size({'width':320,'height':750})
+        for mode, url in [('epub','https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/mobile.epub'), ('epub-chapters',source)]:
+            with self.subTest(mode=mode):
+                self.page.goto(self.origin+support.PREFIX+'/static/reader.html?'+urlencode(dict(url=url, ext=mode)))
+                self.page.wait_for_function("()=>document.documentElement.dataset.readerPhase==='ready'")
+                for width, zoom in [(320,100),(390,150)]:
+                    self.page.set_viewport_size({'width':width,'height':750})
+                    if zoom!=100:
+                        self.page.locator('#zoom').fill(str(zoom))
+                        self.page.locator('#zoom').dispatch_event('change')
+                    result = self.page.locator('#line').evaluate('''line=>{
+                      const root=line.getRootNode(), box=line.closest('.reader-epub-chapter,.reader-section-body');
+                      const bounds=box.getBoundingClientRect(), viewport=document.querySelector('#viewport');
+                      const range=document.createRange();range.selectNodeContents(line);
+                      const textInside=[...range.getClientRects()].every(r=>r.left>=bounds.left-1 && r.right<=bounds.right+1);
+                      const localScroll=id=>{let n=root.querySelector(id); while(n && n!==box){
+                        if (getComputedStyle(n).overflowX==='auto' && n.scrollWidth>n.clientWidth+4){
+                          n.scrollLeft=n.scrollWidth;return n.scrollLeft>0 && n.getBoundingClientRect().right<=bounds.right+1;
+                        }n=n.parentElement;
+                      }return false;};
+                      return {width:viewport.clientWidth,scrollWidth:viewport.scrollWidth,textInside,
+                        table:localScroll('#wide-table'),code:localScroll('#wide-pre'),
+                        figure:root.querySelector('#figure').getBoundingClientRect().right<=bounds.right+1};
+                    }''')
+                    self.assertLessEqual(result['scrollWidth'],result['width']+1,result)
+                    self.assertTrue(all(result[k] for k in ('textInside','table','code','figure')),result)
+                    self.assertEqual(self.page.locator('#after').text_content(),'正文仍可阅读')
+                    self.assertEqual(self.page.locator('#wide-table caption').text_content(),'Table caption')
+                    self.assertEqual(self.page.locator('#wide-pre').text_content(),'0123456789 ' * 50)
+                self.page.set_viewport_size({'width':1024,'height':750})
+                desktop = self.page.locator('#line').evaluate('''line=>({
+                  nowrap:getComputedStyle(line).whiteSpace,
+                  minWidth:getComputedStyle(line.parentElement).minWidth,
+                  table:getComputedStyle(line.getRootNode().querySelector('#wide-table').parentElement).display
+                })''')
+                self.assertEqual(desktop, {'nowrap':'nowrap','minWidth':'680px','table':'contents'})
+
     def test_native_first_text_does_not_wait_for_image_body(self):
         held=[]
         self.page.route('**/api/reader-resource?**',lambda route:held.append(route))

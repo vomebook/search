@@ -15,6 +15,61 @@ export const DISCOURSE_POST_SELECTOR = ".topic-post .cooked";
 
 export const DISCOURSE_TITLE_SELECTOR = "#topic-title .fancy-title, .topic-link, title";
 
+// The continuous EPUB view uses Shadow DOM; converted chapters use light DOM.
+// Keep the same narrow-screen rules in both without changing the book's text.
+export const EBOOK_NARROW_STYLE = `
+.reader-ebook-table-scroll { display: contents; }
+@media (max-width: 600px) {
+  .reader-ebook-table-scroll { display: block; }
+  :is(.reader-section-body, .epub-frame > .reader-epub-chapter) {
+    min-inline-size: 0;
+    max-inline-size: 100%;
+    overflow-x: auto;
+  }
+  :is(.reader-section-body, .epub-frame > .reader-epub-chapter)
+    :is(article, aside, blockquote, dd, div, dl, dt, figure, figcaption, footer, header,
+      h1, h2, h3, h4, h5, h6, li, main, ol, p, section, ul):not(pre *, svg *, math *) {
+    box-sizing: border-box !important;
+    min-inline-size: 0 !important;
+    max-inline-size: 100% !important;
+  }
+  :is(.reader-section-body, .epub-frame > .reader-epub-chapter)
+    :where(:not(pre, pre *, svg, svg *, math, math *)) {
+    /* Change the wrap mode without collapsing authored spaces or newlines. */
+    text-wrap-mode: wrap !important;
+    overflow-wrap: anywhere !important;
+  }
+  @supports not (text-wrap-mode: wrap) {
+    :is(.reader-section-body, .epub-frame > .reader-epub-chapter)
+      :where(:not(pre, pre *, svg, svg *, math, math *)) { white-space: normal !important; }
+  }
+  :is(.reader-section-body, .epub-frame > .reader-epub-chapter) :is(img, svg, video, canvas):not(svg *, math *) {
+    min-inline-size: 0 !important;
+    max-inline-size: 100% !important;
+    block-size: auto !important;
+  }
+  :is(.reader-section-body, .epub-frame > .reader-epub-chapter) :is(pre, .reader-ebook-table-scroll) {
+    box-sizing: border-box !important;
+    min-inline-size: 0 !important;
+    max-inline-size: 100% !important;
+    overflow-x: auto !important;
+  }
+}`;
+
+/** @param {HTMLElement} body */
+export function wrapEbookTables(body) {
+  for (const table of body.querySelectorAll("table")) {
+    if (table.parentElement?.closest("table")) continue;
+    const region = document.createElement("div");
+    region.className = "reader-ebook-table-scroll";
+    region.tabIndex = 0;
+    region.setAttribute("role", "region");
+    region.setAttribute("aria-label", table.caption?.textContent?.trim() || "书内表格");
+    table.before(region);
+    region.appendChild(table);
+  }
+}
+
 export const DISCOURSE_HTML_STYLE = `<style>
 html,body{min-height:100%;margin:0;background:#fff;color:#202124}
 body{box-sizing:border-box;padding:clamp(18px,4vw,48px);font:16px/1.8 system-ui,-apple-system,"Segoe UI","Noto Sans SC",sans-serif;overflow-wrap:anywhere}

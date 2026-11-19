@@ -1,3 +1,5 @@
+import { EBOOK_NARROW_STYLE, wrapEbookTables } from "../ui/reader-document-styles.mjs";
+
 // The current MOBI chapter manifest for this five-volume edition contains
 // cross-volume sidebar targets that point back into volume 1. Its own verified
 // "总目录" links and each volume's adjacent "书名页" independently identify
@@ -91,6 +93,9 @@ export function createReaderChapterFormat(readerContext) {
     const frame = document.createElement("div");
     frame.className = "epub-frame";
     frame.style.overflowAnchor = "none";
+    const narrowStyle = document.createElement("style");
+    narrowStyle.textContent = EBOOK_NARROW_STYLE;
+    frame.appendChild(narrowStyle);
     const openingGeneration = readerContext.readerRuntime.currentGeneration("navigation");
     readerContext.content.appendChild(frame);
     const loaded = new Set(), retainedBytes = new Map(),
@@ -302,6 +307,7 @@ export function createReaderChapterFormat(readerContext) {
             if (++imported % 256 === 0 && imported < children.length && performance.now() >= deadline)
               await yieldIfNeeded(imported, children.length);
           }
+          wrapEbookTables(article);
           const images = article.querySelectorAll("img");
           let prepared = 0;
           for (const image of images) {
