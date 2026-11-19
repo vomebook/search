@@ -665,8 +665,8 @@ test("reader uses original files and lazy PDF canvas rendering", () => {
   assert.match(vendorScript, /pdfGroups = new Set\(\["cmaps", "standard_fonts", "wasm"\]\)/);
   assert.match(vendorScript, /7461aefcd27c4ef0dd76f9ca5760f09466eb6b3f934432670c12132e7b3d6faa/);
   assert.match(vendorScript, /3a88402882cfa3e7e72c2c9b5149f52f0f88baf1c5b62aa11a41abdbc2072440/);
-  assert.match(vendorScript, /marked@18\.2\.0\/lib\/marked\.umd\.js/);
-  assert.match(vendorScript, /392f4df89533b50f1dadff3f6dc0952350bd39c9f17def50a0374ef47d6147ef/);
+  assert.match(vendorScript, /marked@18\.2\.1\/lib\/marked\.umd\.js/);
+  assert.match(vendorScript, /bb95d4c15f1289f78486eaacebf3bb18688475ed58a040ef762ed49337090542/);
   assert.match(vendorScript, /dompurify@3\.4\.18/);
   assert.match(vendorScript, /8053ee2a6a09f9d50f7fcd6fb7f07072f52c7f3fa9aa12147cab4feaf65ee970/);
   assert.match(vendorScript, /@zip\.js\/zip\.js@2\.25\.0\/index\.min\.js/);

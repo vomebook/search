@@ -1,9 +1,9 @@
 // Isolated decoder worker: the main thread transfers a complete, checked source
 // and receives only strictly decoded, complete native pages.
 import '../../reader-resources.js';
-/** @typedef {typeof import('../../vendor/djvu-rs-reader/release-a23e0b3e3a44-025029b02a7c/simd128/djvu_rs.js')} DjvuEngine */
-/** @typedef {import('../../vendor/djvu-rs-reader/release-a23e0b3e3a44-025029b02a7c/simd128/djvu_rs.js').WasmDocument} DjvuDocument */
-/** @typedef {import('../../vendor/djvu-rs-reader/release-a23e0b3e3a44-025029b02a7c/simd128/djvu_rs.js').WasmLazyDocument} DjvuLazyDocument */
+/** @typedef {typeof import('../../vendor/djvu-rs-reader/release-06c82c74447d-03087b1edf0c/simd128/djvu_rs.js')} DjvuEngine */
+/** @typedef {import('../../vendor/djvu-rs-reader/release-06c82c74447d-03087b1edf0c/simd128/djvu_rs.js').WasmDocument} DjvuDocument */
+/** @typedef {import('../../vendor/djvu-rs-reader/release-06c82c74447d-03087b1edf0c/simd128/djvu_rs.js').WasmLazyDocument} DjvuLazyDocument */
 /** @type {DjvuEngine | undefined} */
 let engine;
 /** @type {DjvuDocument | DjvuLazyDocument | undefined} */
@@ -23,16 +23,16 @@ async function prepareEngine() {
   // same Response and preserves its streaming/MIME fallback behavior.
   const controller = new AbortController();
   const wasmUrl = simd
-    ? new URL('../../vendor/djvu-rs-reader/release-a23e0b3e3a44-025029b02a7c/simd128/djvu_rs_bg.wasm', import.meta.url)
-    : new URL('../../vendor/djvu-rs-reader/release-a23e0b3e3a44-025029b02a7c/scalar/djvu_rs_bg.wasm', import.meta.url);
+    ? new URL('../../vendor/djvu-rs-reader/release-06c82c74447d-03087b1edf0c/simd128/djvu_rs_bg.wasm', import.meta.url)
+    : new URL('../../vendor/djvu-rs-reader/release-06c82c74447d-03087b1edf0c/scalar/djvu_rs_bg.wasm', import.meta.url);
   /** @type {DjvuEngine | undefined} */
   let candidate;
   /** @type {Response | undefined} */
   let response;
   try {
     const [module,wasmResponse] = await Promise.all([
-      simd ? import('../../vendor/djvu-rs-reader/release-a23e0b3e3a44-025029b02a7c/simd128/djvu_rs.js')
-           : import('../../vendor/djvu-rs-reader/release-a23e0b3e3a44-025029b02a7c/scalar/djvu_rs.js'),
+      simd ? import('../../vendor/djvu-rs-reader/release-06c82c74447d-03087b1edf0c/simd128/djvu_rs.js')
+           : import('../../vendor/djvu-rs-reader/release-06c82c74447d-03087b1edf0c/scalar/djvu_rs.js'),
       fetch(wasmUrl, {signal:controller.signal}).then(value => {
         if (controller.signal.aborted) { value.body?.cancel().catch(() => {}); throw controller.signal.reason; }
         response = value;
@@ -141,7 +141,7 @@ self.onmessage = async ({ data }) => {
         const [width,height,dpi,rotation]=Array.from(await lazyDocument.reader_geometry(number-1));
         if (![width,height,dpi].every(Number.isSafeInteger) || width < 1 || height < 1 || dpi < 25 || dpi > 6000 ||
             width * height > MAX_PIXELS || ![0,90,180,270].includes(rotation)) throw new Error('DJVU_PAGE_GEOMETRY_INVALID');
-        /** @type {import('../../vendor/djvu-rs-reader/release-a23e0b3e3a44-025029b02a7c/simd128/djvu_rs.js').WasmPixmap | null | undefined} */
+        /** @type {import('../../vendor/djvu-rs-reader/release-06c82c74447d-03087b1edf0c/simd128/djvu_rs.js').WasmPixmap | null | undefined} */
         let pixmap;
         try {
           pixmap=await lazyDocument.reader_render_strict(number-1);

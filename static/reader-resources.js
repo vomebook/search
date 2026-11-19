@@ -19,9 +19,9 @@
       sha256: "43710009ea26bfbcb615524946e46e3aaf8ad927514f5e465e8ff6d18044ffe9"
     },
     marked: {
-      url: "https://cdn.jsdelivr.net/npm/marked@18.2.0/lib/marked.umd.js",
+      url: "https://cdn.jsdelivr.net/npm/marked@18.2.1/lib/marked.umd.js",
       file: "marked.min.js",
-      sha256: "392f4df89533b50f1dadff3f6dc0952350bd39c9f17def50a0374ef47d6147ef"
+      sha256: "bb95d4c15f1289f78486eaacebf3bb18688475ed58a040ef762ed49337090542"
     },
     purify: {
       url: "https://cdn.jsdelivr.net/npm/dompurify@3.4.18/dist/purify.min.js",
@@ -230,7 +230,7 @@
   /** @param {string} base */
   const djvuDecoderAssets = (base) => ["scalar/djvu_rs.js", "scalar/djvu_rs_bg.wasm",
     "simd128/djvu_rs.js", "simd128/djvu_rs_bg.wasm"].map(file =>
-      base + "vendor/djvu-rs-reader/release-a23e0b3e3a44-025029b02a7c/" + file);
+      base + "vendor/djvu-rs-reader/release-06c82c74447d-03087b1edf0c/" + file);
   /** @param {string} extension @param {string} base @param {string} [foliateSuffix] @param {string} [workerWrapper] @returns {string[]} */
   function engineAssets(extension, base, foliateSuffix = "", workerWrapper = base + "reader/pdf/pdf-worker-wrapper.mjs") {
     if (extension === "pdf")

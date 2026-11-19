@@ -1,3 +1,21 @@
+Current Reader decoder: djvu-rs 0.46.0 (MIT).
+Upstream revision: c8e86c93214f9f10093c2c696945cfef0c9e500d
+Local strict-render and bounded range patches are retained in src/wasm.rs,
+src/djvu_async.rs, and src/djvu_document/{mod,bookmark}.rs.
+The current scalar and SIMD builds both expose range and verified full-source APIs.
+
+Exact build source: range-source-v0.46.0.zip (test corpora and prebuilt binaries excluded).
+Rust 1.99.1, wasm-bindgen-cli 0.2.129. Build with
+  cargo build --locked --release --target wasm32-unknown-unknown --features wasm-lazy --lib
+Add RUSTFLAGS='-C target-feature=+simd128' for the SIMD build.
+Run wasm-bindgen --target web on each variant. No wasm-opt pass was used.
+Notices for the current build: THIRD_PARTY_NOTICES-v0.46.0.txt.
+Source SHA-256: 8bbe1d43f04b83c1409e93724009592232e0c5389d8dc37aaa5432b53a1718a8
+Scalar WASM SHA-256: 06c82c74447df20b4135312b50cbdef750f32095d790777e7f6fe439a1885b1e
+SIMD WASM SHA-256: 03087b1edf0c3f61dc0e1f4b7284a87a1b6e7335d735afbec226b3b1e6e16c29
+
+--- Previous releases (kept at their original URLs) ---
+
 DjVu Reader decoder based on djvu-rs 0.43.0
 Copyright (c) 2026 Lev Matyushkin and djvu-rs contributors.
 Upstream: https://github.com/matyushkin/djvu-rs
