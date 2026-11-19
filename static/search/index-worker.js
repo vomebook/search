@@ -406,10 +406,10 @@ async function corpusFingerprint(source) {
   return "worker:" + hex(versionHash) + ":" + hex(hash);
 }
 
-/** @param {unknown} data @param {string | null} [fingerprint] */
-async function installCorpus(data, fingerprint) {
+/** @param {unknown} data @param {string | null} [fingerprint] @param {boolean} [fromJSON] */
+async function installCorpus(data, fingerprint, fromJSON = false) {
   if (fingerprint == null) fingerprint = await corpusFingerprint(JSON.stringify(data));
-  const result = replaceCorpus(decodeSearchPayload(data));
+  const result = replaceCorpus(decodeSearchPayload(data), fromJSON);
   data = null;
   snapshotGeneration = fingerprint;
   return result;
@@ -421,7 +421,7 @@ async function installCorpusFromSource(source) {
   /** @type {unknown} */
   const data = JSON.parse(/** @type {string} */ (source));
   source = null;
-  const result = await installCorpus(data, fingerprint);
+  const result = await installCorpus(data, fingerprint, true);
   return result;
 }
 
@@ -486,8 +486,17 @@ function scheduleSortOrders(expectedGeneration) {
   }, SORT_PRECOMPUTE_DELAY_MS);
 }
 
-/** @param {SearchRecord[]} nextRecords */
-function replaceCorpus(nextRecords) {
+/** @param {SearchRecord} record @param {string} folderPath @param {number} occurrence */
+function stableJSONRecordId(record, folderPath, occurrence) {
+  // Parsed JSON arrays cannot shadow concat or its array-species constructor.
+  // Preserve empty segments (including a leading slash for [""]).
+  const path = (record.Folder.length ? folderPath + "/" : "") +
+    [record.File || "", record.Extension || ""].join("/");
+  return [record.Repo || "", path, String(occurrence)].join("\u001f");
+}
+
+/** @param {SearchRecord[]} nextRecords @param {boolean} [fromJSON] */
+function replaceCorpus(nextRecords, fromJSON = false) {
   // Build all fallible metadata off to the side. A rejected corpus must never
   // expose its records under the previous generation or damage old indexes.
   /** @type {Record<string, number>} */
@@ -538,10 +547,11 @@ function replaceCorpus(nextRecords) {
       if (!nextRepoReaderRecordIndices[repo]) nextRepoReaderRecordIndices[repo] = [];
       nextRepoReaderRecordIndices[repo].push(i);
     }
-    const base = [repo, (record.Folder || []).join("/"), record.File || "", record.Extension || ""].join("\u001f");
+    const folderPath = (record.Folder || []).join("/");
+    const base = [repo, folderPath, record.File || "", record.Extension || ""].join("\u001f");
     const occurrence = idOccurrences[base] || 0;
     idOccurrences[base] = occurrence + 1;
-    nextRecordIds[i] = stableRecordId(record, occurrence);
+    nextRecordIds[i] = fromJSON ? stableJSONRecordId(record, folderPath, occurrence) : stableRecordId(record, occurrence);
   }
   /** @type {SearchMetadata} */
   const nextMetadata = {

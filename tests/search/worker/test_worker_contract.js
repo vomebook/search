@@ -109,6 +109,30 @@ async function names(params) {
   return (await search(params)).records.map((record) => record.File);
 }
 
+test('JSON corpus install preserves stable IDs, collisions, and snapshot stamps', async () => {
+  const data = {v: 2, rp: ['Repo/A', {name: 'legacy'}, null],
+    fd: [[], [''], ['', 'A'], ['A', '', 'B'], ['A/B'], ['A', 'B'], [null, 0, ['Nested']]],
+    rc: [[0, 'same', '', 0, 1, 0], [0, 'same', '', 1, 1, 0],
+      [0, 'same', '', 1, 1, 0], [0, 'same', '', 2, 1, 0],
+      [0, 'same', '', 3, 1, 0], [0, 'same', '', 4, 1, 0],
+      [0, 'same', '', 5, 1, 0], [1, {name: 'file'}, true, 6, 0, 0],
+      [2, null, ['x', 'y'], 6, 0, 0], null]};
+  const plain = makeWorker(), json = makeWorker();
+  await plain.request('replace-corpus', {data});
+  json.context.serialized = JSON.stringify(data);
+  await vm.runInContext('installCorpusFromSource(serialized)', json.context);
+  const params = {q: '', sort: 'relevance', pageSize: 20};
+  const fromJSON = await json.request('local-search', params);
+  const fromObject = await plain.request('local-search', params);
+  assert.deepStrictEqual(fromJSON, fromObject);
+  assert.strictEqual(fromJSON.ids.length, data.rc.length);
+  assert.strictEqual(new Set(fromJSON.ids).size, fromJSON.ids.length);
+  // [] and [""] share the occurrence counter, but not the path string.
+  assert.ok(fromJSON.ids.includes('Repo/A\u001fsame/\u001f0'));
+  assert.ok(fromJSON.ids.includes('Repo/A\u001f/same/\u001f1'));
+  assert.ok(fromJSON.ids.includes('Repo/A\u001f/same/\u001f2'));
+});
+
 test("registers one versioned message protocol listener", () => {
   assert.strictEqual(typeof makeWorker().listeners.message, "function");
 });
