@@ -67,7 +67,7 @@ class SidebarInitialPayloadRouteRaceTests(unittest.TestCase):
             if (String(url).includes('data/initial/global.json')) {
               return new Promise(resolve => {
                 window.__releaseInitialPayload = () => resolve(new Response(JSON.stringify({
-                  mode:'global', total:1,
+                  mode:'global', page:1, page_size:100, total:1,
                   results:[{Repo:'VoiceOfML/VOMEBOOK',File:'first payload',Extension:'txt',Folder:[],Size:12}]
                 }), {status:200,headers:{'Content-Type':'application/json'}}));
               });
@@ -121,7 +121,7 @@ class SidebarInitialPayloadRouteRaceTests(unittest.TestCase):
         self.load("#/VOMEBOOK")
         self.page.wait_for_function("STATE.dataLoaded && STATE.mode === 'repo' && !STATE.isLoading", timeout=30000)
         result = self.page.evaluate('''() => {
-          const payload = {repo: STATE.repoFull, total: 0, results: []};
+          const payload = {repo:STATE.repoFull, page:1, page_size:STATE.pageSize, total:0, results:[]};
           const before = {hash:location.hash, path:STATE.browserPath};
           ROUTER.navigate('repo', STATE.repo, 'docs');
           const pending = {hash:location.hash, path:STATE.browserPath};
@@ -149,7 +149,7 @@ class SidebarInitialPayloadRouteRaceTests(unittest.TestCase):
             buildSearchURLParams = () => new URLSearchParams('q=hello&ext=txt&sort=name&local=0&history=0&mirror=0&sidebar=0');
             ROUTER.navigate('repo', STATE.repo, 'docs/子');
             pending = {hash: location.hash, length: history.length, path:STATE.browserPath};
-            applied = applyInitialSearchPayload({repo:STATE.repoFull,total:0,results:[]});
+            applied = applyInitialSearchPayload({repo:STATE.repoFull, page:1, page_size:STATE.pageSize, total:0, results:[]});
             after = {hash:location.hash, length:history.length};
           } finally { buildSearchURLParams = originalParams; }
           return {before, pending, applied, after};
@@ -187,7 +187,7 @@ class SidebarInitialPayloadRouteRaceTests(unittest.TestCase):
           try {
             ROUTER.navigate('repo', STATE.repo, 'docs');
             const destination = location.href;
-            const applied = applyInitialSearchPayload({repo:STATE.repoFull,total:0,results:[]});
+            const applied = applyInitialSearchPayload({repo:STATE.repoFull, page:1, page_size:STATE.pageSize, total:0, results:[]});
             await entered;
             return {destination, applied, path:STATE.browserPath, hash:location.hash};
           } finally { ROUTER.apply = originalApply; }
@@ -216,7 +216,7 @@ class SidebarInitialPayloadRouteRaceTests(unittest.TestCase):
           syncStateToURL();
           const afterFirstSync = location.hash;
           STATE.useMirrorLinks = false;
-          const applied = applyInitialSearchPayload({repo:STATE.repoFull,total:0,results:[]});
+          const applied = applyInitialSearchPayload({repo:STATE.repoFull, page:1, page_size:STATE.pageSize, total:0, results:[]});
           return {afterFirstSync, applied, afterPayload:location.hash};
         }''')
         self.assertTrue(observed["applied"])
@@ -252,7 +252,7 @@ class SidebarInitialPayloadRouteRaceTests(unittest.TestCase):
                 resolve({before, after:location.hash, result}); return result;
               };
             });
-            release({repo:STATE.repoFull,total:0,results:[]});
+            release({repo:STATE.repoFull, page:1, page_size:STATE.pageSize, total:0, results:[]});
             const state = await applied;
             return {path, wanted, applied:await pending, state};
           } finally {

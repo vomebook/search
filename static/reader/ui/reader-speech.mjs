@@ -571,9 +571,9 @@ export function createReaderSpeech(readerContext, loadPlayer) {
 
   /** @param {import('../../../typings/reader-speech-strict').SpeechSource} info @returns {import('../../../typings/reader-speech-strict').SpeechSource} */
   function withProbeCache(info) {
-    const load = info.load;
+    const load = info.load, owner = generation;
     return { ...info, load: (unit) => {
-      const hit = probeText.get(unit);
+      const hit = owner === generation ? probeText.get(unit) : undefined;
       if (hit) { probeText.delete(unit); return hit; }
       return load(unit);
     } };
@@ -595,13 +595,16 @@ export function createReaderSpeech(readerContext, loadPlayer) {
       // probed once its text is extracted (see attach).
       if (!probeSeen.has(unit) && info.ready && !info.ready(unit)) continue;
       if (!probeSeen.has(unit)) {
-        const text = Promise.resolve().then(() => info.load(unit)).then((value) => String(value || ""));
+        const text = Promise.resolve().then(() => owner === generation ? info.load(unit) : "").then((value) => String(value || ""));
         probeText.set(unit, text);
         probeSeen.set(unit, text.then((value) => !!value.trim()));
       }
       let found;
       try { found = await probeSeen.get(unit); }
-      catch (_) { probeSeen.delete(unit); probeText.delete(unit); continue; }
+      catch (_) {
+        if (owner !== generation) return null;
+        probeSeen.delete(unit); probeText.delete(unit); continue;
+      }
       if (owner !== generation) return null;
       if (found) return from;
     }
@@ -622,7 +625,8 @@ export function createReaderSpeech(readerContext, loadPlayer) {
         if (!adapter && reprobe) offer(info);
         return;
       }
-      publish(createAdapter(info, info.units > 1 ? Math.max(info.first, from - 1) : info.first));
+      // Only the adapter consumes probe results; the probe always uses the raw loader.
+      publish(createAdapter(withProbeCache(info), info.units > 1 ? Math.max(info.first, from - 1) : info.first));
     }, () => { if (owner === generation) probing = null; });
   }
 
@@ -640,9 +644,8 @@ export function createReaderSpeech(readerContext, loadPlayer) {
     if (!player) return;
     document.querySelector("[data-speech-toggle]")?.remove();
     if (!hasText()) return;
-    const raw = source();
-    if (!raw || raw.units <= raw.first) return;
-    const info = withProbeCache(raw);
+    const info = source();
+    if (!info || info.units <= info.first) return;
     if (needsProbe(info)) { offerSource = info; offer(info); }
     else publish(createAdapter(info, info.units > 1 ? Math.max(info.first, (topPosition()?.unit ?? info.first) - 1) : info.first));
     /** @param {EventTarget | null | undefined} target @param {string} type @param {EventListener} handler @param {AddEventListenerOptions} [options] */

@@ -102,6 +102,41 @@ class DownloadLifecycleTests(unittest.TestCase):
                         aborted=False, results=[success, success], label='original', restoredBusy='previous',
                         toast='已发起下载，请在浏览器下载列表查看' if success else 'missing'))
 
+    def test_batch_counts_handoff_when_trigger_cancels_before_notification(self):
+        for timing in ('sync', 'microtask'):
+            with self.subTest(timing=timing):
+                self.page.evaluate('''timing => {
+                  const native=window.fetch;
+                  window.handoffLaunches=[];window.handoffRetained=null;window.handoffIndependent=null;
+                  window.fetch=(url,options)=>String(url).includes('/api/download/check')
+                    ? Promise.resolve(new Response('{"ok":true}')) : native(url,options);
+                  const link='handoff-'+timing;
+                  window.triggerDownload=url=>{
+                    const handedOff=new URL(url,location.href).searchParams.get('link');
+                    handoffLaunches.push(handedOff);
+                    if (handedOff !== link) return;
+                    const cancel=()=>{
+                      downloadBatches.cancel();
+                      handoffRetained=pendingDownloads.has(link);
+                    };
+                    if (timing==='sync') cancel(); else queueMicrotask(cancel);
+                  };
+                  startDownloadBatch([{filename:'book.txt',link},{filename:'queued.txt',link:link+'-queued'},
+                    {filename:'unclaimed.txt',link:link+'-unclaimed'}]);
+                  downloadFile('book.txt',link,{quiet:true}).then(value=>{handoffIndependent=value;});
+                }''', timing)
+                link = 'handoff-' + timing
+                self.page.wait_for_function('downloadBatches.batch.done && handoffIndependent !== null')
+                self.assertEqual(self.page.evaluate('''[
+                  downloadBatches.batch.cancelled,downloadBatches.batch.started,downloadBatches.batch.next,
+                  downloadBatches.batch.failed.map(item=>item.link),handoffLaunches,
+                  handoffIndependent,handoffRetained,pendingDownloads.size
+                ]'''), [True, 1, 2, [link+'-queued', link+'-unclaimed'], [link], True, True, 0])
+                self.assertIn('已发起 1/3', self.page.locator('#download-queue [role="status"]').text_content())
+                self.page.locator('#download-queue [data-queue="retry"]').click()
+                self.page.wait_for_function('downloadBatches.batch.done && downloadBatches.batch.started === 2')
+                self.assertCountEqual(self.page.evaluate('handoffLaunches'), [link, link+'-queued', link+'-unclaimed'])
+
     def test_check_cancellation_is_per_subscriber_and_retry_survives_late_body(self):
         result = self.page.evaluate('''async () => {
           const native=window.fetch;const requests=[];

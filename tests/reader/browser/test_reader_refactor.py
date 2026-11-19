@@ -2971,7 +2971,9 @@ class ReaderRefactorTest(unittest.TestCase):
         # A href-less navigation heading stays in the directory as a group row (it has no
         # destination), so every entry keeps its original order.
         self.assertEqual(entries[0], {'label':'Volume', 'section':-1, 'fragment':'', 'anchor':None})
-        self.assertEqual(entries[1:-1], [dict(label=f'Chapter {n}', section=(0, -1, 1)[n % 3],
+        # The non-linear section at spine index 1 is a real destination: Foliate
+        # addresses supplements by -spine_index - 1, not by their visible index.
+        self.assertEqual(entries[1:-1], [dict(label=f'Chapter {n}', section=(0, -2, 1)[n % 3],
                                             fragment=f'anchor {n}', anchor=n) for n in range(85)])
         self.assertEqual(entries[-1], {'label':'Invalid', 'section':-1, 'fragment':'', 'anchor':None})
         self.assertEqual(self.page.evaluate('[__tocProbe.peak, __tocProbe.scans, __tocProbe.calls]'), [8, 0, 86])

@@ -542,14 +542,16 @@ require('node:test')('Reader speech uses the visible PDF page and does not requi
   for (const key of ['sessionStorage', 'localStorage'])
     Object.defineProperty(globalThis, key, { configurable: true, value: { removeItem() {} } })
   const rect = { top: 0, bottom: 20, height: 20 }
-  const textElement = (data, dataset = {}) => ({ dataset, getBoundingClientRect: () => rect, ownerDocument: {
+  const textElement = (data, dataset = {}, onWalk = () => {}) => ({ dataset, getBoundingClientRect: () => rect, ownerDocument: {
     createTreeWalker() {
+      onWalk()
       let read = false
       return { nextNode() { if (read) return null; read = true; return { data, length: data.length } } }
     },
     createRange: () => ({ setStart() {}, setEnd() {}, getClientRects: () => [rect], getBoundingClientRect: () => rect })
   } })
-  const pdfText = textElement('Visible PDF text.')
+  let pdfWalks = 0
+  const pdfText = textElement('Visible PDF text.', {}, () => { pdfWalks++ })
   const pdfPage = { dataset: { page: '8', textReady: '1' }, querySelector: () => pdfText }
   const chapter = textElement('Second chapter text.', { chapter: '2' })
   const viewport = Object.assign(new EventTarget(), { getBoundingClientRect: () => ({ top: 0, bottom: 800 }) })
@@ -566,7 +568,9 @@ require('node:test')('Reader speech uses the visible PDF page and does not requi
   assert.strictEqual(published.length, 1, 'a stale saved page must not hide speech on the visible page')
   const pdf = published[0]
   assert.strictEqual(pdf.base, 7)
+  const walksAfterProbe = pdfWalks
   assert.strictEqual(pdf.partAt(await pdf.locateTop()).unit, 8)
+  assert.strictEqual(pdfWalks - walksAfterProbe, 1, 'locateTop walks the DOM for position, then reuses the probe text')
 
   const loads = []
   Object.assign(context, { capability: { mode: 'epub-chapters' }, chapterSearchConfiguration: null,

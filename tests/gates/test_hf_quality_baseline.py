@@ -908,7 +908,10 @@ class HfSearchProjectionCiTests(unittest.TestCase):
         workflow = (Path(__file__).resolve().parents[2] / '.github/workflows/reader-refactor.yml').read_text()
         self.assertEqual(workflow.count('python3 -B -m unittest -v tests.gates.test_reader_dom_search_gate'), 2)
         self.assertEqual(workflow.count('python3 -B scripts/reader/check_reader_dom_search_contracts.py'), 2)
-        self.assertEqual(workflow.count('python3 -B -m unittest -v tests.reader.browser.test_reader_refactor'), 2)
+        # Require the skip-rejecting runner on both sites, not merely an
+        # invocation that can go green without launching a browser.
+        for script in ('scripts/ci/run_unittest_suite.py', '../scripts/ci/run_unittest_suite.py'):
+            self.assertEqual(workflow.count(f'run: python3 -B {script} tests.reader.browser.test_reader_refactor'), 1)
 
     def test_both_sites_run_all_djvu_scripts_and_named_contract_gate(self):
         workflow = (Path(__file__).resolve().parents[2] / '.github/workflows/reader-refactor.yml').read_text()
