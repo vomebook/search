@@ -164,11 +164,16 @@ export function createReaderToc(readerContext) {
     link.className = "panel-item-main";
     link.textContent = entry.label;
     link.title = entry.label;
+    const mark = document.createElement("span");
+    mark.className = "toc-current-mark";
+    mark.setAttribute("aria-hidden", "true");
+    mark.textContent = "✓";
+    mark.hidden = true;
+    row.append(link, mark);
     if (entry.group) {
       row.classList.add("toc-group");
       link.setAttribute("role", "heading");
       link.setAttribute("aria-level", String(Math.min(6, (entry.depth || 0) + 1)));
-      row.appendChild(link);
       return row;
     }
     link.tabIndex = 0;
@@ -186,7 +191,6 @@ export function createReaderToc(readerContext) {
         activate();
       }
     });
-    row.appendChild(link);
     return row;
   }
 
@@ -224,7 +228,7 @@ export function createReaderToc(readerContext) {
       if (!row) {
         row = readerContext.createTocRow(state.entries[index], index);
         row.classList.add("toc-virtual-row");
-        if (state.query) readerContext.highlightPanelItem(row, state.query);
+        if (state.query) readerContext.highlightPanelItem(/** @type {HTMLElement} */ (row.firstElementChild), state.query);
         cache.rows.set(index, row);
       }
       const top = `${position * readerContext.TOC_VIRTUAL_ROW_HEIGHT}px`;
@@ -378,8 +382,29 @@ export function createReaderToc(readerContext) {
     pageLookupEntries = entries;
   }
 
+  /** @param {Element} row @param {boolean} current */
+  function markTocRow(row, current) {
+    const mark = /** @type {HTMLElement} */ (row.querySelector(".toc-current-mark"));
+    mark.hidden = !current;
+    row.classList.toggle("is-current", current);
+    const link = row.querySelector('[role="link"]');
+    if (current) link?.setAttribute("aria-current", "location");
+    else link?.removeAttribute("aria-current");
+  }
+
+  // Track the node, not just the index: filtering can replace it at the same index.
+  /** @type {Element | null | undefined} */
+  let markedRow;
+  function syncMarkedTocRow() {
+    const index = readerContext.navigationState.currentChapterIndex, state = readerContext.tocVirtualState;
+    const row = state ? virtualTocRows.get(state)?.rows.get(index) : document.getElementById("toc-list")?.children.item(index);
+    if (markedRow === row) return;
+    if (markedRow?.isConnected) markTocRow(markedRow, false);
+    markedRow = row;
+    if (row) markTocRow(row, true);
+  }
+
   function updateTocCurrentMark() {
-    const rows = [...document.querySelectorAll("#toc-list .toc-item")].map(row => /** @type {HTMLElement} */ (row));
     if (readerContext.documentState.pageCount > 1 && readerContext.documentState.page > 0) {
       const entries = tocEntries();
       let pageIndex = -1;
@@ -401,22 +426,7 @@ export function createReaderToc(readerContext) {
       }
       if (pageIndex >= 0) readerContext.updateNavigationState({ currentChapterIndex: pageIndex });
     }
-    for (const row of rows) {
-      const index = Number(row.dataset.tocIndex);
-      let mark = /** @type {HTMLElement | null} */ (row.querySelector(".toc-current-mark"));
-      if (!mark) {
-        mark = document.createElement("span");
-        mark.className = "toc-current-mark";
-        mark.setAttribute("aria-hidden", "true");
-        mark.textContent = "✓";
-        row.appendChild(mark);
-      }
-      mark.hidden = index !== readerContext.navigationState.currentChapterIndex;
-      row.classList.toggle("is-current", index === readerContext.navigationState.currentChapterIndex);
-      const link = row.querySelector('[role="link"]');
-      if (index === readerContext.navigationState.currentChapterIndex) link?.setAttribute("aria-current", "location");
-      else link?.removeAttribute("aria-current");
-    }
+    syncMarkedTocRow();
   }
 
   function syncTocTab() {

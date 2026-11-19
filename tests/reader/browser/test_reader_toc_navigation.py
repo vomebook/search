@@ -75,6 +75,7 @@ class TocNavigationTests(unittest.TestCase):
               window.__toc={nav:()=>navigationState, jump:i=>navigateTocEntry(i),
                 set:setToc, setPageCount:count=>updateDocumentState({pageCount:count}),
                 setPage:page=>{updateDocumentState({page});updateTocCurrentMark()},
+                setCurrent:index=>{updateNavigationState({currentChapterIndex:index});updateTocCurrentMark()},
                 state:()=>tocVirtualState,
                 align:(selector, offset)=>alignReaderDestination(document.querySelector(selector), offset || 0),
                 hold:(target, offset)=>holdReaderDestination(target, offset),
@@ -381,8 +382,9 @@ class TocNavigationTests(unittest.TestCase):
         # Index 60..119 are the "第N章 第二节" sub-entries.
         for chapter in (2, 30, 58):
             self.click_entry(60 + chapter - 1)
-            self.assertLess(abs(self.offset_of(f'#sec-{chapter}-b') or 99), 2,
-                            f"第{chapter}章 第二节 fragment did not land")
+            offset = self.offset_of(f'#sec-{chapter}-b')
+            self.assertIsNotNone(offset, f"第{chapter}章 第二节 fragment is missing")
+            self.assertLess(abs(offset), 2, f"第{chapter}章 第二节 fragment did not land")
             self.assertEqual(self.landed_chapter(), chapter)
 
     def test_large_chapter_yields_and_aborted_reader_never_mounts_partial_article(self):
@@ -556,6 +558,23 @@ class TocNavigationTests(unittest.TestCase):
             self.assertEqual(self.landed_chapter(), index+1)
             if not self.panel_open(): self.page.locator('#history').click()
 
+    def test_current_mark_only_changes_rows_that_enter_or_leave_current(self):
+        self.open_chapters(12)
+        metrics=self.page.evaluate('''()=>{
+          const list=document.querySelector('#toc-list'), rows=[...list.children];
+          __toc.setCurrent(1);
+          const observer=new MutationObserver(()=>{});
+          observer.observe(list,{subtree:true,attributes:true,attributeFilter:['hidden','class','aria-current']});
+          __toc.setCurrent(1);
+          const repeated=observer.takeRecords().length;
+          __toc.setCurrent(3);
+          const touched=[...new Set(observer.takeRecords().map(r=>Number(r.target.closest('.toc-item').dataset.tocIndex)))].sort();
+          observer.disconnect();
+          const current=[...list.querySelectorAll('[aria-current="location"]')].map(link=>Number(link.parentElement.dataset.tocIndex));
+          return {repeated,touched,current,sameRows:rows.every((row,i)=>row===list.children[i])};
+        }''')
+        self.assertEqual(metrics,dict(repeated=0,touched=[1,3],current=[3],sameRows=True))
+
     def test_virtualized_directory_reuses_rows_and_keeps_keyboard_focus(self):
         self.page.emulate_media(reduced_motion='reduce')
         self.page.set_viewport_size({'width':1200,'height':800})
@@ -577,7 +596,7 @@ class TocNavigationTests(unittest.TestCase):
           const focused=document.activeElement, original=[...list.children];
           const observer=new MutationObserver(records=>mutations.push(...records));
           let mutations=[];
-          observer.observe(list,{childList:true});
+          observer.observe(list,{childList:true,subtree:true,attributes:true,attributeFilter:['hidden','class','aria-current']});
           const frame=()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
           const results=[];
           try {
@@ -590,8 +609,9 @@ class TocNavigationTests(unittest.TestCase):
               mutations.push(...observer.takeRecords());
               const after=[...list.children], indices=after.map(row=>Number(row.dataset.tocIndex));
               results.push({
-                added:mutations.reduce((n,r)=>n+r.addedNodes.length,0),
-                removed:mutations.reduce((n,r)=>n+r.removedNodes.length,0),
+                markerWrites:mutations.filter(r=>r.type==='attributes').length,
+                added:mutations.filter(r=>r.target===list).reduce((n,r)=>n+r.addedNodes.length,0),
+                removed:mutations.filter(r=>r.target===list).reduce((n,r)=>n+r.removedNodes.length,0),
                 fresh:after.filter(row=>!before.includes(row)).length,
                 retained:before.filter(row=>indices.includes(Number(row.dataset.tocIndex)))
                   .every(row=>after.includes(row)),
@@ -604,6 +624,7 @@ class TocNavigationTests(unittest.TestCase):
           return results;
         }''')
         for result, shift, changed in zip(results,(0,1,0),(0,1,1)):
+            self.assertEqual(result['markerWrites'],0,result)
             self.assertEqual(result['added'],changed)
             self.assertEqual(result['removed'],changed)
             self.assertEqual(result['fresh'],changed)
