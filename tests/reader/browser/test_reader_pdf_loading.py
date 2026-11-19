@@ -127,9 +127,9 @@ class PdfLoadingTests(unittest.TestCase):
         self.page.route(BOOK_VALIDATE, fail_validator)
         imports = '''async url => { try { await import(url); return true; } catch { return false; } }'''
         self.assertFalse(self.page.evaluate(imports, validator_url))
-        self.page.unroute(BOOK_VALIDATE)
+        # Leave the validator unavailable regardless of whether this browser
+        # caches the failed import. The hit projection must not depend on it.
         self.assertEqual(validator, [validator_url])
-        self.assertFalse(self.page.evaluate(imports, validator_url))
 
         attempts = []
 
@@ -151,6 +151,7 @@ class PdfLoadingTests(unittest.TestCase):
         parsed = [urllib.parse.urlsplit(url) for url in attempts]
         self.assertEqual([url.query for url in parsed], ['', 'reader-module-retry=1', 'reader-module-retry=2'])
         self.assertEqual(len({url.path for url in parsed}), 1)
+        self.assertEqual(validator, [validator_url])
         self.assertTrue(self.page.evaluate('window.pdfHitTestDocument'))
         self.assertEqual(self.errors, [])
 
