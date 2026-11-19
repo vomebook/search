@@ -472,6 +472,89 @@ class ReaderRefactorTest(unittest.TestCase):
         self.assertFalse(any(path.startswith('objects/') for path in requested))
         self.assertTrue(self.page.locator('#download').get_attribute('href'))
 
+    def test_tiff_first_image_fetch_overlaps_manifest_without_bypassing_validation(self):
+        for saved, save_data, valid in ((False, False, True), (False, False, False),
+                                        (False, True, True), (True, False, True)):
+            with self.subTest(saved=saved, save_data=save_data, valid=valid):
+                page = self.context.new_page()
+                try:
+                    self._check_tiff_opening_overlap(page, saved, save_data, valid)
+                finally:
+                    page.close()
+
+    def _check_tiff_opening_overlap(self, page, saved, save_data, valid):
+        prefix = 'pages/image/tiff/' + hashlib.sha256(str((saved, save_data, valid)).encode()).hexdigest() + '/'
+        source = 'https://voiceofml-search.hf.space/api/reader-bucket-resource?' + urllib.parse.urlencode({
+            'path': prefix + 'page-manifest.json'})
+        data = support.IMAGE_FIXTURES['webp'][1]
+        store = support.STORE_SCRIPT.replace('new Promise((resolve) => setTimeout(() => resolve(null), 300))',
+            'Promise.resolve({page: 2, pageOffset: 0, zoom: 1})' if saved else 'Promise.resolve(null)')
+        page.route('**/static/reader/core/reader-store.js', lambda route: route.fulfill(
+            content_type='text/javascript', body=store))
+        page.add_init_script(f"Object.defineProperty(navigator, 'connection', {{value:{{saveData:{str(save_data).lower()}}}}})")
+        manifests, images = [], []
+
+        def asset(route):
+            path = urllib.parse.parse_qs(urllib.parse.urlsplit(route.request.url).query)['path'][0]
+            if path.endswith('/page-manifest.json'):
+                manifests.append(route)
+            else:
+                images.append(path)
+                route.fulfill(content_type='image/webp', body=data)
+
+        page.route('**/api/reader-bucket-resource?**', asset)
+        page.goto(self.reader_url('image-pages', url=source), wait_until='domcontentloaded')
+        page.wait_for_function('() => window.__storeStartedAt !== undefined')
+        if not save_data and not saved:
+            page.wait_for_function('() => performance.getEntriesByType("resource").some(r => r.initiatorType === "img" && r.name.includes("page-000001.webp"))')
+            self.assertEqual(images, [prefix + 'pages/page-000001.webp'])
+        else:
+            # Flush the settled lookup before confirming it did not request page one.
+            page.evaluate('() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))')
+            self.assertEqual(images, [])
+        self.assertEqual(page.locator('.reader-page').count(), 0)
+        self.assertEqual(len(manifests), 1)
+        count = 2 if saved else 1
+        manifests.pop().fulfill(json=dict(version=1, kind='image-page-stream', page_count=count,
+                                        pages=[{} for _ in range(count)] if valid else []))
+        if not valid:
+            page.locator('.reader-error').wait_for()
+            self.assertEqual(page.locator('.reader-page').count(), 0)
+            return
+        page.locator(f'.reader-page[data-page="{count}"] img.ready').wait_for(state='visible')
+        self.assertEqual(page.locator('#page-number').input_value(), str(count))
+        self.assertEqual(images.count(prefix + f'pages/page-{count:06}.webp'), 1)
+        if saved:
+            self.assertTrue(images[0].endswith('page-000002.webp'))
+
+    def test_disposal_while_tiff_manifest_is_pending_releases_preloaded_image(self):
+        prefix = 'pages/image/tiff/' + 'c' * 64 + '/'
+        source = 'https://voiceofml-search.hf.space/api/reader-bucket-resource?' + urllib.parse.urlencode({
+            'path': prefix + 'page-manifest.json'})
+        self.page.add_init_script('''(() => {
+          Object.defineProperty(navigator, 'connection', {value:{saveData:false}});
+          const NativeImage = window.Image;
+          window.Image = function (...args) {
+            const image = new NativeImage(...args);
+            (window.__openingImages ||= []).push(image);
+            return image;
+          };
+        })()''')
+        self.page.route('**/static/reader/core/reader-store.js', lambda route: route.fulfill(
+            content_type='text/javascript', body=support.STORE_SCRIPT.replace(
+                'new Promise((resolve) => setTimeout(() => resolve(null), 300))', 'Promise.resolve(null)')))
+        held = []
+        self.page.route('**/api/reader-bucket-resource?**', lambda route: held.append(route))
+        self.page.goto(self.reader_url('image-pages', url=source), wait_until='domcontentloaded')
+        self.page.wait_for_function('() => window.__openingImages?.some(image => image.src.includes("page-000001.webp"))')
+        self.assertTrue(self.page.evaluate('''() => {
+          const image = window.__openingImages.find(item => item.src.includes('page-000001.webp'));
+          window.dispatchEvent(new Event('voice-reader-dispose'));
+          return !image.hasAttribute('src') && !image.isConnected;
+        }'''))
+        self.assertEqual(self.page.locator('.reader-page').count(), 0)
+        self.assertTrue(any('page-manifest.json' in route.request.url for route in held))
+
     def test_tiff_first_page_renders_before_remaining_shell_batches_finish(self):
         prefix = 'pages/image/tiff/' + 'a' * 64 + '/'
         source = 'https://voiceofml-search.hf.space/api/reader-bucket-resource?' + urllib.parse.urlencode({'path': prefix+'page-manifest.json'})

@@ -234,6 +234,8 @@ assert.strictEqual(JSON.stringify(runtimeMatrix.unsupported), JSON.stringify({ t
 // Evaluate the owning registry with identifiable loaders/renderers, so comments or
 // dead dispatch functions cannot satisfy the format wiring contract.
 const registry = reader.match(/function\s+registerReaderFormatAdapters\s*\(\)\s*\{[\s\S]*?\n\}/)
+const imageOpen = reader.match(/function openImagePages\(\) \{[\s\S]*?\n\}/)
+assert.ok(imageOpen, 'image manifest opening helper')
 assert.ok(registry, 'format adapter registry')
 const expected = {
   image: ['loadImageDocument', 'renderImageDocument'],
@@ -245,7 +247,9 @@ const expected = {
 const registered = new Map(), calls = []
 const registryContext = { extension: 'pdf', formatAdapters: { register: (mode, adapter) => registered.set(mode, adapter) } }
 for (const name of [...new Set(Object.values(expected).flat()), 'loadPdfDocument', 'renderPdf', 'preloadPdfFirstPage', 'fetchReaderResponse', 'renderPdfPages', 'renderImagePages', 'renderMedia', 'restoreFormat', 'disposeFormatResources']) registryContext[name] = (...args) => calls.push([name, ...args])
-vm.runInNewContext(registry[0] + '; registerReaderFormatAdapters();', registryContext)
+vm.runInNewContext(imageOpen[0] + '\n' + registry[0] + '; registerReaderFormatAdapters();', {
+  ...registryContext, readerRestorationPromise: null, readerRuntime: {currentGeneration: () => 1}
+})
 assert.deepStrictEqual([...registered.keys()].sort(), [...Object.keys(expected), 'pdf', 'pdf-pages', 'image-pages', 'audio', 'video'].sort())
 registered.get('pdf').open()
 assert.deepStrictEqual(calls.splice(0), [['loadPdfDocument']], 'ordinary PDF uses PDF.js loader')

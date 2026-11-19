@@ -1,22 +1,25 @@
 /** @param {import('../../../typings/reader-page-window-strict').PageWindowContext} readerContext */
 export function createReaderPdfPageWindow(readerContext) {
-  /** @param {number} total */
-  async function preloadPdfFirstPage(total) {
-    if (readerContext.capability.mode !== "image-pages") return;
+  /** @param {number} total @param {number} [generation] */
+  async function preloadPdfFirstPage(total, generation) {
+    if (readerContext.capability.mode !== "image-pages" || navigator.connection?.saveData) return;
     await readerContext.getInitialReaderRestoration();
+    if (readerContext.capability.mode !== "image-pages" || readerContext.readerAbortController.signal.aborted ||
+        (generation !== undefined && !readerContext.isReaderGenerationCurrent("navigation", generation))) return;
     try {
       const source = readerContext.pdfPageManifest || readerContext.pdfManifestSource();
-      if (!source) return;
+      if (!source?.pageUrl) return;
       if (["jxl", "png", "mixed"].includes(source.codec || "")) return;
       const page = readerContext.initialReaderPage(total);
       readerContext.pdfFirstPagePreloadPage = page;
-      const pageUrl = new URL(/** @type {(page: number) => string} */ (source.pageUrl)(page));
-      if (!navigator.connection?.saveData) {
-        readerContext.pdfFirstPagePreload = new Image();
-        readerContext.pdfFirstPagePreload.decoding = "async";
-        readerContext.pdfFirstPagePreload.fetchPriority = "high";
-        readerContext.pdfFirstPagePreload.src = pageUrl.href;
-      }
+      const pageUrl = new URL(source.pageUrl(page));
+      if (readerContext.pdfFirstPagePreload?.src === pageUrl.href) return;
+      readerContext.pdfFirstPagePreload?.removeAttribute("src");
+      const image = readerContext.pdfFirstPagePreload = new Image();
+      image.alt = `第 ${page} 页`;
+      image.decoding = "async";
+      image.fetchPriority = "high";
+      image.src = pageUrl.href;
     } catch (_) {}
   }
 

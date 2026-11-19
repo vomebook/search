@@ -109,7 +109,7 @@ export interface PageWindowContext {
   pdfShellLayoutReady: Promise<boolean> | null;
   pdfShellWindow: PageWindowHandle | null; pdfShellsReady: Promise<void>; pdfUserHasScrolled: boolean; pageNavigationLockUntil: number;
   getInitialReaderRestoration(): Promise<unknown>; initialReaderPage(total: number): number;
-  pdfManifestSource(): PageWindowSource | null; preloadPdfFirstPage(total: number): Promise<void>;
+  pdfManifestSource(): PageWindowSource | null; preloadPdfFirstPage(total: number, generation?: number): Promise<void>;
   awaitReader<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T>;
   waitForReader(ms?: number, animationFrame?: boolean): Promise<void>;
   assertReaderActive(): void; readerAbortError(): Error; trackReaderResource(callback: () => void): () => void;

@@ -23,6 +23,7 @@ export interface ReaderFormatControllerContext {
   htmlFrame: HTMLIFrameElement | null; mediaElement: HTMLMediaElement | null;
   extension: string;
   fetchReaderResponse(): Promise<Response>;
+  preloadPdfFirstPage(total: number, generation?: number): Promise<void>;
   loadPdfDocument(): unknown; renderPdf(prepared: unknown): unknown;
   renderPdfPages(prepared: Response): unknown; renderImagePages(prepared: Response): unknown;
   loadImageDocument(target?: string): Promise<HTMLImageElement>; renderImageDocument(image: Node): unknown;
