@@ -82,7 +82,7 @@ export function createReaderToc(readerContext) {
         let low = 0, high = positions.length;
         while (low < high) {
           const middle = (low + high) >> 1;
-          if (positions[middle].top <= scroll) low = middle + 1;
+          if ((positions[middle]?.top ?? Infinity) <= scroll) low = middle + 1;
           else high = middle;
         }
         return positions[low ? low - 1 : 0]?.index ?? -1;
@@ -144,9 +144,9 @@ export function createReaderToc(readerContext) {
   /** @param {number} index @param {{closePanel?: boolean}} [options] */
   async function navigateTocEntry(index, { closePanel = true } = {}) {
     if (index < 0 || index >= readerContext.navigationState.tocEntries.length) return;
-    if (tocEntries()[index].group) return;
-    const generation = readerContext.beginReaderNavigation(),
-      entry = tocEntries()[index];
+    const entry = tocEntries()[index];
+    if (!entry || entry.group) return;
+    const generation = readerContext.beginReaderNavigation();
     try {
       const activated = readerContext.foliateContinuous
         ? await readerContext.activateFoliateTocEntry(entry, generation, { closePanel: false })
@@ -231,9 +231,12 @@ export function createReaderToc(readerContext) {
     let next = state.list.firstElementChild;
     for (let position = start; position < end; position++) {
       const index = indices[position];
+      if (index === undefined) continue;
+      const entry = state.entries[index];
+      if (!entry) continue;
       let row = cache.rows.get(index);
       if (!row) {
-        row = readerContext.createTocRow(state.entries[index], index);
+        row = readerContext.createTocRow(entry, index);
         row.classList.add("toc-virtual-row");
         if (state.query) readerContext.highlightPanelItem(/** @type {HTMLElement} */ (row.firstElementChild), state.query);
         cache.rows.set(index, row);
@@ -431,10 +434,10 @@ export function createReaderToc(readerContext) {
         let low = 0, high = pageLookup.length;
         while (low < high) {
           const middle = (low + high) >> 1;
-          if (pageLookup[middle].page <= readerContext.documentState.page) low = middle + 1;
+          if ((pageLookup[middle]?.page ?? Infinity) <= readerContext.documentState.page) low = middle + 1;
           else high = middle;
         }
-        if (low) pageIndex = pageLookup[low - 1].index;
+        if (low) pageIndex = pageLookup[low - 1]?.index ?? -1;
       } else {
         for (const [index, entry] of entries.entries()) {
           const page = tocPage(entry);

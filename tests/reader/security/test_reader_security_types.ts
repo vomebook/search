@@ -6,10 +6,10 @@ const chapter = security.validateChapterManifest(raw);
 const pdf = security.validatePdfPageManifest(raw);
 const manifest = security.validatePdfOcrManifest(raw);
 const page = security.validatePdfOcrPage(raw, 1);
-const path: string = chapter.chapters[0].path;
+const path: string | undefined = chapter.chapters[0]?.path;
 const count: number = pdf.page_count;
 const hash: string = manifest.source_sha256;
-const text: string = page.blocks[0].t;
+const text: string | undefined = page.blocks[0]?.t;
 // @ts-expect-error Unvalidated fields are not any.
 chapter.chapters[0].bytes.toFixed();
 // @ts-expect-error Images are not validated for every codec.

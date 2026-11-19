@@ -78,7 +78,7 @@ export function createReaderPdfTextRuntime(readerContext) {
           return readerContext.pdfTextLayerRepository.textPage(/** @type {import('../../../typings/reader-v3-strict').Resource} */ (ref), page).then(payload => {
             if (readerContext.pdfV3Map) {
               const geometry = readerContext.pdfV3Map.pages[page - 1];
-              if (Math.abs((payload.geometry.width / payload.geometry.height) / (geometry.width / geometry.height) - 1) > .01)
+              if (!geometry || Math.abs((payload.geometry.width / payload.geometry.height) / (geometry.width / geometry.height) - 1) > .01)
                 throw new Error("PDF_V3_TEXT_GEOMETRY_MISMATCH");
             }
             readerContext.assertReaderActive(); readerContext.cachePdfOcrPage(page, payload); return payload;
@@ -267,7 +267,10 @@ export function createReaderPdfTextRuntime(readerContext) {
               !(payload.blocks || []).some(block => String(block?.t || "").trim())) return;
           if (payload.kind === "pdf-text-layer") {
             readerContext.populateIndependentTextLayer(layer, payload);
-            shell._bookmarkTextItems = payload.regions.map(region => ({ text: region.text, y: region.box[1] }));
+            shell._bookmarkTextItems = payload.regions.flatMap(region => {
+              const y = region.box[1];
+              return y === undefined ? [] : [{ text: region.text, y }];
+            });
           } else {
             VoiceOfMLReaderSecurity.validatePdfOcrPage(payload, page);
             readerContext.populateOcrTextLayer(layer, payload.blocks, payload.layout);
@@ -312,14 +315,15 @@ export function createReaderPdfTextRuntime(readerContext) {
       const pdfViewport = page.getViewport({ scale: 1 });
       if (Array.isArray(text.readerTextZones)) {
         const raw = readerContext.pdfTextContent(text.items);
-        const regions = text.readerTextZones.filter(zone => zone.end > zone.start &&
-          zone.box[0] < zone.box[2] && zone.box[1] < zone.box[3]).map(zone => ({
-            text:zone.text, start:zone.start, end:zone.end, box:zone.box,
-            quad:[[zone.box[0],zone.box[1]],[zone.box[2],zone.box[1]],
-              [zone.box[2],zone.box[3]],[zone.box[0],zone.box[3]]], writing_mode:'horizontal-tb'
-          }));
+        const regions = text.readerTextZones.flatMap(zone => {
+          const [x, y, right, bottom] = zone.box;
+          if (x === undefined || y === undefined || right === undefined || bottom === undefined ||
+              !(zone.end > zone.start && x < right && y < bottom)) return [];
+          return [{ text: zone.text, start: zone.start, end: zone.end, y,
+            quad: [[x,y],[right,y],[right,bottom],[x,bottom]], writing_mode: 'horizontal-tb' }];
+        });
         readerContext.populateIndependentTextLayer(layer,{text:raw,regions});
-        shell._bookmarkTextItems=regions.map(region=>({text:region.text,y:region.box[1]}));
+        shell._bookmarkTextItems=regions.map(region=>({text:region.text,y:region.y}));
         if (readerContext.ocrManifestUrl) shell.dataset.nativeTextFallback="1";
         shell.dataset.textReady="1";
         readerContext.highlightPdfText(shell);
@@ -328,13 +332,11 @@ export function createReaderPdfTextRuntime(readerContext) {
       shell._bookmarkTextItems = text.items
         .filter((item) => item.str && item.str.trim())
         .map((item) => {
-          const point =
-            item.transform && pdfViewport.convertToViewportPoint
-              ? pdfViewport.convertToViewportPoint(item.transform[4], item.transform[5])
-              : null;
+          const tx = item.transform?.[4], ty = item.transform?.[5];
+          const y = tx !== undefined && ty !== undefined ? pdfViewport.convertToViewportPoint?.(tx, ty)?.[1] : undefined;
           return {
             text: item.str,
-            y: point ? Math.max(0, Math.min(1, point[1] / Math.max(1, pdfViewport.height))) : 0
+            y: y === undefined ? 0 : Math.max(0, Math.min(1, y / Math.max(1, pdfViewport.height)))
           };
         });
       readerContext.populatePdfTextLayer(layer, text.items, pdfViewport, text.styles);
@@ -372,12 +374,13 @@ export function createReaderPdfTextRuntime(readerContext) {
       let low = 0, high = runs.length;
       while (low < high) {
         const middle = (low + high) >> 1;
-        if (runs[middle].end <= start) low = middle + 1;
+        if ((runs[middle]?.end ?? Infinity) <= start) low = middle + 1;
         else high = middle;
       }
       const parts = [];
-      for (let index = low; index < runs.length && runs[index].start < end; index++) {
+      for (let index = low; index < runs.length; index++) {
         const run = runs[index];
+        if (!run || run.start >= end) break;
         if (run.end <= start) continue;
         parts.push({ node: run.node, start: Math.max(start, run.start) - run.start,
           end: Math.min(end, run.end) - run.start });

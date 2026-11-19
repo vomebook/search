@@ -37,7 +37,7 @@ export function validateDatasetPrimary(ref, sourceKey, sourceSha, expectedKind) 
       Object.keys(ref).length !== keys.length || keys.some(key => !Object.hasOwn(ref, key)) ||
       ref.kind !== "dataset-source" || ref.role !== "runtime" ||
       typeof ref.repo !== "string" || !/^VoiceOfML\/[A-Za-z0-9._-]+$/.test(ref.repo) ||
-      [".", ".."].includes(ref.repo.split("/")[1]) ||
+      [".", ".."].includes(ref.repo.slice("VoiceOfML/".length)) ||
       typeof ref.path !== "string" || !ref.path || ref.path.startsWith("/") ||
       ref.path.split("/").some(part => !part || part === "." || part === "..") ||
       /[\\%?#\x00-\x1f\x7f\p{Cs}]/u.test(ref.path) || !/\.(?:pdf|djvu)$/i.test(ref.path) ||
@@ -117,7 +117,8 @@ export function partitionFor(partitions, page) {
   let low = 0, high = partitions.length;
   while (low < high) {
     const mid = (low + high) >> 1;
-    if (partitions[mid].start <= page) low = mid + 1;
+    const part = partitions[mid];
+    if (part && part.start <= page) low = mid + 1;
     else high = mid;
   }
   const part = partitions[low - 1];
@@ -215,6 +216,7 @@ export function createV3Repository({ readJson, resourceUrl, signal, pageCount, s
           !Array.isArray(value.pages) || value.pages.length !== part.end - part.start + 1 ||
           value.pages.some((p, i) => !p || p.page !== part.start + i)) invalid();
       const entry = value.pages[page - part.start];
+      if (!entry) invalid();
       validateResource(entry.resource, sourceSha);
       if (!entry.resource.path.endsWith(`/text/page-${String(page).padStart(6, "0")}.json.gz`)) invalid();
       return validateTextLayer(/** @type {TextLayer} */ (await read(entry.resource)), entry, sourceSha);

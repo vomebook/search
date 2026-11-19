@@ -418,9 +418,10 @@
             : asset.m === "i" && path.endsWith("page-manifest.json")
               ? "image-pages"
               : assetModes[/** @type {string} */ (asset.m)];
+    if (!extension && !asset.c) return {};
     return {
       ReaderLink: `${bucketBase}?path=${encodeURIComponent(/** @type {string} */ (chapterBucket ? asset.c : path))}`,
-      ReaderExtension: asset.c ? "epub-chapters" : extension,
+      ...(asset.c ? {ReaderExtension: "epub-chapters"} : extension ? {ReaderExtension: extension} : {}),
       ReaderChapterManifest: asset.c
         ? `${bucketBase}?path=${encodeURIComponent(asset.c)}`
         : "",

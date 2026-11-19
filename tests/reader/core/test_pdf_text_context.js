@@ -48,3 +48,13 @@ for (const [context, expected] of [
 const ocr = makeLayer(null);
 pdf.populateOcrTextLayer(ocr, [{ t: 'OCR', b: [0, 0, 0.3, 0.1] }]);
 assert.strictEqual(ocr.children[0].children[0].style['--reader-pdf-run-scale-x'], '1');
+
+for (const [textItem, view] of [
+  [{ ...item, transform: [10, 0, 0, 10], hasEOL: true }, viewport],
+  [{ ...item, hasEOL: true }, { ...viewport, convertToViewportPoint: () => [20] }]
+]) {
+  const layer = makeLayer(null);
+  pdf.populatePdfTextLayer(layer, [textItem], view);
+  assert.deepEqual(layer.children.map(child => child.textContent), ['test', '\n']);
+  assert.strictEqual(layer.children[0].className, 'reader-pdf-text-run');
+}

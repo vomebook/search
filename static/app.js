@@ -163,7 +163,7 @@ let readerSessionInitialized = false;
 /** @param {string} id @param {unknown} data @param {boolean} [source] */
 function cacheReaderMetadata(id, data, source = false) {
   if (!id) return;
-  const keys = [`reader-source:${id}`, `reader-resolve:${id}`];
+  const sourceKey = `reader-source:${id}`, resolveKey = `reader-resolve:${id}`;
   /** @param {string} bookId */
   const remove = (bookId) => {
     sessionStorage.removeItem(`reader-source:${bookId}`);
@@ -181,8 +181,9 @@ function cacheReaderMetadata(id, data, source = false) {
       readerSessionInitialized = true;
     }
     const encoded = JSON.stringify(data);
-    const values = [source ? encoded : sessionStorage.getItem(keys[0]), encoded];
-    const bytes = values.reduce((sum, value, i) => sum + (value ? 2 * (keys[i].length + value.length) : 0), 0);
+    const sourceValue = source ? encoded : sessionStorage.getItem(sourceKey);
+    const bytes = (sourceValue ? 2 * (sourceKey.length + sourceValue.length) : 0) +
+      (encoded ? 2 * (resolveKey.length + encoded.length) : 0);
     readerSessionEntries.delete(id);
     readerSessionEntries.set(id, bytes);
     let total = [...readerSessionEntries.values()].reduce((sum, size) => sum + size, 0);
@@ -194,8 +195,8 @@ function cacheReaderMetadata(id, data, source = false) {
     if (!readerSessionEntries.has(id)) return;
     for (;;) {
       try {
-        if (source) sessionStorage.setItem(keys[0], encoded);
-        sessionStorage.setItem(keys[1], encoded);
+        if (source) sessionStorage.setItem(sourceKey, encoded);
+        sessionStorage.setItem(resolveKey, encoded);
         return;
       } catch (_) {
         // A smaller browser quota or other session data may require more eviction.
@@ -742,7 +743,7 @@ function updateVisibleSelection() {
     var checkbox = /** @type {HTMLInputElement} */ (cbs[ci]);
     var idx = parseInt(/** @type {string} */ (checkbox.dataset.index));
     checkbox.checked = !!selectedIndices[idx];
-    var item = cbs[ci].closest(".result-item");
+    var item = checkbox.closest(".result-item");
     if (item) item.classList.toggle("selected", !!selectedIndices[idx]);
   }
 }
@@ -867,8 +868,9 @@ async function doSearchAPI(params, append, requestId) {
   const current = () => requestId === searchRequestId && !params.signal?.aborted &&
     ownsAppliedSearchRoute() && key === getSearchViewKey();
   if (!current()) return false;
-  if (append && STATE._pageCache[params.page]) {
-    return applySearchPage({ page: params.page, results: STATE._pageCache[params.page], total: STATE.total }, true);
+  const cached = append && STATE._pageCache[params.page];
+  if (cached) {
+    return applySearchPage({ page: params.page, results: cached, total: STATE.total }, true);
   }
   const base = getSearchApiBase();
   const body = buildSearchApiBody(params);
@@ -892,6 +894,7 @@ async function doSearchAPI(params, append, requestId) {
 
 /** @param {number} page @param {(VoiceOfMLResultRecord | null | undefined)[]} [results] */
 function appendSearchResults(page, results = STATE._pageCache[page]) {
+  if (!results) return false;
   const metadata = getSearchPageMetadata(results?.[0]);
   if (!checkSearchPageAppend({ ...metadata, results, total: metadata?.total ?? STATE.total })) return false;
   if (!STATE._resultBackend) STATE._resultBackend = "api";
@@ -3905,7 +3908,8 @@ function setupQuickScroll() {
   function onTouchMove(e) {
     if (!VSCROLL.isDraggingThumb) return;
     e.preventDefault();
-    moveDrag(e.touches[0].clientY);
+    const touch = e.touches[0];
+    if (touch) moveDrag(touch.clientY);
   }
   function onTouchEnd() {
     document.removeEventListener("touchmove", onTouchMove);
@@ -3920,7 +3924,9 @@ function setupQuickScroll() {
     renderVisible();
   }
   DOM.scrollThumb.addEventListener("touchstart", (e) => {
-    beginDrag(e.touches[0].clientY); e.stopPropagation();
+    const touch = e.touches[0];
+    if (!touch) return;
+    beginDrag(touch.clientY); e.stopPropagation();
     document.addEventListener("touchmove", onTouchMove, { passive: false });
     document.addEventListener("touchend", onTouchEnd);
     document.addEventListener("touchcancel", onTouchCancel);

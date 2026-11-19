@@ -34,13 +34,15 @@ if (staged) {
   // existing size, checksum and adapter-version checks complete.
   const owner = new AbortController();
   const timer = setTimeout(() => owner.abort(), 20000);
+  const workerSource = VoiceOfMLReaderResources.vendors.pdfWorkerSource;
+  if (!workerSource) throw new Error("PDF worker source is not registered");
   const source = VoiceOfMLReaderResources.vendorUrl("pdfWorkerSource", "../../");
   const response = fetch(source, {signal:owner.signal, credentials:"same-origin", cache:"force-cache"});
   response.then(value => {
     if (owner.signal.aborted) value.body?.cancel().catch(() => {});
   }, () => {});
   opening = import("./pdf-first-page-worker-adapter.mjs").then(adapter =>
-    adapter.installFirstPageWorker(source, VoiceOfMLReaderResources.vendors.pdfWorkerSource.sha256,
+    adapter.installFirstPageWorker(source, workerSource.sha256,
       {signal:owner.signal, response})
   ).then(handler => { /** @type {{pdfjsWorker?: unknown}} */ (globalThis).pdfjsWorker = {WorkerMessageHandler:handler}; })
     .catch(() => {

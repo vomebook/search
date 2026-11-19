@@ -701,7 +701,11 @@ const PDFJS_CMAP_URL = "/search/static/vendor/cmaps/";
 const PDFJS_STANDARD_FONT_URL = "/search/static/vendor/standard_fonts/";
 const MARKED_URL = VoiceOfMLReaderResources.vendorUrl("marked", "/search/static/");
 const PURIFY_URL = VoiceOfMLReaderResources.vendorUrl("purify", "/search/static/");
-const RUFFLE_URL = VoiceOfMLReaderResources.ruffleAssets("/search/static/")[0];
+const RUFFLE_URL = (() => {
+  const [url] = VoiceOfMLReaderResources.ruffleAssets("/search/static/");
+  if (!url) throw new Error("Ruffle script is not registered");
+  return url;
+})();
 const READER_PROXY_TIMEOUT_MS = 120000;
 const readerRequestManager = VoiceOfMLReaderRequests.createReaderRequestManager();
 const readerRuntime = VoiceOfMLReaderRuntime.createReaderRuntime();

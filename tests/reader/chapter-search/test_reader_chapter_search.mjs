@@ -52,6 +52,8 @@ for (const offset of [255, 256, 257, 500, 511, 512, 513, 536, 537]) {
   assert.deepEqual(page.map(hit => [hit.chapterIndex, hit.start, hit.length]), oracle.slice(offset, offset+50), `offset ${offset}`);
 }
 assert.deepEqual(counted.firstPage, await resultPage(chapters, "needle", counted.counts, 0, () => true, counted.checkpoints));
+assert.deepEqual(await resultPage(chapters, "needle", [], 0, () => true), [],
+  "a partial count snapshot must not return hits from chapters it has not counted");
 const all = [];
 for (let offset = 0; offset < counted.total; offset += 50) {
   const page = await resultPage(chapters, "needle", counted.counts, offset, () => true, counted.checkpoints);

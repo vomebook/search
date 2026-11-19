@@ -48,12 +48,13 @@ export async function searchBookText(book, query, options = {}) {
     let low = 0, high = checkpointPosition + 1;
     while (low < high) {
       const middle = (low + high) >> 1;
-      if (checkpoints[middle].pageIndex < pageIndex) low = middle + 1;
+      const candidate = checkpoints[middle];
+      if (candidate && candidate.pageIndex < pageIndex) low = middle + 1;
       else high = middle;
     }
     for (let position = low; position <= checkpointPosition; position++) {
       const candidate = checkpoints[position];
-      if (candidate.start < state.end) continue;
+      if (!candidate || candidate.start < state.end) continue;
       const end = candidate.end;
       state.point += codePointLength(page.text.slice(state.end,end));
       state.end = end;
@@ -77,8 +78,9 @@ export async function searchBookText(book, query, options = {}) {
     let checkpoint = null, checkpointPosition = -1;
     for (let low = 0, high = checkpoints.length - 1; low <= high;) {
       const middle = (low + high) >> 1;
-      if (checkpoints[middle].ordinal <= offset) {
-        checkpoint = checkpoints[middle];
+      const candidate = checkpoints[middle];
+      if (candidate && candidate.ordinal <= offset) {
+        checkpoint = candidate;
         checkpointPosition = middle;
         low = middle + 1;
       } else high = middle - 1;
@@ -88,8 +90,9 @@ export async function searchBookText(book, query, options = {}) {
     for (let index = firstPage; index < counts.length && results.length < pageSize; index++) {
       // A global checkpoint's ordinal is already inside its page. Do not add
       // that page's full count again; only whole subsequent pages can skip.
-      if (!(checkpoint && index === firstPage) && passed + counts[index] <= offset) { passed += counts[index]; continue; }
-      const page = book.pages[index];
+      const count = counts[index], page = book.pages[index];
+      if (count === undefined || !page) break;
+      if (!(checkpoint && index === firstPage) && passed + count <= offset) { passed += count; continue; }
       const start = checkpoint && index === firstPage ? checkpoint.start : 0;
       // Partitioned v3 text carries no boxes; computing code-point offsets
       // from the beginning of a large page cannot affect those results.
@@ -131,10 +134,10 @@ export async function searchBookText(book, query, options = {}) {
     }
     return page;
   } };
-  for (let index = 0; index < book.pages.length; index++) {
+  for (const [index, page] of book.pages.entries()) {
     if (!current()) throw new DOMException("Search cancelled", "AbortError");
     let count = 0;
-    const text = book.pages[index].text;
+    const text = page.text;
     for (const match of text.matchAll(re)) {
       if ((total + count) % CHECKPOINT_STRIDE === 0)
         checkpoints.push({ ordinal: total + count, pageIndex: index, start: match.index, end: match.index + match[0].length });

@@ -129,7 +129,9 @@ export function createReaderDomSearch({
         if (!current()) return;
         const stride = Math.max(128, Math.ceil(offsets.length / 2048));
         for (let index = 0; index < offsets.length && checkpoints.length < 2048;) {
-          const { node, parent: target, start } = offsets[index];
+          const entry = offsets[index];
+          if (!entry) break;
+          const { node, parent: target, start } = entry;
           // Element boundaries survive text splitting and normalization by our marks.
           if (target && target.firstChild === node) {
             checkpoints.push({ target, start });
@@ -142,7 +144,7 @@ export function createReaderDomSearch({
         let low = 0, high = checkpoints.length;
         while (low < high) {
           const middle = (low + high) >> 1;
-          if (checkpoints[middle].start <= offset) low = middle + 1;
+          if ((checkpoints[middle]?.start ?? Infinity) <= offset) low = middle + 1;
           else high = middle;
         }
         const checkpoint = checkpoints[low - 1];
@@ -299,7 +301,7 @@ export function createReaderDomSearch({
         let low = 0, high = boundaries.length;
         while (low < high) {
           const middle = (low + high) >> 1;
-          if (boundaries[middle].start <= offset) low = middle + 1;
+          if ((boundaries[middle]?.start ?? Infinity) <= offset) low = middle + 1;
           else high = middle;
         }
         return { label: boundaries[low - 1]?.label };
@@ -319,13 +321,15 @@ export function createReaderDomSearch({
       const target = entry.target;
       let low = 0, high = offsets.length;
       if (linear) {
-        while (cursor < offsets.length &&
-               !(target.compareDocumentPosition(offsets[cursor].node) & Node.DOCUMENT_POSITION_FOLLOWING)) cursor++;
+        for (let entry; (entry = offsets[cursor]); cursor++) {
+          if (target.compareDocumentPosition(entry.node) & Node.DOCUMENT_POSITION_FOLLOWING) break;
+        }
         low = cursor;
       } else {
         while (low < high) {
           const middle = (low + high) >> 1;
-          if (target.compareDocumentPosition(offsets[middle].node) & Node.DOCUMENT_POSITION_FOLLOWING) high = middle;
+          const entry = offsets[middle];
+          if (!entry || target.compareDocumentPosition(entry.node) & Node.DOCUMENT_POSITION_FOLLOWING) high = middle;
           else low = middle + 1;
         }
       }
@@ -336,7 +340,7 @@ export function createReaderDomSearch({
       let low = 0, high = boundaries.length;
       while (low < high) {
         const middle = (low + high) >> 1;
-        if (boundaries[middle].start <= offset) low = middle + 1;
+        if ((boundaries[middle]?.start ?? Infinity) <= offset) low = middle + 1;
         else high = middle;
       }
       return { label: boundaries[low - 1]?.label };
@@ -408,7 +412,7 @@ export function createReaderDomSearch({
       let low = 0, high = parts.length - 1;
       while (low < high) {
         const middle = (low + high) >> 1;
-        if (parts[middle].end <= index) low = middle + 1;
+        if ((parts[middle]?.end ?? Infinity) <= index) low = middle + 1;
         else high = middle;
       }
       return low;
@@ -416,8 +420,11 @@ export function createReaderDomSearch({
     /** @param {number} start @param {number} end */
     const partsFor = (start, end) => {
       const parts = [];
-      for (let index = locateIndex(start, highlightOffsets); index < highlightOffsets.length && highlightOffsets[index].start < end; index++)
-        parts.push(highlightOffsets[index]);
+      for (let index = locateIndex(start, highlightOffsets); index < highlightOffsets.length; index++) {
+        const entry = highlightOffsets[index];
+        if (!entry || entry.start >= end) break;
+        parts.push(entry);
+      }
       return parts;
     };
     /** @param {DomSearch.Group} group */
@@ -435,7 +442,7 @@ export function createReaderDomSearch({
       let low = 0, high = matchableBreaks.length;
       while (low < high) {
         const middle = (low + high) >> 1;
-        if (matchableBreaks[middle] < group.start + group.skip) low = middle + 1;
+        if ((matchableBreaks[middle] ?? Infinity) < group.start + group.skip) low = middle + 1;
         else high = middle;
       }
       let boundary = matchableBreaks[low] ?? Infinity;
@@ -455,7 +462,7 @@ export function createReaderDomSearch({
     const resultFor = (match) => {
       const part = offsets[locateIndex(match.index)];
       return {
-        location: fullSearchLocation(part.node || part.parent, fallback, match.index, text.length, headingLookup, part.parent),
+        location: part ? fullSearchLocation(part.node || part.parent, fallback, match.index, text.length, headingLookup, part.parent) : fallback,
         snippet: fullSearchSnippet(text, match.index, match.value.length),
         async activate(navigationGeneration = runtime.currentGeneration("navigation")) {
           if (!isCurrent("navigation", navigationGeneration)) return false;
@@ -542,9 +549,10 @@ export function createReaderDomSearch({
     const fallbackResults = progressive ? null : firstHits.map(resultFor);
     if (cached && !/** @type {DomSearch.Snapshot} */ (snapshot).current())
       return fullSearchDomMatches(inputRoot, fallback, query, generation, progressive, occurrence, navigationGeneration);
-    if (cached && firstHits.length && navigationGeneration === runtime.currentGeneration("navigation")) {
-      const checkpoint = /** @type {DomSearch.Locator} */ (locator).checkpoint(firstHits[0].index);
-      const end = firstHits[firstHits.length - 1].index + firstHits[firstHits.length - 1].value.length;
+    const firstHit = firstHits[0], lastHit = firstHits.at(-1);
+    if (cached && firstHit && lastHit && navigationGeneration === runtime.currentGeneration("navigation")) {
+      const checkpoint = /** @type {DomSearch.Locator} */ (locator).checkpoint(firstHit.index);
+      const end = lastHit.index + lastHit.value.length;
       highlightOffsets = [];
       const markNodes = await fullSearchTextNodes(root, generation, end, checkpoint,
         (node, start, end) => highlightOffsets.push({ node, start, end }));
@@ -554,13 +562,16 @@ export function createReaderDomSearch({
     }
     if (navigationGeneration === runtime.currentGeneration("navigation")) {
       for (let i = firstHits.length - 1; i >= 0; i--) {
-        const match = firstHits[i], end = match.index + match.value.length;
+        const match = firstHits[i];
+        if (!match) continue;
+        const end = match.index + match.value.length;
         const parts = partsFor(match.index, end);
         if (!parts.length) continue;
         const [target] = highlightTextParts(parts.map(part => ({ node: part.node,
           start: Math.max(match.index, part.start) - part.start,
           end: Math.min(end, part.end) - part.start })));
-        if (fallbackResults) fallbackResults[i].target = target;
+        const result = fallbackResults?.[i];
+        if (result && target) result.target = target;
       }
     }
     return fallbackResults || page(0).results;

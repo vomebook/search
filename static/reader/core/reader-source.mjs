@@ -313,7 +313,7 @@ export function createReaderSource(readerContext) {
       const bucketPath = url.searchParams.get("path") || "";
       const match = bucketPath.match(/^(chapters\/ebook\/(?:epub|mobi|azw3|fb2|chm)\/[0-9a-f]{64}\/[0-9a-f]{16}\/)/);
       if (url.hash || url.searchParams.getAll("path").length !== 1 ||
-          [...url.searchParams.keys()].some((key) => key !== "path") || !match ||
+          [...url.searchParams.keys()].some((key) => key !== "path") || !match?.[1] ||
           !VoiceOfMLReader.isBucketPath(bucketPath, true, "vomebook/reader-assets-v2")) return null;
       return { url, prefix: match[1], bucket: true, bucketPath };
     } catch (_) {

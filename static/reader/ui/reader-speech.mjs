@@ -120,7 +120,9 @@ export function createReaderSpeech(readerContext, loadPlayer) {
         load: async (index) => {
           const loaded = body(index);
           if (loaded) return rootText(loaded);
-          const doc = await sections[index].createDocument();
+          const section = sections[index];
+          if (!section) return "";
+          const doc = await section.createDocument();
           return rootText(doc.body || doc.documentElement);
         },
         locate: (index) => readerContext.foliateSectionLoader?.(index)
@@ -260,6 +262,7 @@ export function createReaderSpeech(readerContext, loadPlayer) {
         let low = 0, high = parts.length - 1;
         while (low <= high) {
           const middle = (low + high) >> 1, part = parts[middle];
+          if (!part) return null;
           if (offset < part.start) high = middle - 1; else if (offset >= part.end) low = middle + 1; else return part;
         }
         return parts.find((part) => part.start >= offset) || parts[parts.length - 1] || null;

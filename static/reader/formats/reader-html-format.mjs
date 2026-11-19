@@ -5,7 +5,7 @@ export function stripMarkdownFrontMatter(markdown) {
   // block so a body that starts with a horizontal rule is left untouched.
   const text = String(markdown ?? "").replace(/^\uFEFF/, "");
   const match = text.match(/^---[ \t]*\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)/);
-  if (!match || !/^[A-Za-z][\w-]*[ \t]*:/m.test(match[1])) return text;
+  if (!match?.[1] || !/^[A-Za-z][\w-]*[ \t]*:/m.test(match[1])) return text;
   return text.slice(match[0].length);
 }
 
@@ -168,7 +168,7 @@ export function createReaderHtmlFormat(readerContext) {
       i++;
       if (i >= length) return "\ufffd";
       let hex = "";
-      while (hex.length < 6 && i < length && /[0-9a-f]/i.test(css[i])) hex += css[i++];
+      while (hex.length < 6 && i < length && /[0-9a-f]/i.test(css.charAt(i))) hex += css[i++];
       if (hex) {
         if (i < length && css[i] === "\r" && css[i + 1] === "\n") i += 2;
         else if (i < length && cssWhitespace(css.charCodeAt(i))) i++;
@@ -181,7 +181,7 @@ export function createReaderHtmlFormat(readerContext) {
       return char;
     };
     /** @param {number} at */
-    const validEscape = (at) => css[at] === "\\" && at + 1 < length && !/[\n\r\f]/.test(css[at + 1]);
+    const validEscape = (at) => css[at] === "\\" && at + 1 < length && !/[\n\r\f]/.test(css.charAt(at + 1));
     const readName = () => {
       let name = "";
       while (i < length) {
@@ -201,7 +201,7 @@ export function createReaderHtmlFormat(readerContext) {
         if (char === "\\") {
           if (i + 1 >= length) { i++; continue; }
           if (css[i + 1] === "\r" && css[i + 2] === "\n") { i += 3; continue; }
-          if (/[\n\r\f]/.test(css[i + 1])) { i += 2; continue; }
+          if (/[\n\r\f]/.test(css.charAt(i + 1))) { i += 2; continue; }
           value += readEscape();
           continue;
         }
@@ -753,7 +753,7 @@ export function createReaderHtmlFormat(readerContext) {
   function detectHtmlEncoding(bytes, hint = "") {
     const probe = String.fromCharCode(...bytes.subarray(0, 8192));
     const match = probe.match(/charset\s*=\s*["']?\s*([a-z0-9._:-]+)/i);
-    if (match) {
+    if (match?.[1]) {
       const label =
         { gb2312: "gb18030", "gb-2312": "gb18030", gbk: "gb18030", "x-gbk": "gb18030" }[
           match[1].toLowerCase()
@@ -789,7 +789,8 @@ export function createReaderHtmlFormat(readerContext) {
         const normalized = value / 255;
         return normalized <= 0.04045 ? normalized / 12.92 : ((normalized + 0.055) / 1.055) ** 2.4;
       });
-      return channels[0] * 0.2126 + channels[1] * 0.7152 + channels[2] * 0.0722;
+      const [red = 0, green = 0, blue = 0] = channels;
+      return red * 0.2126 + green * 0.7152 + blue * 0.0722;
     };
     /** @type {Map<Element, number>} */
     const backgrounds = new Map();

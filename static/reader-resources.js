@@ -204,7 +204,11 @@
     "reader/pdf/pdf-worker-wrapper.mjs"
   ]);
   /** @param {string} name @param {string} base */
-  const vendorUrl = (name, base) => base + vendors[name].path;
+  const vendorUrl = (name, base) => {
+    const vendor = vendors[name];
+    if (!vendor) throw new Error(`Unknown Reader vendor: ${name}`);
+    return base + vendor.path;
+  };
   /** @param {string} base */
   const runtimePaths = (base) => readerFiles.map((file) => base + file);
   /** @param {string} base */

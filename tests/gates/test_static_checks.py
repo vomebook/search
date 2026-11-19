@@ -216,6 +216,10 @@ class CacheProbe extends BaseProbe { clear() {} }
 /** @param {number} value */
 function update(value) { switch (value) { case 0: value++; case 1: break; } }
 """),
+            ("noUncheckedIndexedAccess", "TS2322", """
+/** @param {string[]} values @returns {string} */
+function firstValue(values) { return values[0]; }
+"""),
             ("exactOptionalPropertyTypes", "TS2375", """
 /** @type {{signal?: AbortSignal}} */
 const options = {signal: undefined};
@@ -4771,11 +4775,12 @@ for (const [project, base] of [['github','/search/static/'], ['hf','/static/']])
         prefix=(f'import {{countMatches, resultPage, scanText, queryBigramFilters}} from "{module.as_posix()}";\n'
                 'const chapters=[{index:1,title:"t",path:"1",text:"hello"}];\n')
         source.write_text(prefix + 'countMatches(chapters,"a",()=>true).then(value=>value.total);\n'
-                          'resultPage(chapters,"a",[1],0,()=>true).then(rows=>rows[0].snippet.text);\n'
+                          'resultPage(chapters,"a",[1],0,()=>true).then(rows=>rows[0]?.snippet.text);\n'
                           'scanText("a","a",(offset,length)=>offset+length);\n')
         self.assert_check(self.run_check(*check),True,'')
         for bad in ('countMatches(chapters,42,()=>true);','resultPage(chapters,"a",[1],"0",()=>true);',
                     'scanText("a","a",42);','queryBigramFilters(null);',
+                    'resultPage(chapters,"a",[1],0,()=>true).then(rows=>rows[0].snippet.text);',
                     'countMatches(chapters,"a",()=>true).then(value=>value.notAField);'):
             with self.subTest(invalid=bad):
                 source.write_text(prefix+bad+'\n');self.assert_check(self.run_check(*check),False,'error TS')

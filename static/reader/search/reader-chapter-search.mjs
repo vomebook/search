@@ -118,12 +118,13 @@ export function chapterTextMap(roots, textProfile) {
       let low = 0, high = runs.length;
       while (low < high) {
         const middle = (low + high) >> 1;
-        if (runs[middle].to <= start) low = middle + 1;
+        const run = runs[middle];
+        if (run && run.to <= start) low = middle + 1;
         else high = middle;
       }
       for (let index = low; index < runs.length; index++) {
         const run = runs[index];
-        if (run.from >= end) break;
+        if (!run || run.from >= end) break;
         if (run.to <= start || !run.node || !body.contains(run.node)) continue;
         const part = { node: run.node,
           start: run.linear ? run.start + Math.max(start - run.from, 0) : run.start,

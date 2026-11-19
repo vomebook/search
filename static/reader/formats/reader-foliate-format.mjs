@@ -534,7 +534,9 @@ export function createReaderFoliateFormat(readerContext) {
         });
     const scheduler = readerContext.readerRuntime.track(VoiceOfMLReaderChapters.createChapterScheduler({
       create: async (index, signal, priority) => {
-        const article = await readerContext.createFoliateSection(sections[index], index, signal, priority);
+        const section = sections[index];
+        if (!section) throw new RangeError("Foliate section is unavailable");
+        const article = await readerContext.createFoliateSection(section, index, signal, priority);
         signal.throwIfAborted();
           if (existing(index)) return existing(index);
           return commitSection(index, article);
@@ -665,6 +667,7 @@ export function createReaderFoliateFormat(readerContext) {
           continue;
         }
         const entry = entries[next++];
+        if (!entry) continue;
         if (entry.group) {
           entry.sectionIndex = -1;
           entry.fragment = "";

@@ -22,7 +22,7 @@
   function connectorOnly(text) {
     let index = 0, found = false;
     while (index < text.length) {
-      if (/[，,、：:\s]/u.test(text[index])) { index += 1; continue; }
+      if (/[，,、：:\s]/u.test(text.charAt(index))) { index += 1; continue; }
       const word = connectorWords.find(value => text.startsWith(value, index));
       if (!word) return false;
       found = true; index += word.length;
@@ -58,7 +58,8 @@
   /** @param {string} text */
   function phraseEnds(text, first = false, carry = 0) {
     const cuts = wordEnds(text), chars = Array.from(text), offsets = [0], ends = [];
-    for (const char of chars) offsets.push(offsets[offsets.length - 1] + char.length);
+    let units = offsets[0] ?? 0;
+    for (const char of chars) { units += char.length; offsets.push(units); }
     // While ramping (the first batch, or a batch after a short final clip),
     // every clip follows the previous clip's length: its playback is all the
     // time the next clip has to be synthesized. A short clip after the ramp
@@ -75,8 +76,8 @@
       // 90-character clip on the shared CPU worker.
       /** @param {number} goal @param {number} limit */
       const marks = (goal, limit) => {
-        const ceiling = offsets[Math.min(chars.length, position + limit)];
-        return { target: offsets[Math.min(chars.length, position + goal)],
+        const ceiling = offsets[Math.min(chars.length, position + limit)] ?? text.length;
+        return { target: offsets[Math.min(chars.length, position + goal)] ?? text.length,
           hard: cuts.find(value => value.end > start && value.end <= ceiling && endsSentence(text, value.end)),
           natural: cuts.filter(value => value.end > start + (short ? 5 : Math.min(20, goal / 2)) && value.end <= ceiling &&
             /[，,：:、—…][”’"'」』）)\t \r]*$/u.test(text.slice(start, value.end)) && !connectorOnly(text.slice(start, value.end).trim())),
@@ -88,30 +89,33 @@
       // last words fade (measured -17 to -21 dB). A ramp clip therefore never
       // cuts mid-phrase: without a mark in its range it widens to the next size.
       // The preferred range follows the previous clip's actual length (<= 1.45x).
-      const previous = ends.length ? ends[ends.length - 1] - (ends[ends.length - 2] || 0) : first ? 0 : carry;
+      const previous = ends.length ? start - (ends.at(-2) ?? 0) : first ? 0 : carry;
       /** @param {[number, number]} size @returns {[number, number]} */
       const fit = ([goal, limit]) => previous ? [goal, Math.min(limit, Math.max(goal + 4, Math.round(previous * 1.45)))] : [goal, limit];
       const index = !previous ? 0 : previous < 72 ? stage(previous) : -1;
+      const rampSize = ramping && index >= 0 ? RAMP[index] : undefined;
       /** @type {[number, number][]} */
-      const sizes = ramping && index >= 0 ? [fit(RAMP[index]), ...RAMP.slice(index + 1), [90, 120]] : [[90, 120]];
-      let found = marks(...sizes[0]);
-      for (const size of sizes.slice(1)) {
+      const sizes = rampSize ? [...RAMP.slice(index + 1), [90, 120]] : [];
+      let found = rampSize ? marks(...fit(rampSize)) : marks(90, 120);
+      for (const size of sizes) {
         if (found.hard || found.natural.length) break;
         const wider = marks(...size);
         // Prefer a nearer title boundary to a much longer clip.
-        if (found.weak.length && !wider.natural.some(value => value.end <= found.weak[found.weak.length - 1].end + 8)) break;
+        const previousWeak = found.weak.at(-1);
+        if (previousWeak && !wider.natural.some(value => value.end <= previousWeak.end + 8)) break;
         found = wider;
       }
       const { target, hard } = found, natural = found.natural.length ? found.natural : found.weak;
       /** @type {number} */
       let end;
-      if (short && natural.length && (!hard || natural[0].end < hard.end)) end = natural[0].end; // Earliest mark keeps first audio fast.
+      const firstMark = natural[0], lastMark = natural.at(-1);
+      if (short && firstMark && (!hard || firstMark.end < hard.end)) end = firstMark.end; // Earliest mark keeps first audio fast.
       else if (hard) end = hard.end; // Never merge different spoken sentences in one part.
-      else if (natural.length) end = short ? natural[0].end : natural[natural.length - 1].end;
+      else if (lastMark) end = (short ? firstMark : lastMark)?.end ?? lastMark.end;
       else {
         const choices = cuts.filter(value => value.end > start && value.end <= target && !dangling.has(value.word));
         const any = cuts.filter(value => value.end > start && value.end <= target);
-        end = choices.length ? choices[choices.length - 1].end : any.length ? any[any.length - 1].end : cuts.find(value => value.end > start)?.end || text.length;
+        end = choices.at(-1)?.end ?? any.at(-1)?.end ?? cuts.find(value => value.end > start)?.end ?? text.length;
       }
       // Keep leading connectives with their predicate, not in a tiny independent
       // model clip. No source replacement, phoneme gain or global tone changes.
@@ -119,7 +123,7 @@
         end = cuts.find(value => value.end > end && !dangling.has(value.word) && !connectorOnly(text.slice(start, value.end).trim()))?.end || text.length;
       }
       // Doubled marks (——, ……) and closing quotes stay with the clip they end.
-      while (end < text.length && /[”’"'」』）)\s—…]/u.test(text[end])) end += 1;
+      while (end < text.length && /[”’"'」』）)\s—…]/u.test(text.charAt(end))) end += 1;
       if (end <= start) throw new Error("无法确定完整词语边界");
       if (end < text.length && !/[\p{L}\p{N}]/u.test(text.slice(end))) end = text.length;
       ends.push(end); start = end;
@@ -145,37 +149,37 @@
   /** @param {string} text @param {number} offset */
   function safe(text, offset) {
     offset = Math.max(0, Math.min(text.length, Math.floor(offset)));
-    return offset && /[\uDC00-\uDFFF]/u.test(text[offset] || "") && /[\uD800-\uDBFF]/u.test(text[offset - 1]) ? offset - 1 : offset;
+    return offset && /[\uDC00-\uDFFF]/u.test(text[offset] || "") && /[\uD800-\uDBFF]/u.test(text.charAt(offset - 1)) ? offset - 1 : offset;
   }
   /** @param {string} text @param {number} index */
   function boundary(text, index) {
-    return ending.test(text[index]) || (text[index] === "." && !ascii.test(text[index + 1] || "") && !listMarker(text, index));
+    return ending.test(text.charAt(index)) || (text[index] === "." && !ascii.test(text[index + 1] || "") && !listMarker(text, index));
   }
   // "1." / "12." / "一." / "(3)." at a line or clause start number the item that
   // follows; that period must not end a sentence ("1." spoken alone, then the item).
   /** @param {string} text @param {number} index */
   function listMarker(text, index) {
     let cursor = index;
-    const closed = cursor > 0 && /[)）]/u.test(text[cursor - 1]);
+    const closed = cursor > 0 && /[)）]/u.test(text.charAt(cursor - 1));
     if (closed) cursor -= 1;
     const digits = cursor;
-    while (cursor > 0 && digits - cursor < 4 && /[0-9０-９一二三四五六七八九十百]/u.test(text[cursor - 1])) cursor -= 1;
+    while (cursor > 0 && digits - cursor < 4 && /[0-9０-９一二三四五六七八九十百]/u.test(text.charAt(cursor - 1))) cursor -= 1;
     if (cursor === digits) return false;
-    if (cursor > 0 && /[(（]/u.test(text[cursor - 1])) cursor -= 1;
+    if (cursor > 0 && /[(（]/u.test(text.charAt(cursor - 1))) cursor -= 1;
     else if (closed) return false;
-    return cursor === 0 || /[\s。！？!?；;：:，,、]/u.test(text[cursor - 1]);
+    return cursor === 0 || /[\s。！？!?；;：:，,、]/u.test(text.charAt(cursor - 1));
   }
   // Whether text[0..end) finishes a sentence (ignoring closing quotes/space).
   /** @param {string} text @param {number} end */
   function endsSentence(text, end) {
     let index = end - 1;
-    while (index > 0 && /[”’"'」』）)\t \r]/u.test(text[index])) index -= 1;
+    while (index > 0 && /[”’"'」』）)\t \r]/u.test(text.charAt(index))) index -= 1;
     return index >= 0 && boundary(text, index);
   }
   // Clause marks for natural cut points; ASCII , and : only outside numbers/times.
   /** @param {string} text @param {number} index */
   function clause(text, index) {
-    const char = text[index];
+    const char = text.charAt(index);
     return /[，、：；—…]/u.test(char) || ((char === "," || char === ":") && !ascii.test(text[index + 1] || ""));
   }
   /** @param {string} text @param {number} offset */
@@ -186,7 +190,7 @@
     for (let index = offset; index > 0 && offset - index < 48; index -= 1) {
       if (boundary(text, index - 1) || clause(text, index - 1)) {
         let start = index;
-        while (start < offset && /[\s”’"'」』）)]/u.test(text[start])) start += 1;
+        while (start < offset && /[\s”’"'」』）)]/u.test(text.charAt(start))) start += 1;
         return start;
       }
     }
@@ -198,13 +202,13 @@
     // Navigation examines nearby source, not a document-sized sentence/DOM list.
     let start = offset;
     while (start > 0 && offset - start < 4096 && !boundary(text, start - 1)) start -= 1;
-    while (start < offset && /[\s”’"'」』）)]/u.test(text[start])) start += 1;
+    while (start < offset && /[\s”’"'」』）)]/u.test(text.charAt(start))) start += 1;
     let end = Math.max(start, offset);
     while (end < text.length && end - offset < 4096) {
       const finish = boundary(text, end++);
       if (finish) break;
     }
-    while (end < text.length && /[”’"'」』）)\s]/u.test(text[end])) end += 1;
+    while (end < text.length && /[”’"'」』）)\s]/u.test(text.charAt(end))) end += 1;
     return { start: safe(text, start), end: safe(text, end) };
   }
   /** @param {{start: number, segment_ends: number[]}} batch @param {number} offset */
@@ -217,7 +221,7 @@
   /** @param {string} text @param {number} offset */
   function previousSentence(text, offset) {
     let cursor = sentence(text, offset).start - 1;
-    while (cursor > 0 && /[”’"'」』）)\s]/u.test(text[cursor])) cursor -= 1;
+    while (cursor > 0 && /[”’"'」』）)\s]/u.test(text.charAt(cursor))) cursor -= 1;
     return sentence(text, Math.max(0, cursor)).start;
   }
   /** @param {string} text @param {number} offset */
@@ -226,23 +230,27 @@
     const start = first ? clauseStart(text, offset) : safe(text, offset), limit = first ? 260 : 480;
     if (start >= text.length) return null;
     const chars = Array.from(text.slice(start, start + 1800)), offsets = [start];
-    for (const char of chars) offsets.push(offsets[offsets.length - 1] + char.length);
+    let units = offsets[0] ?? 0;
+    for (const char of chars) { units += char.length; offsets.push(units); }
     let end = Math.min(limit, chars.length), punctuated = false;
-    if (offsets[end] < text.length) {
+    if ((offsets[end] ?? text.length) < text.length) {
       for (let index = end - 1; index >= Math.floor(limit / 2); index -= 1) {
-        if (boundary(text, offsets[index])) { end = index + 1; punctuated = true; break; }
+        const position = offsets[index];
+        if (position !== undefined && boundary(text, position)) { end = index + 1; punctuated = true; break; }
       }
       // No sentence end in range: a clause mark is still a better batch end
       // than an arbitrary word, which the model reads as an utterance ending.
       if (!punctuated) for (let index = end - 1; index >= Math.floor(limit / 4); index -= 1) {
-        if (clause(text, offsets[index])) { end = index + 1; punctuated = true; break; }
+        const position = offsets[index];
+        if (position !== undefined && clause(text, position)) { end = index + 1; punctuated = true; break; }
       }
-      while (punctuated && end < Math.min(chars.length, 800) && /[”’"'」』）)\s—…]/u.test(chars[end])) end += 1;
+      while (punctuated && end < Math.min(chars.length, 800) && /[”’"'」』）)\s—…]/u.test(chars[end] ?? "")) end += 1;
       // Dates, versions, identifiers and words remain whole across API batches.
       const atoms = /(?:[0-9]{4}年[0-9]{1,2}月[0-9]{1,2}[日号]|[0-9]{4}年|[A-Za-z0-9]+(?:[._/\-][A-Za-z0-9]+)*)/gu;
       for (const match of text.slice(start, offsets[Math.min(chars.length, 800)]).matchAll(atoms)) {
         const begin = start + match.index, stop = begin + match[0].length;
-        if (begin < offsets[end] && offsets[end] < stop) {
+        const boundaryOffset = offsets[end];
+        if (boundaryOffset !== undefined && begin < boundaryOffset && boundaryOffset < stop) {
           const target = begin > start ? begin : stop;
           const found = offsets.indexOf(target);
           if (found > 0 && found <= 800) end = found;
@@ -250,12 +258,14 @@
         }
       }
     }
-    let stop = offsets[end];
+    let stop = offsets[end] ?? units;
     const candidates = wordEnds(text.slice(start, offsets[Math.min(chars.length, 800)]))
       .filter(value => value.end <= stop - start && value.end > 0 && !dangling.has(value.word));
-    if (candidates.length && stop < text.length && !punctuated) stop = start + candidates[candidates.length - 1].end;
+    const lastCandidate = candidates.at(-1);
+    if (lastCandidate && stop < text.length && !punctuated) stop = start + lastCandidate.end;
     let body = text.slice(start, stop), ends = phraseEnds(body, first, carry);
-    if (ends.length > 64) { stop = start + ends[63]; body = text.slice(start, stop); ends = ends.slice(0, 64); }
+    const finalClip = ends[63];
+    if (ends.length > 64 && finalClip !== undefined) { stop = start + finalClip; body = text.slice(start, stop); ends = ends.slice(0, 64); }
     return { start, end: stop, text: body, first, segment_ends: ends,
       context_before: Array.from(text.slice(Math.max(0, start - 64), start)).slice(-32).join(""),
       context_after: Array.from(text.slice(stop, stop + 64)).slice(0, 32).join("") };
@@ -334,7 +344,7 @@ if (typeof document !== "undefined") /** @type {Window & {CCRDSpeech?: unknown}}
     if (id) fetch(`${ORIGIN}/tts/jobs/${encodeURIComponent(stringValue(id))}`, { method: "DELETE", credentials: "omit", keepalive }).catch(() => {});
   }
   /** @param {SpeechBatch | null} batch */
-  function lastClip(batch) { const ends = batch?.segment_ends || []; return ends.length ? ends[ends.length - 1] - (ends[ends.length - 2] || 0) : 0; }
+  function lastClip(batch) { const ends = batch?.segment_ends || []; return (ends.at(-1) ?? 0) - (ends.at(-2) ?? 0); }
   /** @param {SpeechOwner} value @param {SpeechJob} job @param {SpeechPart} part */
   function clipKey(value, job, part) { return `${value.snapshot.id}\n${value.pitch}\n${job.batch.start + part.start}\n${job.batch.start + part.end}`; }
   /** @param {string} key */
@@ -808,8 +818,9 @@ if (typeof document !== "undefined") /** @type {Window & {CCRDSpeech?: unknown}}
   /** @param {SpeechJob} job @param {unknown} clip @param {SpeechOwner} value */
   function acceptInline(job, clip, value) {
     const part = job.parts[0], maximum = 128 * 1024;
-    const key = part && clipKey(value, job, part);
-    if (!job.batch.first || !isRecord(clip) || !part || clips.has(key) || clip.index !== 0 || clip.content_type !== "audio/mpeg" ||
+    if (!part) return;
+    const key = clipKey(value, job, part);
+    if (!job.batch.first || !isRecord(clip) || clips.has(key) || clip.index !== 0 || clip.content_type !== "audio/mpeg" ||
         clip.encoding !== "base64" || typeof clip.bytes !== "number" || !Number.isInteger(clip.bytes) || clip.bytes < 1 || clip.bytes > maximum ||
         clip.bytes !== part.bytes || typeof clip.data !== "string" || clip.data.length !== 4 * Math.ceil(clip.bytes / 3)) return;
     // Transport is optional: malformed/unsupported inline bytes fall back only
@@ -854,7 +865,8 @@ if (typeof document !== "undefined") /** @type {Window & {CCRDSpeech?: unknown}}
           (part.pitch_semitones ?? 0) !== value.pitch || part.audio_url !== `/tts/audio/${job.id}/parts/${index}.mp3`) throw new Error("语音分段未连续保留原文");
       end = /** @type {number} */ (part.end);
       if (job.batch.segment_ends[index] !== end) throw new Error("语音没有按完整词句边界生成");
-      if (job.parts[index] && (job.parts[index].start !== part.start || job.parts[index].end !== part.end)) throw new Error("已发布语音的原文范围发生变化");
+      const previousPart = job.parts[index];
+      if (previousPart && (previousPart.start !== part.start || previousPart.end !== part.end)) throw new Error("已发布语音的原文范围发生变化");
     }
     if (state === "ready" && (end !== job.batch.text.length || parts.length !== total)) throw new Error("语音未完整覆盖当前正文");
     job.parts = /** @type {SpeechPart[]} */ (parts); job.state = state; job.preloaded = false;

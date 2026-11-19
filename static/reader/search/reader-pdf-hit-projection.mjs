@@ -21,11 +21,12 @@ export function hitBoxesAtOffsets(page, begin, end) {
   let low = 0, high = spans.length;
   while (low < high) {
     const mid = (low + high) >> 1;
-    if (spans[mid].end <= begin) low = mid + 1;
+    if ((spans[mid]?.end ?? Infinity) <= begin) low = mid + 1;
     else high = mid;
   }
-  for (let index = low; index < spans.length && spans[index].start < end; index++) {
+  for (let index = low; index < spans.length; index++) {
     const span = spans[index];
+    if (!span || span.start >= end) break;
     boxes.push({ box: span.box, block: span.block, precision: typeof span.precision === "string" && span.precision ? span.precision : "block" });
   }
   return boxes;
@@ -35,14 +36,15 @@ export function hitBoxesAtOffsets(page, begin, end) {
 export function paintTextHit(shell, boxes, hit = null) {
   shell.querySelectorAll(".reader-text-hit-box").forEach(node => node.remove());
   const positioned = positionedHitBoxes(shell, hit);
-  for (const { box, precision } of positioned?.length ? positioned : boxes) {
+  for (const { box: [left, top, right, bottom], precision } of positioned?.length ? positioned : boxes) {
+    if (left === undefined || top === undefined || right === undefined || bottom === undefined) continue;
     const mark = shell.ownerDocument.createElement("span");
     mark.className = "reader-text-hit-box";
     mark.setAttribute("aria-hidden", "true");
     mark.dataset.mappingPrecision = /** @type {string} */ (precision || 'block');
     Object.assign(mark.style, { position: "absolute", pointerEvents: "none", zIndex: "4",
-      left: `${box[0] * 100}%`, top: `${box[1] * 100}%`, width: `${(box[2] - box[0]) * 100}%`,
-      height: `${(box[3] - box[1]) * 100}%`, background: "rgb(240 199 94 / 45%)" });
+      left: `${left * 100}%`, top: `${top * 100}%`, width: `${(right - left) * 100}%`,
+      height: `${(bottom - top) * 100}%`, background: "rgb(240 199 94 / 45%)" });
     shell.appendChild(mark);
   }
 }
@@ -78,5 +80,6 @@ function positionedHitBoxes(shell, hit) {
   return rects.map(rect => ({ precision: 'text-range', box: [
     Math.max(0, (rect.left - bounds.left) / bounds.width), Math.max(0, (rect.top - bounds.top) / bounds.height),
     Math.min(1, (rect.right - bounds.left) / bounds.width), Math.min(1, (rect.bottom - bounds.top) / bounds.height)
-  ] })).filter(({ box }) => box[2] > box[0] && box[3] > box[1]);
+  ] })).filter(({ box: [left, top, right, bottom] }) => left !== undefined && top !== undefined &&
+    right !== undefined && bottom !== undefined && right > left && bottom > top);
 }

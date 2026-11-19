@@ -20,10 +20,10 @@ export function pdfSourceOffset(mapping, index) {
   let low = 0, high = offsets.length / 2;
   while (low < high) {
     const middle = (low + high) >> 1;
-    if (offsets[middle * 2] <= index) low = middle + 1;
+    if ((offsets[middle * 2] ?? Infinity) <= index) low = middle + 1;
     else high = middle;
   }
-  return index + (low ? offsets[(low - 1) * 2 + 1] : 0);
+  return index + (low ? (offsets[(low - 1) * 2 + 1] ?? 0) : 0);
 }
 /** @param {string} raw */
 export function pdfSearchText(raw) {
@@ -101,18 +101,23 @@ export function populatePdfTextLayer(layer, items, viewport, styles = {}) {
   for (const item of items) {
     if (typeof item.str !== "string") continue;
     if (item.str) {
-      const t = item.transform, v = viewport.transform;
-      const point = t && viewport.convertToViewportPoint?.(t[4], t[5]);
-      if (point && t.every(Number.isFinite)) {
+      const [a, b, c, d, tx, ty] = item.transform || [];
+      const [v0, v1, v2, v3] = viewport.transform || [];
+      const [pointX, pointY] = tx !== undefined && ty !== undefined
+        ? viewport.convertToViewportPoint?.(tx, ty) || [] : [];
+      if (pointX !== undefined && pointY !== undefined &&
+          a !== undefined && b !== undefined && c !== undefined && d !== undefined &&
+          [a, b, c, d, tx, ty, pointX, pointY].every(Number.isFinite)) {
         const style = styles[item.fontName] || {};
         const family = style.fontFamily || "sans-serif";
         const vertical = style.vertical || item.dir === "ttb";
         const scale = viewport.scale || 1;
-        const height = Math.hypot(t[2], t[3]) * scale || 12;
-        const angle = v ? Math.atan2(v[1] * t[0] + v[3] * t[1], v[0] * t[0] + v[2] * t[1]) : 0;
+        const height = Math.hypot(c, d) * scale || 12;
+        const angle = v0 !== undefined && v1 !== undefined && v2 !== undefined && v3 !== undefined
+          ? Math.atan2(v1 * a + v3 * b, v0 * a + v2 * b) : 0;
         const ascent = height * (Number.isFinite(style.ascent) ? /** @type {number} */ (style.ascent) : 0.8);
-        const x = vertical ? point[0] - height / 2 : point[0] + ascent * Math.sin(angle);
-        const y = vertical ? point[1] : point[1] - ascent * Math.cos(angle);
+        const x = vertical ? pointX - height / 2 : pointX + ascent * Math.sin(angle);
+        const y = vertical ? pointY : pointY - ascent * Math.cos(angle);
         fragment.appendChild(positionedRun(layer, item.str, x / w, y / h, height / w,
           (vertical ? item.height : item.width) * scale / w, family, angle, vertical));
       } else {
@@ -143,7 +148,12 @@ export function populateOcrTextLayer(layer, blocks, layout = {}) {
       fallback.push(text);
       continue;
     }
-    const [x1, y1, x2, y2] = b.map(normalizeBox);
+    const [left, top, right, bottom] = b;
+    if (left === undefined || top === undefined || right === undefined || bottom === undefined) {
+      fallback.push(text);
+      continue;
+    }
+    const x1 = normalizeBox(left), y1 = normalizeBox(top), x2 = normalizeBox(right), y2 = normalizeBox(bottom);
     const width = Math.abs(x2 - x1), height = Math.abs(y2 - y1);
     if (!width || !height) {
       fallback.push(text);
@@ -203,15 +213,22 @@ export function populateIndependentTextLayer(layer, payload) {
     const separator = chars ? chars.slice(end, region.start).join("") : text.slice(gap, advance(region.start));
     fragment.appendChild(layer.ownerDocument.createTextNode(separator));
     const vertical = region.writing_mode.startsWith("vertical");
-    const q = region.quad;
-    const dx = q[1][0] - q[0][0], dy = (q[1][1] - q[0][1]) * ratio;
+    const [origin, right, , bottom] = region.quad;
+    const [x, y] = origin || [], [rx, ry] = right || [], [bx, by] = bottom || [];
+    if (x === undefined || y === undefined || rx === undefined || ry === undefined || bx === undefined || by === undefined) {
+      fragment.appendChild(textRun(layer, region.text));
+      end = region.end;
+      if (!chars) advance(end);
+      continue;
+    }
+    const dx = rx - x, dy = (ry - y) * ratio;
     const angle = Math.atan2(dy, dx);
     const across = Math.hypot(dx, dy);
-    const down = Math.hypot(q[3][0] - q[0][0], (q[3][1] - q[0][1]) * ratio);
+    const down = Math.hypot(bx - x, (by - y) * ratio);
     const height = vertical ? across : down;
     const width = vertical ? down : across;
-    const positioned = positionedRun(layer, region.text, q[0][0],
-      q[0][1], Math.max(height, .0001), width, "sans-serif", angle, vertical);
+    const positioned = positionedRun(layer, region.text, x,
+      y, Math.max(height, .0001), width, "sans-serif", angle, vertical);
     const run = /** @type {HTMLSpanElement} */ (positioned.querySelector(".reader-pdf-text-run"));
     run.dir = ["rtl", "ltr"].includes(region.direction) ? region.direction : "auto";
     run.style.unicodeBidi = "plaintext";
@@ -254,7 +271,7 @@ export function independentTextCaret(doc, x, y) {
   let offset = /** @type {number} */ (position?.offset ?? range?.startOffset);
   if (node?.nodeType !== 3 || !node.parentElement?.closest(
       '.reader-pdf-text[data-text-generation] .reader-pdf-text-run[data-region-id]')) return null;
-  if (offset > 0 && offset < node.length && /[\uDC00-\uDFFF]/.test(node.data[offset]) &&
-      /[\uD800-\uDBFF]/.test(node.data[offset - 1])) offset--;
+  if (offset > 0 && offset < node.length && /[\uDC00-\uDFFF]/.test(node.data.charAt(offset)) &&
+      /[\uD800-\uDBFF]/.test(node.data.charAt(offset - 1))) offset--;
   return { node, offset };
 }

@@ -49,7 +49,7 @@ function typedBloomMayContain(bloom, filters) {
   const mask = bloom.length * 8 - 1;
   for (const hashes of filters) for (const hash of hashes) {
     const bit = hash & mask;
-    if (!(bloom[bit >> 3] & (1 << (bit & 7)))) return false;
+    if (!((bloom[bit >> 3] ?? 0) & (1 << (bit & 7)))) return false;
   }
   return true;
 }
@@ -150,8 +150,9 @@ function checkpointAt(checkpoints, offset) {
   let checkpoint = null;
   for (let low = 0, high = checkpoints.length - 1; low <= high;) {
     const middle = (low + high) >> 1;
-    if (checkpoints[middle].ordinal <= offset) {
-      checkpoint = checkpoints[middle];
+    const candidate = checkpoints[middle];
+    if (candidate && candidate.ordinal <= offset) {
+      checkpoint = candidate;
       low = middle + 1;
     } else high = middle - 1;
   }
@@ -181,8 +182,10 @@ export async function resultPage(chapters, query, counts, offset, current, check
   for (let i = firstChapter; i < chapters.length && results.length < PAGE_SIZE; i++) {
     if (!current()) throw aborted();
     const start = pageStart(checkpoint, firstChapter, i);
-    if (!start && skip >= counts[i]) { skip -= counts[i]; continue; }
-    const chapter = chapters[i];
+    const count = counts[i], chapter = chapters[i];
+    // A progress snapshot may not have counted the remaining chapters yet.
+    if (!chapter || count === undefined) break;
+    if (!start && skip >= count) { skip -= count; continue; }
     if (!chapterMayContainBigrams(chapter, filters)) continue;
     await scanText(chapter.text, query, (matchStart, length) => {
       if (skip) { skip--; return; }

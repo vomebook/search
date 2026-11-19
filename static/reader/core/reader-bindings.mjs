@@ -269,7 +269,7 @@ export function createReaderBindings(readerContext) {
       ["#bookmark-ribbon", "添加书签"],
       ["#history", "阅读选项"]
     ])
-      document.querySelector(selector)?.setAttribute("aria-label", label);
+      if (selector && label) document.querySelector(selector)?.setAttribute("aria-label", label);
   }
 
   function applyMetadataAndWatchSanitizedContent() {
@@ -298,8 +298,9 @@ export function createReaderBindings(readerContext) {
     readerContext.bookmarkExcerptInput.rows = 3;
     readerContext.bookmarkEditFields.className = "bookmark-edit-fields";
     readerContext.bookmarkEditFields.innerHTML = "<label>标题</label><label>摘要</label>";
-    readerContext.bookmarkEditFields.children[0].appendChild(readerContext.bookmarkLabelInput);
-    readerContext.bookmarkEditFields.children[1].appendChild(readerContext.bookmarkExcerptInput);
+    const [titleField, excerptField] = readerContext.bookmarkEditFields.children;
+    titleField?.appendChild(readerContext.bookmarkLabelInput);
+    excerptField?.appendChild(readerContext.bookmarkExcerptInput);
     readerContext.bookmarkPopover.insertBefore(readerContext.bookmarkEditFields, readerContext.bookmarkPopover.querySelector("div"));
   }
 
@@ -588,8 +589,10 @@ export function createReaderBindings(readerContext) {
           : event.key === "End"
             ? tabs.length - 1
             : (current + (event.key === "ArrowRight" ? 1 : -1) + tabs.length) % tabs.length;
-      readerContext.selectPanel(tabs[next].dataset.panel);
-      tabs[next].focus();
+      const target = tabs[next];
+      if (!target) return;
+      readerContext.selectPanel(target.dataset.panel);
+      target.focus();
     });
     readerContext.bookmarksAllButton.addEventListener("click", () => {
       readerContext.updatePanelState({ showingAllBookmarks: !readerContext.panelState.showingAllBookmarks });
@@ -774,11 +777,13 @@ export function createReaderBindings(readerContext) {
       let low = 0, high = runs.length;
       while (low < high) {
         const middle = (low + high) >> 1;
-        if (focus.comparePoint(/** @type {Node} */ (runs[middle].firstChild), 0) < 0) low = middle + 1;
+        const node = runs[middle]?.firstChild;
+        if (!node) return;
+        if (focus.comparePoint(node, 0) < 0) low = middle + 1;
         else high = middle;
       }
       const target = beforeAnchor ? runs[Math.min(low, runs.length - 1)] : runs[Math.max(low - 1, 0)];
-      const node = target.firstChild;
+      const node = target?.firstChild;
       if (!(node instanceof Text)) return;
       readerContext.pdfSelectionBoundaryUpdate = true;
       try {

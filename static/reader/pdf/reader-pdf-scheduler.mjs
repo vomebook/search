@@ -295,7 +295,9 @@ export function createReaderPdfScheduler(readerContext) {
     let index = -1, best = -1, nearest = Infinity;
     const bounds = readerContext.viewport.getBoundingClientRect();
     for (let i = 0; i < waiters.length; i++) {
-      const waiter = waiters[i], value = waiter.shell ? readerContext.pdfPagePriority(waiter.shell) : waiter.priority;
+      const waiter = waiters[i];
+      if (!waiter) continue;
+      const value = waiter.shell ? readerContext.pdfPagePriority(waiter.shell) : waiter.priority;
       const rect = waiter.shell?.getBoundingClientRect();
       const gap = rect ? Math.max(bounds.top - rect.bottom, rect.top - bounds.bottom, 0) : Infinity;
       const behind = rect && (readerContext.pdfScrollDirection < 0 ? rect.top >= bounds.bottom : rect.bottom <= bounds.top);
@@ -361,7 +363,7 @@ export function createReaderPdfScheduler(readerContext) {
     // Disposal rejects each waiter through its own abort listener.
     if (readerContext.readerAbortController.signal.aborted) return;
     while (pdfPreviewActive.size < PDF_PREVIEW_SLOTS && pdfPreviewWaiters.length)
-      pdfPreviewWaiters.splice(nextPdfWaiterIndex(pdfPreviewWaiters), 1)[0].resolve();
+      pdfPreviewWaiters.splice(nextPdfWaiterIndex(pdfPreviewWaiters), 1)[0]?.resolve();
   }
 
   /** @param {import('../../../typings/reader-pdf-scheduler-strict').PdfShell | null} shell */
@@ -453,11 +455,11 @@ export function createReaderPdfScheduler(readerContext) {
       }
     }
     for (let index = readerContext.pdfTextWaiters.length - 1; index >= 0; index--) {
-      const request = readerContext.pdfTextWaiters[index].request;
+      const request = readerContext.pdfTextWaiters[index]?.request;
       if (request && !request.demanded && (request.generation === null || !readerContext.isReaderGenerationCurrent("search", request.generation))) {
         if (readerContext.pdfTextContentPromises.get(request.page)?.request === request)
           readerContext.pdfTextContentPromises.delete(request.page);
-        readerContext.pdfTextWaiters.splice(index, 1)[0].reject(readerContext.readerAbortError());
+        readerContext.pdfTextWaiters.splice(index, 1)[0]?.reject(readerContext.readerAbortError());
       }
     }
     while (readerContext.pdfActiveTextLoads < limit) {
@@ -466,6 +468,7 @@ export function createReaderPdfScheduler(readerContext) {
         !waiter.request || readerContext.pdfActiveSearchTextLoads < limit - 1);
       if (index < 0) return;
       const waiter = readerContext.pdfTextWaiters.splice(index, 1)[0];
+      if (!waiter) return;
       const background = !!waiter.request && !waiter.request.demanded;
       readerContext.pdfActiveTextLoads++;
       if (background) readerContext.pdfActiveSearchTextLoads++;

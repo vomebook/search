@@ -99,7 +99,8 @@ self.onmessage = async ({ data }) => {
       if (lazy) {
         const lazyDocument = /** @type {DjvuLazyDocument} */ (document);
         const [width,height,dpi,rotation]=Array.from(await lazyDocument.reader_geometry(number-1));
-        if (![width,height,dpi].every(Number.isSafeInteger) || width < 1 || height < 1 || dpi < 25 || dpi > 6000 ||
+        if (width === undefined || height === undefined || dpi === undefined || rotation === undefined ||
+            ![width,height,dpi].every(Number.isSafeInteger) || width < 1 || height < 1 || dpi < 25 || dpi > 6000 ||
             width * height > MAX_PIXELS || ![0,90,180,270].includes(rotation)) throw new Error('DJVU_PAGE_GEOMETRY_INVALID');
         if (operation === 'geometry') self.postMessage({id,ok:true,width,height,dpi,rotation});
         else {
@@ -139,7 +140,8 @@ self.onmessage = async ({ data }) => {
       if (lazy) {
         const lazyDocument = /** @type {DjvuLazyDocument} */ (document);
         const [width,height,dpi,rotation]=Array.from(await lazyDocument.reader_geometry(number-1));
-        if (![width,height,dpi].every(Number.isSafeInteger) || width < 1 || height < 1 || dpi < 25 || dpi > 6000 ||
+        if (width === undefined || height === undefined || dpi === undefined || rotation === undefined ||
+            ![width,height,dpi].every(Number.isSafeInteger) || width < 1 || height < 1 || dpi < 25 || dpi > 6000 ||
             width * height > MAX_PIXELS || ![0,90,180,270].includes(rotation)) throw new Error('DJVU_PAGE_GEOMETRY_INVALID');
         /** @type {import('../../vendor/djvu-rs-reader/release-06c82c74447d-03087b1edf0c/simd128/djvu_rs.js').WasmPixmap | null | undefined} */
         let pixmap;
