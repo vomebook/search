@@ -3,6 +3,7 @@ import unittest
 import subprocess
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
+from playwright.sync_api import expect
 from tests.search.browser import test_paging_recovery as paging
 
 
@@ -779,8 +780,9 @@ process.stdout.write(stripBundledScripts(readFileSync('static/index.html','utf8'
             self.page.wait_for_function('!!sessionStorage.getItem("reader-resolve:bbbbbbbbbbbbb")')
             self.page.evaluate("document.querySelectorAll('#priority-reader-test button')[1].click()")
             frame = self.page.frame_locator('.reader-overlay')
-            frame.locator('.reader-text').wait_for(state='visible', timeout=12000)
-            self.assertIn('Priority handoff document', frame.locator('.reader-text').inner_text())
+            content = frame.locator('.reader-text')
+            expect(content).to_contain_text('Priority handoff document', timeout=12000)
+            self.assertTrue(content.is_visible())
             self.assertEqual(lookups, [])
         finally:
             self.page.evaluate('''() => {
@@ -976,11 +978,13 @@ process.stdout.write(stripBundledScripts(readFileSync('static/index.html','utf8'
             navigateToReader('/search/static/reader.html?ext=txt');
             const saved = JSON.parse(sessionStorage.getItem('reader-navigation-current'));
             history.back();
-            return {current, route: saved.returnScroll.route, reader: readerHost.overlay !== null};
+            return {current, route: new URL(saved.readerUrl).searchParams.get('return'),
+                    scroll: saved.returnScroll, reader: readerHost.overlay !== null};
           } finally { doSearch = originalSearch; }
         }''')
         self.assertNotIn('q=%E6%97%A7%E6%9F%A5%E8%AF%A2', result['current'])
-        self.assertNotIn('q=%E6%97%A7%E6%9F%A5%E8%AF%A2', result['route'])
+        self.assertEqual(result['route'], result['current'])
+        self.assertIsNone(result['scroll'], 'uncommitted results cannot own a return scroll snapshot')
         self.assertTrue(result['reader'])
 
     def test_reader_folder_return_merges_current_filters_into_pages_hash(self):

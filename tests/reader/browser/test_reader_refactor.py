@@ -715,7 +715,7 @@ class ReaderRefactorTest(unittest.TestCase):
         state = install_native_djvu(self.page, self.origin, prefix="/search")
         def record_page(route):
             response = route.fetch()
-            marker = 'async function getPage(number) {'
+            marker = 'async function loadPage(number, priority, signal) {'
             body = response.text()
             self.assertIn(marker, body)
             route.fulfill(response=response, body=body.replace(marker, marker + ' (window.__nativePages ||= []).push(number);'))

@@ -203,8 +203,8 @@ class ReaderReloadSearchDocumentCases:
         self.page.locator('.reader-text, iframe.reader-overlay').wait_for(state='visible')
         content = (self.page.frame_locator('iframe.reader-overlay').locator('.reader-text')
                    if self.page.locator('iframe.reader-overlay').count() else self.page.locator('.reader-text'))
-        content.wait_for(state='visible')
-        self.assertIn('Reader history forward content.', content.inner_text())
+        expect(content).to_contain_text('Reader history forward content.', timeout=15000)
+        self.assertTrue(content.is_visible())
         self.assertEqual(self.page.evaluate('history.length'), before['length'] + 1)
         self.page.go_back(wait_until='domcontentloaded')
         self.wait_search('paging')
@@ -222,8 +222,8 @@ class ReaderReloadSearchDocumentCases:
         self.page.locator('.reader-text, iframe.reader-overlay').wait_for(state='visible')
         content = (self.page.frame_locator('iframe.reader-overlay').locator('.reader-text')
                    if self.page.locator('iframe.reader-overlay').count() else self.page.locator('.reader-text'))
-        content.wait_for(state='visible')
-        self.assertIn('Reader history forward content.', content.inner_text())
+        expect(content).to_contain_text('Reader history forward content.', timeout=15000)
+        self.assertTrue(content.is_visible())
         self.assertEqual(self.page.evaluate('history.length'), length)
 
     def test_two_step_back_loads_arrived_query_without_old_return_handoff(self):
@@ -530,8 +530,8 @@ class ReaderTrueOfflineCases:
             'ext': 'txt', 'url': SOURCE, 'title': 'Offline history book'})
         self.assertTrue(self.page.evaluate('target => navigateToReader(target)', target))
         content = self.page.frame_locator('iframe.reader-overlay').locator('.reader-text')
-        content.wait_for(state='visible')
-        self.assertIn('Reader history forward content.', content.inner_text())
+        expect(content).to_contain_text('Reader history forward content.', timeout=15000)
+        self.assertTrue(content.is_visible())
         reader_url = self.page.url
         shell = PREFIX + '/static/reader.html'
         # Await persistence of the actual loaded search/Reader dependencies;

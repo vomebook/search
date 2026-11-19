@@ -248,7 +248,7 @@ for (const {name: project, root} of searchTestProjects()) {
       getResultScrollTop: () => 90, getVirtualTotalHeight: () => 100, DOM: {resultsContainer: {clientHeight: 10}},
       document: {hidden: false}, readerHost: {overlay: null}, VSCROLL: {isDraggingThumb: false},
       appendSearchResults() { calls++; return false; }});
-    for (const name of ['ownsAppliedSearchRoute', 'ownsDisplayedSearchResults', 'searchWithInitialFallback', 'consumeCachedAppendPage', 'readPagingView', 'doSearch'])
+    for (const name of [...(pages ? ['ownsAppliedSearchRoute'] : []), 'ownsDisplayedSearchResults', 'searchWithInitialFallback', 'consumeCachedAppendPage', 'readPagingView', 'doSearch'])
       vm.runInContext(source.match(new RegExp('^(?:async )?function ' + name + '\\([^]*?^}', 'm'))[0], context);
     const restoring = context.searchWithInitialFallback();
     assert.equal(typeof release, 'function');
