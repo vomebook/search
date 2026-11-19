@@ -742,8 +742,8 @@ test("deployment workflow uses official checkout configure upload and deploy act
     "actions/checkout@v7",
     "actions/setup-node@v7",
     "actions/setup-python@v7",
-    "actions/cache@v5",
-    "actions/cache@v5",
+    "actions/cache@v6",
+    "actions/cache@v6",
     "actions/configure-pages@v6",
     "actions/upload-pages-artifact@v5",
     "actions/deploy-pages@v5",
@@ -848,8 +848,8 @@ test("PDF release gate requires all named artifact tests unless exact full-code 
     ["Install Playwright Chromium system libraries", 15], ["Install Playwright Chromium browser", 15],
     ["Check content-addressed PDF opening", 30],
   ]) assert.ok(deploy.includes(`- name: ${name}\n        if: needs.source-checks.outputs.reuse != 'true'\n        timeout-minutes: ${timeout}`), name);
-  assert.match(deploy, /key: \$\{\{ runner\.os \}\}-\$\{\{ runner\.arch \}\}-\$\{\{ steps\.pdf-distro\.outputs\.version \}\}-playwright-1\.63\.0-chromium/);
-  assert.match(deploy, /python3 -m pip install playwright==1\.63\.0 pypdf==6\.21\.4/);
+  assert.match(deploy, /key: \$\{\{ runner\.os \}\}-\$\{\{ runner\.arch \}\}-\$\{\{ steps\.pdf-distro\.outputs\.version \}\}-playwright-1\.65\.2-chromium/);
+  assert.match(deploy, /python3 -m pip install playwright==1\.65\.2 pypdf==7\.1\.1/);
   assert.match(deploy, /python3 -m playwright install-deps chromium/);
   assert.match(deploy, /python3 -m playwright install chromium/);
   const pdfChecks = [

@@ -24,7 +24,7 @@ WORKFLOW = ROOT / '.github/workflows/reader-refactor.yml'
 ORIGINAL = Path(__file__).with_name('reader_matrix_original_2a7436bf.yml')
 ORIGINAL_COMMIT = '2a7436bfd0f3f97f26edc18326558cdaee13bacb'
 ORIGINAL_SHA256 = '03bc625cb66d6c19010602be7c3c9504d1cb5647d15928405db20f82c24735ba'
-POLICY_SHA256 = '71be3a7f5e71366b3ba35df8457f7238c80c66e68e9344f8133971dfb65f92c0'
+POLICY_SHA256 = '3901102736b00a27a874ebdb29aba078dabf4f05cbe7423fa023c449564ded1c'
 JOBS = ('github-search', 'huggingface-search')
 SHARDS = ['static', 'core', 'loading', 'navigation', 'search']
 _SHARD = re.compile(r"\$\{\{\s*!cancelled\(\)\s*&&\s*steps\.setup-complete\.outputs\.ready\s*==\s*'true'\s*&&\s*matrix\.shard\s*==\s*'([a-z0-9-]+)'\s*\}\}")
@@ -220,7 +220,12 @@ def execution_policy(job, records, historical_steps):
         if name in UNITTEST_RUNS:
             record = {**record, 'argv': UNITTEST_RUNS[name]}
         if job == 'huggingface-search' and name == 'Check backend coverage and quality inventory':
-            record = {**record, 'backend_selection': backend_selection(original[name]['run'])}
+            run = original[name]['run']
+            original_pin = 'assert sys.version_info[:3] == (3, 12, 3)'
+            require(run.count(original_pin) == 1, 'unexpected historical coverage interpreter pin')
+            # Keep the historical workflow and every other command byte intact.
+            run = run.replace(original_pin, 'assert sys.version_info[:3] == (3, 12, 16)', 1)
+            record = {**record, 'backend_selection': backend_selection(run)}
         if job == 'github-search' and name == 'Check warmed Reader shell reuse':
             node, *lines = original[name]['run'].splitlines()
             prefix = 'python3 -B -m unittest -v '

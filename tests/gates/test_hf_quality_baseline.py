@@ -36,7 +36,7 @@ class ReaderWorkflowParallelTests(unittest.TestCase):
         workflow = (Path(__file__).resolve().parents[2] / '.github/workflows/reader-refactor.yml').read_text()
         hf = workflow.split('  huggingface-search:\n', 1)[1]
         setup = hf.split('      - name: Identify runner distribution', 1)[0]
-        self.assertLess(setup.index('python-version: "3.12.3"'), setup.index('python-version: "3.15.2"'))
+        self.assertLess(setup.index('python-version: "3.12.16"'), setup.index('python-version: "3.15.2"'))
         self.assertIn('id: coverage-python', setup)
         self.assertIn('${{ steps.coverage-python.outputs.python-path }}', hf)
         self.assertIn('"$COVERAGE_PYTHON" -m venv "$RUNNER_TEMP/hf-coverage-venv"', hf)
@@ -46,7 +46,7 @@ class ReaderWorkflowParallelTests(unittest.TestCase):
         self.assertIn("Path(native.__file__).resolve().parent == Path(os.environ['PYTHONPATH']).resolve()", quality)
         self.assertIn('indexes._native_decode_postings is native.decode_postings', quality)
         self.assertIn('sys.version_info[:3] == (3, 15, 2)', quality)
-        self.assertIn('sys.version_info[:3] == (3, 12, 3)', quality)
+        self.assertIn('sys.version_info[:3] == (3, 12, 16)', quality)
         assert_required_shard(self, hf, 'Check backend coverage and quality inventory', 'static')
         self.assert_hf_backend_invocations(quality)
 
@@ -137,23 +137,23 @@ class ReaderWorkflowParallelTests(unittest.TestCase):
         self.assertNotIn('continue-on-error:', firefox)
         self.assertNotIn('if:', firefox)
         for job, browsers in ((github, 'chromium firefox'), (firefox, 'firefox')):
-            for command in ('python-version: "3.15.2"', 'playwright==1.63.0', 'pypdf==6.21.4',
+            for command in ('python-version: "3.15.2"', 'playwright==1.65.2', 'pypdf==7.1.1',
                             'npm ci --ignore-scripts --no-audit --no-fund', 'install -y qpdf',
                             f'playwright install-deps {browsers}', f'playwright install {browsers}',
                             'fetch_foliate_reader.mjs', 'copy_reader_vendor.mjs'):
                 self.assertIn(command, job)
             for cache in ('~/.cache/pip', '~/.npm', '~/.cache/ms-playwright',
-                          '${{ runner.os }}', '${{ runner.arch }}', '${{ steps.distro.outputs.version }}-1.63.0'):
+                          '${{ runner.os }}', '${{ runner.arch }}', '${{ steps.distro.outputs.version }}-1.65.2'):
                 self.assertIn(cache, job)
             self.assertNotIn('path: node_modules', job)
         hf = workflow.split('  huggingface-search:\n', 1)[1]
         for command in ('python -m pip install -r requirements.txt -r config/dependencies/static-check.txt '
-                        'playwright==1.63.0 Pillow==12.3.0 httpx==0.28.1',
+                        'playwright==1.65.2 Pillow==13.0.0 httpx==0.28.1',
                         'npm ci --ignore-scripts --no-audit --no-fund',
                         'playwright install-deps chromium firefox', 'playwright install chromium firefox',
                         'fetch_foliate_reader.mjs', 'copy_reader_vendor.mjs',
                         "hashFiles('huggingface-search/requirements.txt', 'huggingface-search/config/dependencies/static-check.txt')",
-                        "hashFiles('huggingface-search/package-lock.json')", '${{ steps.distro.outputs.version }}-1.63.0'):
+                        "hashFiles('huggingface-search/package-lock.json')", '${{ steps.distro.outputs.version }}-1.65.2'):
             self.assertIn(command, hf)
         for job in (github, firefox, hf):
             self.assertIn('runs-on: ubuntu-24.04', job)

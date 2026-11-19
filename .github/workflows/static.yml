@@ -143,14 +143,14 @@ jobs:
           node scripts/build/check_reader_release.mjs --project github --root "$GITHUB_WORKSPACE" --artifact-root "$GITHUB_WORKSPACE/_site"
       - name: Cache PDF Python package downloads
         if: needs.source-checks.outputs.reuse != 'true'
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: ~/.cache/pip
-          key: ${{ runner.os }}-${{ runner.arch }}-pdf-pip-playwright-1.63.0-pypdf-6.21.4
+          key: ${{ runner.os }}-${{ runner.arch }}-pdf-pip-playwright-1.65.2-pypdf-7.1.1
       - name: Install PDF Python dependencies
         if: needs.source-checks.outputs.reuse != 'true'
         timeout-minutes: 10
-        run: python3 -m pip install playwright==1.63.0 pypdf==6.21.4
+        run: python3 -m pip install playwright==1.65.2 pypdf==7.1.1
       - name: Configure official Ubuntu mirrors
         if: needs.source-checks.outputs.reuse != 'true'
         run: |
@@ -178,10 +178,10 @@ jobs:
         run: echo "version=$(. /etc/os-release; echo "$ID-$VERSION_ID")" >> "$GITHUB_OUTPUT"
       - name: Cache Playwright Chromium binaries
         if: needs.source-checks.outputs.reuse != 'true'
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: ~/.cache/ms-playwright
-          key: ${{ runner.os }}-${{ runner.arch }}-${{ steps.pdf-distro.outputs.version }}-playwright-1.63.0-chromium
+          key: ${{ runner.os }}-${{ runner.arch }}-${{ steps.pdf-distro.outputs.version }}-playwright-1.65.2-chromium
       - name: Install Playwright Chromium browser
         if: needs.source-checks.outputs.reuse != 'true'
         timeout-minutes: 15

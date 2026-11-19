@@ -594,7 +594,8 @@ class ReaderStyleTests(unittest.TestCase):
     def test_mobile_folder_action_has_contrast_and_stays_out_of_header(self):
         self.page.set_viewport_size({'width': 320, 'height': 568})
         self.page.emulate_media(reduced_motion='reduce')
-        self.page.evaluate("()=>document.querySelector('.reader-panel-folder').textContent='所在目录：Test/一个非常长的目录/子目录/文件所在位置'")
+        # Exceed the panel width even with a narrow CI fallback font.
+        self.page.evaluate("()=>document.querySelector('.reader-panel-folder').textContent='所在目录：Test/'+ '一个非常长的目录/子目录/'.repeat(8)+'文件所在位置'")
         self.page.locator('#history').click()
         action = self.page.locator('#reader-panel-path')
         action.wait_for(state='visible')

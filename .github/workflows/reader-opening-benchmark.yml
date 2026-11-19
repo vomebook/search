@@ -40,7 +40,7 @@ jobs:
       - name: Get shared benchmark and install browser
         run: |
           git clone --depth=1 https://huggingface.co/spaces/VoiceOfML/Search huggingface-search
-          python -m pip install playwright==1.63.0
+          python -m pip install playwright==1.65.2
           python -m playwright install --with-deps chromium
       - name: Benchmark production HF
         working-directory: huggingface-search
@@ -53,7 +53,7 @@ jobs:
           python -B scripts/benchmarks/benchmark_reader_open.py --base-url https://vomebook.github.io --path-prefix /search --samples scripts/benchmarks/reader-opening-samples.json --repeat "$REPEAT" --random-attempts "$RANDOM_ATTEMPTS" --max-ready-seconds "$MAX_READY" --output "$RUNNER_TEMP/reader-opening-pages.json"
       - name: Retain timings and failures
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: reader-opening-benchmark
           path: ${{ runner.temp }}/reader-opening-*.json
