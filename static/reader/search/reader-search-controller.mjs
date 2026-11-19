@@ -326,6 +326,7 @@ export function createReaderSearchController({
       return activate(next, false);
     }
     if (search.results.length) return activate((search.index + step + search.results.length) % search.results.length, false);
+    return undefined;
   }
   function toggle() {
     if (!active()) return;
@@ -371,10 +372,10 @@ export function createReaderSearchController({
     status.textContent = "搜索已取消";
   });
   listen(/** @type {Element} */ (pagination.querySelector("#full-search-page-prev")), "click", () => {
-    if (state.page) return loadPage(state.page.offset - state.page.pageSize);
+    return state.page ? loadPage(state.page.offset - state.page.pageSize) : undefined;
   });
   listen(/** @type {Element} */ (pagination.querySelector("#full-search-page-next")), "click", () => {
-    if (state.page) return loadPage(state.page.offset + state.page.pageSize);
+    return state.page ? loadPage(state.page.offset + state.page.pageSize) : undefined;
   });
   listen(/** @type {Element} */ (pagination.querySelector("#full-search-page")), "change", event => {
     const target = /** @type {HTMLInputElement} */ (event.target);

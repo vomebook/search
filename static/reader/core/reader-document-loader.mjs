@@ -11,7 +11,7 @@
  * @property {(error: unknown) => boolean} retryableReaderProxyError
  * @property {(delay: number) => Promise<void>} waitForReader
  * @property {(rawUrl: string) => string} readerContentUrl
- * @property {(url: string, timeoutMs?: number, requestInit?: RequestInit) => Promise<Response>} fetchWithReaderTimeout
+ * @property {(url: string, timeoutMs?: number, requestInit?: ReaderRequestInit) => Promise<Response>} fetchWithReaderTimeout
  * @property {<T>(open: () => Promise<T>) => Promise<T>} retryReaderProxy
  * @property {(url: string, requestInit?: RequestInit) => Promise<Response>} fetchReaderUrl
  * @property {() => Promise<Response>} fetchReaderResponse
@@ -60,7 +60,7 @@ export function createReaderDocumentLoader(readerContext) {
     }));
   }
 
-  /** @param {string} url @param {number} [timeoutMs] @param {RequestInit} [requestInit] */
+  /** @param {string} url @param {number} [timeoutMs] @param {ReaderRequestInit} [requestInit] */
   function fetchWithReaderTimeout(url, timeoutMs = readerContext.READER_PROXY_TIMEOUT_MS, requestInit = {}) {
     return readerContext.readerRequestManager.request(url, timeoutMs, requestInit);
   }

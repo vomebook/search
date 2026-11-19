@@ -912,7 +912,7 @@ function deferSearchAppend() {
 }
 
 // Network, cached and Worker pages share the same state transition.
-/** @param {{results: unknown[], total: number, generation?: string}} data */
+/** @param {{results: unknown[], total: number, generation?: string | undefined}} data */
 function checkSearchPageAppend(data) {
   const expected = getSearchPageMetadata(STATE.results[0]);
   const generation = data.generation ?? getSearchPageMetadata(data.results?.[0])?.generation;
@@ -936,7 +936,7 @@ function checkSearchPageAppend(data) {
   return false;
 }
 
-/** @param {{results: unknown[], total: number, page: number, page_size?: number, generation?: string}} data @param {boolean | undefined} append */
+/** @param {{results: unknown[], total: number, page: number, page_size?: number, generation?: string | undefined}} data @param {boolean | undefined} append */
 function applySearchPage(data, append) {
   if (!ownsAppliedSearchRoute()) return false;
   if (append && (!ownsDisplayedSearchResults() || !checkSearchPageAppend(data))) return false;
@@ -1896,14 +1896,14 @@ function setupSearchPositionControls() {
 let displayedViewRevision = 0;
 let measuredHeightRevision = 0;
 const resultRowRecords = new WeakMap();
-/** @type {WeakMap<object, {generation?: string, total: number, page: number, page_size?: number, unverifiedInitial?: boolean}>} */
+/** @type {WeakMap<object, {generation?: string, total: number, page: number, page_size?: number | undefined, unverifiedInitial?: boolean}>} */
 const searchPageMetadata = new WeakMap();
 /** @param {unknown} record */
 function getSearchPageMetadata(record) {
   return record !== null && (typeof record === "object" || typeof record === "function") ? searchPageMetadata.get(record) : undefined;
 }
 
-/** @param {{results: unknown[], total: number, page: number, page_size?: number, generation?: string}} data */
+/** @param {{results: unknown[], total: number, page: number, page_size?: number, generation?: string | undefined}} data */
 function rememberSearchPageMetadata(data) {
   if (data?.results?.[0] && typeof data.generation === "string" && data.generation) searchPageMetadata.set(/** @type {object} */ (data.results[0]), {
     generation: data.generation, total: data.total, page: data.page, page_size: data.page_size });
@@ -3503,7 +3503,7 @@ function getBrowserReaderUrl(file, repo, path) {
   const name = getBrowserFileName(file);
   const link = getBrowserFileLink(repo, path || "", file);
   const assetPath = path ? path + "/" + name : name;
-  let record = { File: file.name, Extension: file.ext, Link: link };
+  let record = { File: file.name, ...(file.ext === undefined ? {} : { Extension: file.ext }), Link: link };
   record = applyReaderAsset(record, repo, assetPath, link);
   return VoiceOfMLReader.readerUrl(record, "/search/static/reader.html");
 }

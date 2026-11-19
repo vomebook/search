@@ -3,8 +3,8 @@ type SearchSnapshotHeightEntry = readonly [string, Readonly<SearchSnapshotHeight
 interface SearchSnapshotScroll { index: number; offset: number; viewKey?: string }
 interface SearchSnapshotView {
   key: string; revision: number; results: unknown[]; total: number; loadedPage: number;
-  pageCache: Record<string, unknown>; resultBackend?: string | null;
-  window?: {generation?: string | undefined; pages: Iterable<number>; count: number; invalid?: boolean} | null;
+  pageCache: Record<string, unknown>; resultBackend?: string | null | undefined;
+  window?: {generation?: string | undefined; pages: Iterable<number>; count: number; invalid?: boolean | undefined} | null;
 }
 interface SearchResultSnapshot {
   version: number; key: string; results: unknown[]; total: number; page: number; loadedPage: number;

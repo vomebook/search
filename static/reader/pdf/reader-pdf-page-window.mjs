@@ -50,7 +50,7 @@ export function createReaderPdfPageWindow(readerContext) {
 
   /** @param {import('../../../typings/reader-page-window-strict').PdfOutlineDocument | import('../../../typings/reader-page-window-strict').DjvuOutlineDocument} pdf */
   async function loadPdfOutline(pdf, isDjvu = false) {
-    if (typeof pdf?.getOutline !== "function") return;
+    if (typeof pdf?.getOutline !== "function") return undefined;
     try {
       const outline = await readerContext.awaitReader(pdf.getOutline());
       /** @type {import('../../../typings/reader-page-window-strict').PdfOutlineEntry[]} */
@@ -96,6 +96,7 @@ export function createReaderPdfPageWindow(readerContext) {
     } catch (error) {
       if (!readerContext.readerAbortController.signal.aborted)
         console.warn("PDF outline could not be loaded", error);
+      return undefined;
     }
   }
 

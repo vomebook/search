@@ -44,8 +44,8 @@ class StaticGateTests(unittest.TestCase):
             for name in ("reader-security-strict.d.ts", "reader-store-strict.d.ts",
                          "reader-contract-strict.d.ts", "reader-toc-strict.d.ts"):
                 shutil.copyfile(ROOT / "typings" / name, directory / name)
-        # Reader declarations import other declarations; preserve that graph in fixtures.
-        for declaration in (ROOT / "typings").glob("reader-*.d.ts"):
+        # Reader declarations also reference shared search and window types.
+        for declaration in (ROOT / "typings").glob("*.d.ts"):
             shutil.copyfile(declaration, self.root / "typings" / declaration.name)
         for filename in ("eslint.config.mjs", "ruff.toml"):
             shutil.copyfile(ROOT / filename, self.root / filename)
@@ -200,6 +200,38 @@ class StaticGateTests(unittest.TestCase):
         self.assert_check(self.run_check(*check), True, "")
         source.write_text('/** @type {number} */ let value = "wrong";\nconsole.log(value);\n')
         self.assert_check(self.run_check(*check), False, "TS2322")
+
+    def test_strict_javascript_gate_checks_returns_overrides_switches_and_optionals(self):
+        options = load_type_config("jsconfig.strict.json")["compilerOptions"]
+        probes = (
+            ("noImplicitReturns", "TS7030", """
+/** @param {boolean} active */
+function readCount(active) { if (active) return 1; }
+"""),
+            ("noImplicitOverride", "TS4119", """
+class BaseProbe { clear() {} }
+class CacheProbe extends BaseProbe { clear() {} }
+"""),
+            ("noFallthroughCasesInSwitch", "TS7029", """
+/** @param {number} value */
+function update(value) { switch (value) { case 0: value++; case 1: break; } }
+"""),
+            ("exactOptionalPropertyTypes", "TS2375", """
+/** @type {{signal?: AbortSignal}} */
+const options = {signal: undefined};
+"""),
+        )
+        source = self.root / "static/strict-options-probe.js"
+        config = self.root / "jsconfig.json"
+        check = ["node", ROOT / "node_modules/typescript/bin/tsc", "--project", config]
+        for flag, code, program in probes:
+            with self.subTest(flag=flag):
+                self.assertIs(options.get(flag), True)
+                source.write_text(program)
+                config.write_text(json.dumps({"compilerOptions": options, "files": [str(source)]}))
+                self.assert_check(self.run_check(*check), False, code)
+                config.write_text(json.dumps({"compilerOptions": {**options, flag: False}, "files": [str(source)]}))
+                self.assert_check(self.run_check(*check), True, "")
 
     def test_strict_javascript_gate_rejects_implicit_any(self):
         config = load_type_config("jsconfig.strict.json")
@@ -3733,7 +3765,8 @@ lifecycle.trackReaderResource(() => {}); lifecycle.isReaderGenerationCurrent("se
                     "static/reader/formats/reader-image-loader.mjs", "static/reader/formats/reader-media-format.mjs", "static/reader/formats/reader-text-format.mjs", "static/reader/search/reader-pdf-book-search.mjs", "static/reader/search/reader-pdf-book-url.mjs", "static/reader/search/reader-pdf-search-stream.mjs", "static/reader/search/reader-pdf-search-decode.mjs", "static/reader/search/reader-pdf-partition-shape.mjs", "static/reader/search/reader-pdf-partition-config.mjs", "static/reader/search/reader-pdf-partition-policy.mjs", "static/reader/search/reader-pdf-partition-page.mjs", "static/reader/search/reader-pdf-partition-requests.mjs", "static/reader/search/reader-pdf-book-compact.mjs", "static/reader/search/reader-pdf-book-validate.mjs", "static/reader/formats/reader-chapter-repository.js",
                     "static/reader/ui/reader-document-styles.mjs", "static/reader/pdf/reader-engine-preload.js",
                     "static/reader/pdf/pdf-first-page-worker-adapter.mjs", "static/reader/pdf/reader-djvu-worker.mjs", "static/reader/pdf/reader-djvu-scheduler.mjs", "static/reader/pdf/reader-djvu-adapter.mjs", "static/reader/pdf/reader-djvu-identity.mjs", "static/reader/pdf/reader-djvu-range.mjs", "static/reader/pdf/reader-djvu-loader.mjs", "static/reader/search/reader-chapter-search-proxy-url.mjs", "static/reader/search/reader-chapter-search-index.mjs", "static/reader/pdf/reader-pdf-range-cache.mjs",
-                    "static/reader/pdf/reader-pdf-range-hints.mjs", "static/reader/pdf/reader-pdf-text-store.mjs",
+                    "static/reader/pdf/reader-pdf-range-hints.mjs", "static/reader/pdf/reader-pdf-network.mjs",
+                    "static/reader/pdf/reader-pdf-text-store.mjs",
                     "static/reader/formats/reader-section-virtualizer.js", "static/reader/ui/reader-scroll-anchor.js"}
         fixture = {"typings/reader-globals.d.ts", "tests/reader/core/test_reader_runtime_types.ts"}
         self.assertEqual(set(original["files"]), required | fixture)

@@ -72,8 +72,8 @@ export function createReaderProgress(readerContext) {
     readerContext.progressSaveChain = readerContext.progressSaveChain
       .catch(() => {})
       .then(() => {
-        if (!readerContext.historySuppressed)
-          return VoiceOfMLReaderStore.put({ ...progress, lastReadAt: capturedAt });
+        return readerContext.historySuppressed ? undefined
+          : VoiceOfMLReaderStore.put({ ...progress, lastReadAt: capturedAt });
       })
       .catch((error) => {
         if (readerContext.lastSavedProgress === signature) readerContext.lastSavedProgress = "";

@@ -98,7 +98,7 @@
       });
     }
 
-    /** @param {RequestInfo | URL} url @param {number} timeoutMs @param {RequestInit} [requestInit]
+    /** @param {RequestInfo | URL} url @param {number} timeoutMs @param {ReaderRequestInit} [requestInit]
      * @param {number | null} [bufferLimit] @returns {Promise<Response>} */
     function request(url, timeoutMs, requestInit = {}, bufferLimit = null) {
       if (disposed) return Promise.reject(new DOMException("Reader disposed", "AbortError"));
@@ -246,7 +246,7 @@
     return Object.freeze({
       request,
       /** @param {RequestInfo | URL} url @param {number} timeoutMs @param {number} limit
-       * @param {RequestInit} [requestInit] @returns {Promise<Response>} */
+       * @param {ReaderRequestInit} [requestInit] @returns {Promise<Response>} */
       requestBuffered(url, timeoutMs, limit, requestInit = {}) {
         if (!Number.isSafeInteger(limit) || limit < 0) return Promise.reject(new RangeError("Invalid response limit"));
         return request(url, timeoutMs, requestInit, limit);

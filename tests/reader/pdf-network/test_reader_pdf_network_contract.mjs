@@ -22,6 +22,35 @@ const pdfjs = {PDFDataRangeTransport:Transport,getDocument:opts=>({
   promise:Promise.resolve(opts),destroy:async()=>{}})};
 
 try {
+  // A full GET fallback has bytes but no range version. Do not manufacture
+  // undefined metadata properties or attempt any range lookahead.
+  {
+    const bytes = Uint8Array.of(1,2,3,4);
+    let requests = 0;
+    globalThis.fetch = async () => { requests++; return new Response(bytes); };
+    const hooks = {signal:new AbortController().signal,readBytes,limit:64,rangeCache:null,
+      canPrefetchFirstPage:() => assert.fail('complete bodies do not need range hints')};
+    const first = await preparePdfInitialRange(options,hooks);
+    assert.equal(first.complete,true);
+    assert.equal(Object.hasOwn(first,'total'),false);
+    assert.equal(Object.hasOwn(first,'etag'),false);
+    const task = await openPdfRangeTask(pdfjs,options,{...hooks,initial:Promise.resolve(first)});
+    const result = await task.promise;
+    assert.deepEqual(result.data,bytes);
+    assert.equal(result.range,undefined);
+    assert.equal(requests,1);
+    await task.destroy();
+  }
+
+  for (const contentRange of ['bytes 0-3/*','bytes 0-3/9007199254740992']) {
+    let cancelled = false;
+    globalThis.fetch = async () => new Response(new ReadableStream({cancel() { cancelled = true; }}),{
+      status:206,headers:{'Content-Range':contentRange,ETag:'"A"'}});
+    await assert.rejects(preparePdfInitialRange(options,{signal:new AbortController().signal,
+      limit:64,rangeCache:null,readBytes:() => assert.fail('invalid range must not read the body')}),/PDF_RANGE_INVALID/);
+    assert.equal(cancelled,true,contentRange);
+  }
+
   // A final startxref may point to the single aligned chunk before the
   // standard tail. Trust the trailer only as a bounded scheduling hint.
   for (const scenario of ['hint','demand-first','close','source-changed','malformed','deep','weak-net','save-data','older-offset','covered','linearized','suppressed-after-start']) {

@@ -282,24 +282,24 @@ export function createReaderSpeech(readerContext, loadPlayer) {
       // of view stops following until "回到播放位置" or scrolling back to it.
       follow(start) {
         const part = self.partAt(start);
-        if (!part) return;
+        if (!part) return undefined;
         self.current = start;
         // Parked in the background (Reader closed while reading): no layout to follow.
-        if (!self.following || !readerContext.viewport.getClientRects().length) return;
+        if (!self.following || !readerContext.viewport.getClientRects().length) return undefined;
         const range = self.range(start, start + 1);
         if (!range) {
           // An unrendered page/section: navigate there and wait for its text.
-          if (sourceInfo.root(part.unit) || !sourceInfo.locate) return;
+          if (sourceInfo.root(part.unit) || !sourceInfo.locate) return undefined;
           self.autoUntil = performance.now() + 8000;
           return Promise.resolve(sourceInfo.locate(part.unit)).then(() => until(() => sourceInfo.root(part.unit), 8000))
             .finally(() => { self.autoUntil = performance.now() + 600; });
         }
         const position = self.visible(start, range);
-        if (position && position.inside) return;
-        if (position) {
+        if (position && !position.inside) {
           self.autoUntil = performance.now() + 1200;
           scrollToRange(range, "smooth");
         }
+        return undefined;
       },
       following: true, current: null, autoUntil: 0,
       // null when the clip has no rendered range; otherwise whether it is in view.
@@ -680,9 +680,7 @@ export function createReaderSpeech(readerContext, loadPlayer) {
     if (speech()) return attach();
     loadingPlayer = true;
     // Reading is already ready; an optional player must not delay or fail it.
-    void Promise.resolve().then(() => {
-      if (!disposed) return loadPlayer();
-    }).then(() => {
+    void Promise.resolve().then(() => disposed ? undefined : loadPlayer()).then(() => {
       if (!disposed) attach();
     }).catch(() => {}).finally(() => { loadingPlayer = false; });
   }

@@ -69,7 +69,7 @@
       elements.resultsList.addEventListener("click", function(e) {
         const target = /** @type {HTMLElement} */ (e.target);
         const missing = target.closest('[data-window-page]');
-        if (missing && deps.retryWindowPage(Number(/** @type {HTMLElement} */ (missing).dataset.windowPage))) return;
+        if (missing && deps.retryWindowPage(Number(/** @type {HTMLElement} */ (missing).dataset.windowPage))) return undefined;
         const actionBtn = /** @type {HTMLElement | null} */ (target.closest("[data-action]"));
         if (actionBtn) {
           e.preventDefault();
@@ -79,19 +79,19 @@
           }
           if (action === "download") {
             deps.downloadFile(actionBtn.dataset.filename || "file", actionBtn.dataset.link || "", { button: actionBtn });
-            return;
+            return undefined;
           }
           if (action === "read") {
             const record = deps.recordForRow(actionBtn.closest(".result-item"));
             if (record) actionBtn.dataset.readerUrl = deps.freshReaderLink(record);
             deps.navigateToReader(actionBtn.dataset.readerUrl);
-            return;
+            return undefined;
           }
         }
         const repoTag = /** @type {HTMLElement | null} */ (target.closest(".result-repo-tag"));
         if (repoTag) {
           deps.navigateRepo(repoTag.dataset.repo);
-          return;
+          return undefined;
         }
         const folderLink = /** @type {HTMLElement | null} */ (target.closest(".path-folder"));
         if (folderLink) {
@@ -110,8 +110,8 @@
             if (window.location.hash === nextHash) deps.renderBrowser(folder);
             else window.location.hash = nextHash;
           }
-          return;
         }
+        return undefined;
       });
       elements.sidebarContent.addEventListener("click", function(e) {
         const target = /** @type {HTMLElement} */ (e.target);

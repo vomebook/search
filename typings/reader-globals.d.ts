@@ -289,9 +289,11 @@ interface ReaderRequestManagerOptions {
   clearTimer?: typeof clearTimeout;
   initialIdleMs?: number;
 }
+// The manager normalizes the signal before sending a native fetch request.
+type ReaderRequestInit = Omit<RequestInit, 'signal'> & { signal?: AbortSignal | null | undefined };
 interface ReaderRequestManager {
-  request(url: RequestInfo | URL, timeoutMs: number, requestInit?: RequestInit): Promise<Response>;
-  requestBuffered(url: RequestInfo | URL, timeoutMs: number, limit: number, requestInit?: RequestInit): Promise<Response>;
+  request(url: RequestInfo | URL, timeoutMs: number, requestInit?: ReaderRequestInit): Promise<Response>;
+  requestBuffered(url: RequestInfo | URL, timeoutMs: number, limit: number, requestInit?: ReaderRequestInit): Promise<Response>;
   dispose(): void;
   readonly pendingCount: number;
   readonly activeCount: number;

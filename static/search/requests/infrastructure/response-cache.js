@@ -9,14 +9,15 @@
       this.limit = limit; this.ttl = ttl; this.budget = budget;
       this.bytes = 0; this.entriesInfo = /** @type {Map<string, {bytes: number, time: number}>} */ (new Map());
     }
-    /** @param {string} key */
+    /** @override @param {string} key */
     delete(key) {
       this.bytes -= this.entriesInfo.get(key)?.bytes || 0;
       this.entriesInfo.delete(key);
       return super.delete(key);
     }
+    /** @override */
     clear() { super.clear(); this.entriesInfo.clear(); this.bytes = 0; }
-    /** @param {string} key */
+    /** @override @param {string} key */
     get(key) {
       const info = this.entriesInfo.get(key);
       if (!info) return undefined;
@@ -25,9 +26,9 @@
       super.delete(key); super.set(key, value);
       return value;
     }
-    /** @param {string} key */
+    /** @override @param {string} key */
     has(key) { return this.get(key) !== undefined; }
-    /** @param {string} key @param {T} value */
+    /** @override @param {string} key @param {T} value */
     set(key, value) {
       this.delete(key);
       const now = Date.now();

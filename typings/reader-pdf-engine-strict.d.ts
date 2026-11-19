@@ -23,10 +23,7 @@ export interface PdfOptions {
   disableAutoFetch: boolean; disableStream: boolean; wasmUrl: string; cMapUrl: string;
   cMapPacked: boolean; standardFontDataUrl: string; withCredentials: boolean;
 }
-export interface InitialRange {
-  complete?: boolean; bytes: Uint8Array; total?: number; rangeChunkSize: number;
-  etag?: string | null; cancelInitial?: (reason?: unknown) => void;
-}
+export type InitialRange = NonNullable<Awaited<ReturnType<typeof import('../static/reader/pdf/reader-pdf-network.mjs').preparePdfInitialRange>>>;
 export type Initial = Promise<InitialRange | null> | null;
 export interface Restoration { page?: number | string; pageOffset?: number | string; id?: string }
 export interface RangeHooks {

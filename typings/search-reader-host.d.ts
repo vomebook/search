@@ -4,7 +4,7 @@ interface ReaderReturnPosition {
 }
 interface ReaderReturnDependencies {
   readView(): { hasContainer: boolean; containerHeight: number; resultCount: number; total: number;
-    loading: boolean; loadedPage: number; positionRestore: { preview?: boolean; key: string } | null; routeRevision: number };
+    loading: boolean; loadedPage: number; positionRestore: { preview: boolean | undefined; key: string } | null; routeRevision: number };
   hasResult(index: number): boolean;
   getViewKey(): string; getTop(): number; setTop(top: number): void;
   ensureHeights(): void; findIndex(top: number): number; getOffset(index: number): number;
