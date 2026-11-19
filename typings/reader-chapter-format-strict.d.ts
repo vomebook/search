@@ -27,7 +27,7 @@ export interface ChapterFormatContext {
   trustedChapterReferenceUrl(value: string | null, base: string | null, manifestBase: string): {url: string; fragment: string} | null;
   readerContentUrl(url: string): string;
   isReaderGenerationCurrent(kind: string, generation: number): boolean;
-  setToc(entries: TocEntry[]): void;
+  setToc(entries: TocEntry[]): unknown[];
   fetchReaderUrl(url: string, init: {signal: AbortSignal; priority: 'high' | 'low'}): Promise<Response>;
   parseChapterDocument(text: string): Document;
   alignReaderDestination(anchor: Element): void;

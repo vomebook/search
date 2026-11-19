@@ -551,6 +551,93 @@ class TocNavigationTests(unittest.TestCase):
             self.assertLess(abs(offset),2,f'{target} did not land')
         self.assertFalse(self.errors)
 
+    def test_chapter_target_updates_only_visit_the_owned_toc_once(self):
+        self.expose()
+        # Drive demand loads and the real virtualizer explicitly, without ambient prefetch.
+        self.page.add_init_script("Object.defineProperty(document, 'hidden', {value:true})")
+
+        def instrument(route):
+            response = route.fetch()
+            script = response.text()
+            for needle, code in [
+                ('function isChapterTocEntry(entry) {', 'window.__tocChecks = (window.__tocChecks || 0) + 1;'),
+                ('function scheduleChapterWindow() {', 'return;'),
+                ('    setChapterToc();', 'window.__chapterTargets = {load: chapterManifestLoader, trim: chapterVirtualizer.trim};'),
+            ]:
+                self.assertIn(needle, script)
+                script = script.replace(needle, needle + '\n' + code, 1)
+            route.fulfill(response=response, body=script)
+
+        self.page.route('**/static/reader/formats/reader-chapter-format.mjs*', instrument)
+        manifest = chapter_manifest(300, fragments=True)
+        manifest['chapters'][12]['source_path'] = 'chm-fallback.html'
+        manifest['toc'].reverse()  # Two disjoint runs of chapters in reverse order.
+        manifest['toc'] += [dict(title=label, chapter=13, depth=1, fragment='') for label in
+                            ('Exact link', 'Ambiguous', 'Inexact', 'Duplicate anchor', 'Missing anchor')]
+        links = ('<a href="#chm-page-1"> Exact  link </a>'
+                 '<a href="#chm-page-1">Ambiguous</a><a href="#chm-page-2">Ambiguous</a>'
+                 '<a href="#chm-page-2">Inexact suffix</a><a href="#chm-page-3">Duplicate anchor</a>'
+                 '<a href="#chm-page-4">Missing anchor</a>'
+                 '<p id="chm-page-1"></p><p id="chm-page-2"></p>'
+                 '<p id="chm-page-3"></p><p id="chm-page-3"></p>')
+
+        def resource(route):
+            url = unquote(route.request.url)
+            if 'chapter-manifest' in url:
+                route.fulfill(json=manifest)
+            else:
+                index = int(re.search(r'chapter-(\d+)\.xhtml', url).group(1))
+                route.fulfill(content_type='text/html', body=chapter_body(index) + (links if index == 13 else ''))
+
+        self.page.route('**/api/reader-bucket-resource**', resource)
+        source = ('https://voiceofml-search.hf.space/api/reader-bucket-resource?path=chapters/ebook/chm/'
+                  + 'a'*64 + '/1234567890abcdef/chapter-manifest.json')
+        self.page.goto(self.origin + support.PREFIX + '/static/reader.html?' +
+                       urlencode(dict(url=source, ext='epub-chapters')), wait_until='domcontentloaded')
+        self.page.wait_for_function("()=>document.documentElement.dataset.readerPhase==='ready'")
+        result = self.page.evaluate('''async () => {
+          const {load, trim} = __chapterTargets, all = __toc.nav().tocEntries;
+          const rows = all.filter(entry => entry.chapterIndex === 13);
+          const first = all.find(entry => entry.chapterIndex === 1), firstTarget = first.target;
+          const snapshot = entries => entries.map(entry => [entry.fragment,
+            entry.target === null ? null : entry.target?.id || entry.target?.dataset.chapter || 'unset']);
+          const checks = [__tocChecks];
+          for (let i = 2; i < 13; i++) await load(i);
+          checks.push(__tocChecks - checks[0]);
+          let before = __tocChecks;
+          await load(13);
+          checks.push(__tocChecks - before);
+          const mounted = snapshot(rows), oldTarget = rows[0].target;
+          before = __tocChecks;
+          const removed = trim(1).removed;
+          checks.push(__tocChecks - before);
+          const cleared = rows.every(entry => entry.target === null) && !oldTarget.isConnected;
+          before = __tocChecks;
+          await load(13);
+          checks.push(__tocChecks - before);
+          const rebound = rows[0].target?.isConnected && rows[0].target !== oldTarget;
+          trim(1);
+          __toc.set([{...rows[0]}, {...first}, {...rows[2], fragment:''}]);
+          const replaced = __toc.nav().tocEntries;
+          before = __tocChecks;
+          await load(13);
+          checks.push(__tocChecks - before);
+          const replacement = snapshot(replaced);
+          before = __tocChecks;
+          trim(1);
+          checks.push(__tocChecks - before);
+          return {checks, mounted, removed, cleared, rebound, replacement,
+            replacementCleared: replaced[0].target === null && replaced[2].target === null,
+            untouched: first.target === firstTarget && replaced[1].target === firstTarget};
+        }''')
+        self.assertEqual(result['mounted'], [['sec-13-b', 'sec-13-b'], ['', '13'],
+                         ['chm-page-1', 'chm-page-1']] + [['', '13']] * 4)
+        self.assertEqual(result['removed'], 1)
+        self.assertTrue(all(result[key] for key in ('cleared', 'rebound', 'replacementCleared', 'untouched')), result)
+        self.assertEqual(result['replacement'], [['sec-13-b', 'sec-13-b'], ['sec-1-b', 'sec-1-b'],
+                                                 ['chm-page-1', 'chm-page-1']])
+        self.assertEqual(result['checks'], [len(manifest['toc']), 0, 0, 0, 0, 3, 3])
+
     def test_rejump_after_target_chapter_was_trimmed(self):
         self.open_chapters(300)
         self.click_entry(49)

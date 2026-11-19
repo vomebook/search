@@ -364,6 +364,7 @@ export function createReaderToc(readerContext) {
     readerContext.placeReadingProgress();
     readerContext.updateProgressTools();
     hintReaderToc();
+    return normalizedEntries;
   }
 
   /** @param {unknown} value */

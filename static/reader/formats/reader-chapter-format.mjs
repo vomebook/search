@@ -69,7 +69,9 @@ export function chapterPrefetchSize(chapter) {
   } catch (_) { return 0; }
 }
 
-/** @param {unknown} entry @returns {entry is import("../../../typings/reader-chapter-format-strict").TocEntry} */
+/** @typedef {import("../../../typings/reader-chapter-format-strict").TocEntry} ChapterTocEntry */
+
+/** @param {unknown} entry @returns {entry is ChapterTocEntry} */
 function isChapterTocEntry(entry) {
   return typeof entry === "object" && entry !== null &&
     "label" in entry && typeof entry.label === "string" &&
@@ -206,10 +208,9 @@ export function createReaderChapterFormat(readerContext) {
     // Old merged CHM bundles can lose the TOC fragment while retaining the
     // original, functioning book-internal link. Accept only a unique exact
     // label that points to an existing generated page in the same chapter.
-    /** @param {HTMLElement} article @param {import("../../../typings/reader-chapter-format-strict").Chapter} chapter */
-    const repairMergedChmToc = (article, chapter) => {
-      const missing = readerContext.navigationState.tocEntries.filter(isChapterTocEntry).filter(entry =>
-        entry.chapterIndex === chapter.index && !entry.fragment && normalizeTocLabel(entry.label));
+    /** @param {HTMLElement} article @param {ChapterTocEntry[]} entries */
+    const repairMergedChmToc = (article, entries) => {
+      const missing = entries.filter(entry => !entry.fragment && normalizeTocLabel(entry.label));
       if (!missing.length) return;
       const wanted = new Set(missing.map(entry => normalizeTocLabel(entry.label)));
       const idCounts = new Map();
@@ -234,6 +235,18 @@ export function createReaderChapterFormat(readerContext) {
     };
     const mergedChmToc = manifest.chapters.some(chapter =>
       "source_path" in chapter && chapter.source_path === "chm-fallback.html");
+    // Only the normalized array produced for this manifest has stable chapter
+    // membership. Keep the scan for replacements and don't retain old arrays.
+    /** @type {WeakMap<unknown[], Map<number, ChapterTocEntry[]>>} */
+    const chapterTocIndex = new WeakMap();
+    /** @param {number} index */
+    const chapterTocEntries = index => {
+      const entries = readerContext.navigationState.tocEntries;
+      const byChapter = chapterTocIndex.get(entries);
+      return byChapter ? byChapter.get(index) || [] : entries.filter(
+        /** @returns {entry is ChapterTocEntry} */
+        entry => isChapterTocEntry(entry) && entry.chapterIndex === index);
+    };
     const setChapterToc = () => {
       const entries = (manifest.toc ?? manifest.chapters.map((item) => ({
           title: ("title" in item && chapterOptionalText(item.title)) || `章节 ${item.index}`, chapter: item.index, depth: 0, fragment: ""
@@ -244,9 +257,18 @@ export function createReaderChapterFormat(readerContext) {
           depth: item.depth,
           activate: (/** @type {number} */ generation) => activateChapter(/** @type {import("../../../typings/reader-chapter-format-strict").Chapter} */ (manifest.chapters[item.chapter - 1]), generation, item.fragment)
         }));
-      readerContext.setToc(entries);
-      for (const entry of readerContext.navigationState.tocEntries.filter(isChapterTocEntry))
+      const normalized = readerContext.setToc(entries);
+      const current = readerContext.navigationState.tocEntries;
+      /** @type {Map<number, ChapterTocEntry[]> | null} */
+      const byChapter = current === normalized ? new Map() : null;
+      for (const entry of current.filter(isChapterTocEntry)) {
         entry.activate = generation => activateChapter(/** @type {import("../../../typings/reader-chapter-format-strict").Chapter} */ (chapterAt(entry.chapterIndex)), generation, entry);
+        if (!byChapter) continue;
+        const bucket = byChapter.get(entry.chapterIndex);
+        if (bucket) bucket.push(entry);
+        else byChapter.set(entry.chapterIndex, [entry]);
+      }
+      if (byChapter) chapterTocIndex.set(current, byChapter);
     };
     const chapterScheduler = VoiceOfMLReaderChapters.createChapterScheduler({
       create: async (index, signal, priority) => {
@@ -325,10 +347,9 @@ export function createReaderChapterFormat(readerContext) {
           loaded.add(chapter.index);
           retainedBytes.set(chapter.index, bytes.byteLength);
           inserted = true;
-          if (mergedChmToc) repairMergedChmToc(article, chapter);
-          for (const entry of readerContext.navigationState.tocEntries.filter(isChapterTocEntry))
-            if (entry.chapterIndex === chapter.index)
-              entry.target = chapterTarget(article, entry.fragment);
+          const toc = chapterTocEntries(chapter.index);
+          if (mergedChmToc) repairMergedChmToc(article, toc);
+          for (const entry of toc) entry.target = chapterTarget(article, entry.fragment);
           const next = chapterAt(chapter.index + 1);
           if (next) ensureSentinel(next);
           const previous = chapterAt(chapter.index - 1);
@@ -473,8 +494,7 @@ export function createReaderChapterFormat(readerContext) {
         marker.setAttribute("aria-hidden", "true");
         /** @type {IntersectionObserver} */ (readerContext.chapterManifestObserver).unobserve(article);
         readerContext.foliateScrollAnchors.unobserve(article);
-        for (const entry of readerContext.navigationState.tocEntries.filter(isChapterTocEntry))
-          if (entry.chapterIndex === index) entry.target = null;
+        for (const entry of chapterTocEntries(index)) entry.target = null;
         for (const image of article.querySelectorAll("img")) image.removeAttribute("src");
         article.replaceWith(marker);
         article._chapterSearchHead = null;
