@@ -11,7 +11,24 @@ function loadManager(options) {
   return sandbox.VoiceOfMLReaderScroll.createScrollAnchorManager(options);
 }
 
+function testCaptureReadsEachRectOnce() {
+  let viewReads = 0;
+  const viewport = {getBoundingClientRect() { viewReads++; return {top: 20, bottom: 150}; }};
+  const candidate = (top, height, isConnected = true) => ({isConnected, reads: 0,
+    getBoundingClientRect() { this.reads++; return {top, bottom: top + height, height}; }});
+  const candidates = [candidate(26, 20), candidate(30, 10), candidate(30, 5), candidate(30, 5),
+    candidate(28, 0), candidate(28, 10, false), candidate(151, 20)];
+  const manager = loadManager({viewport, candidates: () => candidates, ResizeObserverImpl: null,
+    requestFrame: () => 1, cancelFrame: () => {}, setTimer: () => 1, clearTimer: () => {}});
+  const result = manager.capture();
+  assert.strictEqual(result.node, candidates[2], 'prefer shorter rect, then first exact tie');
+  assert.strictEqual(result.offset, 10);
+  assert.strictEqual(viewReads, 1);
+  assert.deepStrictEqual(candidates.map(node => node.reads), [1,1,1,1,1,0,1]);
+}
+
 function main() {
+  testCaptureReadsEachRectOnce();
   const frames = new Map();
   let nextFrame = 1, resizeCallback;
   class ResizeObserverMock {

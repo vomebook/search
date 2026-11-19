@@ -20,7 +20,6 @@
   }) {
     /** @type {ScrollAnchor | null} */
     let anchor = null;
-    let captureFrame = 0;
     let restoreFrame = 0;
     let disposed = false;
     let generation = 0;
@@ -41,21 +40,19 @@
       if (disposed) return null;
       const viewportRect = viewport.getBoundingClientRect();
       const marker = viewportRect.top + 8;
-      const measured = candidates()
-        .filter((node) => node?.isConnected)
-        .map((node) => ({ node, rect: node.getBoundingClientRect() }))
-        .filter(
-          ({ rect }) =>
-            rect.height > 0 && rect.bottom > viewportRect.top && rect.top < viewportRect.bottom
-        );
-      const selected = measured
-        .filter(({ rect }) => rect.bottom > marker)
-        .sort(
-          (left, right) =>
-            Math.abs(left.rect.top - marker) - Math.abs(right.rect.top - marker) ||
-            left.rect.height - right.rect.height
-        )[0];
-      anchor = measure(selected?.node) || anchor;
+      let selected = null, distance = Infinity, height = Infinity, offset = 0;
+      for (const node of candidates()) {
+        if (!node?.isConnected) continue;
+        const rect = node.getBoundingClientRect();
+        if (!(rect.height > 0 && rect.bottom > marker && rect.top < viewportRect.bottom)) continue;
+        const delta = Math.abs(rect.top - marker);
+        if (delta > distance || (delta === distance && rect.height >= height)) continue;
+        selected = node;
+        distance = delta;
+        height = rect.height;
+        offset = rect.top - viewportRect.top;
+      }
+      if (selected?.isConnected) anchor = { node: selected, offset, generation };
       return anchor;
     }
 
@@ -90,8 +87,6 @@
         cancelFrame(restoreFrame);
         restoreFrame = 0;
       }
-      if (captureFrame) cancelFrame(captureFrame);
-      captureFrame = 0;
       capture();
     }
 
@@ -161,9 +156,7 @@
     }
     function invalidate() {
       generation += 1;
-      if (captureFrame) cancelFrame(captureFrame);
       if (restoreFrame) cancelFrame(restoreFrame);
-      captureFrame = 0;
       restoreFrame = 0;
       anchor = null;
     }
