@@ -431,8 +431,9 @@ class ReaderReloadSearchDocumentCases:
         self.page.locator('.reader-text, iframe.reader-overlay').wait_for(state='visible')
         content = (self.page.frame_locator('iframe.reader-overlay').locator('.reader-text')
                    if self.page.locator('iframe.reader-overlay').count() else self.page.locator('.reader-text'))
-        content.wait_for(state='visible')
-        self.assertIn('Reader history forward content.', content.inner_text())
+        # The text element can be visible before asynchronous Reader content is mounted.
+        expect(content).to_contain_text('Reader history forward content.', timeout=15000)
+        self.assertTrue(content.is_visible())
         # Forward may mount Reader in the uncontrolled Space search host. Check
         # the document rendering the book, not the parent host's controller.
         self.assertEqual(content.evaluate('() => navigator.serviceWorker.controller?.scriptURL'), controller)
