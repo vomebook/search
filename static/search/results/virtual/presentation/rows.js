@@ -58,13 +58,17 @@ function reconcileVirtualRows(items, start, end, topH, bottomH, viewport = DOM.r
     if (idx < start || idx >= end || Number(row.dataset.contentVersion) !== VSCROLL.contentVersion || deps.recordForRow(row) !== items[idx]) row.remove();
     else existing.set(idx, row);
   });
+  const setSize = String(deps.total());
   /** @type {ChildNode | null} */
   let cursor = topSpacer.nextSibling;
   for (let idx = start; idx < end; idx++) {
-    const row = existing.get(idx) || createResultRow(items[idx], idx);
-    row.setAttribute('role', 'listitem');
-    row.setAttribute('aria-posinset', String(idx + 1));
-    row.setAttribute('aria-setsize', String(deps.total()));
+    let row = existing.get(idx);
+    if (!row) {
+      row = createResultRow(items[idx], idx);
+      row.setAttribute('role', 'listitem');
+      row.setAttribute('aria-posinset', String(idx + 1));
+    }
+    if (row.getAttribute('aria-setsize') !== setSize) row.setAttribute('aria-setsize', setSize);
     if (row !== cursor) DOM.resultsList.insertBefore(row, cursor || bottomSpacer);
     cursor = row.nextSibling;
   }

@@ -180,6 +180,42 @@ class ReaderOptimizationTests(unittest.TestCase):
         self.assertEqual(result['seeking'], dict(updates=1, percents=0, page=4))
         self.assertEqual(result['saves'], 5)
 
+    def test_marker_lookup_reuses_live_page_collection(self):
+        self.expose_progress()
+        self.serve('marker fixture')
+        self.open(self.reader_url('txt'))
+        result = self.page.evaluate('''() => {
+          const c=__progressContext, root=c.content;
+          root.replaceChildren();
+          const queries=root.querySelectorAll, collections=root.getElementsByClassName;
+          let pageQueries=0, pageCollections=0;
+          root.querySelectorAll=function(selector){if(selector==='.reader-page')pageQueries++;return queries.call(this,selector)};
+          root.getElementsByClassName=function(names){if(names==='reader-page')pageCollections++;return collections.call(this,names)};
+          const selected=()=>Number(c.pageAtMarker()?.dataset.page || 0);
+          const addPage=page=>{
+            const shell=document.createElement('section');shell.className='reader-page';shell.dataset.page=page;
+            shell.style.cssText='height:900px;min-height:0';root.append(shell);return shell;
+          };
+          try {
+            const empty=selected(), first=addPage(1), second=addPage(2);
+            c.viewport.scrollTop=c.readerPageScrollTop(second)+100;
+            const picks=Array.from({length:20},selected);
+            const last=addPage(3);
+            c.viewport.scrollTop=c.readerPageScrollTop(last)+100;
+            const appended=selected();
+            last.classList.remove('reader-page');
+            const reclassified=selected();
+            root.replaceChildren();
+            addPage(4);
+            const replaced=selected();
+            return {empty,picks,appended,reclassified,replaced,pageQueries,pageCollections};
+          } finally {
+            root.querySelectorAll=queries;root.getElementsByClassName=collections;
+          }
+        }''')
+        self.assertEqual(result, dict(empty=0,picks=[2]*20,appended=3,reclassified=2,replaced=4,
+                                      pageQueries=0,pageCollections=1))
+
     def test_marker_scroll_tracks_dynamic_pages_and_pdf_bottom(self):
         self.expose_progress()
         self.serve('scroll fixture')

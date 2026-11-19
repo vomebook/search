@@ -76,17 +76,27 @@ class ScrollStabilityTests(unittest.TestCase):
           VSCROLL.renderFrame=0;
           STATE.filterFolderSelfs=Array.from({length:1000},(_,i)=>'docs/'+i);
           clearResultTemplateCache();DOM.resultsList.replaceChildren();
-          const original=getResultsHTMLCacheKey;let keys=0;
+          const original=getResultsHTMLCacheKey;let keys=0,totalReads=0,total=STATE.total;
           getResultsHTMLCacheKey=(...args)=>{keys++;return original(...args)};
           const rowsView=VoiceOfMLVirtualRows.create(VSCROLL,{origin:0,target:null},{
-            elements:DOM,total:()=>STATE.total,recordForRow:row=>resultRowRecords.get(row),
+            elements:DOM,total:()=>{totalReads++;return total},recordForRow:row=>resultRowRecords.get(row),
             resetKeyboardIndex:index=>{keyboardResultIndex=index},ensureResultTemplateCache,createResultRow,
             getResultScrollTop,getVirtualOffset,findVirtualIndex});
           const render=()=>rowsView.reconcileVirtualRows(STATE.results,0,60,0,getVirtualTotalHeight()-getVirtualOffset(60));
           const rows=()=>[...DOM.resultsList.querySelectorAll('.result-item')];
           try {
             render();const createdKeys=keys,first=rows(),version=VSCROLL.contentVersion;
-            keys=0;render();const reusedKeys=keys,stable=first.every((row,i)=>row===rows()[i]);
+            const observer=new MutationObserver(()=>{});
+            observer.observe(DOM.resultsList,{subtree:true,attributeFilter:['role','aria-posinset','aria-setsize']});
+            totalReads=keys=0;render();
+            const reusedKeys=keys,reusedReads=totalReads,reusedWrites=observer.takeRecords().length;
+            const stable=first.every((row,i)=>row===rows()[i]);
+            total++;totalReads=0;render();
+            const changedReads=totalReads,changes=observer.takeRecords();
+            observer.disconnect();
+            const changedOnlySize=changes.every(change=>change.attributeName==='aria-setsize');
+            const updatedSize=rows().every((row,i)=>row===first[i] && row.getAttribute('role')==='listitem' &&
+              row.getAttribute('aria-posinset')===String(i+1) && row.getAttribute('aria-setsize')===String(total));
             STATE.filterFolderSelfs[999]='edited';keys=0;render();
             const editedKeys=keys,updated=rows(),allReplaced=first.every(row=>!row.isConnected),
               versions=updated.every(row=>Number(row.dataset.contentVersion)===VSCROLL.contentVersion),
@@ -95,12 +105,15 @@ class ScrollStabilityTests(unittest.TestCase):
             const queryKeys=keys,highlighted=rows().every(row=>row.querySelector('.result-title mark')?.textContent==='row');
             STATE.useMirrorLinks=!STATE.useMirrorLinks;keys=0;render();
             return {createdKeys,reusedKeys,editedKeys,queryKeys,mirrorKeys:keys,stable,allReplaced,
+              reusedReads,reusedWrites,changedReads,changedWrites:changes.length,changedOnlySize,updatedSize,
               versions,invalidated,highlighted,count:rows().length,
               ids:rows().map(row=>Number(row.dataset.index))};
           } finally {getResultsHTMLCacheKey=original;}
         }''')
         self.assertEqual(result, dict(createdKeys=1,reusedKeys=1,editedKeys=1,queryKeys=1,
                                       mirrorKeys=1,stable=True,allReplaced=True,versions=True,
+                                      reusedReads=1,reusedWrites=0,changedReads=1,changedWrites=60,
+                                      changedOnlySize=True,updatedSize=True,
                                       invalidated=True,highlighted=True,count=60,ids=list(range(60))))
         self.assertEqual(self.fixture.errors, [])
 

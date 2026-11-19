@@ -198,23 +198,27 @@ export function createReaderProgress(readerContext) {
     );
   }
 
+  /** @type {HTMLCollectionOf<Element> | undefined} */
+  let markerPages;
   function pageAtMarker() {
-    const y = readerContext.bookmarkRibbon.getBoundingClientRect().bottom,
-      pages = [...readerContext.content.querySelectorAll(".reader-page")];
-    if (!pages.length) return null;
+    // The content root is stable; the live list follows added, replaced and unmounted shells.
+    const pages = markerPages ??= readerContext.content.getElementsByClassName("reader-page");
+    const count = pages.length;
+    if (!count) return null;
+    const y = readerContext.bookmarkRibbon.getBoundingClientRect().bottom;
     const end = readerContext.viewport.scrollHeight - readerContext.viewport.clientHeight;
     if (["pdf", "pdf-pages"].includes(/** @type {string} */ (readerContext.capability.mode)) && end > 2 && readerContext.viewport.scrollTop > 0 &&
         end - readerContext.viewport.scrollTop <= 2) {
-      const last = /** @type {HTMLElement} */ (pages[pages.length - 1]), rect = last.getBoundingClientRect(), view = readerContext.viewport.getBoundingClientRect();
+      const last = /** @type {HTMLElement} */ (pages[count - 1]), rect = last.getBoundingClientRect(), view = readerContext.viewport.getBoundingClientRect();
       if (rect.bottom > view.top && rect.top < view.bottom) return last;
     }
-    let low = 0, high = pages.length;
+    let low = 0, high = count;
     while (low < high) {
       const middle = (low + high) >> 1;
       if ((/** @type {HTMLElement} */ (pages[middle])).getBoundingClientRect().bottom > y) high = middle;
       else low = middle + 1;
     }
-    return /** @type {HTMLElement} */ (pages[Math.min(low, pages.length - 1)]);
+    return /** @type {HTMLElement} */ (pages[Math.min(low, count - 1)]);
   }
 
   /** @param {boolean} [updateProgress] */
