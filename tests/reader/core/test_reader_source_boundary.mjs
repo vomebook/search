@@ -17,7 +17,8 @@ function fixture() {
   globalThis.VoiceOfMLReaderSecurity = { LIMITS: { manifestBytes: 10000 } };
   globalThis.document = {
     title: "", querySelector: () => heading,
-    createElement: () => ({ setAttribute() {}, remove() {} }),
+    createElement: () => ({ setAttribute() {}, remove() { this.removed = true; },
+      addEventListener(type, fn) { if (type === "load") this.onLoad = fn; } }),
     body: { appendChild: frame => frames.push(frame) }
   };
   globalThis.setTimeout = (fn, ms) => { const timer = saved.setTimeout(fn, ms); timer.unref(); return timer; };
@@ -57,6 +58,11 @@ test("download validates unknown JSON and preserves server messages", async () =
     assert.equal(f.feedback.at(-1), expected);
     assert.equal(f.frames.length, expected === "已发起下载" ? 1 : 0);
     assert.equal(f.button.busy, false);
+    if (f.frames.length) {
+      f.frames[0].onLoad();
+      assert.equal(f.frames[0].removed, true);
+      assert.equal(f.feedback.at(-1), "下载失败，请重试（已发起下载，未收到附件）");
+    }
   }
 });
 

@@ -2095,6 +2095,7 @@ keepValue(1, 2);
                           "static/reader/formats/reader-chapter-format.mjs",
                           "static/reader/ui/reader-document-styles.mjs",
                           "static/reader/formats/reader-format-controller.mjs",
+                          "static/reader/ui/reader-progress.mjs",
                           "static/reader/core/reader-source.mjs", "static/reader/core/reader-lifecycle.mjs", "static/reader/pdf/reader-pdf-text.js",
                           "tests/reader/chapters/test_chapter_format_validation.mjs",
                           "tests/reader/core/test_pdf_text_context.js",
@@ -2654,7 +2655,7 @@ keepValue(1, 2);
                  'scripts/reader/check_reader_v3_coverage.mjs', 'scripts/reader/check_reader_v3_mutations.mjs',
                  'scripts/check_tap_contracts.mjs', 'tests/reader/pdf-v3/test_reader_v3_untrusted.mjs',
                  'tests/reader/pdf-v3/test_dataset_primary_policy.mjs', 'tests/reader/pdf-v3/test_reader_v3_ocr_retained.mjs',
-                 'tests/reader/djvu/test_reader_djvu_only.mjs']
+                 'tests/reader/djvu/test_reader_djvu_only.mjs', 'static/reader/pdf/reader-pdf-text.js']
         for path in paths:
             target = self.root / path
             target.parent.mkdir(parents=True, exist_ok=True)
