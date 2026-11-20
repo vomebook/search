@@ -181,10 +181,10 @@ let folderSelectionMemo = null;
 
 /** @param {Set<string>} subtreeSet @param {Set<string>} selfSet */
 function getFolderSelectionLookup(subtreeSet, selfSet) {
-  if (!folderSelectionMemo || folderSelectionMemo.tree !== deps.readView().tree
-      || !sameValues(deps.readView().subtrees, folderSelectionMemo.subtrees)
-      || !sameValues(deps.readView().selfs, folderSelectionMemo.selfs)) {
-    const view = deps.readView();
+  const view = deps.readView();
+  if (!folderSelectionMemo || folderSelectionMemo.tree !== view.tree
+      || !sameValues(view.subtrees, folderSelectionMemo.subtrees)
+      || !sameValues(view.selfs, folderSelectionMemo.selfs)) {
     folderSelectionMemo = { tree: view.tree, subtrees: view.subtrees.slice(), selfs: view.selfs.slice(),
       lookup: deps.selection.createFolderSelectionLookup(view.tree, subtreeSet, selfSet),
       canonical: folderSelectionMemo?.tree === view.tree && folderSelectionMemo.canonical };
@@ -421,20 +421,15 @@ function handleFolderSelfToggle(node) {
 }
 
 function selectAll() {
-    if (!deps.readView().tree || deps.readView().tree.length === 0) return;
-    var subtreeSet = new Set(/** @type {string[]} */ ([]));
-    var selfSet = new Set(/** @type {string[]} */ ([]));
-    var currentSubtreeSet = getFolderSubtreeSet();
-    var currentSelfSet = getFolderSelfSet();
-    var allSelected = deps.readView().tree.every(function(node) { return deps.selection.folderSelectionState(node, currentSubtreeSet, currentSelfSet).full; });
-    if (allSelected) {
-      persistFolderSelection(subtreeSet, selfSet);
-      refreshFilterFolderSelectionState();
-      return;
-    }
-    for (const node of deps.readView().tree) {
-      setNodeSubtreeSelection(node, true, subtreeSet, selfSet);
-    }
+    const {tree, subtrees, selfs} = deps.readView();
+    if (!tree?.length) return;
+    const currentSubtreeSet = new Set(subtrees);
+    const currentSelfSet = new Set(selfs);
+    const lookup = getFolderSelectionLookup(currentSubtreeSet, currentSelfSet);
+    const allSelected = tree.every(node => lookup.get(node)?.full);
+    const subtreeSet = new Set(/** @type {string[]} */ ([]));
+    const selfSet = new Set(/** @type {string[]} */ ([]));
+    if (!allSelected) for (const node of tree) setNodeSubtreeSelection(node, true, subtreeSet, selfSet);
     persistFolderSelection(subtreeSet, selfSet);
     refreshFilterFolderSelectionState();
 }

@@ -154,6 +154,18 @@ test('root selection and direct-file exclusion preserve normalized commit values
   assert.equal(f.builds, 4);
 });
 
+test('select-all toggle reuses the rendered lookup across top-level branches', () => {
+  const f = fixture();
+  f.view.tree = f.nodes[0].children;
+  f.controller.render();
+  f.controller.selectAll();
+  assert.deepEqual(f.commits.at(-1), [['a', 'ab', 'empty'], []]);
+  f.controller.selectAll();
+  assert.deepEqual(f.commits.at(-1), [[], []]);
+  assert.equal(f.builds, 3, 'initial projection and one normalization per commit');
+  assert.deepEqual(f.stateLookups, [], 'no independent subtree projections during either toggle');
+});
+
 test('rejected selection neither commits nor replaces the rendered memo', () => {
   const f = fixture();
   f.view.selfs = [''];

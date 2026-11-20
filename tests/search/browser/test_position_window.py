@@ -214,7 +214,7 @@ class PositionWindowTests(unittest.TestCase):
               new Error('INVALID_API_RESPONSE'),new Error('API_TIMEOUT'),new TypeError('Failed to fetch')].map(isRecoverableSearchError));
         }'''), [True]*6 + [False]*6 + [True,True])
         self.assertEqual(self.page.evaluate('''() => [408,429,403].map(status=>{
-          resetPagingRecovery();finishPagingAttempt(false,{status});return pagingFailures;
+          resetPagingRecovery();finishPagingAttempt(false,{status});return pagingController.readRecovery().failures;
         })'''), [1,1,2])
 
     def test_generation_change_relocates_without_mixing_pages(self):

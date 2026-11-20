@@ -18,8 +18,6 @@ const WORKER_REQUEST_TIMEOUT = 10000;
 const WORKER_LOAD_TIMEOUT = 60000;
 const APPEND_REQUEST_TIMEOUT = 5000;
 const DOWNLOAD_CHECK_TIMEOUT = 8000;
-// Detached compatibility projection for browser diagnostics; the controller owns recovery.
-let pagingFailures = 0;
 
 const ORDERED_EXTENSIONS = VoiceOfMLSearchFileTypes.orderedExtensions;
 const FILE_ICON_MAP = VoiceOfMLSearchFileTypes.fileIconMap;
@@ -3443,7 +3441,7 @@ function updateCurrentResultPosition() {
 
 function updateLoadInfo() {
   if (STATE.total === 0 && STATE.results.length === 0 && DOM.retryPositionBtn?.hidden !== false
-      && (!STATE.hasMore || pagingFailures < 2)) {
+      && (!STATE.hasMore || pagingController.readRecovery().failures < 2)) {
     DOM.loadInfo.style.display = "none";
     return;
   }
@@ -3707,7 +3705,6 @@ const pagingController = VoiceOfMLPagingController.create({
     doSearch(true);
   },
   onState: recovery => {
-    pagingFailures = recovery.failures;
     pagingStatus.render(readPagingView(), recovery);
     if (!STATE._loadedPage && recovery.failures >= 2 && STATE.hasMore && !STATE.isLoading && DOM.loadInfo)
       DOM.loadInfo.style.display = "";

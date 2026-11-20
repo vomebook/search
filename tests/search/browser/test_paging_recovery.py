@@ -339,22 +339,24 @@ class PagingRecoveryTests(unittest.TestCase):
           resetPagingRecovery();
           finishPagingAttempt(false, {status: 400});
           const projection = pagingController.readRecovery();
+          const retryAt = projection.retryAt;
           projection.failures = 0; projection.retryAt = 0;
-          pagingFailures = 0;
           updatePagingStatus();
           const button = document.getElementById('paging-status');
-          const failed = [pagingFailures, button.hidden, button.textContent];
+          const failed = [pagingController.readRecovery().failures, button.hidden, button.textContent];
+          const retryUnchanged = retryAt > 0 && pagingController.readRecovery().retryAt === retryAt;
           resetPagingRecovery();
-          return {failed, reset: [pagingFailures, button.hidden, button.textContent]};
+          return {failed, retryUnchanged, reset: [pagingController.readRecovery(), button.hidden, button.textContent]};
         }''')
         self.assertEqual(result['failed'], [2, False, '加载失败，重试'])
-        self.assertEqual(result['reset'], [0, True, '加载失败，重试'])
+        self.assertTrue(result['retryUnchanged'])
+        self.assertEqual(result['reset'], [{'failures': 0, 'retryAt': 0}, True, '加载失败，重试'])
         self.assertEqual(self.errors, [])
 
     def test_failure_retries_once_then_button_recovers_same_page(self):
         self.reach_bottom()
         self.expire_pending('fail')
-        self.page.wait_for_function('pagingFailures === 2 && !STATE.isLoading')
+        self.page.wait_for_function('pagingController.readRecovery().failures === 2 && !STATE.isLoading')
         count = self.page.evaluate('pagingRequests.length')
         self.page.wait_for_timeout(1000)
         self.assertEqual(self.page.evaluate('pagingRequests.length'), count)
@@ -368,7 +370,7 @@ class PagingRecoveryTests(unittest.TestCase):
     def test_truncated_nonempty_page_is_rejected_and_retry_preserves_all_ids(self):
         self.reach_bottom()
         self.expire_pending('short')
-        self.page.wait_for_function('pagingFailures === 2 && !STATE.isLoading')
+        self.page.wait_for_function('pagingController.readRecovery().failures === 2 && !STATE.isLoading')
         self.assertEqual(self.page.evaluate('[STATE._loadedPage,STATE.results.length,STATE.total]'), [1,100,301])
         self.page.evaluate("pagingMode='normal'")
         self.page.locator('#paging-status').click()
@@ -379,7 +381,7 @@ class PagingRecoveryTests(unittest.TestCase):
     def test_touch_at_bottom_retries_without_scroll_position_change(self):
         self.reach_bottom()
         self.expire_pending('fail')
-        self.page.wait_for_function('pagingFailures === 2 && !STATE.isLoading')
+        self.page.wait_for_function('pagingController.readRecovery().failures === 2 && !STATE.isLoading')
         self.page.wait_for_timeout(800)
         self.page.evaluate("window.pagingMode = 'normal'; DOM.resultsContainer.dispatchEvent(new Event('touchend'))")
         self.page.wait_for_function('STATE._loadedPage === 2 && !STATE.isLoading')
