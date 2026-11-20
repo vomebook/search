@@ -139,6 +139,54 @@ class EbookFlowTests(unittest.TestCase):
                 style = node.evaluate('n => {const s = getComputedStyle(n); return [s.color, s.letterSpacing, s.wordSpacing]}')
                 self.assertEqual(style, [color, '2px', '4px'])
 
+    def test_chapter_rewrites_resource_attributes_without_revisiting_prose(self):
+        base = 'chapters/ebook/epub/' + 'a' * 64 + '/1234567890abcdef/'
+        endpoint = 'https://voiceofml-search.hf.space/api/reader-bucket-resource?'
+        source = endpoint + urlencode({'path': base + 'chapter-manifest.json'})
+        prose = '<p class="rewrite-prose">Plain chapter paragraph</p>' * 500
+        chapter = '''<h1 id="target">Chapter</h1>
+          <a id="jump" href="#target">Jump to heading</a>
+          <img id="cover" src="../resources/cover.svg" srcset="../resources/other.svg 2x" />
+          <img id="only-srcset" srcset="../resources/other.svg 2x" />
+          <video id="poster" poster="../resources/cover.svg"></video>
+          <svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+            <image id="svg-modern" href="../resources/cover.svg" width="5" height="5" />
+            <image id="svg-legacy" xlink:href="../resources/cover.svg" width="5" height="5" />
+          </svg><span id="legacy" xlink:href="../resources/cover.svg">Legacy link</span>''' + prose
+        manifest = {'version': 1, 'kind': 'epub-chapters', 'chapters': [
+            {'index': 1, 'path': 'chapters/chapter-0001.xhtml', 'bytes': len(chapter.encode())}]}
+        def resource(route):
+            path = unquote(route.request.url)
+            if path.endswith('chapter-manifest.json'):
+                route.fulfill(json=manifest)
+            elif path.endswith('.svg'):
+                route.fulfill(content_type='image/svg+xml', body='<svg xmlns="http://www.w3.org/2000/svg"/>')
+            else:
+                route.fulfill(content_type='text/html', body=chapter)
+        self.page.route('**/api/reader-bucket-resource**', resource)
+        self.page.add_init_script('''(() => {
+          window.__proseRewriteChecks=0;
+          const has=Element.prototype.hasAttribute;
+          Element.prototype.hasAttribute=function(name){
+            if(name==='src' && this.className==='rewrite-prose' && this.ownerDocument!==document)
+              window.__proseRewriteChecks++;
+            return has.call(this,name);
+          };
+        })()''')
+        self.page.goto(self.origin + support.PREFIX + '/static/reader.html?' + urlencode(
+            dict(url=source, ext='epub-chapters')))
+        self.page.wait_for_function("()=>document.documentElement.dataset.readerPhase==='ready'")
+        self.assertEqual(self.page.locator('.rewrite-prose').count(), 500)
+        self.assertEqual(self.page.evaluate('window.__proseRewriteChecks'), 0)
+        self.assertEqual(self.page.locator('#jump').get_attribute('href'), '#target')
+        cover = endpoint + urlencode({'path': base + 'resources/cover.svg'})
+        for selector, attr in (('#cover', 'src'), ('#poster', 'poster'), ('#svg-modern', 'href'),
+                               ('#svg-legacy', 'xlink:href'), ('#legacy', 'xlink:href')):
+            with self.subTest(selector=selector):
+                self.assertEqual(self.page.locator(selector).get_attribute(attr), cover)
+        for selector in ('#cover', '#only-srcset'):
+            self.assertIsNone(self.page.locator(selector).get_attribute('srcset'))
+
     def test_ebook_first_content_does_not_import_pdf_hit_projection(self):
         requested = []
 

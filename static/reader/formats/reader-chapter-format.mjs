@@ -347,7 +347,10 @@ export function createReaderChapterFormat(readerContext) {
           readerContext.assertReaderActive();
           signal.throwIfAborted();
           const doc = readerContext.parseChapterDocument(new TextDecoder().decode(bytes));
-          const elements = doc.querySelectorAll("*");
+          // Sanitization already visited the entire document. Only these nodes
+          // can need URL rewriting. Match namespaced SVG hrefs as well as
+          // literal xlink:href attributes in legacy HTML.
+          const elements = doc.querySelectorAll("[src], [*|href], [poster], [xlink\\:href], [srcset]");
           let rewritten = 0, deadline = performance.now() + 8;
           /** @param {number} count @param {number} total */
           const yieldIfNeeded = async (count, total) => {
