@@ -115,6 +115,39 @@ class SidebarKeyboardTests(unittest.TestCase):
         self.assertEqual(actual['min'], 7 * 1048576, actual)
         self.assertEqual(actual['body']['min_size'], 7 * 1048576, actual)
 
+    def test_empty_size_unit_change_keeps_results_and_other_bound_deadline(self):
+        self.page.locator('#settings-btn').click()
+        self.page.clock.install()
+        self.page.clock.pause_at(self.page.evaluate('Date.now() + 100'))
+        self.page.evaluate('''()=>{
+          cancelSearchPrefetch();
+          window.__sizeSearches=[];
+          window.__sizeRows=STATE.results;
+          window.__sizeFirst=DOM.resultsList.querySelector('.result-item');
+          window.__sizeScroll=DOM.resultsContainer.scrollTop;
+          const original=doFilterSearch;
+          doFilterSearch=(...args)=>{
+            __sizeSearches.push({min:STATE.filterMinSize,max:STATE.filterMaxSize});
+            return original(...args);
+          };
+        }''')
+        self.page.locator('#filter-min-unit').select_option('KB')
+        self.page.clock.fast_forward(501)
+        kept = self.page.evaluate('''()=>({calls:__sizeSearches.length,
+          sameRows:STATE.results===__sizeRows,
+          sameFirst:!!__sizeFirst&&DOM.resultsList.querySelector('.result-item')===__sizeFirst,
+          sameScroll:DOM.resultsContainer.scrollTop===__sizeScroll})''')
+        self.assertEqual(kept, {'calls': 0, 'sameRows': True, 'sameFirst': True, 'sameScroll': True})
+        self.page.evaluate('''()=>{
+          DOM.filterMaxUnit.value='KB';DOM.filterMaxSize.value='2';
+          DOM.filterMaxSize.dispatchEvent(new Event('input',{bubbles:true}));
+        }''')
+        self.page.clock.fast_forward(400)
+        self.page.locator('#filter-min-unit').select_option('MB')
+        self.assertEqual(self.page.evaluate('__sizeSearches'), [])
+        self.page.clock.fast_forward(101)
+        self.assertEqual(self.page.evaluate('__sizeSearches'), [{'min': None, 'max': 2048}])
+
     def test_size_debounce_and_exact_saved_bytes_are_preserved(self):
         self.page.clock.install()
         self.page.locator('#settings-btn').click()

@@ -3450,7 +3450,10 @@ function setupSizeFilterControls() {
     }, 500);
   };
   [DOM.filterMinSize, DOM.filterMaxSize].forEach(input => input.addEventListener("input", schedule));
-  [DOM.filterMinUnit, DOM.filterMaxUnit].forEach(select => select.addEventListener("change", schedule));
+  // A unit alone does not change the search. Leave any pending edit to
+  // either bound on its existing debounce deadline.
+  DOM.filterMinUnit.addEventListener("change", () => { if (DOM.filterMinSize.value !== "") schedule(); });
+  DOM.filterMaxUnit.addEventListener("change", () => { if (DOM.filterMaxSize.value !== "") schedule(); });
 }
 
 function scheduleFilterSearch(clearResults = false) {
