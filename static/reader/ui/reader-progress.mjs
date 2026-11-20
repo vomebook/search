@@ -308,7 +308,7 @@ export function createReaderProgress(readerContext) {
     if (readerContext.progressPercent.textContent !== label) readerContext.progressPercent.textContent = label;
     if (readerContext.progressRange.getAttribute("aria-valuetext") !== label)
       readerContext.progressRange.setAttribute("aria-valuetext", label);
-    const hasChapters = readerContext.navigationState.tocEntries.some((entry) => !!entry && typeof entry === "object" && !("group" in entry && entry.group)),
+    const hasChapters = readerContext.navigationState.tocEntries.some(isChapterDestination),
       hasPreviousChapter = readerContext.adjacentTocIndex(-1) >= 0,
       hasNextChapter = readerContext.adjacentTocIndex(1) >= 0;
     if (readerContext.chapterPrev.hidden !== !hasChapters) readerContext.chapterPrev.hidden = !hasChapters;
@@ -447,12 +447,19 @@ export function createReaderProgress(readerContext) {
     }
   }
 
+  /** @param {unknown} entry */
+  function isChapterDestination(entry) {
+    if (!entry || typeof entry !== "object" || ("group" in entry && entry.group)) return false;
+    // Native PDF and DjVu share this mode. Other TOCs need not have page metadata.
+    return readerContext.capability.mode !== "pdf" ||
+      ("page" in entry && typeof entry.page === "number" && Number.isSafeInteger(entry.page) && entry.page > 0);
+  }
+
   /** @param {number} direction */
   function adjacentTocIndex(direction) {
     for (let index = readerContext.navigationState.currentChapterIndex + direction;
       index >= 0 && index < readerContext.navigationState.tocEntries.length; index += direction) {
-      const entry = readerContext.navigationState.tocEntries[index];
-      if (entry && typeof entry === "object" && !("group" in entry && entry.group)) return index;
+      if (isChapterDestination(readerContext.navigationState.tocEntries[index])) return index;
     }
     return -1;
   }

@@ -109,6 +109,20 @@ class TocNavigationTests(unittest.TestCase):
                 'link=>Number(link.parentElement.dataset.tocIndex)'), index)
         self.assertFalse(self.page.evaluate('()=>__toc.nav().tocEntries[2].activate()'))
 
+        if not self.panel_open():
+            self.page.locator('#history').click()
+        self.page.locator('#toc-tab').click()
+        previous = self.page.locator('.reader-chapter-prev')
+        following = self.page.locator('.reader-chapter-next')
+        self.assertTrue(previous.is_disabled())
+        for button, index, page in ((following, 1, 6), (following, 3, 9), (previous, 1, 6)):
+            button.click()
+            self.page.wait_for_function('i=>__toc.nav().currentChapterIndex===i', arg=index)
+            self.assertEqual(self.page.locator('#page-number').input_value(), str(page))
+            self.assertTrue(self.panel_open())
+            if index == 3:
+                self.assertTrue(following.is_disabled(), 'an invalid trailing destination is not a chapter')
+
     def test_large_pdf_toc_page_lookup_preserves_unsorted_labels_and_resets(self):
         self.expose()
         self.page.route('**/api/reader-content**',lambda route:route.fulfill(content_type='text/plain',body='text'))

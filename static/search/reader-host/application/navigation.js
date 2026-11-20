@@ -336,6 +336,8 @@
         kept.removeAttribute("aria-hidden");
         shade(kept);
         if (revision !== owner) return frame;
+        try { kept.contentWindow?.dispatchEvent(new Event("voice-reader-overlay-resume")); } catch (_) {}
+        if (revision !== owner) return frame;
         kept.focus();
         if (revision !== owner) return frame;
         // Show the sentence being read (not the "回到原位置" toggle of the panel button).

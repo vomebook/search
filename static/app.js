@@ -982,7 +982,8 @@ function prefetchSearchPages(base, template) {
     stringify: body => stableSearchStringify(body),
     getCached: key => getCachedSearchResponse(key),
     evictCached: key => { searchResponseStore.cache.delete(key); },
-    readRecent: (...args) => readRecentSearchPage(...args),
+    readRecent: (key, page, expected, delay, signal) => readRecentSearchPage(key, page,
+      {...expected, query: {...expected.query, resultBackend: "api"}}, delay, signal),
     fetchPage: (key, url, body, signal) => fetchSearchPage(key, url, body, signal, APPEND_REQUEST_TIMEOUT),
     validate: (...args) => validatePositionWindowPage(...args),
     acceptPage: (page, data) => {
@@ -1014,7 +1015,6 @@ function prefetchNextPage() {
   if (STATE._resultBackend === "local") return prefetchLocalSearchPage();
   if (!apiAvailable) return Promise.resolve();
   if (STATE.useLocalMode && STATE.dataLoaded && STATE._resultBackend !== "api") return Promise.resolve();
-  if (STATE.filterFolderSelfs.length > 0 || STATE.filterFolderSubtrees.length > 0) return Promise.resolve();
   return prefetchSearchPages(getSearchApiBase(), buildCurrentSearchBody(1));
 }
 
@@ -1800,7 +1800,8 @@ function jumpToSearchResult(value) {
   const key = getSearchViewKey();
   setReturnPositionTarget();
   if (!positionRestore && !resultWindow?.invalid && STATE.results[index]) setResultScrollTop(getVirtualOffset(index));
-  else tryRestoreSearchPosition(key, { viewport: null, position: {
+  else tryRestoreSearchPosition(key, { viewport: null,
+    backend: positionRestore?.key === key ? positionRestore.backend : ownsDisplayedSearchResults() ? STATE._resultBackend : undefined, position: {
     version: 1, key, index, offset: 0, anchorId: "",
     loadedPage: Math.floor(index / STATE.pageSize) + 1, savedAt: Date.now()
   }});
@@ -1873,7 +1874,7 @@ function rememberSearchPageMetadata(data) {
     generation: data.generation, total: data.total, page: data.page, page_size: data.page_size });
 }
 
-/** @param {string} key @param {number} page @param {VoiceOfMLSearchWindowExpected & {query: {pageSize: number}}} expected @param {number} [timeoutMs] @param {AbortSignal | null} [signal] */
+/** @param {string} key @param {number} page @param {SearchRecentPageExpected} expected @param {number} [timeoutMs] @param {AbortSignal | null} [signal] */
 async function readRecentSearchPage(key, page, expected, timeoutMs = 150, signal = null) {
   return positionPersistence.readRecentPage(key, page, expected, timeoutMs, signal);
 }
@@ -1933,6 +1934,7 @@ function showSavedSearchViewport(viewport, position, task) {
   for (const [index, record] of viewport.records) if (Number.isInteger(index) && index >= 0 && index < results.length) results[index] = record;
   const snapshot = { version: SEARCH_VIEW_SNAPSHOT_VERSION, key: position.key, results, total: viewport.total,
     page: position.loadedPage, loadedPage: position.loadedPage, pageCache: {}, hasMore: results.length < viewport.total,
+    resultBackend: viewport.resultBackend,
     window: { preview: true, generation: viewport.generation, pages: [], count: Object.keys(results).length }, estimatedHeight: viewport.estimatedHeight,
     heightCache: viewport.records.map(([, record, height]) => /** @type {SearchSnapshotHeightEntry} */ ([getResultStableId(record), {height, measurementKey: viewport.measurementKey}])),
     scroll: {index: position.index, offset: position.offset, viewKey: position.key}, savedAt: Date.now() };
@@ -2029,7 +2031,8 @@ const positionRestoration = VoiceOfMLPositionRestoration.create({
   validatePage: (data, page, size, expected) => validatePositionWindowPage(data, page, size, expected),
   isCurrent: task => positionRestore === task && task.key === getSearchViewKey(),
   readViewport: key => readSearchViewport(key),
-  fetchPage: (query, page, signal, anchorId) => fetchPositionPageWithRecovery(query, page, signal, anchorId),
+  lookupPage: (query, signal, anchorId, backend) => lookupPositionPage(query, signal, anchorId, backend),
+  fetchPage: (query, page, signal) => fetchPositionPageWithRecovery(query, page, signal, undefined),
   showPreview: (viewport, position, task) => showSavedSearchViewport(viewport, position, task),
   isDragging: () => VSCROLL.isDraggingThumb,
   capturePreviewAnchor: () => {
@@ -2049,7 +2052,7 @@ const positionRestoration = VoiceOfMLPositionRestoration.create({
   notify: message => showToast(message)
 });
 
-/** @param {string} key @param {{position?: SearchPosition | null, backend?: string, viewport?: SearchPositionViewport | null}} [options] */
+/** @param {string} key @param {{position?: SearchPosition | null, backend?: SearchResultBackend | null | undefined, viewport?: SearchPositionViewport | null}} [options] */
 function tryRestoreSearchPosition(key, options = {}) {
   const previous = positionRestore?.key === key && positionRestore.failed && !options.position ? positionRestore : null;
   const position = options.position || previous?.position || positionPersistence.getPosition(key);
@@ -2095,6 +2098,7 @@ function applyValidatedSearchViewport(snapshot) {
     pages: new Set(snapshot.window.pages), pending: new Map(), failures: new Map(), controller: new AbortController() };
   // Snapshot owns the sparse array; keep its identity and legacy record values.
   STATE.results = /** @type {(PagesSearchRecord | null | undefined)[]} */ (snapshot.results); STATE.total = snapshot.total;
+  STATE._resultBackend = snapshot.resultBackend || null;
   STATE.page = STATE._loadedPage = snapshot.loadedPage;
   STATE.hasMore = snapshot.hasMore; STATE.isLoading = false;
   if (VSCROLL.heights.length > STATE.results.length) { VSCROLL.heights.length = STATE.results.length; VSCROLL.heightsDirty = true; }
@@ -2112,17 +2116,16 @@ function validatePositionWindowPage(data, page, pageSize, expected) {
   VoiceOfMLSearchWindowPage.validate(data, page, pageSize, expected);
 }
 
-/** @param {VoiceOfMLResultWindow | PagesResultWindow} window */
+/** @param {VoiceOfMLResultWindow} window */
 function resultWindowCurrent(window) {
   return resultWindow === window && window.key === getSearchViewKey() && !window.controller.signal.aborted;
 }
 
 function restartResultWindow() {
-  const key = getSearchViewKey();
+  const key = getSearchViewKey(), backend = resultWindow?.query.resultBackend;
   saveSearchPosition();
   resultSnapshots.remove(key);
-  cancelPositionRestore();
-  tryRestoreSearchPosition(key);
+  tryRestoreSearchPosition(key, {backend});
 }
 
 function updateResultWindowStatus() {
@@ -2154,18 +2157,40 @@ async function fetchPositionPageWithRecovery(query, page, signal, anchorId, dema
   return VoiceOfMLResultWindowLoader.fetchWithRecovery({
     fetchPage: (query, page, signal, anchorId) => fetchPositionPage(query, page, signal, anchorId),
     isRecoverable: error => isRecoverableSearchError(error),
-    isLocal: query => query.useLocalMode || query.folders.self.length || query.folders.subtree.length || !apiAvailable,
+    isLocal: () => query.resultBackend === "local",
     wait: (signal, delay, local) => waitForSearchRecovery(signal, delay, local),
   }, query, page, signal, anchorId, demanded);
+}
+
+/** @param {VoiceOfMLSearchViewProjection} query */
+function preferredPositionBackend(query) {
+  return query.useLocalMode || !apiAvailable ? "local" : "api";
+}
+
+/** @param {VoiceOfMLSearchViewProjection} query @param {AbortSignal} signal @param {string} anchorId @param {SearchResultBackend} [backend] */
+async function lookupPositionPage(query, signal, anchorId, backend) {
+  const selected = backend ?? preferredPositionBackend(query);
+  try {
+    const data = await fetchPositionPageWithRecovery({...query, resultBackend: selected}, 1, signal, anchorId);
+    return {data, backend: selected};
+  } catch (error) {
+    // Only an unpinned lookup may fall back. Once any page is accepted,
+    // retries and sparse window requests must use that backend.
+    if (backend || selected !== "local" || signal.aborted || /** @type {Error} */ (error).name === "AbortError"
+        || !apiAvailable || !navigator.onLine) throw error;
+    const data = await fetchPositionPageWithRecovery({...query, resultBackend: "api"}, 1, signal, anchorId);
+    return {data, backend: /** @type {const} */ ("api")};
+  }
 }
 
 function resumeResultRecovery() {
   if (document.hidden || readerHost.overlay) return;
   if (positionRestore?.failed && isRecoverableSearchError(positionRestore.error)) {
-    if (navigator.onLine || JSON.parse(positionRestore.key).useLocalMode) tryRestoreSearchPosition(positionRestore.key);
+    const backend = positionRestore.backend ?? preferredPositionBackend(JSON.parse(positionRestore.key));
+    if (navigator.onLine || backend === "local") tryRestoreSearchPosition(positionRestore.key);
     return;
   }
-  if (!resultWindow || resultWindow.invalid || (!navigator.onLine && !resultWindow.query.useLocalMode)) return;
+  if (!resultWindow || resultWindow.invalid || (!navigator.onLine && resultWindow.query.resultBackend !== "local")) return;
   const start = Math.floor(findVirtualIndex(getResultScrollTop()) / STATE.pageSize);
   const end = Math.floor(findVirtualIndex(getResultScrollTop() + DOM.resultsContainer.clientHeight) / STATE.pageSize) + 2;
   for (const [page, error] of resultWindow.failures) {
@@ -2301,23 +2326,23 @@ function createResultWindowPlaceholder(index) {
 async function fetchPositionPage(query, page, signal, anchorId) {
   const mixed = query.folders.self.length || query.folders.subtree.length;
   const params = { q: query.query, repos: query.mode === "repo" ? [query.repo] : query.repos,
-    extensions: query.extensions, folders: query.plainFolders, folderMatchMode: mixed ? "mixed" : "prefix",
+    extensions: query.extensions,
+    folders: mixed ? mergeFolderFilters(query.folders.self, query.folders.subtree) : query.plainFolders,
+    folderMatchMode: mixed ? "mixed" : "prefix",
     folderSelfs: query.folders.self, folderSubtrees: query.folders.subtree,
     minSize: query.minSize, maxSize: query.maxSize, sort: query.sort,
     searchFolders: query.searchFolders, exact: query.exact, page, pageSize: query.pageSize,
     ...(anchorId === undefined ? {} : { anchorId }) };
-  if (query.resultBackend === "local" || (!query.resultBackend && (query.useLocalMode || mixed || !apiAvailable))) {
+  if (query.resultBackend === "local") {
     const ok = STATE.dataLoaded || await ensureLocalDataLoaded(false, true);
     if (signal.aborted) throw new DOMException("Cancelled", "AbortError");
     if (!ok) throw new Error("LOCAL_UNAVAILABLE");
     return doSearchLocal({...params, signal});
   }
-  const body = { q: params.q, repos: params.repos, extensions: params.extensions,
-    folders: params.folders, min_size: params.minSize, max_size: params.maxSize,
-    sort: params.sort, search_folders: params.searchFolders, exact: params.exact,
-    page, page_size: params.pageSize,
-    ...(anchorId === undefined ? {} : { anchor_id: anchorId }) };
-  const url = query.mode === "repo" ? API_BASE + "/api/search/" + encodeURIComponent(query.repo.split("/").pop() || "") : API_BASE + "/api/search";
+  if (query.resultBackend !== "api") throw new Error("SEARCH_BACKEND_MISSING");
+  const repo = query.mode === "repo" ? query.repo.split("/").pop() : null;
+  const body = buildSearchApiBody(params, query.mode === "repo");
+  const url = API_BASE + "/api/search" + (repo ? "/" + encodeURIComponent(repo) : "");
   try {
     const data = await fetchSearchPage(url + "|" + stableSearchStringify(body), url, body, signal, WORKER_REQUEST_TIMEOUT);
     noteApiSuccess();
@@ -2448,7 +2473,7 @@ function restoreSearchViewSnapshot(key, restoreScroll = true, preserveRestore = 
   const snapshot = resultSnapshots.snapshots.get(key);
   if (snapshot?.window?.invalid) {
     resultSnapshots.remove(key);
-    return restoreScroll && tryRestoreSearchPosition(key);
+    return restoreScroll && tryRestoreSearchPosition(key, {backend: snapshot.resultBackend});
   }
   if (!snapshot || snapshot.version !== SEARCH_VIEW_SNAPSHOT_VERSION || snapshot.loadedPage < 1) return restoreScroll && tryRestoreSearchPosition(key);
   searchIntentId++;
@@ -2515,13 +2540,7 @@ function setCachedSearchResponse(key, data, defer = false, acquiredAt = Date.now
 
 /** @param {number} page */
 function buildCurrentSearchBody(page) {
-  return buildSearchApiBody({
-    q: STATE.query, page: page || STATE.page || 1, pageSize: STATE.pageSize,
-    repos: STATE.mode === "global" ? STATE.filterRepos : null,
-    extensions: STATE.filterExtensions, folders: STATE.filterFolders,
-    minSize: STATE.filterMinSize, maxSize: STATE.filterMaxSize,
-    sort: STATE.sort, searchFolders: STATE.searchFolders, exact: STATE.exact,
-  });
+  return buildSearchApiBody(buildLocalSearchParams(page || STATE.page || 1));
 }
 
 /** @param {number} page */
@@ -2533,16 +2552,20 @@ function getSearchApiBase() {
   return STATE.repoFull ? API_BASE + "/api/search/" + STATE.repo : API_BASE + "/api/search";
 }
 
-// Ordinary API requests use the existing prefix-folder contract. Mixed folder
-// selection remains on the Worker path, with its separate camelCase protocol.
-/** @param {PagesSearchParams} params */
-function buildSearchApiBody(params) {
+/** @param {PagesSearchParams} params @param {boolean} [repoScoped] */
+function buildSearchApiBody(params, repoScoped = !!STATE.repoFull) {
   /** @type {VoiceOfMLSearchRequestBody} */
   const body = { page: params.page || 1, page_size: params.pageSize || STATE.pageSize };
   if (params.q) body.q = params.q;
-  if (!STATE.repoFull && params.repos?.length) body.repos = params.repos;
+  if (!repoScoped && params.repos?.length) body.repos = params.repos;
   if (params.extensions?.length) body.extensions = params.extensions;
   if (params.folders?.length) body.folders = params.folders;
+  if (params.folderMatchMode === "mixed") {
+    body.folder_match_mode = "mixed";
+    body.folder_selfs = params.folderSelfs;
+    body.folder_subtrees = params.folderSubtrees;
+  }
+  if (params.anchorId !== undefined) body.anchor_id = params.anchorId;
   if (params.minSize !== null) body.min_size = params.minSize;
   if (params.maxSize !== null) body.max_size = params.maxSize;
   body.sort = normalizeSearchSort(params.sort);
@@ -2927,23 +2950,14 @@ function clearResultsSkeleton() {
 
 /** @param {number} page @returns {PagesSearchParams} */
 function buildLocalSearchParams(page) {
-  /** @type {string[]} */
-  var activeFolderFilters = [];
-  var folderMatchMode = null;
-  if (STATE.filterFolderSelfs.length > 0 || STATE.filterFolderSubtrees.length > 0) {
-    activeFolderFilters = STATE.filterFolderSelfs.concat(
-      STATE.filterFolderSubtrees.filter(function(path) {
-        return STATE.filterFolderSelfs.indexOf(path) < 0;
-      })
-    );
-    folderMatchMode = "mixed";
-  }
+  const mixed = STATE.filterFolderSelfs.length || STATE.filterFolderSubtrees.length;
+  const activeFolderFilters = mixed ? mergeFolderFilters(STATE.filterFolderSelfs, STATE.filterFolderSubtrees) : STATE.filterFolders;
   return {
     q: STATE.query,
     repos: STATE.mode === "repo" ? [STATE.repoFull] : (STATE.filterRepos.length > 0 ? STATE.filterRepos : null),
     extensions: STATE.filterExtensions.length > 0 ? STATE.filterExtensions : null,
     folders: activeFolderFilters.length > 0 ? activeFolderFilters : null,
-    folderMatchMode: folderMatchMode,
+    folderMatchMode: mixed ? "mixed" : null,
     folderSelfs: STATE.filterFolderSelfs,
     folderSubtrees: STATE.filterFolderSubtrees,
     minSize: STATE.filterMinSize,
@@ -2969,8 +2983,8 @@ function ownsDisplayedSearchResults() {
     displayedSearchView?.key === getSearchViewKey() && displayedSearchView.results === STATE.results;
 }
 
-/** @param {boolean} [append] @param {boolean} [fromStart] @param {boolean} [restorePosition] */
-function doSearch(append, fromStart = false, restorePosition = false) {
+/** @param {boolean} [append] @param {boolean} [fromStart] @param {boolean} [restorePosition] @param {boolean} [allowFallback] */
+function doSearch(append, fromStart = false, restorePosition = false, allowFallback = true) {
   if (append && STATE._loadedPage && !ownsDisplayedSearchResults()) return;
   if (append && resultWindow) { loadResultWindowPage(STATE._loadedPage + 1); return; }
   const recoveringFirstPage = !!append && !STATE._loadedPage;
@@ -3017,7 +3031,7 @@ function doSearch(append, fromStart = false, restorePosition = false) {
       clearResultsSkeleton();
     }
   }
-  getSearchExecution().execute(params, append, id, intent);
+  getSearchExecution().execute(params, append, id, intent, allowFallback);
 }
 
 // Only execution fields and bounded effects cross this boundary. The host
@@ -3051,7 +3065,8 @@ function getSearchExecution() {
     loadLocal: () => ensureLocalDataLoaded(false, true),
     searchLocal: params => doSearchLocal(params),
     searchAPI: (params, append, requestId) => doSearchAPI(params, append, requestId),
-    retry: append => doSearch(append), applyPage: (data, append) => applySearchPage(data, append),
+    retry: (append, allowFallback) => doSearch(append, false, false, allowFallback),
+    applyPage: (data, append) => applySearchPage(data, append),
     clearUnavailableResults: () => clearUnavailableSearchResults(),
     renderUnavailable: waiting => renderSearchBackendUnavailable(waiting),
     renderPage: append => renderSearchPage(append), visualLoading: value => setSearchVisualLoading(value),

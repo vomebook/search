@@ -38,9 +38,11 @@ function fixture() {
   });
   installClassicSearchModules(process.cwd(), c);
   c.validatePositionWindowPage = (...args) => c.VoiceOfMLSearchWindowPage.validate(...args);
+  c.apiAvailable = true;
+  c.navigator = {onLine: true};
   vm.runInContext(source.match(/^const positionRestoration = VoiceOfMLPositionRestoration.create\(\{[^]*?^\}\);/m)[0], c);
-  for (const name of ['tryRestoreSearchPosition', 'cancelPositionRestore'])
-    vm.runInContext(source.match(new RegExp('^function ' + name + '\\([^]*?^}', 'm'))[0], c);
+  for (const name of ['tryRestoreSearchPosition', 'cancelPositionRestore', 'preferredPositionBackend', 'lookupPositionPage'])
+    vm.runInContext(source.match(new RegExp('^(?:async )?function ' + name + '\\([^]*?^}', 'm'))[0], c);
   const make = (previous, saved = position) => c.VoiceOfMLPositionRestoration.createTask({key, position: saved, previous});
   const run = (task, viewport = null) => {c.positionRestore = task; return vm.runInContext('positionRestoration', c).run(task, viewport);};
   return {c, calls, events, timers, make, run};
@@ -54,9 +56,11 @@ test('restoration retries retain lookup and partial-neighbor buffer identity wit
   assert.equal(first.page, 1); assert.equal(first.results.length, 0);
   const retry = f.make(first);
   assert.equal(retry.ready, first.ready); assert.equal(retry.lookup, first.lookup);
+  assert.equal(retry.backend, 'api');
+  f.c.apiAvailable = false;
   f.calls.length = 0; f.c.fetchPositionPageWithRecovery = original;
   await f.run(retry);
-  assert.deepEqual(f.calls.map(call => call.number), [3]);
+  assert.deepEqual(f.calls.map(call => [call.query.resultBackend, call.number]), [['api', 3]]);
   assert.equal(f.c.snapshot.scroll.index, 4); assert.equal(f.c.snapshot.scroll.offset, 7);
   assert.equal(f.events.filter(event => event === 'restore').length, 1);
   assert.equal(f.events.includes('apply'), false); assert.equal(f.c.positionRestore, null);
@@ -96,11 +100,12 @@ test('preview waits for drag release, accepts only matching cached pages and app
   const f = fixture(), task = f.make();
   f.c.STATE.results[4] = {id: 'r4'}; f.c.VSCROLL.isDraggingThumb = true;
   f.c.captureReaderReturnScroll = () => ({index: 4, offset: 19});
-  task.cachedPages = new Map([[5, page(5)], [6, page(6, 'old')]]);
+  task.cachedPages = new Map([[3, page(3)], [5, {...page(5), resultBackend: 'api'}],
+    [6, {...page(6, 'old'), resultBackend: 'api'}], [7, {...page(7), resultBackend: 'local'}]]);
   const running = f.run(task, {}); await flush();
   assert.equal(f.timers.length, 1); assert.equal(f.c.snapshot, undefined);
   f.c.VSCROLL.isDraggingThumb = false; f.timers.shift()(); await running;
-  assert.equal(task.ready.has(5), true); assert.equal(task.ready.has(6), false);
+  assert.equal(task.ready.has(5), true); assert.equal(task.ready.has(6), false); assert.equal(task.ready.has(7), false);
   assert.equal(f.c.snapshot.scroll.offset, 19); assert.equal(f.c.snapshot.results[8].id, 'r8');
   assert.equal(f.events.filter(event => event === 'apply').length, 1);
   assert.equal(f.events.includes('restore'), false); assert.equal(f.events.includes('put'), false);
@@ -153,15 +158,44 @@ test('active-search abort reentry exits before restoration cancellation', () => 
   assert.equal(f.c.positionEntryId, 0); assert.equal(active.controller.signal.aborted, false);
 });
 
-test('site-specific backend pin and completion reset remain unchanged', async () => {
-  const f = fixture(); const pages = source.includes('backend: options.backend');
-  const task = f.c.VoiceOfMLPositionRestoration.createTask({key, position, backend: 'local'});
+test('API recovery after a Worker lookup cannot change its neighbor or snapshot backend', async () => {
+  const f = fixture(), original = f.c.fetchPositionPageWithRecovery;
+  f.c.apiAvailable = false;
+  f.c.fetchPositionPageWithRecovery = async (...args) => {
+    const data = await original(...args);
+    if (args[3]) f.c.apiAvailable = true;
+    return data;
+  };
+  const task = f.make();
   await f.run(task);
-  assert.equal(f.calls[0].query.resultBackend, pages ? 'local' : undefined);
-  assert.equal(Object.hasOwn(f.c.snapshot, 'resultBackend'), pages);
-  assert.equal(f.c.snapshot.resultBackend, pages ? 'local' : undefined);
-  assert.equal(f.events.includes('reset-controls'), !pages);
-  const previous = f.c.VoiceOfMLPositionRestoration.createTask({key, position, backend: 'api'});
-  const retry = f.c.VoiceOfMLPositionRestoration.createTask({key, position, previous});
-  assert.equal(retry.backend, pages ? 'api' : undefined);
+  assert.deepEqual(f.calls.map(call => [call.number, call.query.resultBackend]), [[1, 'local'], [2, 'local'], [3, 'local'], [4, 'local']]);
+  assert.equal(task.backend, 'local');
+  assert.equal(f.c.snapshot.resultBackend, 'local');
+});
+
+test('only an unpinned Worker lookup can fall back to API, and neighbors retain that API backend', async () => {
+  for (const scenario of ['fallback', 'pinned', 'aborted']) {
+    const f = fixture(), original = f.c.fetchPositionPageWithRecovery;
+    f.c.apiAvailable = false;
+    f.c.fetchPositionPageWithRecovery = async (...args) => {
+      if (args[0].resultBackend === 'local') {
+        f.calls.push({query: args[0], number: args[1]});
+        f.c.apiAvailable = true;
+        if (scenario === 'aborted') f.c.positionRestore.controller.abort();
+        throw new Error('WORKER_UNAVAILABLE');
+      }
+      return original(...args);
+    };
+    const task = f.c.VoiceOfMLPositionRestoration.createTask({key, position, backend: scenario === 'pinned' ? 'local' : undefined});
+    await f.run(task);
+    const calls = f.calls.map(call => [call.number, call.query.resultBackend]);
+    if (scenario === 'fallback') {
+      assert.deepEqual(calls, [[1, 'local'], [1, 'api'], [2, 'api'], [3, 'api'], [4, 'api']]);
+      assert.equal(f.c.snapshot.resultBackend, 'api');
+    } else {
+      assert.deepEqual(calls, [[1, 'local']]);
+      assert.equal(f.c.snapshot, undefined);
+      assert.equal(task.failed, scenario === 'pinned' ? true : undefined);
+    }
+  }
 });

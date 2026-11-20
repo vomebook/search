@@ -313,6 +313,63 @@ class ApiIntegrationTest(unittest.TestCase):
         self.page.wait_for_function("STATE._loadedPage === 2 && !STATE.isLoading")
         self.assertEqual(self.page.evaluate("STATE.results.map(r => r.File)"), [f"API-{i}" for i in range(200)])
 
+    def test_online_mixed_folder_filters_keep_scope_in_prefetch_append_and_restore(self):
+        self.page.add_init_script(r'''(() => {
+          window.Worker = undefined;
+          const native = window.fetch;
+          window.mixedCalls = [];
+          const candidates = ['', 'Only', 'Only/child', 'Tree', 'Tree/child', 'Tree-other', 'Other'];
+          window.fetch = (url, options) => {
+            const body = JSON.parse(options?.body || '{}');
+            if (!String(url).includes('/api/search') || body.q !== 'mixed-test') return native(url, options);
+            mixedCalls.push({url:String(url),body});
+            const all = candidates.filter(path => body.folder_match_mode === 'mixed' &&
+              (body.folder_selfs.includes(path) || body.folder_subtrees.some(folder => path === folder || path.startsWith(folder+'/'))))
+              .flatMap(path => Array.from({length:51}, (_,i) => ({Repo:'VoiceOfML/VOMEBOOK',Folder:path ? path.split('/') : [],
+                File:'mixed-test-'+i,Extension:'txt',Size:5})));
+            const anchor_index = body.anchor_id === undefined ? undefined : all.findIndex(row => getResultStableId(row) === body.anchor_id);
+            return Promise.resolve(new Response(JSON.stringify({page:body.page,page_size:body.page_size,
+              generation:'mixed-fixture',total:all.length,anchor_index,
+              results:all.slice((body.page-1)*body.page_size,body.page*body.page_size)})));
+          };
+        })()''')
+        selection = 'q=mixed-test&folder_self=&folder_self=Only&folder_subtree=Tree&ext=txt&min_size=1&max_size=10&sort=name&search_folders=false'
+        # Start in local mode. No Worker is available, so the complete first page must fall back to API.
+        self.load('#/VOMEBOOK?' + selection)
+        self.page.wait_for_function("STATE._resultBackend === 'api' && !STATE.isLoading && mixedCalls.some(({body}) => body.page === 2)")
+        self.assertEqual(self.page.evaluate('STATE.total'), 204)
+        self.assertFalse(self.page.evaluate('STATE.useLocalMode'))
+        self.assertIn('local=0', self.page.evaluate('location.hash'))
+        self.page.evaluate('''() => {
+          cancelSearchPrefetch(); STATE._pageCache={}; searchResponseStore.cache.clear();
+          if (STATE._loadedPage === 1) { STATE.page=2; doSearch(true); }
+        }''')
+        self.page.wait_for_function('STATE._loadedPage >= 2 && !STATE.isLoading')
+        self.page.evaluate('''() => {
+          const key = getSearchViewKey();
+          const position = {version:1,key,index:150,offset:0,anchorId:getResultStableId(STATE.results[150]),
+            loadedPage:2,savedAt:Date.now()};
+          tryRestoreSearchPosition(key,{position,viewport:null});
+        }''')
+        self.page.wait_for_function("!positionRestore && resultWindow?.query.resultBackend === 'api'")
+        self.assertEqual(self.page.evaluate('STATE._resultBackend'), 'api')
+        self.assertEqual(self.page.evaluate('STATE.total'), 204)
+        calls = self.page.evaluate('mixedCalls')
+        self.assertTrue(any('anchor_id' in call['body'] for call in calls))
+        self.assertTrue(any(call['body']['page'] > 1 for call in calls))
+        for call in calls:
+            self.assertTrue(call['url'].endswith('/api/search/VOMEBOOK'))
+            body = call['body']
+            self.assertEqual(body['folder_match_mode'], 'mixed')
+            self.assertEqual(body['folder_selfs'], ['', 'Only'])
+            self.assertEqual(body['folder_subtrees'], ['Tree'])
+            self.assertEqual(body['folders'], ['', 'Only', 'Tree'])
+            self.assertEqual(body['extensions'], ['txt'])
+            self.assertEqual((body['min_size'], body['max_size']), (1, 10))
+            self.assertEqual(body['sort'], 'name')
+            self.assertFalse(body['search_folders'])
+            self.assertTrue(body['exact'])
+
     def test_stalled_page_two_prefetch_does_not_block_local_corpus_loading(self):
         self.page.add_init_script(
             """(() => {

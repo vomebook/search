@@ -13,6 +13,8 @@ export function createReaderSearchController({
   };
   /** @type {{generation: number, mode: string | null} | null} */
   let initialSearch = null;
+  /** @type {number | null} */
+  let resultNavigation = null;
   /** @type {ReturnType<typeof setTimeout> | 0} */
   let inputTimer = 0;
   let disposed = false, confirmedNoText = false;
@@ -158,10 +160,15 @@ export function createReaderSearchController({
     updateSearch({ query, results: [], index: -1 });
     render();
   }
-  function cancelPending() {
+  function supersedeSearchNavigation(hasQuery = false) {
+    // Blank input must leave restoration and other navigation alone, but may
+    // still cancel an unfinished jump to a result that is being cleared.
+    if (hasQuery || (resultNavigation !== null && navigation.current(resultNavigation))) navigation.begin();
+  }
+  function cancelPending(hasQuery = false) {
     clearInputTimer();
     nextGeneration();
-    navigation.begin();
+    supersedeSearchNavigation(hasQuery);
     backend.chapterClient()?.cancel();
     backend.pdfClient()?.cancel();
     resetResults();
@@ -196,7 +203,7 @@ export function createReaderSearchController({
     const query = input.value.trim();
     const generation = nextGeneration();
     backend.pdfClient()?.cancel();
-    navigation.begin();
+    supersedeSearchNavigation(!!query);
     backend.clearMarks();
     resetResults(query);
     retry.hidden = true;
@@ -287,6 +294,7 @@ export function createReaderSearchController({
     const panelSerial = panel.serial();
     const searchGeneration = runtime.currentGeneration("search");
     const generation = navigation.begin();
+    resultNavigation = generation;
     const ownsResult = () => current(searchGeneration) && search.results[index] === result;
     updateSearch({ index });
     updateNavigation();
@@ -312,6 +320,8 @@ export function createReaderSearchController({
           ? failure?.message || "搜索结果定位失败，请重试" : "搜索结果定位失败，请重试";
       }
       navigation.reportError(error, generation);
+    } finally {
+      if (resultNavigation === generation) resultNavigation = null;
     }
   }
   /** @param {number} step */
@@ -341,9 +351,10 @@ export function createReaderSearchController({
   }
   function queue() {
     if (!active()) return;
-    cancelPending();
+    const hasQuery = !!input.value.trim();
+    cancelPending(hasQuery);
     cancel.hidden = retry.hidden = true;
-    status.textContent = input.value.trim() ? "正在搜索正文…" : "输入关键词搜索正文";
+    status.textContent = hasQuery ? "正在搜索正文…" : "输入关键词搜索正文";
     inputTimer = setTimeout(run, 180);
   }
 

@@ -111,9 +111,14 @@ test('parked reuse keeps the new navigation identity through replacement and rec
   const {nav, context, input, shell} = shellFixture();
   const first = new URL(origin + readerPath + '?id=book&nav=old&return=%2Fold');
   const parked = parkSpeakingReader(nav, first);
+  const resumes = [];
+  parked.frame.contentWindow.addEventListener('voice-reader-overlay-resume', () => {
+    resumes.push({url: nav.readerUrl, inert: parked.frame.hasAttribute('inert')});
+  });
   input.focus();
   const fresh = new URL(origin + readerPath + '?id=book&nav=new&return=%2Fsearch%2F%3Fq%3Dlatest');
   assert.equal(nav.mount(fresh, true), parked.frame);
+  assert.deepEqual(resumes, [{url: fresh.href, inert: false}]);
   assert.equal(nav.readerUrl, fresh.href);
   assert.equal(nav.reusedMount, true);
   assert.equal(nav.returnFocus, input);

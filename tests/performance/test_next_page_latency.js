@@ -206,7 +206,7 @@ for (const {name:project,root} of searchTestProjects()) {
   test(project + " memory-cached pages avoid transport",async()=>{
     const f=fixture(source);
     for (let page=2;page<=4;page++) f.context.recentSearchPages.set(JSON.stringify(["query",page]),{
-      ...f.data(page),key:"query",savedAt:Date.now()});
+      ...f.data(page),key:"query",...(project === "github-Search" ? {resultBackend:"api"} : {}),savedAt:Date.now()});
     f.start(); await f.flush(); assert.strictEqual(f.calls.length,0);
     assert.deepStrictEqual(Object.keys(f.context.STATE._pageCache),["2","3","4"]);
   });

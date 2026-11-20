@@ -23,16 +23,16 @@ interface SearchExecutionDependencies {
   pendingLocal(page: number, append: boolean | undefined): Promise<VoiceOfMLSearchWindowPageData> | false | undefined;
   loadLocal(): Promise<boolean>; searchLocal(params: SearchExecutionParams): Promise<VoiceOfMLSearchWindowPageData>;
   searchAPI(params: SearchExecutionParams, append: boolean | undefined, requestId: number): Promise<boolean>;
-  retry(append?: boolean): void; applyPage(data: VoiceOfMLSearchWindowPageData, append: boolean | undefined): boolean;
+  retry(append?: boolean, allowFallback?: boolean): void; applyPage(data: VoiceOfMLSearchWindowPageData, append: boolean | undefined): boolean;
   clearUnavailableResults(): void; renderUnavailable(waiting: boolean): void;
   renderPage(append: boolean | undefined): void; visualLoading(value: boolean): void;
   prefetch(): void; warmConnection(): void; syncURL(): void; notify(message: string): void;
   updateStatus(): void; finishPaging(ok: boolean, error: unknown): void; updatePaging(): void;
 }
 declare var VoiceOfMLSearchExecutionPolicy: {
-  backend(view: SearchExecutionView, append: boolean | undefined, folderMatchMode: string | null | undefined): "api" | "local" | "unavailable" | "local-fallback";
+  backend(view: SearchExecutionView, append: boolean | undefined): "api" | "local" | "unavailable" | "local-fallback";
 };
 declare var VoiceOfMLSearchExecution: { create(deps: SearchExecutionDependencies): {
-  execute(params: SearchExecutionParams, append: boolean | undefined, id: number, intent: number): void;
-  local(params: SearchExecutionParams, append: boolean | undefined, id: number): Promise<void>;
+  execute(params: SearchExecutionParams, append: boolean | undefined, id: number, intent: number, allowFallback?: boolean): void;
+  local(params: SearchExecutionParams, append: boolean | undefined, id: number, allowFallback?: boolean): Promise<void>;
 }};

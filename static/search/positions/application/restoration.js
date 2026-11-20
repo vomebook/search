@@ -3,9 +3,11 @@
 (function () {
   /** @param {SearchPositionRestoreInput} input */
   function createTask({ key, position, previous, backend }) {
+    const pinned = backend ?? previous?.backend;
+    const reusable = previous?.backend === pinned ? previous : null;
     return /** @type {SearchPositionRestoreTask} */ ({ key, controller: new AbortController(),
-      position: { ...position }, backend: backend || previous?.backend,
-      lookup: previous?.lookup, ready: previous?.ready || new Map(), page: 0, results: [] });
+      position: { ...position }, backend: pinned,
+      lookup: reusable?.lookup, ready: reusable?.ready || new Map(), page: 0, results: [] });
   }
 
   /** @param {SearchPositionRestorationHost} host */
@@ -17,15 +19,20 @@
       const current = () => host.isCurrent(task) && !controller.signal.aborted;
       try {
         const query = JSON.parse(key);
-        if (task.backend) query.resultBackend = task.backend;
         if (viewport === undefined) viewport = await host.readViewport(key);
         if (!current()) return;
         host.showPreview(viewport, position, task);
         while (current()) {
-          const lookup = task.lookup || await host.fetchPage(query, 1, controller.signal, position.anchorId);
-          if (!current()) return;
-          host.validatePage(lookup, 1, query.pageSize);
-          task.lookup = lookup; task.ready.set(1, lookup); task.page = 1;
+          if (!task.lookup) {
+            const {data, backend} = await host.lookupPage(query, controller.signal, position.anchorId, task.backend);
+            if (!current()) return;
+            host.validatePage(data, 1, query.pageSize);
+            task.backend = backend;
+            task.lookup = data;
+          }
+          const lookup = task.lookup;
+          const pinnedQuery = {...query, resultBackend: task.backend};
+          task.ready.set(1, lookup); task.page = 1;
           const total = lookup.total;
           const index = typeof lookup.anchor_index === "number" && Number.isInteger(lookup.anchor_index) && lookup.anchor_index >= 0 && lookup.anchor_index < total
             ? lookup.anchor_index : Math.min(position.index, Math.max(0, total - 1));
@@ -33,7 +40,7 @@
           const lastPage = Math.max(1, Math.ceil(total / query.pageSize));
           const pages = Array.from({length: Math.min(lastPage, targetPage + 1) - Math.max(1, targetPage - 1) + 1}, (_, i) => Math.max(1, targetPage - 1) + i);
           const responses = await Promise.all(pages.map(async page => {
-            try { return {page, data: task.ready.get(page) || await host.fetchPage(query, page, controller.signal)}; }
+            try { return {page, data: task.ready.get(page) || await host.fetchPage(pinnedQuery, page, controller.signal)}; }
             catch (error) { return {page, error}; }
           }));
           if (!current()) return;
@@ -45,9 +52,9 @@
           if (failure) throw failure.error;
           while (task.preview && host.isDragging() && current()) await new Promise(resolve => setTimeout(resolve, 30));
           if (!current()) return;
-          // A cached page is authoritative only after the current generation agrees.
+          // Preview pages are authoritative only on the same backend and generation.
           for (const [page, data] of task.cachedPages || []) {
-            if (!task.ready.has(page) && data.generation === lookup.generation && data.total === total) task.ready.set(page, data);
+            if (!task.ready.has(page) && data.resultBackend === task.backend && data.generation === lookup.generation && data.total === total) task.ready.set(page, data);
           }
           const latest = task.preview ? host.capturePreviewAnchor() : null;
           if (latest) {

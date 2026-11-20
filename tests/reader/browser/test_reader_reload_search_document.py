@@ -260,6 +260,53 @@ class ReaderReloadSearchDocumentCases:
         self.assertIsNone(self.page.evaluate('window.__arrivalHandoff'))
         self.assertEqual(self.page.evaluate('history.length'), length)
 
+    def test_early_overlay_back_replays_once_when_module_load_fails(self):
+        held = []
+        self.page.route('**/static/reader.js*', lambda route: held.append(route))
+        before = self.page.url
+        self.page.locator('#search-input').focus()
+        target = PREFIX + '/static/reader.html?' + urlencode({'ext': 'txt', 'url': SOURCE})
+        self.assertTrue(self.page.evaluate('target => navigateToReader(target)', target))
+        back = self.page.frame_locator('iframe.reader-overlay').locator('#back')
+        back.wait_for(state='visible')
+        self.page.wait_for_function('readerHost.overlay.contentDocument.readyState === "interactive"')
+        self.assertTrue(held, 'reader entry request was not intercepted')
+        reader_url = self.page.url
+        self.page.evaluate('''() => {
+          window.__backCalls = 0;
+          const back = history.back.bind(history);
+          history.back = () => { __backCalls++; back(); };
+        }''')
+        back.click()
+        back.click()
+        self.assertEqual(self.page.url, reader_url)
+        self.assertEqual(self.page.evaluate('__backCalls'), 0)
+        # Reject the module itself, not the book request. Forward must still
+        # restore the original Reader entry after the one requested Back.
+        for route in held:
+            route.abort()
+        self.wait_search('paging')
+        self.assertEqual(self.page.url, before)
+        self.assertEqual(self.page.evaluate('__backCalls'), 1)
+        self.assertEqual(self.page.evaluate('document.activeElement.id'), 'search-input')
+        self.page.unroute('**/static/reader.js*')
+        self.page.go_forward(wait_until='commit')
+        self.assertEqual(self.page.url, reader_url)
+        expect(self.page.frame_locator('iframe.reader-overlay').locator('.reader-text')).to_contain_text(TEXT.strip().splitlines()[0])
+
+    def test_toolbar_back_after_module_failure_on_reload_uses_saved_search_url(self):
+        search_url = self.page.url
+        self.open_and_reload()
+        self.page.route('**/static/reader/core/reader-bindings.mjs*', lambda route: route.abort())
+        self.page.reload(wait_until='load')
+        self.assertEqual(self.page.locator('.reader-text').count(), 0)
+        self.assertTrue(self.page.evaluate('history.state.voiceReaderOverlay && !new URL(location.href).searchParams.has("return")'))
+        length = self.page.evaluate('history.length')
+        self.page.locator('#back').click()
+        self.wait_search('paging')
+        self.assertEqual(self.page.url, search_url)
+        self.assertEqual(self.page.evaluate('history.length'), length, 'toolbar return replaces the reloaded Reader entry')
+
     def test_failed_reader_reload_back_restores_search_document(self):
         search_url = self.page.url
         cdp = self.context.new_cdp_session(self.page) if self.engine == 'chromium' else None

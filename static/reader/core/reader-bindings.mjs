@@ -360,6 +360,8 @@ export function createReaderBindings(readerContext) {
     document.querySelector("#reader-panel-path")?.addEventListener("click", readerContext.navigateReaderFolder);
     let closing = false;
     window.addEventListener("pageshow", event => { if (event.persisted) closing = false; });
+    // A parked speech iframe is shown again without a document navigation.
+    window.addEventListener("voice-reader-overlay-resume", () => { closing = false; });
     /** @type {Element} */ (document.querySelector("#back")).addEventListener("click", async () => {
       if (closing) return;
       closing = true;

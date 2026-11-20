@@ -1,18 +1,22 @@
+type SearchResultBackend = "api" | "local";
 interface SearchPosition {
   version: number; key: string; index: number; offset: number; anchorId: string; loadedPage: number; savedAt: number;
 }
 interface SearchPositionViewport {
   key: string; savedAt: number; anchorId: string; index: number; total: number;
-  generation: string | undefined; estimatedHeight: number; measurementKey: string;
+  generation: string | undefined; resultBackend?: SearchResultBackend | null | undefined;
+  estimatedHeight: number; measurementKey: string;
   records: [number, unknown, number][];
 }
 interface SearchRecentPage extends VoiceOfMLSearchWindowPageData {
   id: [string, number]; key: string; savedAt: number;
+  resultBackend?: SearchResultBackend | null | undefined;
 }
 interface SearchPositionView {
-  key: string; total: number; results: unknown[];
+  key: string; total: number; results: unknown[]; resultBackend?: SearchResultBackend | null | undefined;
   window?: {generation?: string | undefined; total: number; pages: Set<number>} | null | undefined;
 }
+type SearchRecentPageExpected = VoiceOfMLSearchWindowExpected & {query: {pageSize: number; resultBackend?: SearchResultBackend | null | undefined}};
 interface SearchPositionGeometry {
   visibleEnd: number; pageSize: number; measurementKey: string; estimatedHeight: number;
   heightAt(index: number): number;
@@ -35,7 +39,7 @@ interface SearchPositionPersistence {
   saveViewport(position: SearchPosition, view: SearchPositionView, geometry: SearchPositionGeometry): void;
   saveRecentPages(position: SearchPosition, view: SearchPositionView, visibleEnd: number): void;
   readViewport(key: string): Promise<SearchPositionViewport | null>;
-  readRecentPage(key: string, page: number, expected: VoiceOfMLSearchWindowExpected & {query: {pageSize: number}}, timeout?: number, signal?: AbortSignal | null): Promise<SearchRecentPage | null>;
+  readRecentPage(key: string, page: number, expected: SearchRecentPageExpected, timeout?: number, signal?: AbortSignal | null): Promise<SearchRecentPage | null>;
   scheduleSave(save: () => void): void; cancelSave(): void;
 }
 declare var VoiceOfMLPositionPolicy: {
@@ -43,7 +47,7 @@ declare var VoiceOfMLPositionPolicy: {
   RECENT_PAGE_MAX: number; RECENT_PAGE_BYTES_MAX: number; RECENT_PAGE_TTL: number;
   validPosition(value: unknown): value is SearchPosition;
   validViewport(value: unknown, position: SearchPosition | null | undefined, stableId: (record: unknown) => string): value is SearchPositionViewport;
-  validRecentPage(value: unknown, key: string, page: number, expected: VoiceOfMLSearchWindowExpected & {query: {pageSize: number}}): value is SearchRecentPage;
+  validRecentPage(value: unknown, key: string, page: number, expected: SearchRecentPageExpected): value is SearchRecentPage;
 };
 declare var VoiceOfMLPositionStorage: {
   create(): SearchPositionStorage;

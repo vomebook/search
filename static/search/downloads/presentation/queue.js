@@ -38,7 +38,8 @@
     const blockedFiles = batch.blockedFailures.map(describe).join("、");
     const skippedFiles = batch.skippedUncertain.map(describe).join("、");
     const status = /** @type {HTMLElement} */ (panel.querySelector('[role="status"]'));
-    status.textContent = `${batch.cancelled ? "已取消待下载 · " : ""}已发起 ${batch.started}/${batch.items.length} · 失败 ${batch.failed.length} · 本次失败但此前状态不确定（不自动重试） ${batch.blockedFailures.length}${blockedFiles ? `：${blockedFiles}` : ""} · 因状态不确定跳过重试 ${batch.skippedUncertain.length}${skippedFiles ? `：${skippedFiles}` : ""} · 状态不确定 ${batch.uncertain.length}${uncertainFiles ? `：${uncertainFiles}` : ""}。请在浏览器下载列表查看文件进度，不确定项请检查后再手动重试。`;
+    const cancellation = !batch.cancelled ? "" : batch.done ? "已取消待下载 · " : "已取消待下载 · 正在确认共享下载结果 · ";
+    status.textContent = `${cancellation}已发起 ${batch.started}/${batch.items.length} · 失败 ${batch.failed.length} · 本次失败但此前状态不确定（不自动重试） ${batch.blockedFailures.length}${blockedFiles ? `：${blockedFiles}` : ""} · 因状态不确定跳过重试 ${batch.skippedUncertain.length}${skippedFiles ? `：${skippedFiles}` : ""} · 状态不确定 ${batch.uncertain.length}${uncertainFiles ? `：${uncertainFiles}` : ""}。请在浏览器下载列表查看文件进度，不确定项请检查后再手动重试。`;
     const uncertainList = /** @type {HTMLElement} */ (panel.querySelector('[data-uncertain-list]'));
     uncertainList.replaceChildren();
     for (const item of batch.uncertain) {

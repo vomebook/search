@@ -57,7 +57,7 @@ const makeButton = (label = "下载", busy = null) => {
   return {textContent: label, attrs, getAttribute(k) { return attrs.get(k) ?? null; },
     setAttribute(k, v) { attrs.set(k, v); }, removeAttribute(k) { attrs.delete(k); }};
 };
-// Minimal DOM/storage used by the three app batch contracts. Rows and buttons
+// Minimal DOM/storage used by the batch contracts. Rows and buttons
 // are separate nodes so rendering and acknowledgement assertions inspect the UI.
 function batchDomFixture() {
   const node = () => ({style: {}, dataset: {}, children: [], textContent: "",
@@ -948,6 +948,73 @@ test("cancelled batch retries only the retained subset, never started items", as
   await flush();
   assert.equal(batches.batch.started, 3);
 });
+
+for (const outcome of ["started", "failed", "uncertain"]) {
+  test(`cancelled batch reconciles a shared ${outcome} before retry`, async () => {
+    const dom = batchDomFixture();
+    const f = fixture({
+      triggerDownload(url) {
+        f.launches.push(url);
+        if (url === "shared|shared" && outcome === "uncertain") throw new Error("possible handoff");
+      },
+      onUncertain: (name, link) => batches.onUncertain(name, link),
+    });
+    const sandbox = {AbortController, document: dom.document, sessionStorage: dom.sessionStorage};
+    installBatchModules(sandbox);
+    const batches = sandbox.VoiceOfMLDownloadBatch.create({render: sandbox.VoiceOfMLDownloadQueue.render,
+      showToast() {}, downloadFileDetailed: f.controller.downloadFileDetailed});
+    const links = items => Array.from(items, item => item.link);
+    // Exercise both single-first and batch-first ownership of the pending entry.
+    let single = outcome === "failed" ? f.controller.downloadFile("shared", "shared") : null;
+    batches.start(["shared", "cancelled", "unclaimed"].map(link => ({filename: link, link})));
+    single ||= f.controller.downloadFile("shared", "shared");
+    await flush();
+    assert.deepEqual(f.requests.map(request => request.url), ["check:shared", "check:cancelled"]);
+    dom.click({target: {dataset: {queue: "cancel"}}});
+    await flush();
+    const cancelledBatch = batches.batch;
+    assert.equal(cancelledBatch.done, false);
+    assert.match(dom.status.textContent, /正在确认共享下载结果/);
+    assert.equal(dom.buttons.retry.hidden, true);
+    dom.click({target: {dataset: {queue: "retry"}}});
+    assert.equal(batches.batch, cancelledBatch);
+    assert.equal(f.requests[0].signal.aborted, false);
+    assert.equal(f.requests[1].signal.aborted, true);
+    f.requests[1].resolve(response({ok: true})); // An abandoned transport can complete late.
+    f.requests[0].resolve(outcome === "failed" ? response({ok: false}, false, 404) : response({ok: true}));
+    assert.equal(await settledWithin(single), outcome === "started");
+    await flush();
+    const expected = outcome === "failed" ? ["shared", "cancelled", "unclaimed"] : ["cancelled", "unclaimed"];
+    assert.equal(cancelledBatch.done, true);
+    assert.equal(cancelledBatch.started, Number(outcome === "started"));
+    assert.deepEqual(links(cancelledBatch.failed).sort(), expected.slice().sort());
+    assert.deepEqual(links(cancelledBatch.uncertain), outcome === "uncertain" ? ["shared"] : []);
+    assert.deepEqual(f.launches, outcome === "failed" ? [] : ["shared|shared"]);
+
+    assert.equal(dom.buttons.retry.hidden, false);
+    dom.click({target: {dataset: {queue: "retry"}}});
+    assert.deepEqual(links(batches.batch.items).sort(), expected.slice().sort());
+    // Let every retry succeed and check the actual browser handoff calls.
+    const expectedChecks = expected.map(link => `check:${link}`);
+    for (let index = 0; index < expected.length; index++) {
+      await flush();
+      const request = f.requests[index + 2];
+      assert.ok(request && expectedChecks.includes(request.url), `unexpected retry check: ${request?.url}`);
+      request.resolve(response({ok: true}));
+      await flush();
+      if ([...f.timers.values()].some(timer => timer.delay === 300)) {
+        f.advance(300);
+        f.fireDelay(300);
+      }
+    }
+    await flush();
+    assert.equal(batches.batch.done, true);
+    assert.equal(batches.batch.started, expected.length);
+    assert.equal(dom.buttons.retry.hidden, true);
+    assert.deepEqual(f.requests.slice(2).map(request => request.url).sort(), expectedChecks.sort());
+    assert.deepEqual(f.launches.sort(), ["shared|shared", "cancelled|cancelled", "unclaimed|unclaimed"].sort());
+  });
+}
 
 test("ledger restore filters records, tolerates storage failure and preserves acknowledgement order", () => {
   for (const saved of ["invalid json", "{}", '[null,{"filename":3,"link":"bad"},{"filename":"empty","link":""}]']) {

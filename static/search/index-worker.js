@@ -22,7 +22,7 @@ const MAX_CORPUS_COMPRESSED_BYTES = 32 * 1024 * 1024;
 const MAX_CORPUS_EXPANDED_BYTES = 256 * 1024 * 1024;
 const SORT_PRECOMPUTE_DELAY_MS = 1000;
 // Bump when matching, filtering, collation or public record semantics change.
-const SEARCH_SEMANTICS_VERSION = "worker-search-v7";
+const SEARCH_SEMANTICS_VERSION = "worker-search-v8";
 /** @type {string | null} */
 let snapshotGeneration = null;
 
@@ -191,51 +191,74 @@ function couldBeFuzzy(token, word, maxDist) {
   return true;
 }
 
+/** @param {string} literal */
+function escapeWildcardLiteral(literal) {
+  return literal.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/** @param {string} pattern @returns {{test(text: string): boolean}} */
+function compileFixedQuestionMatcher(pattern) {
+  const tokens = Array.from(pattern);
+  const fixed = new RegExp(tokens.map(char => char === "?" ? "." : escapeWildcardLiteral(char)).join(""), "i");
+  const required = tokens.length < 128 ? [] : Array.from(new Set(tokens.filter(char => char !== "?")))
+    .map(char => new RegExp(escapeWildcardLiteral(char), "i"));
+  const pair = /[\uD800-\uDBFF][\uDC00-\uDFFF]/;
+  /** @type {RegExp | undefined} */
+  let codepointFixed;
+  return {test(text) {
+    if (text.length > 4096) for (const literal of required) if (!literal.test(text)) return false;
+    if (!pair.test(text)) return fixed.test(text);
+    if (!codepointFixed) {
+      // Use legacy /i, but prohibit boundaries inside surrogate pairs. The
+      // guard makes the pair and dot alternatives mutually exclusive at each
+      // valid position, so there is no variable-width wildcard backtracking.
+      const boundary = String.raw`(?!(?<=[\uD800-\uDBFF])[\uDC00-\uDFFF])`;
+      const dot = `(?:${pair.source}|.)` + boundary;
+      const source = tokens.map(char => char === "?" ? dot : escapeWildcardLiteral(char)
+        + (/^[\uD800-\uDBFF]$/.test(char) ? boundary : "")).join("");
+      codepointFixed = new RegExp(boundary + source, "i");
+    }
+    return codepointFixed.test(text);
+  }};
+}
+
 /** @param {string} pattern @returns {{test(text: string): boolean}} */
 function compileWildcardMatcher(pattern) {
   const normalized = String(pattern || "");
   // Python's Unicode case-insensitive matcher equates Kelvin sign and long s
   // with ASCII k and s. JS non-unicode regex deliberately does not. Handle
-  // these one-literal edge patterns without changing UTF-16/dot semantics.
+  // these one-literal edge patterns without changing other /i rules.
   const special = normalized.replace(/^\*+|\*+$/g, "");
   if (normalized.includes("*") && /^[Kſ]$/.test(special)) {
     return new RegExp(special === "K" ? "[kK]" : "[sſ]", "i");
   }
-  if (normalized.includes("*") && normalized.includes("?") && /^[*?]+$/.test(normalized)) {
-    // Stars may match nothing; questions require adjacent regex-dot code units.
+  const questions = normalized.includes("?");
+  if (questions && /^[*?]+$/.test(normalized)) {
+    // Stars may match nothing; questions require adjacent non-newline code points.
     const requiredLength = normalized.replace(/\*/g, "").length;
     return {test(text) {
+      if (text.length < requiredLength) return false;
       let run = 0;
       for (let i = 0; i < text.length; i++) {
-        const code = text.charCodeAt(i);
+        const code = text.codePointAt(i) ?? 0;
+        if (code > 0xffff) i++;
         if (code === 10 || code === 13 || code === 0x2028 || code === 0x2029) run = 0;
         else if (++run >= requiredLength) return true;
       }
       return false;
     }};
   }
-  if (normalized.includes("?") && !normalized.includes("*")) {
-    // Escaped literals and non-u dots have fixed width and cannot backtrack.
-    const tokens = normalized.split("");
-    const fixed = new RegExp(tokens.map(char => char === "?" ? "." : char.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join(""), "i");
-    if (tokens.length < 128 || !tokens.some(char => char !== "?")) return fixed;
-    const required = Array.from(new Set(tokens.filter(char => char !== "?")))
-      .map(char => new RegExp(char.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i"));
-    return {test(text) {
-      if (text.length > 4096) for (const literal of required) if (!literal.test(text)) return false;
-      return fixed.test(text);
-    }};
-  }
+  if (questions && !normalized.includes("*")) return compileFixedQuestionMatcher(normalized);
   // Boundary stars may match zero characters in substring matching. Escaping
   // every remaining literal keeps regex work bounded and preserves /i rules.
   const core = normalized.replace(/^\*+|\*+$/g, "");
   if (core && !core.includes("*") && !core.includes("?")) {
-    return new RegExp(core.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
+    return new RegExp(escapeWildcardLiteral(core), "i");
   }
   if (core.includes("*") && !core.includes("?") && /^[\x00-\x7f]+$/.test(core) && !/[\n\r]/.test(core)) {
     // Match literal chunks in leftmost order within a single regex-dot line.
     // Searching each escaped chunk separately avoids wildcard backtracking.
-    const chunks = core.split(/\*+/).map(part => new RegExp(part.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "ig"));
+    const chunks = core.split(/\*+/).map(part => new RegExp(escapeWildcardLiteral(part), "ig"));
     return {test(text) {
       for (const chunk of chunks) {
         chunk.lastIndex = 0;
@@ -266,14 +289,15 @@ function compileWildcardMatcher(pattern) {
   const parts = core.split(/\*+/);
   if (parts.length === 2 && ((/^\?+$/.test(/** @type {string} */ (parts[0])) && !/** @type {string} */ (parts[1]).includes("?"))
       || (/^\?+$/.test(/** @type {string} */ (parts[1])) && !/** @type {string} */ (parts[0]).includes("?")))) {
-    const fixed = parts.join("").split("").map(char => char === "?" ? "." : char.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("");
-    return new RegExp(fixed, "i");
+    return compileFixedQuestionMatcher(parts.join(""));
   }
-  const tokens = normalized.replace(/\*+/g, "*").split("");
+  const collapsed = normalized.replace(/\*+/g, "*");
+  // Star-only patterns keep their legacy UTF-16 literal matching.
+  const tokens = questions ? Array.from(collapsed) : collapsed.split("");
   const literals = tokens.map(char => char === "*" || char === "?" ? null
-    : new RegExp("^" + char.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "$", "i"));
+    : new RegExp("^" + escapeWildcardLiteral(char) + "$", "i"));
   const required = Array.from(new Set(tokens.filter(char => char !== "*" && char !== "?")))
-    .map(char => new RegExp(char.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i"));
+    .map(char => new RegExp(escapeWildcardLiteral(char), "i"));
   /** @type {Map<string, (boolean | null)[]>} */
   const masks = new Map();
   /** @param {string} char */
@@ -290,14 +314,16 @@ function compileWildcardMatcher(pattern) {
     // Reject fields missing a mandatory literal before allocating DP rows.
     for (const regex of required) if (!regex.test(text)) return false;
     // Substring glob matching in O(pattern length * text length), without
-    // backtracking. Iterate UTF-16 units to retain the former non-u regex rules.
+    // backtracking. For question globs, each row consumes one code point.
     let previous = new Uint8Array(tokens.length + 1);
     let current = new Uint8Array(tokens.length + 1);
     previous[0] = 1;
     for (let j = 0; j < tokens.length && tokens[j] === "*"; j++) previous[j + 1] = 1;
     if (previous[tokens.length]) return true;
-    for (let i = 0; i < text.length; i++) {
-      const char = /** @type {string} */ (text[i]);
+    for (let i = 0; i < text.length;) {
+      const width = questions && (text.codePointAt(i) ?? 0) > 0xffff ? 2 : 1;
+      const char = width === 2 ? text.slice(i, i + 2) : text.charAt(i);
+      i += width;
       const dot = char !== "\n" && char !== "\r" && char !== "\u2028" && char !== "\u2029";
       const mask = literalMask(char);
       current[0] = 1;

@@ -202,17 +202,92 @@
       </section>
     </aside>
     <script>
-      // Back is visible before the module graph binds it; remember an early tap
-      // so the Reader can still exit instead of ignoring it.
+      // A slow module still owns Back once it binds. Only fall back if the
+      // module settles without taking ownership (including a failed import).
       (() => {
         const back = document.querySelector("#back");
-        let pending = false;
-        const early = (event) => { event.preventDefault(); pending = true; };
+        let pending = false, failed = false, closing = false;
+        function exit() {
+          if (closing) return;
+          closing = true;
+          try {
+            if (parent !== window && parent.location.origin === location.origin &&
+                frameElement?.matches("iframe.reader-overlay")) {
+              parent.postMessage({ type: "voice-reader-close" }, location.origin);
+              return;
+            }
+          } catch (_) {} // A non-overlay frame returns in place.
+
+          const reader = new URL(location.href);
+          const home = new URL("/search/", reader.origin);
+          let returnUrl = reader.searchParams.get("return"), token = reader.searchParams.get("nav");
+          let reload = false, canGoBack = false;
+          try {
+            const state = history.state;
+            let raw = state?.voiceReaderOverlay && state.readerUrl;
+            if (!raw) {
+              const saved = JSON.parse(sessionStorage.getItem("reader-navigation-current") || "null");
+              if (saved?.shareUrl === reader.href) raw = saved.readerUrl;
+            }
+            if (raw) {
+              const source = new URL(raw, reader.origin), share = new URL(source);
+              share.searchParams.delete("return");
+              share.searchParams.delete("nav");
+              if (share.href === reader.href) {
+                returnUrl ||= source.searchParams.get("return");
+                token ||= source.searchParams.get("nav");
+                // A reloaded overlay can own prior search entries in this
+                // document. Without Reader bindings, Back cannot reload them.
+                reload = true;
+              }
+            }
+          } catch (_) {}
+          let target;
+          try {
+            const candidate = new URL(returnUrl || home.href, reader.origin);
+            if (candidate.origin === reader.origin && !candidate.username && !candidate.password &&
+                ["/search/", "/search/index.html"].includes(candidate.pathname)) target = candidate;
+          } catch (_) {}
+          try {
+            const key = token && `reader-return:${token}`;
+            if (key) {
+              canGoBack = target && sessionStorage.getItem(key) === target.href && history.length > 1;
+              sessionStorage.removeItem(key);
+            }
+            const saved = JSON.parse(sessionStorage.getItem("reader-navigation-current") || "null");
+            if (saved?.readerUrl === reader.href || saved?.shareUrl === reader.href)
+              sessionStorage.removeItem("reader-navigation-current");
+          } catch (_) {}
+          if (reload) location.replace((target || home).href);
+          else if (canGoBack) history.back();
+          else location.assign((target || home).href);
+        }
+        const early = (event) => {
+          event.preventDefault();
+          if (failed) exit();
+          else pending = true;
+        };
+        const stopWatchingModule = () => {
+          document.removeEventListener("load", settled, true);
+          document.removeEventListener("error", settled, true);
+        };
+        const settled = (event) => {
+          if (event.target !== document.getElementById("reader-module")) return;
+          stopWatchingModule();
+          failed = true;
+          if (pending) exit();
+        };
         back?.addEventListener("click", early);
+        document.addEventListener("load", settled, true);
+        document.addEventListener("error", settled, true);
+        const restore = event => { if (event.persisted) closing = false; };
+        window.addEventListener("pageshow", restore);
         window.__VOICE_READER_EARLY_BACK__ = () => {
+          stopWatchingModule();
+          window.removeEventListener("pageshow", restore);
           back?.removeEventListener("click", early);
           delete window.__VOICE_READER_EARLY_BACK__;
-          return pending;
+          return pending && !failed;
         };
       })();
       if (window.parent !== window)
@@ -241,6 +316,6 @@
       <div class="speech-transport"><button type="button" id="speech-previous" class="text-button" aria-label="上一句">上一句</button><button type="button" id="speech-play" class="speech-play">暂停</button><button type="button" id="speech-next" class="text-button" aria-label="下一句">下一句</button></div>
       <div class="speech-links"><button type="button" id="speech-visible" class="text-button">从当前阅读位置开始</button><button type="button" id="speech-locate" class="text-button">回到播放位置</button></div>
     </section>
-    <script type="module" src="/search/static/reader.js"></script>
+    <script id="reader-module" type="module" src="/search/static/reader.js"></script>
   </body>
 </html>

@@ -37,6 +37,7 @@
     if (viewport.key !== position.key || !Number.isFinite(viewport.savedAt) || viewport.savedAt < Date.now() - POSITION_TTL
         || !Number.isInteger(viewport.total) || viewport.total <= position.index || viewport.total > 0x7ffffffe
         || !Number.isInteger(position.index) || position.index < 0
+        || (viewport.resultBackend != null && viewport.resultBackend !== "local" && viewport.resultBackend !== "api")
         || !Array.isArray(viewport.records) || !viewport.records.length || viewport.records.length > 80
         || (viewport.estimatedHeight != null && viewport.estimatedHeight !== 0 && !validHeight(viewport.estimatedHeight))) return false;
     const indexes = new Set();
@@ -53,13 +54,13 @@
   }
 
   /** @param {unknown} value @param {string} key @param {number} page
-   * @param {VoiceOfMLSearchWindowExpected & {query: {pageSize: number}}} expected
+   * @param {SearchRecentPageExpected} expected
    * @returns {value is SearchRecentPage} */
   function validRecentPage(value, key, page, expected) {
     if (!value || typeof value !== "object") return false;
     const entry = /** @type {SearchRecentPage} */ (value);
     if (entry.key !== key || !Number.isFinite(entry.savedAt) || entry.savedAt < Date.now() - RECENT_PAGE_TTL
-        || !expected.generation || !Array.isArray(entry.results)
+        || !expected.generation || (entry.resultBackend ?? null) !== (expected.query.resultBackend ?? null) || !Array.isArray(entry.results)
         || !Array.isArray(entry.id) || entry.id.length !== 2 || entry.id[0] !== key || entry.id[1] !== page
         || Object.keys(entry.results).length !== entry.results.length
         || !entry.results.every(validRenderingRecord)) return false;

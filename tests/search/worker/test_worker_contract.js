@@ -318,9 +318,30 @@ test("inherited object names remain ordinary tokens and repository keys", async 
   assert.strictEqual((await plain.worker.request("local-search", {repos: ["__proto__"]})).total, 0);
 });
 
-test("bounded wildcards preserve regex case, UTF-16 and line-terminator semantics", () => {
+// Small independent oracle: try each substring start and expand each star
+// only up to the next line terminator. Literal equality uses legacy /i.
+function questionGlobReference(pattern, text) {
+  const chars = Array.from(text);
+  const esc = ch => ch.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const tokens = Array.from(pattern, ch => ch === "*" || ch === "?" ? ch : new RegExp(`^${esc(ch)}$`, "i"));
+  const dot = pos => pos < chars.length && !/[\n\r\u2028\u2029]/.test(chars[pos]);
+  function matches(tokenIndex, pos) {
+    if (tokenIndex === tokens.length) return true;
+    const token = tokens[tokenIndex];
+    if (token === "*") {
+      do {
+        if (matches(tokenIndex + 1, pos)) return true;
+      } while (dot(pos++));
+      return false;
+    }
+    return (token === "?" ? dot(pos) : pos < chars.length && token.test(chars[pos])) && matches(tokenIndex + 1, pos + 1);
+  }
+  return chars.some((_, pos) => matches(0, pos));
+}
+
+test("bounded wildcards preserve literal case and line-terminator semantics", () => {
   const { context } = makeWorker();
-  const alphabet = ["a", "A", "?", "*", "\n", "\r", "\u2028", "\u2029", ".", "[", "İ", "ı", "ſ", "K", "Σ", "σ", "ς", "ß", "😀"];
+  const alphabet = ["a", "A", "?", "*", "\n", "\r", "\u2028", "\u2029", ".", "[", "İ", "ı", "ſ", "K", "Σ", "σ", "ς", "ß", "😀", "\ud83d", "\ude00"];
   // Kelvin/long-s one-literal globs intentionally follow Python IGNORECASE.
   const special = pattern => /^[*]*[Kſ][*]*$/.test(pattern) && pattern.includes('*');
   let seed = 17;
@@ -330,8 +351,8 @@ test("bounded wildcards preserve regex case, UTF-16 and line-terminator semantic
   for (let i = 0; i < 1500; i++) pairs.push([string(20), string(7) + "*"]);
   for (const [text, pattern] of pairs) {
     const escaped = pattern.replace(/[.+^${}()|[\]\\]/g, "\\$&");
-    const expected = special(pattern) ? new RegExp(escaped.replace(/\*/g, ".*").replace(/\?/g, "."), "iu").test(text)
-      : new RegExp(escaped.replace(/\*/g, ".*").replace(/\?/g, "."), "i").test(text);
+    const expected = pattern.includes("?") ? questionGlobReference(pattern, text)
+      : new RegExp(escaped.replace(/\*/g, ".*"), special(pattern) ? "iu" : "i").test(text);
     assert.strictEqual(context.compileWildcardMatcher(pattern).test(text), expected, JSON.stringify([text, pattern]));
   }
   vm.runInContext('if (compileWildcardMatcher("*a".repeat(100)+"b").test("a".repeat(120))) throw new Error("bad match");', context, {timeout: 1000});
@@ -364,19 +385,21 @@ test("boundary-only wildcard scans preserve literal matching and bounded work", 
   vm.runInContext('if (compileWildcardMatcher("*"+"a".repeat(127)+"b*").test("a".repeat(20000))) throw Error("bad match");', context, {timeout: 1000});
 });
 
-test("boundary question-star matching stays bounded and preserves non-u regex semantics", () => {
+test("boundary question-star matching stays on the bounded fixed-width path", () => {
   const {context}=makeWorker();
   const patterns=["?*.pdf","??**PDF","???*İ","a*?","K**??","*?*.pdf*","*.pdf*?*","?*\n","\n*?","?*😀"];
-  const alphabet=["a",".","\n","\r","\u2028","\u2029","İ","i","K","k","😀","\ud800"];
-  const texts=["",...alphabet,...alphabet.flatMap(a=>alphabet.map(b=>a+b)),"a.pdf","A.PDF","a\n.pdf","a😀"];
-  for(const pattern of patterns){
-    const escaped=pattern.replace(/[.+^${}()|[\]\\]/g,"\\$&");
-    const reference=new RegExp(escaped.replace(/\*/g,".*").replace(/\?/g,"."),"i");
-    for(const text of texts) assert.strictEqual(context.compileWildcardMatcher(pattern).test(text),reference.test(text),JSON.stringify([pattern,text]));
+  const alphabet=["a",".","\n","\r","\u2028","\u2029","İ","i","K","k","😀","\ud800","\udc00"];
+  const texts=["",...alphabet,...alphabet.flatMap(a=>alphabet.map(b=>a+b)),"a.pdf","A.PDF","a\n.pdf","😀.pdf","a😀"];
+  for (const pattern of patterns) {
+    const matcher = context.compileWildcardMatcher(pattern);
+    for (const text of texts) assert.strictEqual(matcher.test(text), questionGlobReference(pattern, text), JSON.stringify([pattern, text]));
   }
-  vm.runInContext('if (compileWildcardMatcher("?".repeat(100)+"*z").test("a".repeat(20000))) throw Error("bad match")',context,{timeout:1000});
-  assert.strictEqual(vm.runInContext('Object.prototype.toString.call(compileWildcardMatcher("?*.pdf"))',context),'[object RegExp]');
-  assert.notStrictEqual(vm.runInContext('Object.prototype.toString.call(compileWildcardMatcher("a?*b"))',context),'[object RegExp]');
+  vm.runInContext(`
+    Uint8Array = function() { throw Error('unexpected DP for boundary wildcard'); };
+    const matcher = compileWildcardMatcher('?'.repeat(100) + '*z');
+    if (!matcher.test('a'.repeat(100) + 'z') || !matcher.test('😀'.repeat(100) + 'z')) throw Error('missing match');
+    if (matcher.test('a'.repeat(20000)) || matcher.test('😀'.repeat(20000))) throw Error('bad match');
+  `, context, {timeout: 1000});
 });
 test("Kelvin and long-s boundary globs match Python Unicode case folding", async () => {
   const input = [
@@ -404,6 +427,11 @@ test("ordered interior stars preserve overlapping literals and line boundaries",
     ["a*b", "a\u2029b", false], ["a*b", "a😀b", true],
     ["a*\nb", "a--\nb", true], ["a?*b", "a\nb", false],
     ["中*文", "中\n文", false], ["İ*K", "i--k", false],
+    ["开?*终", "开📚终", true], ["开*?终", "开📚终", true],
+    ["开??*终", "开📚终", false], ["开?*?终", "开📚书终", true],
+    ["开?*?终", "开📚终", false], ["开?*终", "开📚\u2028终", false],
+    ["开?*📚终", "开a📚终", true], ["开?*\udcda终", "开a📚终", false],
+    ["K?*终", "k📚终", false], ["𐐀?*终", "𐐨📚终", false],
   ];
   for (const [pattern, text, expected] of cases) {
     const matcher = context.compileWildcardMatcher(pattern);
@@ -411,13 +439,18 @@ test("ordered interior stars preserve overlapping literals and line boundaries",
     assert.strictEqual(matcher.test(text), expected, "repeated " + JSON.stringify([pattern, text]));
   }
   vm.runInContext('if (compileWildcardMatcher("*a".repeat(100)+"*b").test("a".repeat(20000))) throw Error("bad match");', context, {timeout: 1000});
+  // Both mandatory literals are present, so the DP must reject without
+  // backtracking over the many ways stars could divide the first line.
+  vm.runInContext(`
+    if (compileWildcardMatcher('a?*'.repeat(60) + 'z').test('a📚'.repeat(10000) + '\\nz')) throw Error('crossed a line terminator');
+  `, context, {timeout: 1000});
 });
 
 test("mixed wildcard runs preserve dot semantics with linear bounded scans", () => {
   const {context} = makeWorker();
-  for (const pattern of ["*?", "?*", "*?*", "?*?", "**??***?*"]) {
+  for (const pattern of ["??", "*?", "?*", "*?*", "?*?", "**??***?*"]) {
     const matcher = context.compileWildcardMatcher(pattern);
-    const regex = new RegExp(pattern.replace(/\*/g, ".*").replace(/\?/g, "."), "i");
+    const regex = new RegExp(pattern.replace(/\*/g, ".*").replace(/\?/g, "."), "u");
     for (const text of ["", "a", "abc", "😀", "\ud800", "\udc00", "a\nb", "a\rb", "a\u2028b", "a\u2029b", "ab\ncd"]) {
       assert.strictEqual(matcher.test(text), regex.test(text), JSON.stringify([pattern, text]));
       assert.strictEqual(matcher.test(text), regex.test(text), "repeat " + JSON.stringify([pattern, text]));
@@ -426,19 +459,29 @@ test("mixed wildcard runs preserve dot semantics with linear bounded scans", () 
   vm.runInContext(`(() => {
     const matcher = compileWildcardMatcher('?*'.repeat(512));
     if (matcher.test(('a'.repeat(511)+'\\n').repeat(1000))) throw Error('crossed a line terminator');
-    if (!matcher.test('😀'.repeat(256))) throw Error('wrong UTF-16 width');
+    if (matcher.test('😀'.repeat(511))) throw Error('counted UTF-16 units');
+    if (!matcher.test('😀'.repeat(512))) throw Error('wrong code-point width');
   })()`, context, {timeout: 1000});
 });
 
-test("question-only wildcard preserves non-u UTF-16 and dot semantics", () => {
+test("question-only wildcard consumes code points and preserves legacy case and dot rules", () => {
   const {context} = makeWorker();
   for (const [pattern, text, expected] of [
     ["a?b", "xaAbx", true], ["a?b", "a\nb", false],
     ["a?b", "a\rb", false], ["a?b", "a\u2028b", false],
-    ["a?b", "a\u2029b", false], ["İ?K", "iXk", false],
+    ["a?b", "a\u2029b", false], ["a?b", "a\u0085b", true],
+    ["İ?K", "i📚k", false], ["K?", "k📚", false], ["ſ?", "s📚", false],
+    ["Σ?", "ς📚", true], ["𐐀?", "𐐨📚", false],
     ["[.?]", "x[.z]y", true], ["[.?]", "x[z.]y", false],
-    ["😀?", "😀x", true], ["??", "😀", true],
-    ["?", "\n", false], ["???", "ab", false], ["a?*b", "a\nb", false],
+    ["开?终", "开📚终", true], ["开??终", "开📚终", false],
+    ["开?终", "开e\u0301终", false], ["开??终", "开e\u0301终", true],
+    ["开?终", "开\ud83d终", true], ["开?终", "开\udcda终", true],
+    ["?终", "📚终", true], ["??终", "📚终", false],
+    ["开?", "开📚", true], ["开??", "开📚", false],
+    ["开?\udcda", "开📚", false], ["\ud83d?终", "📚终", false],
+    ["开?终", "开\udcda终📚", true], ["\ud83d?终", "📚\ud83da终", true],
+    ["😀?", "😀📚", true], ["??", "😀", false],
+    ["?", "\n", false], ["???", "ab", false],
   ]) {
     const matcher = context.compileWildcardMatcher(pattern);
     assert.strictEqual(matcher.test(text), expected, JSON.stringify([pattern,text]));
@@ -466,6 +509,29 @@ test("question-only long fields skip the full scan if a required literal is abse
   assert.deepStrictEqual(JSON.parse(JSON.stringify(check)), {absent:false,afterAbsent:0,present:true,afterPresent:1,short:false,afterShort:2});
   assert.strictEqual(context.compileWildcardMatcher('???').test('x'.repeat(4097)), true);
   assert.strictEqual(context.compileWildcardMatcher('a?b').test('x'.repeat(4097) + 'a\nb'), false);
+});
+
+test("question globs match Unicode code points in file, repo and folder fields", async () => {
+  const {worker} = await loaded([
+    {...records[0], File:"开📚终"},
+    {...records[0], File:"开ab终"},
+    {...records[0], Repo:"Repo/开📚终", File:"repo match"},
+    {...records[0], Folder:["开📚终"], File:"folder match"},
+    {...records[0], File:"开📚\n终"},
+  ]);
+  for (const exact of [true, false]) {
+    for (const [q, searchFolders, expected] of [
+      ["开?终", true, ["开📚终", "folder match", "repo match"]],
+      ["开??终", true, ["开ab终"]],
+      ["开?*终", false, ["开📚终", "开ab终", "repo match"]],
+      ["开?*?终", true, ["开ab终"]],
+      ["开?终*.TXT", true, ["开📚终"]],
+    ]) {
+      const result = await worker.request("local-search", {q, exact, searchFolders});
+      assert.deepStrictEqual(result.records.map(record => record.File), expected, q);
+      assert.strictEqual(result.total, expected.length, q);
+    }
+  }
 });
 
 test("wildcard search returns complete IDs for repeated-star patterns", async () => {
@@ -689,12 +755,20 @@ test("long wildcard search yields to metadata and cancellation", async () => {
 });
 
 test("yielded multi-term wildcards preserve ordinary matching and order", async () => {
-  const input = [{...records[0],File:"alpha " + "a".repeat(40)}, {...records[1],File:"beta"}];
+  const prefix = "alpha " + "ax".repeat(10);
+  const input = [
+    {...records[0], File: prefix + "开📚终"},
+    {...records[0], File: prefix + "开📚📚终"},
+    {...records[0], File: prefix + "开书终"},
+    {...records[1], File: "beta"},
+  ];
   const {worker} = await loaded(input);
-  const q = "alpha " + "a?*".repeat(11);
+  const q = "alpha " + "a?*".repeat(10) + "开?终";
   const expected = vm.runInContext(`searchLocal({q:${JSON.stringify(q)},exact:true,pageSize:5}).ids`, worker.context);
   vm.runInContext('searchOrderCache.clear()', worker.context);
-  assert.deepStrictEqual((await worker.request('local-search', {q,exact:true,pageSize:5})).ids, Array.from(expected));
+  const result = await worker.request('local-search', {q,exact:true,pageSize:5});
+  assert.deepStrictEqual(result.records.map(record => record.File), [input[0].File, input[2].File]);
+  assert.deepStrictEqual(result.ids, Array.from(expected));
 });
 
 test("query limit counts Unicode code points", async () => {
@@ -1029,7 +1103,7 @@ test("snapshot identity survives Worker restarts but changes with content and se
   assert.deepStrictEqual(old.ids, current.ids);
   await second.worker.request('replace-corpus', {data: compact(records)});
   assert.strictEqual(old.snapshot_generation, (await second.worker.request('local-search', {})).snapshot_generation);
-  const changed = makeWorker(source.replace('worker-search-v7', 'worker-search-v8'));
+  const changed = makeWorker(source.replace(/worker-search-v\d+/, 'worker-search-test'));
   await changed.request('replace-corpus', {data: compact(records)});
   assert.notStrictEqual(old.snapshot_generation, (await changed.request('local-search', {})).snapshot_generation);
   const resized = records.map(record => Object.assign({}, record, {Size: 1}));
@@ -1850,16 +1924,18 @@ test("mixed wildcard repo proof skips only demonstrably matching string corpora"
   assert.deepStrictEqual((await worker.request("local-search",{q:"?*? first",exact:true})).records.map(record=>record.File),["first"]);
   assert.deepStrictEqual((await worker.request("local-search",{q:"first ?*?",exact:true})).records.map(record=>record.File),["first"]);
 
-  // An empty or line-broken repo cannot prove a match; filenames may still match.
+  // An empty, line-broken or one-code-point repo cannot prove a match;
+  // filenames may still match, including their extension.
   const fallback = [
     {...records[0], Repo:"", File:"abc", Folder:[]},
     {...records[0], Repo:"A\nB", File:"z", Folder:[]},
     {...records[0], Repo:"\u2028", File:"", Folder:[]},
-    {...records[0], Repo:"😀", File:"", Folder:[]},
+    {...records[0], Repo:"😀", File:"", Extension:"", Folder:[]},
+    {...records[0], Repo:"😀📚", File:"", Extension:"", Folder:[]},
   ];
   await worker.request("replace-corpus",{data:compact(fallback)});
   vm.runInContext('globalThis.scans = 0; getRecordSearchFields = record => {scans++; return originalFields(record);};',worker.context);
-  assert.deepStrictEqual((await worker.request("local-search",{q:"?*?",exact:true})).records.map(record=>record.File),["abc","z","",""]);
+  assert.deepStrictEqual((await worker.request("local-search",{q:"?*?",exact:true})).records.map(record=>record.Repo),["","A\nB","\u2028","😀📚"]);
   assert.strictEqual(vm.runInContext('scans',worker.context),fallback.length);
   assert.strictEqual(vm.runInContext('repoWildcardProofSafe',worker.context),true);
   vm.runInContext('getRecordSearchFields = originalFields;',worker.context);

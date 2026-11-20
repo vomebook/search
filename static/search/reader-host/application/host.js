@@ -137,11 +137,12 @@
           if (deps.hashRoute && returnFocus && returnFocus.isConnected) returnFocus.focus();
           return;
         }
-        const previous = overlay;
+        const previous = overlay, owner = revision;
         history.back();
-        // A delayed Back still owns its Reader entry for Forward.
+        // A delayed Back still owns its Reader entry for Forward, but not a
+        // later close of the same iframe after it was parked and reopened.
         setTimeout(() => {
-          if (!closing || overlay !== previous) return;
+          if (!closing || overlay !== previous || revision !== owner) return;
           navigation.showCloseRecovery(returnUrl);
         }, 1000);
         return;

@@ -3,20 +3,21 @@ interface SearchPositionRestorePage extends VoiceOfMLSearchWindowPageData {
 }
 interface SearchPositionRestoreTask {
   key: string; controller: AbortController; position: SearchPosition;
-  backend?: string | undefined;
+  backend?: SearchResultBackend | undefined;
   lookup?: SearchPositionRestorePage | null | undefined;
   ready: Map<number, SearchPositionRestorePage>; page: number; results: unknown[];
-  preview?: boolean; cachedPages?: Map<number, SearchPositionRestorePage>;
+  preview?: boolean; cachedPages?: Map<number, SearchRecentPage>;
   failed?: boolean; error?: Error;
 }
 interface SearchPositionRestoreInput {
   key: string; position: SearchPosition; previous?: SearchPositionRestoreTask | null | undefined;
-  backend?: string | undefined;
+  backend?: SearchResultBackend | null | undefined;
 }
 interface SearchPositionRestorationHost {
   isCurrent(task: SearchPositionRestoreTask): boolean;
   readViewport(key: string): Promise<SearchPositionViewport | null>;
-  fetchPage(query: VoiceOfMLSearchViewProjection & {resultBackend?: string}, page: number, signal: AbortSignal, anchorId?: string): Promise<SearchPositionRestorePage>;
+  lookupPage(query: VoiceOfMLSearchViewProjection, signal: AbortSignal, anchorId: string, backend?: SearchResultBackend): Promise<{data: SearchPositionRestorePage; backend: SearchResultBackend}>;
+  fetchPage(query: VoiceOfMLSearchViewProjection & {resultBackend: SearchResultBackend}, page: number, signal: AbortSignal): Promise<SearchPositionRestorePage>;
   validatePage: typeof VoiceOfMLSearchWindowPage.validate;
   showPreview(viewport: SearchPositionViewport | null, position: SearchPosition, task: SearchPositionRestoreTask): void;
   isDragging(): boolean;

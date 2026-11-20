@@ -43,13 +43,14 @@
         const id = [view.key, page];
         const previous = recentPages.get(JSON.stringify(id)), source = previous && pageSources.get(previous);
         if (previous && source?.first === view.results[start] && source?.last === view.results[start + length - 1]
-            && previous.generation === metadata.generation && Date.now() - previous.savedAt < 60000) {
+            && previous.generation === metadata.generation && previous.resultBackend === view.resultBackend
+            && Date.now() - previous.savedAt < 60000) {
           cachePage(previous); continue;
         }
         const results = view.results.slice(start, start + length);
         if (results.length !== length || Object.keys(results).length !== length || results.some(record => !record)) continue;
         const entry = {id, key: view.key, page, page_size: size, total: view.total, generation: metadata.generation,
-          results: results.map(deps.cloneResult), savedAt: Date.now()};
+          resultBackend: view.resultBackend, results: results.map(deps.cloneResult), savedAt: Date.now()};
         if (new TextEncoder().encode(JSON.stringify(entry)).byteLength > policy.RECENT_PAGE_BYTES_MAX) continue;
         cachePage(entry);
         pageSources.set(entry, {first: results[0], last: results[length - 1]});
@@ -58,7 +59,7 @@
       storage.writeContent("recent-pages", writes, policy.RECENT_PAGE_MAX, policy.RECENT_PAGE_TTL);
     }
     /** @param {string} key @param {number} page
-     * @param {VoiceOfMLSearchWindowExpected & {query: {pageSize: number}}} expected
+     * @param {SearchRecentPageExpected} expected
      * @param {number} [timeoutMs] @param {AbortSignal | null} [signal] */
     async function readRecentPage(key, page, expected, timeoutMs = 150, signal = null) {
       const id = [key, page];
@@ -79,7 +80,7 @@
       const pageStart = Math.floor(position.index / pageSize) * pageSize;
       const generation = view.window?.generation || deps.metadata(view.results[pageStart])?.generation;
       if (previous && source && previous.total === view.total && previous.generation === generation
-          && previous.measurementKey === measurementKey && Date.now() - previous.savedAt < 24 * 60 * 60 * 1000) {
+          && previous.resultBackend === view.resultBackend && previous.measurementKey === measurementKey && Date.now() - previous.savedAt < 24 * 60 * 60 * 1000) {
         let covered = true;
         for (let index = position.index; index <= visibleEnd; index++) {
           const saved = source.get(index);
@@ -95,7 +96,7 @@
       }
       /** @type {SearchPositionViewport} */
       const viewport = {key: position.key, savedAt: position.savedAt, anchorId: position.anchorId, index: position.index,
-        total: view.total, generation, estimatedHeight, measurementKey, records: []};
+        total: view.total, generation, resultBackend: view.resultBackend, estimatedHeight, measurementKey, records: []};
       // Spend the byte budget on visible records before nearest neighbors.
       /** @param {number} index */
       const distance = index => Math.max(position.index - index, index - visibleEnd, 0);

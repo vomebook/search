@@ -2561,6 +2561,49 @@ class ReaderRefactorTest(unittest.TestCase):
         self.assertIsNone(self.page.evaluate("() => VoiceOfMLReaderStore.get(new URL(location.href).searchParams.get('url'))"))
         peer.close()
 
+    def test_late_txt_history_survives_empty_search_but_yields_to_query_or_navigation(self):
+        store = support.STORE_SCRIPT.replace(
+            "get: () => new Promise((resolve) => setTimeout(() => resolve(null), 300)),",
+            "get: url => new Promise(resolve => { window.__releaseRestore = () => resolve({url, scrollTop: 85000}); }),",
+        )
+        self.page.route("**/static/reader/core/reader-store.js", lambda route: route.fulfill(
+            content_type="text/javascript", body=store))
+        self.serve("a long line of text for the saved reading position\n" * 10000 + "needle")
+        self.page.emulate_media(reduced_motion="reduce")
+        for action in ("open-only", "blank-input", "query", "navigation"):
+            with self.subTest(action=action):
+                self.page.goto(self.reader_url(name=action), wait_until="domcontentloaded")
+                self.page.wait_for_function("() => window.__releaseRestore && document.querySelectorAll('.reader-text-block').length > 8")
+                viewport = self.page.locator("#viewport")
+                self.assertEqual(viewport.evaluate("node => node.scrollTop"), 0)
+                self.assertFalse(self.page.evaluate("!!window.__savedReaderProgress"))
+                if action == "navigation":
+                    self.page.keyboard.press("PageDown")
+                    self.page.wait_for_function("() => document.querySelector('#viewport').scrollTop > 0")
+                else:
+                    self.page.locator("#history").click()
+                    self.page.locator("#full-search-toggle").click()
+                    if action == "blank-input":
+                        self.page.locator("#full-search-input").fill("   ")
+                        self.page.locator("#full-search-clear").click()
+                        self.page.locator("#full-search-toggle").click()
+                expected = 85000 if action in ("open-only", "blank-input") else viewport.evaluate("node => node.scrollTop")
+                if action == "query":
+                    # Commit the input and release the lookup in the same task, before debounce.
+                    self.page.evaluate('''() => {
+                      const input = document.querySelector('#full-search-input');
+                      input.value = 'needle';
+                      input.dispatchEvent(new Event('input', {bubbles: true}));
+                      window.__releaseRestore();
+                    }''')
+                else:
+                    self.page.evaluate("window.__releaseRestore()")
+                self.page.wait_for_function("() => document.documentElement.dataset.readerPhase === 'ready'")
+                if action == "query":
+                    self.page.wait_for_function("() => document.querySelector('#full-search-status').textContent === '1 个结果'")
+                self.assertEqual(viewport.evaluate("node => node.scrollTop"), expected)
+                self.page.wait_for_function("top => window.__savedReaderProgress?.scrollTop === top", arg=expected)
+
     def test_search_reopen_retains_live_targets(self):
         self.serve("prefix\n" * 500 + "needle" + "\nending" * 500)
         self.open(self.reader_url())
@@ -2979,9 +3022,31 @@ class ReaderRefactorTest(unittest.TestCase):
         while not held and time.time() < deadline:
             self.page.wait_for_timeout(50)
         self.assertTrue(held, "reader module was not requested")
+        url = self.page.url
         self.page.locator("#back").click()
+        self.assertEqual(self.page.url, url, 'a slow module still owns successful startup Back')
         held.pop(0).continue_()
         self.page.wait_for_url(landing, timeout=8000)
+
+    def test_standalone_back_after_module_dependency_failure(self):
+        landing = self.origin + "/search/"
+        target = landing + "#/Test?q=return"
+        self.page.route(landing, lambda route: route.fulfill(content_type="text/html", body="search page"))
+        self.page.route("**/static/reader/core/reader-bindings.mjs*", lambda route: route.abort())
+        # An exact token retains a native Back (not a push or replacement).
+        self.page.goto(target)
+        self.page.evaluate("sessionStorage.setItem('reader-return:test', location.href)")
+        url = self.reader_url(name="module-failure", nav="test", **{"return": target})
+        self.page.goto(url, wait_until="load")
+        self.page.locator("#back").click()
+        self.page.wait_for_url(target)
+        self.assertIsNone(self.page.evaluate("sessionStorage.getItem('reader-return:test')"))
+        self.page.go_forward(wait_until="load")
+        self.assertEqual(self.page.url, url)
+        # A foreign return cannot replace the same-origin search fallback.
+        self.page.goto(self.reader_url(**{"return": "https://elsewhere.test/"}), wait_until="load")
+        self.page.locator("#back").click()
+        self.page.wait_for_url(landing)
 
     def test_offline_html_keeps_layout_attributes_and_enforces_frame_csp(self):
         dot = ("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8"

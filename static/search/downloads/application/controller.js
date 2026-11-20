@@ -10,7 +10,7 @@
     /** @typedef {"started" | "failed" | "uncertain" | "cancelled"} DownloadResult */
     /** @typedef {{users: number, controller: AbortController, promise: Promise<DownloadResult> | null, handoff: boolean, failure: unknown}} PendingDownloadEntry */
     /** @typedef {{link: string, entry: DownloadCheckEntry, resolve: (value: DownloadCheckResult) => void}} DownloadQueueItem */
-    /** @typedef {{button?: HTMLElement, quiet?: boolean, skipCheck?: boolean, batch?: {cancelled?: boolean, abortController?: AbortController}}} DownloadOptions */
+    /** @typedef {{button?: HTMLElement, quiet?: boolean, skipCheck?: boolean, batch?: {cancelled?: boolean, abortController?: AbortController}, observeSharedOnCancel?: boolean}} DownloadOptions */
     /** @param {Parameters<DownloadControllerApi["createDownloadController"]>[0]} options
      * @returns {ReturnType<DownloadControllerApi["createDownloadController"]>} */
     function createDownloadController({
@@ -38,26 +38,30 @@
       /** @template T
        * @param {{users: number, promise: Promise<T> | null}} entry
        * @param {AbortSignal | null | undefined} signal @param {() => void} abandon
-       * @param {() => boolean} [canCancel] @returns {Promise<T | false>} */
-      function subscribe(entry, signal, abandon, canCancel = () => true) {
+       * @param {() => boolean} [canCancel] @param {boolean} [observeSharedOnCancel] @returns {Promise<T | false>} */
+      function subscribe(entry, signal, abandon, canCancel = () => true, observeSharedOnCancel = false) {
         entry.users++;
         return new Promise(resolve => {
-          let settled = false;
-          /** @param {T | false} value */
-          const finish = value => {
-            if (settled) return;
-            settled = true;
+          let active = true;
+          const detach = () => {
+            if (!active) return;
+            active = false;
             signal?.removeEventListener("abort", abort);
             entry.users--;
-            resolve(value);
           };
           const abort = () => {
             if (!canCancel()) return;
-            finish(false);
+            detach();
             if (!entry.users) abandon();
+            // Keep observing the same attempt, without keeping it alive.
+            else if (observeSharedOnCancel) return;
+            resolve(false);
           };
           signal?.addEventListener("abort", abort, { once: true });
-          (/** @type {Promise<T>} */ (entry.promise)).then(finish);
+          (/** @type {Promise<T>} */ (entry.promise)).then(value => {
+            detach();
+            resolve(value);
+          });
           if (signal?.aborted) abort();
         });
       }
@@ -206,7 +210,7 @@
           const result = subscribe(entry, signal, () => {
             if (pendingDownloads.get(link) === entry) pendingDownloads.delete(link);
             entry.controller.abort();
-          }, () => !entry.handoff).then(result => {
+          }, () => !entry.handoff, options.observeSharedOnCancel).then(result => {
             if (!options.quiet) {
               try {
                 if (result === "uncertain") showToast("下载状态不确定，请检查浏览器下载列表后再重试", 3500);

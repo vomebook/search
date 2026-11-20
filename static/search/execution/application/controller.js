@@ -17,14 +17,15 @@
       deps.clearUnavailableResults();
       deps.renderUnavailable(waiting);
     }
-    /** @param {boolean | undefined} append @param {number} id @param {number} intent */
-    function apiFailure(append, id, intent) {
+    /** @param {boolean | undefined} append @param {number} id @param {number} intent @param {boolean} allowFallback */
+    function apiFailure(append, id, intent, allowFallback) {
       if (!current(id, intent)) return Promise.resolve();
       if (append) {
         deps.update({ page: Math.max(1, deps.readView()._loadedPage) });
         deps.notify("加载更多失败，请重试");
         return Promise.resolve();
       }
+      if (!allowFallback) { unavailable(false); return Promise.resolve(); }
       deps.notify("在线搜索失败，正在切换本地搜索...");
       unavailable(true);
       return deps.loadLocal().then(ok => {
@@ -32,11 +33,11 @@
         if (!ok) { unavailable(false); return; }
         deps.setLocalMode(true);
         deps.syncURL();
-        deps.retry();
+        deps.retry(undefined, false);
       });
     }
-    /** @param {SearchExecutionParams} params @param {boolean | undefined} append @param {number} id */
-    async function local(params, append, id) {
+    /** @param {SearchExecutionParams} params @param {boolean | undefined} append @param {number} id @param {boolean} [allowFallback] */
+    async function local(params, append, id, allowFallback = true) {
       let pagingSucceeded = false;
       let pagingError = null;
       if (!currentLocal(id)) return;
@@ -61,15 +62,12 @@
           return;
         }
         deps.update({ dataLoaded: false });
-        if (params.folderMatchMode === "mixed") {
-          unavailable(false);
-          deps.notify("本地目录筛选不可用，请重试");
-        } else if (deps.readView().apiAvailable) {
+        if (allowFallback && deps.readView().apiAvailable) {
           deps.setLocalMode(false);
           deps.syncURL();
           deps.notify("本地搜索不可用，正在切换在线搜索...");
           deps.update({ isLoading: false });
-          deps.retry(append);
+          deps.retry(undefined, false);
         } else {
           unavailable(false);
           deps.notify("本地搜索不可用");
@@ -84,8 +82,8 @@
         }
       }
     }
-    /** @param {SearchExecutionParams} params @param {boolean | undefined} append @param {number} id @param {number} intent */
-    function api(params, append, id, intent) {
+    /** @param {SearchExecutionParams} params @param {boolean | undefined} append @param {number} id @param {number} intent @param {boolean} allowFallback */
+    function api(params, append, id, intent, allowFallback) {
       deps.update({ _resultBackend: "api" });
       const view = deps.readView();
       if (append && view._pendingPage === view.page) {
@@ -117,10 +115,10 @@
           return;
         }
         console.warn("API search failed:", err);
-        return apiFailure(append, id, intent).then(() => {
-          // A successful local fallback transfers search ownership. If no
-          // fallback could run, keep a bounded retry of the requested page.
-          if (!append && current(id, intent) && !deps.readView()._loadedPage)
+        return apiFailure(append, id, intent, allowFallback).then(() => {
+          // A successful fallback transfers ownership. If local acquisition
+          // failed, keep the original bounded first-page recovery.
+          if (!append && allowFallback && current(id, intent) && !deps.readView()._loadedPage)
             deps.update({ hasMore: true });
         });
       }).finally(() => {
@@ -133,11 +131,11 @@
         }
       });
     }
-    /** @param {SearchExecutionParams} params @param {boolean | undefined} append @param {number} id @param {number} intent */
-    function execute(params, append, id, intent) {
+    /** @param {SearchExecutionParams} params @param {boolean | undefined} append @param {number} id @param {number} intent @param {boolean} [allowFallback] */
+    function execute(params, append, id, intent, allowFallback = true) {
       const view = deps.readView();
-      const backend = globalThis.VoiceOfMLSearchExecutionPolicy.backend(view, append, params.folderMatchMode);
-      if (backend === "api") { api(params, append, id, intent); return; }
+      const backend = globalThis.VoiceOfMLSearchExecutionPolicy.backend(view, append);
+      if (backend === "api") { api(params, append, id, intent, allowFallback); return; }
       if (backend === "unavailable") {
         deps.update({ isLoading: false, page: view._loadedPage });
         deps.finishPaging(false, new Error("API_UNAVAILABLE"));
@@ -148,21 +146,21 @@
         deps.loadLocal().then(ok => {
           if (!current(id, intent)) return;
           deps.update({ isLoading: false });
-          if (ok) deps.retry(append);
-          else if (backend === "local" && !append && params.folderMatchMode !== "mixed" && deps.readView().apiAvailable) {
+          if (ok) deps.retry(append, allowFallback);
+          else if (!append && allowFallback && deps.readView().apiAvailable) {
             deps.setLocalMode(false);
-            deps.retry();
+            deps.retry(undefined, false);
           } else if (!append) unavailable(false);
           else {
-            if (backend === "local-fallback") deps.update({ page: Math.max(1, deps.readView()._loadedPage) });
+            deps.update({ page: Math.max(1, deps.readView()._loadedPage) });
             deps.finishPaging(false, new Error("LOCAL_UNAVAILABLE"));
           }
         });
         return;
       }
-      if (backend === "local" && view._resultBackend !== "local") deps.clearPrefetch();
+      if (view._resultBackend !== "local") deps.clearPrefetch();
       deps.update({ _resultBackend: "local" });
-      void local({ ...params, signal: deps.signal(false) }, append, id);
+      void local({ ...params, signal: deps.signal(false) }, append, id, allowFallback);
     }
     return { execute, local };
   }

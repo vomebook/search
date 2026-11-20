@@ -738,6 +738,37 @@ process.stdout.write(stripBundledScripts(readFileSync('static/index.html','utf8'
         }''')
         self.assertEqual(result, dict(same=True, opacity='1', pointer='auto'))
 
+    def test_toolbar_back_closes_the_same_speech_frame_after_reopen(self):
+        self.page.unroute('**/static/reader.html?**')
+        target = '/search/static/reader.html?ext=txt&url=https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/speech-back.txt'
+        self.page.route('**/api/reader-content?**', lambda route: route.fulfill(
+            content_type='text/plain', body='Speech Back regression', headers={'Access-Control-Allow-Origin': '*'}))
+        search_url = self.page.url
+        self.page.locator('#search-input').focus()
+        self.assertTrue(self.page.evaluate('target => navigateToReader(target)', target))
+        reader = self.page.frame_locator('iframe.reader-overlay')
+        back = reader.locator('#back')
+        expect(reader.locator('.reader-text')).to_contain_text('Speech Back regression')
+        # Let the lazy player finish attaching so it cannot overwrite the fake.
+        reader.locator('.preview-speech-btn').wait_for(state='attached')
+        # Use the real Reader bindings, but control speech state without audio or TTS.
+        self.page.evaluate('''() => {
+          window.__speechFrame = readerHost.overlay;
+          window.__speechDocument = __speechFrame.contentDocument;
+          __speechFrame.contentWindow.CCRDSpeech = {state: () => ({active:true}), reveal() {}, previewClosed() {}};
+        }''')
+        bar = self.page.locator('.reader-speech-mini')
+        for reopen in (True, False):
+            back.click()
+            bar.wait_for(state='visible', timeout=5000)
+            self.assertEqual(self.page.url, search_url)
+            self.assertTrue(self.page.evaluate('!readerHost.overlay && readerNavigation.backgroundReader === __speechFrame'))
+            if reopen:
+                bar.get_by_role('button', name='返回阅读').click()
+                self.assertTrue(self.page.evaluate('readerHost.overlay === __speechFrame && __speechFrame.contentDocument === __speechDocument'))
+        bar.get_by_role('button', name='停止朗读并关闭阅读器').click()
+        self.assertFalse(self.page.evaluate('__speechFrame.isConnected'))
+
     def test_reader_intent_preempts_a_stalled_hover_without_stale_cache(self):
         result = self.page.evaluate(r'''async () => {
           cancelReaderWarmup();

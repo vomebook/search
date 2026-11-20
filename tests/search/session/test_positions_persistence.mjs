@@ -36,7 +36,7 @@ function fixture(overrides = {}) {
     vm.runInContext(readFileSync(new URL('../../../static/search/' + file, import.meta.url), 'utf8'), context);
   }
   const storage = context.VoiceOfMLPositionStorage.create();
-  const controller = context.VoiceOfMLSearchPositions.create({storage, cloneResult: structuredClone, metadata: () => undefined});
+  const controller = context.VoiceOfMLSearchPositions.create({storage, cloneResult: record => structuredClone(record), metadata: () => undefined});
   return {context, storage, controller};
 }
 function fakeDatabase() {
@@ -178,6 +178,26 @@ test('malformed viewport rows and recent-page holes fail validation without thro
     assert.equal(policy.validViewport({...viewport, records: [anchor, tuple]}, position, record => record.File), false);
   }
   assert.equal(policy.validViewport({...viewport, estimatedHeight: Infinity}, position, record => record.File), false);
+});
+
+test('saved preview pages with the same generation are reused only on their own backend', async () => {
+  const f = fixture(); await f.controller.init();
+  const key = JSON.stringify({pageSize: 2});
+  const result = {File: 'book'};
+  const view = {key, results: [result], total: 1, resultBackend: 'local',
+    window: {generation: 'opaque', total: 1, pages: new Set([1])}};
+  const position = {key, index: 0, anchorId: 'book', savedAt: Date.now()};
+  const geometry = {pageSize: 2, visibleEnd: 0, measurementKey: 'test', estimatedHeight: 60, heightAt: () => 60};
+  const read = resultBackend => f.controller.readRecentPage(key, 1, {total: 1, generation: 'opaque', query: {pageSize: 2, resultBackend}});
+  f.controller.saveViewport(position, view, geometry);
+  assert.equal((await read('local')).resultBackend, 'local');
+  assert.equal(await read('api'), null);
+  assert.equal((await f.controller.readViewport(key)).resultBackend, 'local');
+  f.controller.saveViewport(position, {...view, resultBackend: 'api'}, geometry);
+  assert.equal((await read('api')).resultBackend, 'api');
+  assert.equal(await read('local'), null);
+  assert.equal((await f.controller.readViewport(key)).resultBackend, 'api');
+  f.storage.close();
 });
 
 test('scheduled saves coalesce and cancellation leaves no delayed flush', () => {

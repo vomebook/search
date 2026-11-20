@@ -102,6 +102,35 @@ class DownloadLifecycleTests(unittest.TestCase):
                         aborted=False, results=[success, success], label='original', restoredBusy='previous',
                         toast='已发起下载，请在浏览器下载列表查看' if success else 'missing'))
 
+    def test_cancel_and_retry_does_not_repeat_a_shared_handoff(self):
+        self.page.evaluate('''() => {
+          const native = window.fetch;
+          window.launches = [];
+          window.fetch = (url, options) => {
+            if (!String(url).includes('/api/download/check')) return native(url, options);
+            const link = new URL(url, location.href).searchParams.get('link');
+            const ok = () => new Response('{"ok":true}');
+            return link === 'shared' ? new Promise(resolve => { window.releaseShared = () => resolve(ok()); })
+              : Promise.resolve(ok());
+          };
+          window.triggerDownload = url => launches.push(new URL(url, location.href).searchParams.get('link'));
+          startDownloadBatch([{filename:'shared.txt', link:'shared'}]);
+          window.singleDownload = downloadFile('shared.txt', 'shared', {quiet:true});
+        }''')
+        self.page.wait_for_function('typeof releaseShared === "function"')
+        queue = self.page.locator('#download-queue')
+        queue.locator('[data-queue="cancel"]').click()
+        self.assertTrue(self.page.evaluate('''async () => {
+          releaseShared();
+          return await singleDownload;
+        }'''))
+        self.page.wait_for_function('downloadBatches.batch.done')
+        self.assertEqual(self.page.evaluate('downloadBatches.batch.failed.map(item => item.link)'), [])
+        self.assertIn('已发起 1/1 · 失败 0', queue.locator('[role="status"]').text_content())
+        self.assertTrue(queue.locator('[data-queue="retry"]').is_hidden())
+        self.page.evaluate('downloadBatches.retry()')
+        self.assertEqual(self.page.evaluate('launches'), ['shared'])
+
     def test_batch_counts_handoff_when_trigger_cancels_before_notification(self):
         for timing in ('sync', 'microtask'):
             with self.subTest(timing=timing):

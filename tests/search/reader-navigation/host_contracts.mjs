@@ -89,6 +89,38 @@ test('handoff requires the matching session token and yields to input ownership'
   }
 });
 
+test('a stale close watchdog cannot recover a later close of the same parked frame', () => {
+  const location = new URL('https://example.test/search/');
+  const history = {state: {voiceReaderOverlay: true}, back() {}};
+  const timers = [], recoveries = [];
+  const c = context({location, history, setTimeout: callback => timers.push(callback)});
+  const frame = {src: '', contentWindow: {}};
+  const navigation = {
+    mount(url) { frame.src = url.href; return frame; },
+    unmount() {}, persistProgress() {}, dismiss() {},
+    accepts: event => event.origin === location.origin && event.source === frame.contentWindow,
+    showCloseRecovery: url => recoveries.push(url)
+  };
+  const host = c.VoiceOfMLReaderHost.create({hashRoute:true, position:{}, createNavigation:() => navigation});
+  const message = {origin: location.origin, source: frame.contentWindow, data: {type: 'voice-reader-close'}};
+  const reader = new URL('/search/static/reader.html', location);
+  const readerEntry = query => {
+    reader.searchParams.set('return', '/search/?q=' + query);
+    host.openReaderOverlay(reader, false);
+    host.handleReaderMessage(message);
+  };
+  readerEntry('old');
+  host.closeReaderOverlay(false, false);
+  readerEntry('current');
+  assert.equal(host.overlay, frame);
+  assert.equal(host.closing, true);
+  assert.equal(timers.length, 2);
+  timers[0]();
+  assert.deepEqual(recoveries, []);
+  timers[1]();
+  assert.deepEqual(recoveries, ['https://example.test/search/?q=current']);
+});
+
 test('host release is synchronous and disposal reentry keeps the newer reader', () => {
   for (const hashRoute of [false,true]) {
     const location = new URL('https://example.test' + (hashRoute ? '/search/' : '/'));

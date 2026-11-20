@@ -72,7 +72,8 @@
           render();
           continue;
         }
-        const result = await deps.downloadFileDetailed(item.filename, item.link, { quiet: true, batch: current });
+        const options = { quiet: true, batch: current, observeSharedOnCancel: true };
+        const result = await deps.downloadFileDetailed(item.filename, item.link, options);
         if (result === "started") current.started++;
         else if (result === "uncertain" && !current.uncertain.some(previous => previous.link === item.link)) current.uncertain.push(item);
         else if (result === "cancelled") current.failed.push(item);
@@ -89,7 +90,7 @@
       batch.abortController.abort();
       render();
     }
-    function retry() { if (batch?.done) start(batch.failed, true); }
+    function retry() { if (batch?.done && batch.failed.length) start(batch.failed, true); }
     function close() {
       if (batch?.done) { batch = null; deps.render(batch, uncertain, actions, true); }
     }

@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { createReaderPdfPageWindow } from '../../../static/reader/pdf/reader-pdf-page-window.mjs';
+import { createReaderProgress } from '../../../static/reader/ui/reader-progress.mjs';
 
 test('outline traversal preserves order, depth and navigation', async () => {
   const calls = [];
@@ -93,18 +94,24 @@ test('small page counts do not create a virtual window', () => {
 });
 
 
-test('DjVu numeric outline destinations are forwarded unchanged', async () => {
+test('DjVu numeric destinations are forwarded unchanged and missing destinations are skipped by chapter controls', async () => {
   const seen = [];
   const reader = {awaitReader: p => p, assertReaderActive() {}, goToPage: () => true,
-    readerAbortController: new AbortController()};
+    readerAbortController: new AbortController(), capability: {mode: 'pdf'}};
   const entries = await createReaderPdfPageWindow(reader).loadPdfOutline({
     numPages: 3,
-    getOutline: async () => [{title: 'DjVu', dest: [3], items: []}],
+    getOutline: async () => [{title: 'Cover', dest: [1]}, {title: 'No destination', dest: null,
+      items: [{title: 'DjVu', dest: [3]}]}],
     getPageIndex: async ref => { seen.push(ref); return ref - 1; }
   }, true);
-  assert.deepEqual(seen, [3]);
-  assert.equal(entries[0].page, 3);
-  assert.equal(entries[0].label, 'DjVu · 第 3 页');
+  assert.deepEqual(seen, [1, 3]);
+  assert.deepEqual(entries.map(({page}) => page), [1, null, 3]);
+  assert.equal(entries[2].label, 'DjVu · 第 3 页');
+  reader.navigationState = {tocEntries: entries, currentChapterIndex: 0};
+  const {adjacentTocIndex} = createReaderProgress(reader);
+  assert.equal(adjacentTocIndex(1), 2);
+  reader.navigationState.currentChapterIndex = 2;
+  assert.equal(adjacentTocIndex(-1), 0);
 });
 
 test('virtual ensure preserves valid, out-of-range and disposed behavior', () => {

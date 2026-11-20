@@ -96,6 +96,50 @@ class PagingRecoveryTests(unittest.TestCase):
         self.assertEqual(self.page.evaluate('STATE._resultBackend'), 'api')
         self.assertEqual(self.errors, [])
 
+    def test_worker_restore_and_window_keep_backend_when_api_recovers(self):
+        self.page.evaluate(r'''async () => {
+          cancelSearchPrefetch(); prefetchNextPage = () => {};
+          ensureResultWindowPages = () => {}; // Keep the gap for explicit demand below.
+          if (!await ensureLocalDataLoaded(false, true)) throw new Error('Missing test corpus');
+          const repo = 'VoiceOfML/Test';
+          await corpusWorkerRequest('replace-corpus', {data:{v:2,rp:[repo],fd:[[]],
+            rc:Array.from({length:24}, (_,i) => [0,'local-'+String(i).padStart(2,'0'),'txt',0,1,0])}});
+          STATE.query = 'local'; STATE.exact = false; STATE.sort = 'name'; STATE.pageSize = 2;
+          STATE.filterRepos = [repo]; STATE.useLocalMode = false;
+          apiAvailable = false;
+          window.restoreBackends = [];
+          const original = fetchPositionPage;
+          fetchPositionPage = async (query, page, signal, anchorId) => {
+            restoreBackends.push([query.resultBackend, page]);
+            const data = await original(query, page, signal, anchorId);
+            if (anchorId) apiAvailable = true;
+            return data;
+          };
+          const key = getSearchViewKey();
+          tryRestoreSearchPosition(key, {viewport:null, position:{version:1,key,index:12,offset:0,
+            anchorId:repo+'\0local-12.txt',loadedPage:10,savedAt:Date.now()}});
+        }''')
+        self.page.wait_for_function("!positionRestore && resultWindow?.query.resultBackend === 'local'")
+        self.assertTrue(self.page.evaluate('apiAvailable && !STATE.useLocalMode'))
+        self.assertEqual(self.page.evaluate('STATE._resultBackend'), 'local')
+        self.assertEqual(self.page.evaluate('STATE.results[12].File'), 'local-12')
+        restored = self.page.evaluate('''async () => {
+          const key = getSearchViewKey();
+          const snapshot = saveSearchViewSnapshot();
+          const restored = restoreSearchViewSnapshot(key);
+          const hole = !resultWindow.pages.has(2);
+          const loaded = await loadResultWindowPage(2);
+          return {restored,hole,loaded,backend:snapshot.resultBackend,window:resultWindow.query.resultBackend,
+            invalid:!!resultWindow.invalid, file:STATE.results[2]?.File,
+            workerOnly:restoreBackends.every(([backend]) => backend === 'local')};
+        }''')
+        self.assertEqual(restored, dict(restored=True, hole=True, loaded=True, backend='local', window='local',
+                                        invalid=False, file='local-02', workerOnly=True))
+        self.page.evaluate('jumpToSearchResult("17")')  # Jump to a different unloaded page by index.
+        self.page.wait_for_function('!positionRestore && STATE.results[16]?.File === "local-16"')
+        self.assertTrue(self.page.evaluate("restoreBackends.every(([backend]) => backend === 'local')"))
+        self.assertEqual(self.errors, [])
+
     def check_initial_generation_relocation(self, prefetched, initial_generation='different', local_ready=False):
         self.page.evaluate(r'''({initialGeneration, localReady}) => {
           cancelSearchPrefetch();

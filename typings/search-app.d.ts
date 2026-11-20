@@ -3,6 +3,7 @@ interface PagesPrefetchGroup extends AbortController {
   cacheWaits?: Map<number, {controller: AbortController; urgent: boolean}>;
 }
 interface PagesResultWindow extends VoiceOfMLResultWindow {
+  query: PagesWindowQuery;
   pages: Set<number>; count: number; missingPages?: Set<number>;
 }
 interface PagesDisplayedSearchView extends Omit<SearchSnapshotView, 'window'> {
@@ -25,7 +26,7 @@ interface PagesCorpusPage {
   snapshot_generation: string; anchor_index?: number;
 }
 interface PagesWindowQuery extends VoiceOfMLSearchViewProjection {
-  resultBackend?: string | null;
+  resultBackend?: SearchResultBackend | null | undefined;
 }
 interface PagesSearchParams extends SearchExecutionParams {}
 interface PagesSearchState extends Omit<VoiceOfMLRouteState, 'wide'> {
@@ -37,7 +38,7 @@ interface PagesSearchState extends Omit<VoiceOfMLRouteState, 'wide'> {
   resultsSkeletonActive: boolean; _pendingPage: number; _loadedPage: number;
   _pageCache: Record<number, (VoiceOfMLResultRecord | null | undefined)[]>;
   _initialActive: boolean; _deferredAppendWhileDragging: boolean;
-  _resultBackend?: string | null; _pagingAppendScrollTop?: number | null;
+  _resultBackend?: SearchResultBackend | null; _pagingAppendScrollTop?: number | null;
 }
 
 // Elements populated by cacheDOM from the search page. The two legacy position

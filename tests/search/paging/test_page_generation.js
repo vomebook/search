@@ -95,26 +95,44 @@ for (const {name: project, root} of searchTestProjects()) {
       const f=executionFixture(root,true), policy=f.context.VoiceOfMLSearchExecutionPolicy;
       for(const apiAvailable of [false,true]) for(const useLocalMode of [false,true]) {
         Object.assign(f.view,{apiAvailable,useLocalMode,_resultBackend:'local'});
-        assert.strictEqual(policy.backend(f.view,true,null),'local');
+        assert.strictEqual(policy.backend(f.view,true),'local');
         f.view._resultBackend='api';
-        assert.strictEqual(policy.backend(f.view,true,'mixed'),apiAvailable?'api':'unavailable');
+        assert.strictEqual(policy.backend(f.view,true),apiAvailable?'api':'unavailable');
       }
       Object.assign(f.view,{apiAvailable:true,useLocalMode:true,_resultBackend:null,_initialActive:true,dataLoaded:false});
-      assert.strictEqual(policy.backend(f.view,true,null),'api');
-      assert.strictEqual(policy.backend(f.view,true,'mixed'),'local');
+      assert.strictEqual(policy.backend(f.view,true),'api');
+      Object.assign(f.view,{useLocalMode:false,_initialActive:false});
+      f.service.execute({page:1,folderMatchMode:'mixed'},false,1,1);
+      assert.deepStrictEqual(f.effects,['api']);
     });
-    test(project + ' mixed Worker failure cannot escape to API; plain failure reentry keeps newer state', async () => {
-      for(const mixed of [false,true]) {
-        const f=executionFixture(root,true);f.view._resultBackend='local';f.view.useLocalMode=true;
-        f.deps.retry=()=>{f.effects.push('retry');f.view.searchId++;f.view.isLoading=true;f.view._pendingPage=9;};
-        f.service.execute({page:1,folderMatchMode:mixed?'mixed':null},false,1,1);
-        f.calls[0].reject(Error('worker failed'));await f.flush();
+    test(project + ' mixed first-page Worker load/query failures retry online but never bounce back', async () => {
+      for(const dataLoaded of [false,true]) {
+        const f=executionFixture(root,true);
+        Object.assign(f.view,{page:1,_loadedPage:0,_resultBackend:null,useLocalMode:true,dataLoaded});
+        const params={page:1,folderMatchMode:'mixed',folderSelfs:[''],folderSubtrees:['a']};
+        f.deps.retry=(append,allowFallback)=>{
+          f.view.searchId++; f.view.intent++; f.view.isLoading=true;
+          f.service.execute(params,append,f.view.searchId,f.view.intent,allowFallback);
+        };
+        f.service.execute(params,false,1,1);
+        if(dataLoaded) f.calls[0].reject(Error('worker failed')); else f.calls[0].resolve(false);
+        await f.flush();
         assert.strictEqual(f.view.dataLoaded,false);
-        assert.strictEqual(f.effects.includes('retry'),!mixed);
-        assert.strictEqual(f.view.isLoading,!mixed);
-        if(!mixed) assert.strictEqual(f.view._pendingPage,9);
-        else assert(f.effects.some(e=>Array.isArray(e)&&e[0]==='unavailable'&&!e[1]));
+        assert.strictEqual(f.view._resultBackend,'api');
+        assert.strictEqual(f.view._pendingPage,1);
+        assert.strictEqual(f.view.isLoading,true);
+        f.calls[1].reject(Error('API_TIMEOUT')); await f.flush();
+        assert.strictEqual(f.calls.length,2);
+        assert.strictEqual(f.view.isLoading,false);
       }
+    });
+    test(project + ' published mixed Worker append failure never switches backend', async () => {
+      const f=executionFixture(root,true);f.view._resultBackend='local';
+      f.service.execute({page:2,folderMatchMode:'mixed'},true,1,1);
+      f.calls[0].reject(Error('worker failed')); await f.flush();
+      assert.strictEqual(f.view._resultBackend,'local');
+      assert.strictEqual(f.view.page,1);
+      assert(!f.effects.includes('api')&&!f.effects.includes('retry'));
     });
     test(project + ' API fallback reentry cannot be cleared by the preceding finally', async () => {
       const f=executionFixture(root,true);f.start(false);f.calls[0].reject(Error('API_TIMEOUT'));await f.flush();

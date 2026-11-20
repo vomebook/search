@@ -144,7 +144,7 @@ async function delayedInitialSearch(mode) {
   panel.innerHTML = '<button id="full-search-toggle"></button><div class="reader-panel-tabs"></div>';
   document.body.append(panel);
   const state = {query: '', results: [], index: -1};
-  let open = false, serial = 0, run;
+  let open = false, serial = 0, run, deferredActivation;
   const controller = createReaderSearchController({document, signal: new AbortController().signal,
     runtime: {state: {search: state}, currentGeneration: f.runtime.currentGeneration, events: {on: () => () => {}}},
     nextGeneration: () => { f.cancel(); return f.generation; }, isCurrent: generation => generation === f.generation,
@@ -156,7 +156,7 @@ async function delayedInitialSearch(mode) {
         });
         return run;
       },
-      activate: (result, generation) => result.activate(generation)},
+      activate: (result, generation) => deferredActivation?.promise.then(() => result.activate(generation)) ?? result.activate(generation)},
     navigation: {begin: () => { f.nextNavigation(); return f.navigation; },
       current: generation => generation === f.navigation, reportError: error => { throw error; }},
     panel: {isOpen: () => open, serial: () => serial, show: () => { open = true; view.hidden = false; serial++; },
@@ -233,6 +233,25 @@ async function delayedInitialSearch(mode) {
     await waitForPartial();
     await settle();
     ensure(status.textContent === '135 个结果', 'reopen after cancellation starts fresh');
+    for (const newerNavigation of [false, true]) {
+      deferredActivation = Promise.withResolvers();
+      const activating = controller.activate(0);
+      const activeResult = f.navigation;
+      if (newerNavigation) f.nextNavigation();
+      find('full-search-clear').click();
+      ensure(f.navigation === activeResult + 1, 'clear cancels only the owned result jump');
+      ensure(!f.root.querySelector('mark'), 'clear removes the old highlights');
+      deferredActivation.resolve();
+      await activating;
+      ensure(open && state.results.length === 0 && !f.root.querySelector('mark'), 'cleared result cannot land');
+      if (!newerNavigation) {
+        input.value = 'needle';
+        const searching = controller.run();
+        await waitForPartial();
+        await settle();
+        await searching;
+      }
+    }
   } finally {
     controller.dispose();
     f.cancel();

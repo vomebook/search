@@ -49,10 +49,11 @@ test('recovery wait requires elapsed delay, visibility and connectivity, and cle
   }
 });
 
-test('recovery adapters retain 750/1500 retries, demand gating, anchor and each site local policy', async () => {
+test('recovery waits use the pinned backend, not preferences, mixed filters or current API health', async () => {
   for (const scenario of ['remote', 'local', 'self', 'subtree', 'unavailable', 'prefetch', 'fatal', 'aborted']) {
     const owner = new AbortController(), error = new Error('temporary'), waits = [], calls = [];
-    const query = {useLocalMode: scenario === 'local', folders: {self: scenario === 'self' ? ['a'] : [], subtree: scenario === 'subtree' ? ['a'] : []}};
+    const query = {resultBackend: scenario === 'local' ? 'local' : 'api', useLocalMode: scenario === 'remote',
+      folders: {self: scenario === 'self' ? ['a'] : [], subtree: scenario === 'subtree' ? ['a'] : []}};
     const c = fixture(['fetchPositionPageWithRecovery'], {apiAvailable: scenario !== 'unavailable',
       fetchPositionPage(...args) {calls.push(args); throw error;},
       isRecoverableSearchError: () => scenario !== 'fatal',
@@ -63,8 +64,7 @@ test('recovery adapters retain 750/1500 retries, demand gating, anchor and each 
     const retry = !['prefetch', 'fatal', 'aborted'].includes(scenario);
     assert.equal(calls.length, scenario === 'aborted' ? 0 : retry ? 3 : 1);
     for (const args of calls) assert.deepEqual(args, [query, 7, owner.signal, 'anchor']);
-    const pages = source.includes('isLocal: query => query.useLocalMode ||');
-    const local = scenario === 'local' || (pages && ['self', 'subtree', 'unavailable'].includes(scenario));
+    const local = scenario === 'local';
     assert.deepEqual(waits, retry ? [[750, local], [1500, local]] : []);
   }
 });
