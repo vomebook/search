@@ -82,8 +82,7 @@ test('PDF range dependencies are built before the network consumer and pinned fo
           } else if(extension==='pdf') {
             assert.ok(hrefs.includes(base+built('reader/pdf/pdf-worker-wrapper.mjs').path),'intent and Reader use hashed worker URL');
             assert.ok(hrefs.includes(base+'vendor/wasm/qcms_bg.wasm'),'ICC branch survives build');
-          } else if(extension==='epub') assert.ok(hrefs.includes(base+'foliate-reader/view.js'+(project==='github'?'?reader-v1':'')));
-          else assert.deepEqual(hrefs,[]);
+          } else assert.deepEqual(hrefs,[]);
         }
       }
       const original=readFileSync(join(root,'static',network),'utf8');

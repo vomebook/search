@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { Agent, get } from "node:https";
 import { dirname, join } from "node:path";
 import { gunzipSync } from "node:zlib";
@@ -8,13 +8,6 @@ import { setTimeout as delay } from "node:timers/promises";
 const resources = createRequire(import.meta.url)(join(process.cwd(), "static/reader-resources.js"));
 
 const output = process.argv[2] || "static/vendor";
-const foliateOutputArgument = process.argv.indexOf("--foliate-output");
-if (foliateOutputArgument >= 0 && !process.argv[foliateOutputArgument + 1])
-  throw new Error("--foliate-output requires a directory");
-const foliateOutput = foliateOutputArgument >= 0
-  ? process.argv[foliateOutputArgument + 1]
-  : process.argv.includes("--refresh-foliate")
-    ? join(process.cwd(), "static/foliate-reader/vendor") : null;
 // proxyEnv is supported by Node 22.21+, 24.5+, and later major versions.
 const [major, minor] = process.versions.node.split(".").map(Number);
 if (major < 22 || (major === 22 && minor < 21) || major === 23 || (major === 24 && minor < 5))
@@ -82,8 +75,7 @@ async function downloadWithRetry(url, signal) {
 
 async function main() {
   const vendors = Object.entries(resources.vendors);
-  const foliateVendors = foliateOutput ? Object.values(resources.foliateVendors) : [];
-  const items = [resources.pdfArchive, ...vendors.map(([, value]) => value), ...foliateVendors, resources.ruffleArchive];
+  const items = [resources.pdfArchive, ...vendors.map(([, value]) => value), resources.ruffleArchive];
   const downloaded = new Array(items.length);
   let next = 0;
   const controller = new AbortController();
@@ -134,7 +126,6 @@ async function main() {
   // Prepare every operation before touching existing output. Disk errors during the
   // commit below can still leave partial updates; this is not an atomic rollback.
   const writes = [];
-  const removals = [];
   const ruffleOutput = join(output, resources.ruffleArchive.directory.slice("vendor/".length));
   for (const [file, bytes] of extractedRuffle) writes.push([join(ruffleOutput, file), bytes]);
   const tar = gunzipSync(downloaded[0], { maxOutputLength: MAX_ARCHIVE_BYTES });
@@ -158,7 +149,6 @@ for (let offset = 0; offset < tar.length;) {
     const target = join(output, relative);
     const bytes = tar.subarray(offset + 512, offset + 512 + size);
     writes.push([target, bytes]);
-    if (foliateOutput) writes.push([join(foliateOutput, "pdfjs", relative), bytes]);
   }
   offset += 512 + Math.ceil(size / 512) * 512;
 }
@@ -166,26 +156,15 @@ for (const group of pdfGroups) {
   if (![...pdfFiles].some(file => file.startsWith(group + "/")))
     throw new Error(`PDF archive missing required files: ${group}`);
 }
-for (const [index, [name, {path}]] of vendors.entries()) {
+for (const [index, [, {path}]] of vendors.entries()) {
   const bytes = downloaded[index + 1];
   const versioned = path.slice("vendor/".length);
   writes.push([join(output, versioned), bytes]);
-  if (foliateOutput && (name === "pdf" || name === "pdfWorker")) {
-    const filename = name === "pdf" ? "pdf.mjs" : "pdf.worker.mjs";
-    writes.push([join(foliateOutput, "pdfjs", filename), bytes]);
-    removals.push(join(foliateOutput, "pdfjs", filename + ".map"));
-  }
-}
-if (foliateOutput) for (const [index, {file}] of foliateVendors.entries()) {
-  const bytes = downloaded[1 + vendors.length + index];
-  const target = join(foliateOutput, file);
-  writes.push([target, bytes]);
 }
 for (const [target, bytes] of writes) {
   mkdirSync(dirname(target), { recursive: true });
   writeFileSync(target, bytes);
 }
-for (const target of removals) rmSync(target, { force: true });
 }
 
 main().catch((error) => { console.error(error); process.exitCode = 1; });

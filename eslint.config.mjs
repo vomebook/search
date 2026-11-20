@@ -12,7 +12,7 @@ const rules = Object.fromEntries([
 
 export default [
   // ESLint's global ignore also prevents parsing third-party minified files.
-  { ignores: ["**/vendor/**", "**/foliate-reader/**", "**/node_modules/**"] },
+  { ignores: ["**/vendor/**", "**/node_modules/**"] },
   {
     files: ["static/**/*.{js,mjs}"],
     languageOptions: {

@@ -67,7 +67,7 @@
       navigation: { tocEntries: [], currentChapterIndex: -1 },
       search: { query: "", results: [], index: -1 },
       panel: { open: false, selected: "toc", showingAllBookmarks: false, editingBookmark: null },
-      formats: { active: null, pdf: {}, foliate: {}, html: {}, media: {} },
+      formats: { active: null, pdf: {}, html: {}, media: {} },
       capability: null,
       ...(options.initialState || {})
     };

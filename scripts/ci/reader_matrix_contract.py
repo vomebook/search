@@ -149,7 +149,7 @@ def unittest_recipe():
                 'tests.reader.browser.test_reader_accessibility', ebook, store, prefetch,
                 'tests.search.browser.test_search_positions', wildcard,
             ), (
-                ebook + '.EbookFlowTests.test_native_first_chapter_reads_packaged_styles_in_parallel_and_keeps_cascade',
+                ebook + '.EbookFlowTests.test_chapter_xhtml_packaged_css_cascade',
                 store_upgrade, prefetch + '.PrefetchPipelineTests.test_three_page_lookahead_joins_foreground_and_retains_later_pages',
                 wildcard + '.WildcardIndexOracleTests.test_generated_index_is_exact_for_metadata_fields',
             ), hf=True),
@@ -186,6 +186,24 @@ def playwright_install_step(setup, *, hf=False):
             'unexpected baseline Playwright system dependency command')
     prefix = '../' if hf else ''
     return {**setup, 'run': f'bash {prefix}scripts/ci/install_playwright_system_deps.sh {browsers}'}
+
+
+def remove_foliate_setup(steps, *, hf=False, records=False):
+    """Transform only the exact authenticated setup entries, once each."""
+    directory = {'working-directory': 'huggingface-search'} if hf else {}
+    install = {'name': 'Install pinned Foliate runtime', 'timeout-minutes': 10,
+               **directory, 'run': 'node scripts/build/fetch_foliate_reader.mjs static/foliate-reader'}
+    vendor = {'name': 'Install pinned Reader vendors', 'timeout-minutes': 5,
+              **directory, 'run': 'node scripts/build/copy_reader_vendor.mjs static/vendor --foliate-output static/foliate-reader/vendor'}
+    def entry(step):
+        return {'label': step['name'], 'setup': step} if records else step
+    old_install, old_vendor = entry(install), entry(vendor)
+    for old in (old_install, old_vendor):
+        name = old['label'] if records else old['name']
+        matches = [item for item in steps if (item.get('label') if records else item.get('name')) == name]
+        require(matches == [old], f'{name}: expected exactly one unchanged setup')
+    replacement = entry({**vendor, 'run': 'node scripts/build/copy_reader_vendor.mjs static/vendor'})
+    return [replacement if item == old_vendor else item for item in steps if item != old_install]
 
 
 def execution_policy(job, records, historical_steps):
@@ -252,7 +270,7 @@ def execution_policy(job, records, historical_steps):
                     'invalid Service Worker test selection')
             record = {**record, 'argv': (tuple(node.split()), (*prefix.split(), *arguments))}
         adjusted.append(record)
-    return adjusted
+    return remove_foliate_setup(adjusted, hf=job == 'huggingface-search', records=True)
 
 
 def verify_policy(contract, original_bytes):
@@ -324,7 +342,8 @@ def validate(workflow, contract, original_bytes=None):
     # summary's exact reviewed command enforces all four success results.
     for name, expected in contract['fixed_jobs'].items():
         if name == 'firefox-staged-pdf':
-            expected = {**expected, 'steps': [playwright_install_step(step) for step in expected['steps']]}
+            expected = {**expected, 'steps': remove_foliate_setup(
+                [playwright_install_step(step) for step in expected['steps']])}
         require(name in jobs and jobs[name] == expected, f'{name}: job changed')
     require(set(contract['fixed_jobs']) == set(jobs) - set(JOBS), 'incomplete fixed jobs contract')
     manifest = summary_manifest(jobs['summary'])

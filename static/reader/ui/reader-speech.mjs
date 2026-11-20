@@ -84,15 +84,12 @@ export function createReaderSpeech(readerContext, loadPlayer) {
   const readerSpeechTitle = () => document.querySelector("#title")?.textContent?.trim() || document.title || "朗读";
 
   // ---- Per-format unit sources -------------------------------------------
-  function foliateSections() {
-    return (readerContext.epubBook?.sections || []).filter((section) => section.linear !== "no");
-  }
   function chapterCount() { return readerContext.chapterManifestLoader?.count || 0; }
   function pageCount() { return Number(readerContext.documentState?.pageCount) || 0; }
 
   function hasText() {
     const current = mode();
-    if (["text", "markdown", "html", "foliate", "epub-chapters", "pdf"].includes(current)) return true;
+    if (["text", "markdown", "html", "epub-chapters", "pdf"].includes(current)) return true;
     if (current === "pdf-pages") return !!(readerContext.ocrManifestUrl || readerContext.pdfOcrManifest || readerContext.pdfDocument);
     return false;
   }
@@ -108,25 +105,6 @@ export function createReaderSpeech(readerContext, loadPlayer) {
       const frame = readerContext.htmlFrame;
       const root = () => frame?.contentDocument?.body || null;
       return { units: 1, first: 0, root, load: async () => rootText(root()), dom: true, frame };
-    }
-    if (current === "foliate") {
-      const sections = foliateSections();
-      /** @param {number} index */
-      const article = (index) => readerContext.content.querySelector(`.foliate-continuous article[data-section="${index}"]:not(.foliate-section-placeholder)`);
-      /** @param {number} index */
-      const body = (index) => { const node = article(index); const root = node && readerContext.foliateSectionRoot(node); return root?.querySelector(".reader-section-body") || root || null; };
-      return {
-        units: sections.length, first: 0, root: body,
-        load: async (index) => {
-          const loaded = body(index);
-          if (loaded) return rootText(loaded);
-          const section = sections[index];
-          if (!section) return "";
-          const doc = await section.createDocument();
-          return rootText(doc.body || doc.documentElement);
-        },
-        locate: (index) => readerContext.foliateSectionLoader?.(index)
-      };
     }
     if (current === "epub-chapters") {
       // Valid chapter manifests have consecutive 1-based indices. Reading
@@ -385,11 +363,7 @@ export function createReaderSpeech(readerContext, loadPlayer) {
     const box = readerContext.viewport.getBoundingClientRect();
     const current = mode();
     let unit = info.first;
-    if (current === "foliate") {
-      const article = [...readerContext.content.querySelectorAll(/** @type {string} */ (".foliate-continuous article[data-section]"))]
-        .find((node) => node.getBoundingClientRect().bottom > box.top + 8);
-      unit = article ? Number(/** @type {HTMLElement} */ (article).dataset.section) : 0;
-    } else if (current === "epub-chapters") {
+    if (current === "epub-chapters") {
       const article = [...readerContext.content.querySelectorAll(".reader-epub-chapter[data-chapter]")]
         .find((node) => node.getBoundingClientRect().bottom > box.top + 8);
       const chapter = Number(/** @type {HTMLElement | undefined} */ (article)?.dataset.chapter);

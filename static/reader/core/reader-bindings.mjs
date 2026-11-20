@@ -22,7 +22,7 @@ export function createReaderBindings(readerContext) {
       if (window.VoiceOfMLReaderPdfDiagnostics === readerContext.pdfDiagnostics) delete window.VoiceOfMLReaderPdfDiagnostics;
     });
 
-    // Polyfills for vendor engines (pdf.js, foliate): neither helper has a direct
+    // Polyfills for pdf.js: neither helper has a direct
     // caller in first-party code, but both are required by pinned vendor bundles.
     if (!Map.prototype.getOrInsertComputed) {
       Map.prototype.getOrInsertComputed = function (key, callback) {
@@ -274,16 +274,6 @@ export function createReaderBindings(readerContext) {
 
   function applyMetadataAndWatchSanitizedContent() {
     readerContext.applyReaderMetadata(readerContext.resolvedReaderData);
-    readerContext.contentSanitizerObserver = new MutationObserver(() => {
-      const seen = new Set();
-      for (const article of /** @type {NodeListOf<HTMLElement>} */ (document.querySelectorAll(".foliate-continuous > article[data-section]"))) {
-        article.querySelectorAll("style,link[rel=stylesheet]").forEach((node) => node.remove());
-        const index = article.dataset.section;
-        if (seen.has(index)) article.remove();
-        else seen.add(index);
-      }
-    });
-    readerContext.contentSanitizerObserver.observe(readerContext.content, { childList: true, subtree: true });
     readerContext.bookmarkPopover.className = "bookmark-popover";
     readerContext.bookmarkPopover.setAttribute("role", "dialog");
     readerContext.bookmarkPopover.setAttribute("aria-modal", "true");
@@ -483,33 +473,6 @@ export function createReaderBindings(readerContext) {
     document.addEventListener("click", readerContext.handleReaderOutsideClick);
     readerContext.trackReaderResource(() => document.removeEventListener("click", readerContext.handleReaderOutsideClick));
     readerContext.trackReaderResource(() => { readerContext.headingLocationCache?.dispose(); readerContext.headingLocationCache = null; });
-
-    document.addEventListener("click", async (event) => {
-      const path = event.composedPath(),
-        link = /** @type {Element | undefined} */ (path.find((node) => node instanceof Element && node.matches?.("a[href]"))),
-        article = /** @type {HTMLElement | undefined} */ (path.find(
-          (node) =>
-            node instanceof Element && node.matches?.(".foliate-continuous article[data-section]")
-        ));
-      if (!link || !article || !readerContext.epubRendition?.book) return;
-      const raw = link.getAttribute("href") || "";
-      if (!raw || readerContext.epubRendition.book.isExternal?.(raw) || /^(?:https?:|mailto:|tel:)/i.test(raw))
-        return;
-      event.preventDefault();
-      const generation = readerContext.beginReaderNavigation(),
-        index = Number(article.dataset.section),
-        section = index < 0 ? readerContext.epubRendition.book.sections[-index - 1]
-          : readerContext.epubRendition.book.sections.filter((item) => item.linear !== "no")[index];
-      let href = raw;
-      try {
-        href = section?.resolveHref?.(raw) || raw;
-      } catch (_) {}
-      try {
-        await readerContext.activateFoliateTocEntry({ href }, generation);
-      } catch (error) {
-        readerContext.reportNavigationError(error, generation);
-      }
-    });
 
     // Bookmark dialog owns focus and temporarily makes only its siblings inert.
 
@@ -799,7 +762,6 @@ export function createReaderBindings(readerContext) {
     });
     window.addEventListener("pageshow", (event) => {
       if (event.persisted && !readerContext.readerLifecycle.disposed) {
-        readerContext.scheduleFoliateScrollSync();
         readerContext.updateProgressTools();
       }
     });

@@ -9,7 +9,6 @@ import os
 import time
 import unittest
 import urllib.parse
-import zipfile
 import wave
 
 from tests.performance import test_reader_performance as support
@@ -138,8 +137,6 @@ class ReaderRefactorTest(unittest.TestCase):
 
 [chapter](chapter%20one.md)
 
-[book](book.epub)
-
 [fragment](chapter%20one.md#section)
 
 [self](index.md#local)
@@ -175,8 +172,6 @@ class ReaderRefactorTest(unittest.TestCase):
                 route.fulfill(content_type='text/markdown', body=index)
             elif path.endswith('/books/chapter one.md'):
                 route.fulfill(content_type='text/markdown', body=chapter)
-            elif path.endswith('/books/book.epub'):
-                route.fulfill(content_type='application/epub+zip', body=support.minimal_epub())
             else:
                 route.fulfill(status=404, body='missing')
         self.page.route('**/api/reader-content**', serve)
@@ -188,13 +183,12 @@ class ReaderRefactorTest(unittest.TestCase):
         base = self.markdown_link_fixture()
         self.open(self.reader_url('md', name='books/index'))
         article = self.page.locator('.reader-markdown')
-        for label, filename, ext in [('chapter', 'chapter one.md', 'md'), ('book', 'book.epub', 'epub')]:
-            href = article.get_by_role('link', name=label, exact=True).get_attribute('href')
-            target = urllib.parse.urlsplit(href)
-            args = urllib.parse.parse_qs(target.query)
-            self.assertTrue(target.path.endswith('/static/reader.html'))
-            self.assertEqual(urllib.parse.unquote(args['url'][0]), base + filename)
-            self.assertEqual(args['ext'][0], ext)
+        href = article.get_by_role('link', name='chapter', exact=True).get_attribute('href')
+        target = urllib.parse.urlsplit(href)
+        args = urllib.parse.parse_qs(target.query)
+        self.assertTrue(target.path.endswith('/static/reader.html'))
+        self.assertEqual(urllib.parse.unquote(args['url'][0]), base + 'chapter one.md')
+        self.assertEqual(args['ext'][0], 'md')
         self.assertEqual(article.get_by_role('link', name='local', exact=True).get_attribute('href'), '#local')
         self.assertEqual(article.get_by_role('link', name='self', exact=True).get_attribute('href'), '#local')
         self.assertEqual(article.get_by_role('link', name='outside').get_attribute('href'), 'https://example.org/article.md')
@@ -247,17 +241,6 @@ class ReaderRefactorTest(unittest.TestCase):
         self.open(self.reader_url('md', name='cache', url=cache, download=base + 'index.md'))
         href = self.page.locator('.reader-markdown').get_by_role('link', name='chapter', exact=True).get_attribute('href')
         self.assertEqual(urllib.parse.unquote(urllib.parse.parse_qs(urllib.parse.urlsplit(href).query)['url'][0]), base + 'chapter one.md')
-
-    def test_markdown_epub_link_opens_book_without_downloading(self):
-        base = self.markdown_link_fixture()
-        self.open(self.reader_url('md', name='books/index'))
-        downloads = []
-        self.page.on('download', lambda download: downloads.append(download))
-        self.page.locator('.reader-markdown').get_by_role('link', name='book', exact=True).click()
-        self.page.wait_for_url('**/reader.html?*ext=epub*')
-        self.page.wait_for_function("() => document.documentElement.dataset.readerPhase === 'ready'")
-        self.assertEqual(urllib.parse.unquote(urllib.parse.parse_qs(urllib.parse.urlsplit(self.page.url).query)['url'][0]), base + 'book.epub')
-        self.assertEqual(downloads, [])
 
     def test_markdown_dataset_link_in_search_overlay_uses_parent_navigation(self):
         self.markdown_link_fixture()
@@ -810,22 +793,6 @@ class ReaderRefactorTest(unittest.TestCase):
         self.assertEqual(self.page.evaluate('window.__imageWaitProbe()'),
                          [[0, 1, 'eager'], [0, 0, 'eager'], [0, 0, 'eager'], 'AbortError', 0])
 
-    def test_epub_lazy_image_loads_while_section_is_prepared_off_dom(self):
-        with zipfile.ZipFile(io.BytesIO(support.minimal_epub())) as archive:
-            files = {name: archive.read(name) for name in archive.namelist()}
-        files['OEBPS/chapter.xhtml'] = files['OEBPS/chapter.xhtml'].replace(
-            b'</body>', b'<img src="picture.webp" loading="lazy" alt="Chapter image" width="64" height="32"/></body>')
-        files['OEBPS/picture.webp'] = support.IMAGE_FIXTURES['webp'][1]
-        images = []
-        self.page.route('**/api/reader-resource?**', lambda route: (
-            images.append(route.request.url), route.fulfill(content_type='image/webp', body=files['OEBPS/picture.webp'])))
-        self.serve(support.zip_bytes(files), 'application/epub+zip')
-        self.open(self.reader_url('epub'))
-        image = self.page.locator('article[data-section] img').first
-        self.assertEqual(image.evaluate('node => node.loading'), 'eager')
-        self.assertGreater(image.evaluate('node => node.naturalWidth'), 0)
-        self.assertEqual(len(images), 1)
-
     def test_spreadsheet_cells_take_first_viewport_while_images_are_pending(self):
         # Delay only the post-frame image settlement. The sanitized HTML has
         # already loaded, so this distinguishes first paint from restore-ready.
@@ -975,25 +942,6 @@ class ReaderRefactorTest(unittest.TestCase):
         self.page.evaluate("() => document.querySelector('.reader-chapter-sentinel[data-chapter=\\\"6\\\"]')?.click()")
         self.page.locator('.reader-epub-chapter[data-chapter="6"]').wait_for(state="attached")
         self.assertNotIn(1, requested)
-
-    def test_saved_foliate_builds_target_section_first(self):
-        store = support.STORE_SCRIPT.replace(
-            "get: () => new Promise((resolve) => setTimeout(() => resolve(null), 300)),",
-            "get: () => Promise.resolve({foliateSection: 10, foliateOffset: 0, foliateTocIndex: 9}),",
-        )
-        self.page.route("**/static/reader/core/reader-store.js", lambda route: route.fulfill(content_type="text/javascript", body=store))
-        def instrument(route):
-            response = route.fetch()
-            script = response.text()
-            marker = "async function createFoliateSection(section, index, signal, priority) {"
-            self.assertEqual(script.count(marker), 1, "Foliate section instrumentation boundary changed")
-            body = script.replace(marker, marker + " (window.__openedSections ||= []).push(index);")
-            route.fulfill(response=response, body=body)
-        self.page.route("**/static/reader/formats/reader-foliate-format.mjs*", instrument)
-        self.serve(support.epub_with_many_chapters(), "application/epub+zip")
-        self.open(self.reader_url("epub"))
-        self.assertEqual(self.page.evaluate("window.__openedSections[0]"), 10)
-        self.assertTrue(self.page.locator('.foliate-continuous article[data-section="10"]').is_visible())
 
     def test_djvu_retries_failed_ocr_without_reloading_source(self):
         state = install_native_djvu(self.page, self.origin, prefix="/search", ocr=True, fail_page_once=True)
@@ -1437,271 +1385,6 @@ class ReaderRefactorTest(unittest.TestCase):
         self.page.wait_for_function("() => document.querySelector('.full-search-rank')?.textContent === '101.'")
         self.assertEqual(self.page.locator("#full-search-page").input_value(), "3")
         self.assertEqual(self.page.locator("#full-search-status").text_content(), "180 个结果")
-
-    def test_pending_foliate_result_does_not_close_reopened_search(self):
-        self.serve(support.epub_with_many_chapters(3), "application/epub+zip")
-        self.open(self.reader_url("epub"))
-        self.search("正文")
-        self.page.evaluate("""() => {
-          const view = document.querySelector('foliate-view');
-          const original = view.resolveNavigation.bind(view);
-          view.resolveNavigation = cfi => new Promise(resolve => {
-            window.__releaseSearchNavigation = () => resolve(original(cfi));
-          });
-        }""")
-        self.page.locator(".full-search-result").first.click()
-        self.page.wait_for_function("() => !!window.__releaseSearchNavigation")
-        self.page.locator("#history").click()
-        self.page.locator("#history").click()
-        self.page.locator("#full-search-input").focus()
-        self.page.evaluate("window.__releaseSearchNavigation()")
-        self.page.locator(".foliate-continuous mark.full-search-highlight").first.wait_for()
-        self.assertTrue(self.page.locator("#full-search-input").is_visible())
-        self.assertTrue(self.page.locator("#history-panel").evaluate("node => node.classList.contains('is-open')"))
-
-    def test_unresolvable_foliate_result_keeps_search_open_for_retry(self):
-        self.serve(support.epub_with_many_chapters(3), "application/epub+zip")
-        self.open(self.reader_url("epub"))
-        self.search("正文")
-        self.page.evaluate("""() => {
-          const view = document.querySelector('foliate-view');
-          window.__resolveSearchResult = view.resolveNavigation.bind(view);
-          view.resolveNavigation = async () => null;
-        }""")
-        self.page.locator(".full-search-result").first.click()
-        self.page.wait_for_function("() => document.querySelector('#full-search-status').textContent === '搜索结果定位失败，请重试'")
-        self.assertTrue(self.page.locator("#history-panel").evaluate("node => node.classList.contains('is-open')"))
-        self.assertEqual(self.page.locator(".foliate-continuous mark.full-search-highlight").count(), 0)
-        self.page.evaluate("document.querySelector('foliate-view').resolveNavigation = window.__resolveSearchResult")
-        self.page.locator(".full-search-result").first.click()
-        self.page.wait_for_function("() => !document.querySelector('#history-panel').classList.contains('is-open')")
-        self.assertEqual(self.page.locator("#full-search-status").text_content(), "3 个结果")
-        self.assertEqual(self.page.locator(".foliate-continuous mark.full-search-highlight").count(), 1)
-
-    def test_foliate_navigation_exception_reports_failure_and_retries(self):
-        self.serve(support.epub_with_many_chapters(3), "application/epub+zip")
-        self.open(self.reader_url("epub"))
-        self.search("正文")
-        self.page.evaluate("""() => {
-          const view = document.querySelector('foliate-view');
-          const original = view.resolveNavigation.bind(view);
-          view.resolveNavigation = async cfi => {
-            view.resolveNavigation = original;
-            throw new Error('temporary navigation failure');
-          };
-        }""")
-        self.page.locator(".full-search-result").first.click()
-        self.page.wait_for_function("() => document.querySelector('#full-search-status').textContent === '搜索结果定位失败，请重试'")
-        self.assertTrue(self.page.locator("#history-panel").evaluate("node => node.classList.contains('is-open')"))
-        self.page.locator(".full-search-result").first.click()
-        self.page.wait_for_function("() => !document.querySelector('#history-panel').classList.contains('is-open')")
-        self.assertEqual(self.page.locator("#full-search-status").text_content(), "3 个结果")
-
-    def test_stale_foliate_fallback_cannot_highlight_after_navigation(self):
-        def hold_fallback(route):
-            response = route.fetch()
-            needle = ("const nodes = cached ? [] : await fullSearchTextNodes("
-                      "root, generation, Infinity, null, collect, respectBlocks);")
-            script = response.text()
-            self.assertIn(needle, script)
-            script = script.replace(needle, """if (occurrence !== null && !window.__fallbackHeld) {
-              window.__fallbackHeld = true;
-              await new Promise(resolve => { window.__releaseFallback = resolve; });
-            } """ + needle)
-            route.fulfill(response=response, body=script)
-        def finish_fallback(route):
-            response = route.fetch()
-            route.fulfill(response=response, body=response.text().replace(
-                "target = matches[0]?.target;", "target = matches[0]?.target; window.__fallbackDone = true;"))
-        self.page.route("**/static/reader/search/reader-dom-search.mjs*", hold_fallback)
-        self.page.route("**/static/reader/search/reader-search-backends.mjs*", finish_fallback)
-        self.serve(support.epub_with_many_chapters(3), "application/epub+zip")
-        self.open(self.reader_url("epub"))
-        self.search("正文")
-        self.page.evaluate("""() => {
-          const view = document.querySelector('foliate-view');
-          const original = view.resolveNavigation.bind(view);
-          view.resolveNavigation = async cfi => ({ ...(await original(cfi)), anchor: null });
-        }""")
-        self.page.locator(".full-search-result").first.click()
-        self.page.wait_for_function("() => !!window.__releaseFallback")
-        self.page.evaluate("document.querySelector('#viewport').dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }))")
-        self.page.evaluate("window.__releaseFallback()")
-        self.page.wait_for_function("() => !!window.__fallbackDone")
-        self.assertEqual(self.page.locator(".foliate-continuous mark.full-search-highlight").count(), 0)
-
-    def test_foliate_search_reuses_rows_and_bounds_visited_pages(self):
-        with zipfile.ZipFile(io.BytesIO(support.epub_with_many_chapters(6))) as archive:
-            files = {name: archive.read(name) for name in archive.namelist()}
-        for number in range(1, 7):
-            files[f'OEBPS/chapter-{number}.xhtml'] = (
-                '<html xmlns="http://www.w3.org/1999/xhtml"><body>' +
-                ''.join(f'<p>needle {number}-{hit}</p>' for hit in range(100)) +
-                '</body></html>').encode()
-        self.serve(support.zip_bytes(files), "application/epub+zip")
-        self.open(self.reader_url("epub"))
-        self.page.evaluate("""() => {
-          window.__searchProbe = {rows: 0, calls: 0};
-          const view = document.querySelector('foliate-view'), search = view.search.bind(view);
-          view.search = (...args) => { __searchProbe.calls++; return search(...args); };
-          new MutationObserver(records => {
-            for (const record of records) __searchProbe.rows += record.addedNodes.length;
-          }).observe(document.querySelector('#full-search-results'), {childList: true});
-        }""")
-        self.search("needle")
-        self.assertEqual(self.page.locator("#full-search-status").text_content(), "600 个结果")
-        self.assertEqual(self.page.evaluate("__searchProbe.rows"), 50)
-
-        def jump(number):
-            self.page.locator("#full-search-page").fill(str(number))
-            self.page.locator("#full-search-page").dispatch_event("change")
-            self.page.wait_for_function("rank => document.querySelector('.full-search-rank')?.textContent === rank",
-                                        arg=f"{(number - 1) * 50 + 1}.")
-            return self.page.locator(".full-search-result").all_text_contents()
-
-        original = jump(2)
-        jump(3)
-        before = self.page.evaluate("__searchProbe.calls")
-        self.assertEqual(jump(2), original)
-        self.assertEqual(self.page.evaluate("__searchProbe.calls"), before)
-        for number in (4, 5, 6, 7):
-            jump(number)
-        before = self.page.evaluate("__searchProbe.calls")
-        self.assertEqual(jump(2), original)
-        self.assertGreater(self.page.evaluate("__searchProbe.calls"), before)
-        self.page.locator("#full-search-input").fill("absent")
-        self.page.wait_for_function("() => document.querySelector('#full-search-status').textContent === '未找到正文匹配'")
-        self.page.locator("#full-search-input").fill("needle")
-        self.page.wait_for_function("() => document.querySelector('#full-search-status').textContent === '600 个结果'")
-        before = self.page.evaluate("__searchProbe.calls")
-        self.assertEqual(jump(2), original)
-        self.assertGreater(self.page.evaluate("__searchProbe.calls"), before)
-
-    def test_foliate_counting_materializes_only_requested_results(self):
-        for name, needle, probe in (
-            ("search.js", "const makeExcerpt = (strs, { startIndex, startOffset, endIndex, endOffset }) => {", "__excerptCalls"),
-            ("text-walker.js", "const range = document.createRange()", "__rangeCalls"),
-        ):
-            def instrument(route, _request, needle=needle, probe=probe):
-                response = route.fetch()
-                self.assertIn(needle, response.text())
-                route.fulfill(response=response, body=response.text().replace(needle,
-                    needle + f"; window.{probe} = (window.{probe} || 0) + 1;"))
-            self.page.route(f"**/foliate-reader/{name}", instrument)
-        with zipfile.ZipFile(io.BytesIO(support.epub_with_many_chapters(1))) as archive:
-            files = {name: archive.read(name) for name in archive.namelist()}
-        files['OEBPS/chapter-1.xhtml'] = (
-            '<html xmlns="http://www.w3.org/1999/xhtml"><body>' +
-            ''.join(f'<p>needle {hit}</p>' for hit in range(1000)) + '</body></html>'
-        ).encode()
-        self.serve(support.zip_bytes(files), "application/epub+zip")
-        self.open(self.reader_url("epub"))
-        self.page.evaluate("window.__excerptCalls = window.__rangeCalls = 0")
-        self.search("needle")
-        self.assertEqual(self.page.locator("#full-search-status").text_content(), "1000 个结果")
-        self.assertEqual(self.page.evaluate("[window.__excerptCalls, window.__rangeCalls]"), [50, 50])
-        self.page.locator("#full-search-page").fill("20")
-        self.page.locator("#full-search-page").dispatch_event("change")
-        self.page.wait_for_function("() => document.querySelector('.full-search-rank')?.textContent === '951.'")
-        self.assertEqual(self.page.evaluate("[window.__excerptCalls, window.__rangeCalls]"), [100, 100])
-        self.assertIn("999", self.page.locator(".full-search-result").last.text_content())
-        self.page.locator(".full-search-result").last.click()
-        self.page.wait_for_function("() => [...document.querySelectorAll('article[data-section]')].some(node => node.shadowRoot?.querySelector('mark')?.parentElement.textContent === 'needle 999')")
-
-    def test_foliate_excerpt_preserves_all_inline_match_nodes(self):
-        self.serve("Text")
-        self.open(self.reader_url())
-        base = urllib.parse.urlsplit(self.reader_url()).path.rsplit('/', 1)[0]
-        result = self.page.evaluate("""async base => {
-          const {search} = await import(base + '/foliate-reader/search.js');
-          return ['variant', 'base'].map(sensitivity => {
-            const result = [...search(['before ne', 'e', 'dle after'], 'needle',
-              {sensitivity, granularity: 'grapheme'})][0];
-            return result.excerpt;
-          }).concat([...search(['ne', 'ed', 'ne'], 'needne',
-            {sensitivity: 'base', granularity: 'grapheme'})][0].excerpt);
-        }""", base)
-        self.assertEqual(result, [{"pre": "before ", "match": "needle", "post": " after"}] * 2 +
-                         [{"pre": "", "match": "needne", "post": ""}])
-
-    def test_foliate_many_hits_paginate_and_cancel(self):
-        with zipfile.ZipFile(io.BytesIO(support.epub_with_many_chapters(3))) as archive:
-            files = {name: archive.read(name) for name in archive.namelist()}
-        for number in (1, 2, 3):
-            files[f'OEBPS/chapter-{number}.xhtml'] = (
-                '<html xmlns="http://www.w3.org/1999/xhtml"><body>' +
-                ''.join(f'<p>needle {number}-{hit}</p>' for hit in range(70)) +
-                '</body></html>'
-            ).encode()
-        self.serve(support.zip_bytes(files), "application/epub+zip")
-        self.open(self.reader_url("epub"))
-        self.search("needle")
-        self.assertEqual(self.page.locator("#full-search-status").text_content(), "210 个结果")
-        self.assertEqual(self.page.locator(".full-search-result").count(), 50)
-        self.assertTrue(self.page.locator("#full-search-cancel").is_hidden())
-        self.page.evaluate("""() => {
-          window.__cancelPagingChanges = [];
-          const cancel = document.querySelector('#full-search-cancel');
-          new MutationObserver(() => {
-            __cancelPagingChanges.push(cancel.hidden);
-          }).observe(document.querySelector('#full-search-cancel'), {
-            attributes: true, attributeFilter: ['hidden']
-          });
-        }""")
-        self.page.evaluate("""() => {
-          const status = document.querySelector('#full-search-status');
-          window.__pagingStatuses = [status.textContent];
-          window.__pagingObserver = new MutationObserver(records => {
-            for (const record of records) {
-              for (const node of record.removedNodes) window.__pagingStatuses.push(node.textContent);
-            }
-            window.__pagingStatuses.push(status.textContent);
-          });
-          window.__pagingObserver.observe(status, {childList: true});
-          const view = document.querySelector('foliate-view');
-          const original = view.search.bind(view);
-          view.search = async function* (options) {
-            if (options.index != null && !window.__heldResultPage) {
-              window.__heldResultPage = true;
-              await new Promise(resolve => { window.__releaseResultPage = resolve; });
-            }
-            yield* original(options);
-          };
-        }""")
-        self.page.locator("#full-search-page-next").click()
-        self.page.wait_for_function("() => !!window.__releaseResultPage")
-        self.assertTrue(self.page.locator("#full-search-cancel").is_hidden())
-        self.page.evaluate("window.__releaseResultPage()")
-        self.page.wait_for_function("() => document.querySelector('.full-search-rank')?.textContent === '51.'")
-        self.page.locator("#full-search-page").fill("3")
-        self.page.locator("#full-search-page").dispatch_event("change")
-        self.page.wait_for_function("() => document.querySelector('#full-search-page').value === '3' && document.querySelector('.full-search-result .full-search-rank')?.textContent === '101.'")
-        self.assertIn("needle 2-30", self.page.locator(".full-search-result").first.text_content())
-        self.assertTrue(self.page.locator("#full-search-cancel").is_hidden())
-        self.assertNotIn(False, self.page.evaluate("__cancelPagingChanges"))
-        statuses = self.page.evaluate("() => { window.__pagingObserver.disconnect(); return window.__pagingStatuses; }")
-        self.assertEqual(set(statuses), {"210 个结果"})
-        self.page.locator(".full-search-result").first.click()
-        self.page.wait_for_function("() => !document.querySelector('#history-panel').classList.contains('is-open')")
-        self.page.locator("#history").click()
-        self.page.wait_for_function("() => document.querySelector('#history-panel').classList.contains('is-open') && !document.querySelector('#full-search-view').hidden")
-        self.assertEqual(self.page.locator("#full-search-page").input_value(), "3")
-        self.page.locator("#full-search-input").fill("missing")
-        self.page.wait_for_function("() => document.querySelector('#full-search-status').textContent === '未找到正文匹配'")
-        self.page.evaluate("""() => {
-          const sections = document.querySelector('foliate-view').book.sections;
-          for (const section of sections) if (section.createDocument) {
-            const original = section.createDocument.bind(section);
-            section.createDocument = async () => { await new Promise(resolve => setTimeout(resolve, 200)); return original(); };
-          }
-        }""")
-        self.page.locator("#full-search-input").fill("needle")
-        self.page.locator("#full-search-cancel").click()
-        self.page.wait_for_timeout(700)
-        self.assertEqual(self.page.locator("#full-search-status").text_content(), "搜索已取消")
-        self.assertEqual(self.page.locator(".full-search-result").count(), 0)
-        self.page.locator("#full-search-retry").click()
-        self.page.wait_for_function("() => document.querySelector('#full-search-status').textContent === '210 个结果'")
 
     def test_pdf_with_unavailable_ocr_index_does_not_fall_back(self):
         self.page.route("**/static/vendor/pdf.min.*.mjs", lambda route: route.fulfill(
@@ -3003,77 +2686,6 @@ class ReaderRefactorTest(unittest.TestCase):
                 self.page.wait_for_function("() => document.documentElement.dataset.readerPhase === 'ready'")
                 self.assertEqual(self.page.locator('.reader-text').text_content(), text)
 
-    def expose_toc_probe(self):
-        def instrument(route):
-            response = route.fetch()
-            route.fulfill(response=response, body=response.text() + '''
-              window.__startTocProbe = () => {
-                const sourceSections = [{linear:'yes'}, {linear:'no'}, {linear:'yes'}];
-                const visibleSections = [sourceSections[0], sourceSections[2], sourceSections[0]];
-                const probe = window.__tocProbe = {calls:0, active:0, peak:0, scans:0, held:[]};
-                visibleSections.indexOf = section => {probe.scans++; return Array.prototype.indexOf.call(visibleSections, section);};
-                let hold = true;
-                const children = Array.from({length:85}, (_, n) => ({label:'Chapter ' + n, href:'chapter-' + n + '#anchor%20' + n}));
-                children.push({label:'Invalid', href:'invalid'});
-                const view = {book:{sections:sourceSections, toc:[{label:'Volume', subitems:children}],
-                  async resolveHref(href) {
-                    probe.calls++; probe.active++; probe.peak = Math.max(probe.peak, probe.active);
-                    try {
-                      if (hold) await new Promise(resolve => probe.held.push(resolve));
-                      if (probe.busy) {
-                        const deadline = performance.now() + 1;
-                        while (performance.now() < deadline) {}
-                      }
-                      if (href === 'invalid') throw Error('bad href');
-                      const number = Number(href.match(/chapter-(\\d+)/)[1]);
-                      return {index:number % 3, anchor:() => number};
-                    } finally {probe.active--;}
-                  }}, goTo(href) {probe.navigation = href;}};
-                probe.release = () => {hold = false; for (const resolve of probe.held.splice(0)) resolve();};
-                probe.promise = foliateTocEntries(view, visibleSections).then(entries => {
-                  entries.find(e => e.href === 'chapter-84#anchor%2084').activate();
-                  probe.entries = entries.map(e => ({label:e.label, section:e.sectionIndex, fragment:e.fragment,
-                    anchor:typeof e.anchor === 'function' ? e.anchor() : null}));
-                }, error => {probe.error = error.name;});
-              };
-            ''')
-        self.page.route('**/static/reader.js*', instrument)
-        self.serve('TOC probe')
-        self.open(self.reader_url())
-        self.page.evaluate('window.__startTocProbe()')
-
-    def test_foliate_toc_bounds_resolution_and_keeps_every_entry_in_order(self):
-        self.expose_toc_probe()
-        self.page.wait_for_function('() => window.__tocProbe.calls >= 8')
-        self.assertEqual(self.page.evaluate('__tocProbe.calls'), 8)
-        self.page.evaluate('''__tocProbe.busy = true; __tocProbe.ticks = [];
-          const timer = setInterval(() => __tocProbe.ticks.push(__tocProbe.calls), 0);
-          __tocProbe.promise.finally(() => clearInterval(timer)); __tocProbe.release();''')
-        self.page.evaluate('__tocProbe.promise')
-        entries = self.page.evaluate('__tocProbe.entries')
-        # A href-less navigation heading stays in the directory as a group row (it has no
-        # destination), so every entry keeps its original order.
-        self.assertEqual(entries[0], {'label':'Volume', 'section':-1, 'fragment':'', 'anchor':None})
-        # The non-linear section at spine index 1 is a real destination: Foliate
-        # addresses supplements by -spine_index - 1, not by their visible index.
-        self.assertEqual(entries[1:-1], [dict(label=f'Chapter {n}', section=(0, -2, 1)[n % 3],
-                                            fragment=f'anchor {n}', anchor=n) for n in range(85)])
-        self.assertEqual(entries[-1], {'label':'Invalid', 'section':-1, 'fragment':'', 'anchor':None})
-        self.assertEqual(self.page.evaluate('[__tocProbe.peak, __tocProbe.scans, __tocProbe.calls]'), [8, 0, 86])
-        self.assertGreaterEqual(len(self.page.evaluate('__tocProbe.ticks')), 2)
-        self.assertEqual(self.page.evaluate('__tocProbe.navigation'), 'chapter-84#anchor%2084')
-
-    def test_foliate_toc_disposal_stops_queued_resolution_and_late_publication(self):
-        self.expose_toc_probe()
-        self.page.wait_for_function('() => window.__tocProbe.calls >= 8')
-        self.page.evaluate("window.dispatchEvent(new Event('pagehide'))")
-        self.page.wait_for_function("() => window.__tocProbe.error === 'AbortError'")
-        self.assertEqual(self.page.evaluate('__tocProbe.calls'), 8)
-        self.page.evaluate('__tocProbe.release()')
-        self.page.wait_for_function('() => __tocProbe.active === 0')
-        self.assertFalse(self.page.evaluate('!!__tocProbe.entries'))
-        self.assertEqual(self.page.evaluate('__tocProbe.calls'), 8)
-
     def test_text_search_publishes_partial_results_before_full_scan(self):
         self.page.add_init_script("""const native = window.setTimeout.bind(window);
           window.setTimeout = (fn, ms, ...args) => native(fn, ms === 0 ? 20 : ms, ...args);""")
@@ -3367,25 +2979,6 @@ class ReaderRefactorTest(unittest.TestCase):
         }''')
         self.assertEqual(result, [dict(equal=True, unsafe=False, remote=False, styles=False)] * 9)
 
-    def test_epub_svg_xlink_control_whitespace_cannot_execute_in_reader_context(self):
-        with zipfile.ZipFile(io.BytesIO(support.minimal_epub())) as archive:
-            files = {item.filename: archive.read(item.filename) for item in archive.infolist()}
-        files["OEBPS/chapter.xhtml"] = b'''<html xmlns="http://www.w3.org/1999/xhtml"><body>
-          <svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
-            <a id="probe" xlink:href="java&#x09;script:window.__readerSecurityMarker=17;void(0)">
-              <text x="10" y="20">safe label</text>
-            </a>
-          </svg>
-        </body></html>'''
-        body = support.zip_bytes({name: value for name, value in files.items() if name != "mimetype"},
-                                 ("mimetype", "application/epub+zip"))
-        self.serve(body, "application/epub+zip")
-        self.open(self.reader_url("epub", name="svg-xlink-security"))
-        probe = self.page.locator("article[data-section] #probe")
-        self.assertEqual(probe.get_attribute("xlink:href"), None)
-        probe.click()
-        self.assertFalse(self.page.evaluate("() => window.__readerSecurityMarker === 17"))
-
     def test_back_tapped_before_reader_module_binds_still_exits(self):
         held = []
         self.page.route("**/static/reader.js*", lambda route: held.append(route))
@@ -3402,32 +2995,6 @@ class ReaderRefactorTest(unittest.TestCase):
         self.page.locator("#back").click()
         held.pop(0).continue_()
         self.page.wait_for_url(landing, timeout=8000)
-
-    def test_epub_prefixed_xlink_and_smil_href_cannot_execute_in_reader_context(self):
-        with zipfile.ZipFile(io.BytesIO(support.minimal_epub())) as archive:
-            files = {item.filename: archive.read(item.filename) for item in archive.infolist()}
-        files["OEBPS/chapter.xhtml"] = b'''<html xmlns="http://www.w3.org/1999/xhtml"><body>
-          <svg xmlns="http://www.w3.org/2000/svg" xmlns:x="http://www.w3.org/1999/xlink" width="240" height="70">
-            <a id="probe" x:href="javascript:window.__readerSecurityMarker=23;void(0)">
-              <text x="10" y="20">prefixed label</text>
-            </a>
-            <a id="animated">
-              <set attributeName="href" to="javascript:window.__readerSecurityMarker=29;void(0)"/>
-              <text x="10" y="50">animated label</text>
-            </a>
-          </svg>
-        </body></html>'''
-        body = support.zip_bytes({name: value for name, value in files.items() if name != "mimetype"},
-                                 ("mimetype", "application/epub+zip"))
-        self.serve(body, "application/epub+zip")
-        self.open(self.reader_url("epub", name="svg-prefixed-xlink-security"))
-        probe = self.page.locator("article[data-section] #probe")
-        self.assertIsNone(probe.evaluate("n => n.getAttributeNS('http://www.w3.org/1999/xlink', 'href')"))
-        self.assertEqual(self.page.locator("article[data-section] #animated set").count(), 0)
-        probe.click()
-        self.page.locator("article[data-section] #animated").click()
-        self.page.wait_for_timeout(200)
-        self.assertIsNone(self.page.evaluate("() => window.__readerSecurityMarker ?? null"))
 
     def test_offline_html_keeps_layout_attributes_and_enforces_frame_csp(self):
         dot = ("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8"
@@ -3463,41 +3030,6 @@ class ReaderRefactorTest(unittest.TestCase):
         }""")
         self.assertEqual(result, {"policy": True, "violations": ["img-src"]})
         self.assertNotIn("https://img.remote.test/a.png", remote)
-
-    def test_epub_css_cannot_load_remote_references_but_keeps_packaged_styles(self):
-        css = ("@import url(https://css.remote.test/a.css);\n"
-               "@import '\\68ttps://css.remote.test/b.css';\n"
-               "p.linked { letter-spacing: 3px; background-image: url(https://img.remote.test/a.png); }\n"
-               "p.escaped { background-image: \\75rl(//img.remote.test/b.png); }\n"
-               "p.set { background-image: image-set('https://img.remote.test/c.png' 1x); }\n"
-               "p.local { background-image: url(dot.png); }\n")
-        dot = base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMB/6XWbqkAAAAASUVORK5CYII=")
-        body = support.zip_bytes({
-            "META-INF/container.xml": '<?xml version="1.0"?><container xmlns="urn:oasis:names:tc:opendocument:xmlns:container" version="1.0"><rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>',
-            "OEBPS/content.opf": '<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="id"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:identifier id="id">css-security</dc:identifier><dc:title>CSS</dc:title><dc:language>en</dc:language></metadata><manifest><item id="chapter" href="chapter.xhtml" media-type="application/xhtml+xml"/><item id="style" href="style.css" media-type="text/css"/><item id="dot" href="dot.png" media-type="image/png"/></manifest><spine><itemref idref="chapter"/></spine></package>',
-            "OEBPS/style.css": css,
-            "OEBPS/dot.png": dot,
-            "OEBPS/chapter.xhtml": '<html xmlns="http://www.w3.org/1999/xhtml"><head><title>CSS</title><link rel="stylesheet" href="style.css"/><style>p.inline { background-image: \\75 rl("https://img.remote.test/d.png"); }</style></head><body><p class="linked">linked</p><p class="escaped">escaped</p><p class="set">set</p><p class="local">local</p><p class="inline">inline</p><p class="attr" style="background-image:url(&quot;https://img.remote.test/e.png&quot;)">attr</p></body></html>',
-        }, ("mimetype", "application/epub+zip"))
-        remote = []
-        self.page.on("request", lambda request: remote.append(request.url) if ".remote.test" in request.url else None)
-        self.serve(body, "application/epub+zip")
-        self.open(self.reader_url("epub", name="css-security"))
-        self.page.wait_for_function("""() => {
-          const root = document.querySelector('article[data-section]')?.shadowRoot;
-          const p = root?.querySelector('p.linked');
-          return p && getComputedStyle(p).letterSpacing === '3px';
-        }""")
-        styles = self.page.evaluate("""() => {
-          const root = document.querySelector('article[data-section]').shadowRoot;
-          return Object.fromEntries([...root.querySelectorAll('p')].map(p =>
-            [p.className, getComputedStyle(p).backgroundImage]));
-        }""")
-        for name in ("linked", "escaped", "set", "inline", "attr"):
-            self.assertEqual(styles[name], "none", name)
-        self.assertRegex(styles["local"], r"^url\(\"blob:")
-        self.page.wait_for_timeout(300)
-        self.assertEqual(remote, [])
 
     def frame_host_reader(self, overlay=False, cross_origin=False):
         # The Reader must decide by its real host whether parent messages are handled.
@@ -3579,6 +3111,64 @@ class ReaderRefactorTest(unittest.TestCase):
                                  str(theme == "dark").lower())
                 page.close()
 
+    def open_security_chapter(self, chapter):
+        prefix = "chapters/ebook/epub/" + "e" * 64 + "/" + "f" * 16 + "/"
+        manifest_path = prefix + "chapter-manifest.json"
+        chapter_path = "chapters/chapter-0001.xhtml"
+        manifest = {"version": 1, "kind": "epub-chapters", "chapters": [
+            {"index": 1, "path": chapter_path, "bytes": len(chapter),
+             "sha256": hashlib.sha256(chapter).hexdigest()}]}
+
+        def bucket(route):
+            path = urllib.parse.parse_qs(urllib.parse.urlsplit(route.request.url).query)["path"][0]
+            if path == manifest_path:
+                route.fulfill(json=manifest)
+            elif path == prefix + chapter_path:
+                route.fulfill(content_type="application/xhtml+xml", body=chapter)
+            else:
+                route.fulfill(status=404)
+
+        self.page.route("**/api/reader-bucket-resource?**", bucket)
+        source = ("https://voiceofml-search.hf.space/api/reader-bucket-resource?" +
+                  urllib.parse.urlencode({"path": manifest_path}))
+        self.open(self.reader_url("epub-chapters", url=source))
+        return self.page.locator(".reader-epub-chapter")
+
+    def test_chapter_svg_xlink_control_whitespace_cannot_execute_in_reader_context(self):
+        chapter = b'''<html xmlns="http://www.w3.org/1999/xhtml"><body>
+          <svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+            <a id="probe" xlink:href="java&#x09;script:window.__readerSecurityMarker=17;void(0)">
+              <text x="10" y="20">safe label</text>
+            </a>
+          </svg>
+        </body></html>'''
+        chapter_root = self.open_security_chapter(chapter)
+        probe = chapter_root.locator("#probe")
+        self.assertEqual(probe.get_attribute("xlink:href"), None)
+        probe.click()
+        self.assertFalse(self.page.evaluate("() => window.__readerSecurityMarker === 17"))
+
+    def test_chapter_prefixed_xlink_and_smil_href_cannot_execute_in_reader_context(self):
+        chapter = b'''<html xmlns="http://www.w3.org/1999/xhtml"><body>
+          <svg xmlns="http://www.w3.org/2000/svg" xmlns:x="http://www.w3.org/1999/xlink" width="240" height="70">
+            <a id="probe" x:href="javascript:window.__readerSecurityMarker=23;void(0)">
+              <text x="10" y="20">prefixed label</text>
+            </a>
+            <a id="animated">
+              <set attributeName="href" to="javascript:window.__readerSecurityMarker=29;void(0)"/>
+              <text x="10" y="50">animated label</text>
+            </a>
+          </svg>
+        </body></html>'''
+        chapter_root = self.open_security_chapter(chapter)
+        probe = chapter_root.locator("#probe")
+        self.assertIsNone(probe.evaluate("n => n.getAttributeNS('http://www.w3.org/1999/xlink', 'href')"))
+        self.assertEqual(chapter_root.locator("#animated set").count(), 0)
+        probe.click()
+        chapter_root.locator("#animated").click()
+        self.page.wait_for_timeout(200)
+        self.assertIsNone(self.page.evaluate("() => window.__readerSecurityMarker ?? null"))
+
     def test_epub_html_and_svg_references_cannot_load_remote_resources(self):
         vectors = ('<p style="background:image-set(\'https://img.remote.test/a.png\' 1x)">a</p>'
                    '<p style="background:\\75rl(https://img.remote.test/b.png)">b</p>'
@@ -3592,47 +3182,13 @@ class ReaderRefactorTest(unittest.TestCase):
                    '<use href="https://img.remote.test/h.svg#a"/></svg><p id="kept">kept text</p>')
         chapter = ('<html xmlns="http://www.w3.org/1999/xhtml"><head><title>Refs</title></head><body>'
                    + vectors + '</body></html>')
-        book = support.zip_bytes({
-            "META-INF/container.xml": '<?xml version="1.0"?><container xmlns="urn:oasis:names:tc:opendocument:xmlns:container" version="1.0"><rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>',
-            "OEBPS/content.opf": '<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="id"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:identifier id="id">refs</dc:identifier><dc:title>Refs</dc:title><dc:language>en</dc:language></metadata><manifest><item id="c" href="c.xhtml" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="c"/></spine></package>',
-            "OEBPS/c.xhtml": chapter,
-        }, ("mimetype", "application/epub+zip"))
-        prefix = "chapters/ebook/epub/" + "e" * 64 + "/" + "f" * 16 + "/"
-        manifest = {"version": 1, "kind": "epub-chapters", "chapters": [
-            {"index": 1, "path": "chapters/chapter-0001.xhtml", "title": "Refs",
-             "bytes": len(chapter.encode()), "sha256": hashlib.sha256(chapter.encode()).hexdigest()}]}
-        def bucket(route):
-            path = urllib.parse.parse_qs(urllib.parse.urlsplit(route.request.url).query)["path"][0]
-            if path == prefix + "chapter-manifest.json":
-                route.fulfill(content_type="application/json", body=json.dumps(manifest))
-            elif path == prefix + "chapters/chapter-0001.xhtml":
-                route.fulfill(content_type="application/xhtml+xml", body=chapter)
-            else:
-                route.fulfill(status=404, body="missing")
-        bucket_url = ("https://voiceofml-search.hf.space/api/reader-bucket-resource?path="
-                      + urllib.parse.quote(prefix + "chapter-manifest.json", safe=""))
-        for mode, url, root in (
-            ("foliate", self.reader_url("epub", name="remote-refs"),
-             "document.querySelector('article[data-section]')?.shadowRoot"),
-            ("chapters", self.reader_url("epub-chapters", url=bucket_url),
-             "document.querySelector('.reader-epub-chapter')"),
-        ):
-            with self.subTest(mode=mode):
-                page = self.context.new_page()
-                page.set_default_timeout(int(os.environ.get("READER_TEST_TIMEOUT_MS", "6000")))
-                page.on("pageerror", lambda error: self.errors.append(str(error)))
-                remote = []
-                page.on("request", lambda request: remote.append(request.url) if ".remote.test" in request.url else None)
-                page.route("**/api/reader-content**", lambda route: route.fulfill(
-                    content_type="application/epub+zip", body=book))
-                page.route("https://voiceofml-search.hf.space/api/reader-bucket-resource**", bucket)
-                page.goto(url)
-                page.wait_for_function("() => document.documentElement.dataset.readerPhase === 'ready'")
-                page.wait_for_function(f"() => !!({root})?.querySelector('#kept')")
-                page.wait_for_timeout(400)
-                self.assertEqual(remote, [])
-                self.assertEqual(page.evaluate(f"() => ({root}).querySelector('#local-use').getAttribute('href')"), "#dot")
-                page.close()
+        remote = []
+        self.page.on("request", lambda request: remote.append(request.url) if ".remote.test" in request.url else None)
+        chapter_root = self.open_security_chapter(chapter.encode())
+        chapter_root.locator("#kept").wait_for(state="attached")
+        self.page.wait_for_timeout(400)
+        self.assertEqual(remote, [])
+        self.assertEqual(chapter_root.locator("#local-use").get_attribute("href"), "#dot")
 
     def expose_html_contrast(self):
         def instrument(route):
@@ -4008,33 +3564,6 @@ class ReaderRefactorTest(unittest.TestCase):
         self.page.route(self.origin + "/search/", lambda route: route.fulfill(content_type="text/html", body="Folder"))
         self.page.locator("#reader-path").click()
         self.page.wait_for_url(folder)
-
-    def test_foliate_cfi_selects_accented_and_inline_ranges_after_repeated_search(self):
-        with zipfile.ZipFile(io.BytesIO(support.epub_with_many_chapters())) as archive:
-            files = {name: archive.read(name) for name in archive.namelist()}
-        chapter = next(name for name in files if name.endswith("chapter-1.xhtml"))
-        files[chapter] = b'''<?xml version="1.0" encoding="UTF-8"?>
-          <html xmlns="http://www.w3.org/1999/xhtml"><head><title>Search</title></head><body>
-          <h1>Search</h1><p style="height:1300px">Before</p>
-          <p id="accent">caf&#233;</p><p style="height:1300px">Between</p>
-          <p id="plain">cafe</p><p id="inline">inter<b>national</b></p><p style="height:1300px">After</p>
-          </body></html>'''
-        self.serve(support.zip_bytes(files), "application/epub+zip")
-        self.open(self.reader_url("epub"))
-        self.search("cafe")
-        self.assertEqual(self.page.locator(".full-search-result").count(), 2)
-        self.page.locator(".full-search-result").first.click()
-        self.assertEqual(self.page.locator("#accent .full-search-highlight").text_content(), "caf\u00e9")
-        self.page.locator("#history").click()
-        self.assertFalse(self.page.locator("#full-search-view").is_hidden())
-        self.page.locator(".full-search-result").nth(1).click()
-        self.assertEqual(self.page.locator("#plain .full-search-highlight").text_content(), "cafe")
-        self.page.locator("#history").click()
-        self.assertFalse(self.page.locator("#full-search-view").is_hidden())
-        self.page.locator("#full-search-input").fill("international")
-        self.page.locator(".full-search-result").click()
-        self.page.locator("#inline .full-search-highlight").first.wait_for()
-        self.assertEqual("".join(self.page.locator("#inline .full-search-highlight").all_text_contents()), "international")
 
     def test_chapter_resources_allow_siblings_within_manifest_family_only(self):
         for extension in ("epub", "chm"):

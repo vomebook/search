@@ -3,7 +3,6 @@ import unittest
 from urllib.parse import urlencode
 
 from tests.reader.browser import test_reader_pdf_followup as support
-from tests.performance.test_reader_performance import epub_with_navigation
 
 
 class ReaderFormatPipelineTests(unittest.TestCase):
@@ -26,13 +25,12 @@ class ReaderFormatPipelineTests(unittest.TestCase):
             'marked':'window.marked={parse:t=>"<h1>Heading</h1><p>"+t+"</p>"};',
             'purify':'window.DOMPurify={addHook(){},removeHook(){},sanitize:(t,o)=>{if(!o?.RETURN_DOM_FRAGMENT)return t;const n=document.createElement("template");n.innerHTML=t;return n.content;}};',
         }
-        documents=[('md',b'Markdown body','text/plain'),('html',b'<h1>Heading</h1><p>HTML body</p>','text/html'),
-                   ('epub',epub_with_navigation(),'application/epub+zip')]
+        documents=[('md',b'Markdown body','text/plain'),('html',b'<h1>Heading</h1><p>HTML body</p>','text/html')]
         for ext,body,mime in documents:
             with self.subTest(format=ext):
                 held=[]
                 def engine(route):held.append(route)
-                pattern='**/static/foliate-reader/view.js*' if ext=='epub' else '**/static/vendor/*.js'
+                pattern='**/static/vendor/*.js'
                 self.page.route(pattern,engine)
                 self.page.route('**/api/reader-content**',lambda route,_request,body=body,mime=mime:route.fulfill(
                     content_type=mime,body=body,headers={'Access-Control-Allow-Origin':'*'}))
@@ -43,13 +41,11 @@ class ReaderFormatPipelineTests(unittest.TestCase):
                 self.assertNotEqual(self.page.locator('html').get_attribute('data-reader-phase'),'ready')
                 self.page.unroute(pattern,engine)
                 for route in held:
-                    if ext=='epub':route.continue_()
-                    else:
-                        name=next(key for key in engines if '/'+key+'.' in route.request.url)
-                        route.fulfill(content_type='text/javascript',body=engines[name])
+                    name=next(key for key in engines if '/'+key+'.' in route.request.url)
+                    route.fulfill(content_type='text/javascript',body=engines[name])
                 self.page.wait_for_function("()=>document.documentElement.dataset.readerPhase==='ready'")
                 text=(self.page.frame_locator('.html-frame').locator('body').inner_text() if ext=='html' else
-                      self.page.locator('.reader-section-body').first.inner_text() if ext=='epub' else self.page.locator('#content').inner_text())
+                      self.page.locator('#content').inner_text())
                 self.assertTrue(text.strip())
 
     def test_swf_body_finishes_while_ruffle_is_held(self):

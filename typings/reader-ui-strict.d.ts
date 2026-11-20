@@ -1,7 +1,7 @@
 export interface NavigationContext {
   cancelReaderDestinationHold?: () => void;
   epubSeekFrame: number;
-  foliateScrollAnchors: { invalidate(): void; remember(): void };
+  chapterScrollAnchors: { invalidate(): void; remember(): void };
   nextReaderGeneration(kind: string): number;
   returnHistoryKey: string | null;
   folderNavigationTarget: URL | null;
@@ -43,7 +43,6 @@ export interface NavigationContext {
   pdfScrollDirection: number;
   scheduleVisiblePdfRenderReconciliation?: (immediate: boolean) => void;
   scheduleMarkerSync(): void;
-  scheduleFoliateScrollSync(): void;
   saveProgress(): Promise<unknown> | undefined;
   pdfUserHasScrolled: boolean;
   trackReaderResource(cleanup: () => void): unknown;

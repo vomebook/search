@@ -63,7 +63,7 @@ function html(file) {
 
 function visitDirectory(directory) {
   for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
-    if (entry.name === "vendor" || entry.name === "foliate-reader") continue;
+    if (entry.name === "vendor") continue;
     const file = path.join(directory, entry.name);
     if (entry.isDirectory()) visitDirectory(file);
     else if (entry.isFile() && entry.name.endsWith(".html")) html(file);

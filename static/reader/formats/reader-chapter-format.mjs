@@ -224,10 +224,10 @@ export function createReaderChapterFormat(readerContext) {
         } else frame.insertBefore(article, next || null);
       };
       const preservePosition = chapterWindowReady || !readerContext.isReaderGenerationCurrent("navigation", openingGeneration);
-      if (preservePosition) readerContext.foliateScrollAnchors.preserve(insert);
+      if (preservePosition) readerContext.chapterScrollAnchors.preserve(insert);
       else insert();
       /** @type {IntersectionObserver} */ (readerContext.chapterManifestObserver).observe(article);
-      if (preservePosition) readerContext.foliateScrollAnchors.observe(article);
+      if (preservePosition) readerContext.chapterScrollAnchors.observe(article);
       return article;
     };
     /** @param {import("../../../typings/reader-chapter-format-strict").Chapter} chapter @param {boolean} [previous] */
@@ -253,7 +253,7 @@ export function createReaderChapterFormat(readerContext) {
         ".reader-epub-chapter[data-chapter], .reader-chapter-sentinel[data-chapter]");
       const insert = () => frame.insertBefore(marker, next || null);
       if (chapterWindowReady || !readerContext.isReaderGenerationCurrent("navigation", openingGeneration))
-        readerContext.foliateScrollAnchors.preserve(insert);
+        readerContext.chapterScrollAnchors.preserve(insert);
       else insert();
       /** @type {IntersectionObserver} */ (previous ? chapterPreviousObserver : readerContext.chapterManifestObserver).observe(marker);
       return marker;
@@ -425,7 +425,7 @@ export function createReaderChapterFormat(readerContext) {
       readerContext.assertReaderActive();
       if (loaded.has(chapter.index)) return Promise.resolve();
       return chapterScheduler.load(chapter.index, demand, exclusive).then(() => {
-        readerContext.foliateScrollAnchors.whenIdle(trimChapterWindow);
+        readerContext.chapterScrollAnchors.whenIdle(trimChapterWindow);
       }).catch(error => {
         if (error.name !== "AbortError" && !readerContext.readerAbortController.signal.aborted) {
           const marker = ensureSentinel(chapter);
@@ -454,11 +454,11 @@ export function createReaderChapterFormat(readerContext) {
         } catch (_) {}
         const anchor = chapterTarget(/** @type {Element} */ (node), id);
         if (!anchor) throw new Error("EPUB_MISSING_ANCHOR");
-        readerContext.foliateScrollAnchors.invalidate();
+        readerContext.chapterScrollAnchors.invalidate();
         // Measure the anchor instead of using scrollIntoView: the demanded landing line is
         // this viewport's top edge, and scrollIntoView can also move ancestor scrollers.
         readerContext.alignReaderDestination(anchor);
-        readerContext.foliateScrollAnchors.remember();
+        readerContext.chapterScrollAnchors.remember();
         // Chapter images and lazy placeholders keep changing height after the jump; hold
         // the anchor on the landing line until the layout settles.
         readerContext.holdReaderDestination(anchor);
@@ -559,7 +559,7 @@ export function createReaderChapterFormat(readerContext) {
         marker.style.marginBottom = style.marginBottom;
         marker.setAttribute("aria-hidden", "true");
         /** @type {IntersectionObserver} */ (readerContext.chapterManifestObserver).unobserve(article);
-        readerContext.foliateScrollAnchors.unobserve(article);
+        readerContext.chapterScrollAnchors.unobserve(article);
         for (const entry of chapterTocEntries(index)) entry.target = null;
         for (const image of article.querySelectorAll("img")) image.removeAttribute("src");
         article.replaceWith(marker);
@@ -569,7 +569,7 @@ export function createReaderChapterFormat(readerContext) {
         chapterBudget.release(retainedBytes.get(index));
         retainedBytes.delete(index);
       },
-      preserve: change => readerContext.foliateScrollAnchors.preserve(change)
+      preserve: change => readerContext.chapterScrollAnchors.preserve(change)
     });
     function trimChapterWindow() {
       if (chapterWindowReady && !chapterNavigating) chapterVirtualizer.trim(navigationTargetChapter || chapterFocusIndex);
@@ -611,7 +611,7 @@ export function createReaderChapterFormat(readerContext) {
           current.top < view.bottom)
         fetchChapter(/** @type {import("../../../typings/reader-chapter-format-strict").Chapter} */ (chapterAt(chapterFocusIndex))).catch(() => {});
       if (!chapterNavigating) chapterScheduler.prefetch(chapterPrefetchIndices());
-      readerContext.foliateScrollAnchors.whenIdle(trimChapterWindow);
+      readerContext.chapterScrollAnchors.whenIdle(trimChapterWindow);
     }
     function scheduleChapterWindow() {
       if (!chapterWindowFrame) chapterWindowFrame = requestAnimationFrame(refreshChapterWindow);
@@ -657,7 +657,7 @@ export function createReaderChapterFormat(readerContext) {
           if (limit !== progressEnd.limit || limit - viewport.scrollTop > 1) {
             progressEnd.limit = limit;
             viewport.scrollTop = limit;
-            readerContext.foliateScrollAnchors.remember();
+            readerContext.chapterScrollAnchors.remember();
           }
         }
         readerContext.updateProgressTools();
@@ -739,8 +739,8 @@ export function createReaderChapterFormat(readerContext) {
       });
     }
     chapterWindowReady = true;
-    if (readerContext.isReaderGenerationCurrent("navigation", openingGeneration)) readerContext.foliateScrollAnchors.invalidate();
-    for (const article of frame.querySelectorAll(".reader-epub-chapter")) readerContext.foliateScrollAnchors.observe(article);
+    if (readerContext.isReaderGenerationCurrent("navigation", openingGeneration)) readerContext.chapterScrollAnchors.invalidate();
+    for (const article of frame.querySelectorAll(".reader-epub-chapter")) readerContext.chapterScrollAnchors.observe(article);
       frame.style.overflowAnchor = "none";
     scheduleChapterWindow();
     readerContext.assertReaderActive();
@@ -798,7 +798,7 @@ export function createReaderChapterFormat(readerContext) {
         : chapterProgressHeight(rect, marker, last) * progressFraction;
       viewport.scrollTop += rect.top - marker + offset;
     }
-    readerContext.foliateScrollAnchors.remember();
+    readerContext.chapterScrollAnchors.remember();
     readerContext.syncHeadingLocation();
     readerContext.updateProgressTools();
     readerContext.scheduleSave();

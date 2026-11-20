@@ -42,8 +42,6 @@ export interface TocContext {
   updateNavigationState(patch: Partial<{ tocEntries: TocEntry[]; currentChapterIndex: number }>): unknown;
   updateTocCurrentMark(): void;
   beginReaderNavigation(): number;
-  foliateContinuous: boolean;
-  activateFoliateTocEntry(entry: TocEntry, generation: number, options: { closePanel: boolean }): Promise<unknown>;
   isReaderGenerationCurrent(kind: string, generation: number): boolean;
   updateProgressTools(): void;
   setReaderPanelOpen(open: boolean, focus?: boolean): void;

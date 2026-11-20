@@ -1,13 +1,9 @@
-import type { FoliateSection } from './reader-foliate-format-strict';
 import type { OcrPayload, PdfPage, TextContent, TextItem, TextTask } from './reader-pdf-text-runtime-strict';
 
 export interface SpeechContext {
   capability: { mode?: string | null } | null;
   sourceUrl: string; contentUrl: string; content: HTMLElement; viewport: HTMLElement;
   htmlFrame: HTMLIFrameElement | null;
-  epubBook: { sections: FoliateSection[] } | null;
-  foliateSectionRoot(article: Element): Element | ShadowRoot;
-  foliateSectionLoader: ((index: number) => Promise<unknown>) | null;
   chapterManifestLoader: (((index: number) => Promise<HTMLElement | null>) & { count: number }) | null;
   documentState: { pageCount: number; page: number };
   ocrManifestUrl: string; pdfOcrManifest: object | null;

@@ -22,7 +22,6 @@ CATEGORY_METHODS = {
         "test_video_failure_shows_recoverable_reader_error",
         "test_video_extension_aliases_report_media_errors_consistently",
         "test_unsupported_format_hides_inapplicable_controls",
-        "test_truncated_epub_reports_source_damage",
         "test_txt_displays_before_stream_finishes_and_preserves_split_utf8",
         "test_text_reader_uses_scroll_mode_without_pagination_controls",
         "test_reader_tab_is_hidden_for_document_without_toc",
@@ -52,31 +51,15 @@ CATEGORY_METHODS = {
         "test_djvu_touch_swipe_preserves_ocr_selection",
         "test_long_pdf_virtualizes_and_navigates_to_distant_page",
         "test_oversized_chapter_manifest_and_response_use_resource_limit",
-        "test_zip_bomb_metadata_is_rejected_before_foliate_parser",
         "test_image_proxy_failure_recovers_on_manual_retry_without_direct_source",
         "test_fetch_formats_keep_proxy_failure_until_manual_retry",
-        "test_foliate_normalizes_legacy_chm_markup_and_keeps_resources",
     ),
     "navigation": (
-        "test_large_foliate_toc_keeps_a_bounded_dom_window",
         "test_reader_controls_honor_boundaries_and_keyboard_activation",
         "test_text_bookmark_uses_progress_excerpt_and_highlights_search",
         "test_full_text_search_lists_highlighted_snippets_and_jumps",
         "test_pdf_allows_two_bookmarks_on_one_page_and_restores_offsets",
         "test_html_bookmark_at_zero_restores_iframe_top",
-        "test_foliate_navigation_path_dark_links_and_unique_sections",
-        "test_foliate_rapid_toc_navigation_keeps_latest_destination",
-        "test_foliate_failed_toc_section_can_retry",
-        "test_foliate_duplicate_toc_navigation_shares_section_load",
-        "test_foliate_chapter_buttons_use_continuous_reader_navigation",
-        "test_foliate_scroll_updates_toc_on_animation_frame",
-        "test_foliate_resize_keeps_current_text_anchor",
-        "test_foliate_virtualizes_distant_sections_and_reloads_them",
-        "test_foliate_full_search_uses_continuous_reader_navigation",
-        "test_foliate_bookmark_restores_continuous_section_position",
-        "test_foliate_progress_slider_uses_continuous_viewport",
-        "test_foliate_history_saves_structured_section_position",
-        "test_foliate_history_restores_structured_section_position",
         "test_html_restores_and_saves_internal_scroll_position",
         "test_actual_store_broadcasts_progress_and_bookmark_updates_between_readers",
         "test_html_and_markdown_toc_click_navigation",
@@ -105,11 +88,20 @@ CATEGORY_METHODS = {
 }
 
 
+# These cases still exist in the performance module but exercise raw EPUB
+# loading through the removed Foliate engine. ZIP limits remain covered by
+# tests/reader/security/test_reader_security.js.
+RETIRED_FOLIATE_METHODS = {
+    "test_truncated_epub_reports_source_damage",
+    "test_zip_bomb_metadata_is_rejected_before_foliate_parser",
+}
+
+
 def validate_partition():
     source = {
         name for name, value in ReaderPerformanceTest.__dict__.items()
         if name.startswith("test_") and callable(value)
-    }
+    } - RETIRED_FOLIATE_METHODS
     assigned = [name for methods in CATEGORY_METHODS.values() for name in methods]
     counts = collections.Counter(assigned)
     missing = sorted(source - counts.keys())

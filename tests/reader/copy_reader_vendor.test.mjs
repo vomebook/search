@@ -91,7 +91,7 @@ function tarGzip(files) {
 
 async function run(cwd, env, scriptPath = script) {
   return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [scriptPath, "out", "--foliate-output", "foliate"], { cwd, env });
+    const child = spawn(process.execPath, [scriptPath, "out"], { cwd, env });
     let stderr = "", timedOut = false;
     const timer = setTimeout(() => { timedOut = true; child.kill("SIGKILL"); }, 15000);
     child.stderr.on("data", (chunk) => { stderr += chunk; });
@@ -118,7 +118,7 @@ test("environment proxy, bounded concurrent downloads, bypass and hash failure",
     writeFileSync(cert, TEST_CERT);
     const ruffleFiles = { "ruffle.js": "ruffle loader", "core.js": "ruffle core", "core.wasm": "wasm bytes", "LICENSE": "license" };
     const pdfFiles = { "cmaps/existing": "new pdf", "standard_fonts/font": "font", "wasm/decoder": "wasm" };
-    const bodies = { "/archive": tarGzip(pdfFiles), "/ruffle": tarGzip({ ...ruffleFiles, "ignored.txt": "ignored" }), "/a": Buffer.from("a"), "/b": Buffer.from("b"), "/c": Buffer.from("c"), "/d": Buffer.from("d"), "/f": Buffer.from("f") };
+    const bodies = { "/archive": tarGzip(pdfFiles), "/ruffle": tarGzip({ ...ruffleFiles, "ignored.txt": "ignored" }), "/a": Buffer.from("a"), "/b": Buffer.from("b"), "/c": Buffer.from("c"), "/d": Buffer.from("d") };
     let active = 0, maxActive = 0, connects = 0, failureMode = false, limitMode = "";
     let limitRequests = 0, limitClosed = 0;
     const seen = [], blockedClosed = [];
@@ -169,7 +169,7 @@ test("environment proxy, bounded concurrent downloads, bypass and hash failure",
     const resources = (host) => {
       const url = (name) => `https://${host}:${server.address().port}/${name}`;
       const entry = (name) => ({ url: url(name), sha256: hash(bodies[`/${name}`]), file: `${name}.js`, path: `vendor/${name}.js` });
-      return { pdfArchive: entry("archive"), vendors: { a: entry("a"), b: entry("b"), c: entry("c"), d: entry("d") }, foliateVendors: { f: entry("f") }, ruffleArchive: { ...entry("ruffle"), directory: "vendor/ruffle/release-test", files: Object.keys(ruffleFiles) } };
+      return { pdfArchive: entry("archive"), vendors: { a: entry("a"), b: entry("b"), c: entry("c"), d: entry("d") }, ruffleArchive: { ...entry("ruffle"), directory: "vendor/ruffle/release-test", files: Object.keys(ruffleFiles) } };
     };
     const save = (value) => writeFileSync(join(dir, "static/reader-resources.js"), `module.exports = ${JSON.stringify(value)};`);
     const env = { ...process.env, NODE_EXTRA_CA_CERTS: cert, HTTPS_PROXY: `http://127.0.0.1:${proxy.address().port}`, https_proxy: "", NO_PROXY: "", no_proxy: "", HTTP_PROXY: "", http_proxy: "" };
@@ -178,10 +178,8 @@ test("environment proxy, bounded concurrent downloads, bypass and hash failure",
     assert.equal(result.code, 0, result.stderr);
     assert.ok(connects > 0, "HTTPS traffic passed through the proxy");
     assert.ok(maxActive > 1 && maxActive <= 4, `concurrency: ${maxActive}`);
-    assert.equal(readFileSync(join(dir, "foliate/f.js"), "utf8"), "f");
     for (const [file, content] of Object.entries(pdfFiles)) {
       assert.equal(readFileSync(join(dir, "out", file), "utf8"), content);
-      assert.equal(readFileSync(join(dir, "foliate/pdfjs", file), "utf8"), content);
     }
     for (const [file, content] of Object.entries(ruffleFiles)) {
       assert.equal(readFileSync(join(dir, "out/ruffle/release-test", file), "utf8"), content);
@@ -192,13 +190,11 @@ test("environment proxy, bounded concurrent downloads, bypass and hash failure",
     bad.vendors.d.sha256 = "0".repeat(64);
     save(bad);
     writeFileSync(join(dir, "out/a.js"), "old");
-    writeFileSync(join(dir, "foliate/f.js"), "old foliate");
     writeFileSync(join(dir, "out/ruffle/release-test/ruffle.js"), "old ruffle");
     result = await run(dir, env);
     assert.notEqual(result.code, 0);
     assert.match(result.stderr, /SHA-256/);
     assert.equal(readFileSync(join(dir, "out/a.js"), "utf8"), "old");
-    assert.equal(readFileSync(join(dir, "foliate/f.js"), "utf8"), "old foliate");
     assert.equal(readFileSync(join(dir, "out/ruffle/release-test/ruffle.js"), "utf8"), "old ruffle");
 
     // The hash matches, but a later PDF tar entry is malformed after a valid file.
@@ -208,17 +204,13 @@ test("environment proxy, bounded concurrent downloads, bypass and hash failure",
     bodies["/archive"] = gzipSync(malformedTar);
     save(resources("example.test"));
     mkdirSync(join(dir, "out/cmaps"), { recursive: true });
-    mkdirSync(join(dir, "foliate/pdfjs/cmaps"), { recursive: true });
     writeFileSync(join(dir, "out/cmaps/existing"), "old pdf");
-    writeFileSync(join(dir, "foliate/pdfjs/cmaps/existing"), "old foliate pdf");
     result = await run(dir, env);
     assert.notEqual(result.code, 0);
     assert.match(result.stderr, /Invalid PDF archive entry size/);
     assert.equal(readFileSync(join(dir, "out/cmaps/existing"), "utf8"), "old pdf");
-    assert.equal(readFileSync(join(dir, "foliate/pdfjs/cmaps/existing"), "utf8"), "old foliate pdf");
     assert.equal(readFileSync(join(dir, "out/ruffle/release-test/ruffle.js"), "utf8"), "old ruffle");
     assert.equal(readFileSync(join(dir, "out/a.js"), "utf8"), "old");
-    assert.equal(readFileSync(join(dir, "foliate/f.js"), "utf8"), "old foliate");
     // Each required group must contain a regular file, not just a directory or link.
     for (const group of ["cmaps", "standard_fonts", "wasm"]) {
       const files = Object.fromEntries(Object.entries(pdfFiles).filter(([name]) => !name.startsWith(group + "/")));
@@ -231,7 +223,6 @@ test("environment proxy, bounded concurrent downloads, bypass and hash failure",
         assert.notEqual(result.code, 0, `${group}: ${type}`);
         assert.match(result.stderr, type === "symlink" ? /Invalid PDF archive entry/ : new RegExp(`PDF archive missing required files: ${group}`));
         assert.equal(readFileSync(join(dir, "out/cmaps/existing"), "utf8"), "old pdf");
-        assert.equal(readFileSync(join(dir, "foliate/pdfjs/cmaps/existing"), "utf8"), "old foliate pdf");
         assert.equal(readFileSync(join(dir, "out/ruffle/release-test/ruffle.js"), "utf8"), "old ruffle");
       }
     }

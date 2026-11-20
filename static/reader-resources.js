@@ -28,6 +28,16 @@
       file: "purify.min.js",
       sha256: "8053ee2a6a09f9d50f7fcd6fb7f07072f52c7f3fa9aa12147cab4feaf65ee970"
     },
+    zip: {
+      url: "https://cdn.jsdelivr.net/npm/@zip.js/zip.js@2.25.0/index.min.js",
+      file: "zip.js",
+      sha256: "715a4067bb71d750d4af8e60390e48894072f65501e0442e53f252cbfc45cfbc"
+    },
+    zipLicense: {
+      url: "https://cdn.jsdelivr.net/npm/@zip.js/zip.js@2.25.0/LICENSE",
+      file: "LICENSE_zipjs.txt",
+      sha256: "1b7ebc8d7889ed25491484ab2b102370742ca6c0b26650a0c62cc2269b579b84"
+    },
     ruffle: {
       url: "https://unpkg.com/@ruffle-rs/ruffle@0.7.1/ruffle.js",
       file: "ruffle.js",
@@ -62,54 +72,11 @@
     url: "https://registry.npmjs.org/pdfjs-dist/-/pdfjs-dist-6.5.438.tgz",
     sha256: "7461aefcd27c4ef0dd76f9ca5760f09466eb6b3f934432670c12132e7b3d6faa"
   });
-  const foliateRevision = "78914aef4466eb960965702401634c2cb348e9b1";
-  const foliateArchive = Object.freeze({
-    url: `https://codeload.github.com/johnfactotum/foliate-js/tar.gz/${foliateRevision}`,
-    sha256: "4878cd5f04073af5046ea543da73a963a7f9e1a4b30ddc63ac86cea5adf02f38"
-  });
-  const foliateFiles = Object.freeze([
-    "LICENSE", "comic-book.js", "epub.js", "epubcfi.js", "fb2.js", "fixed-layout.js",
-    "mobi.js", "overlayer.js", "paginator.js", "pdf.js", "progress.js", "reader.html",
-    "reader.js", "search.js", "text-walker.js", "tts.js", "ui/menu.js", "ui/tree.js", "view.js"
-  ]);
-  const foliateVendors = {
-    fflateLicense: {
-      url: "https://cdn.jsdelivr.net/npm/fflate@0.8.3/LICENSE",
-      file: "LICENSE_fflate",
-      sha256: "0a1df3a083d0c010560aa342e87959c8c1070e6fd54545741f083f22d0c8b551"
-    },
-    zipLicense: {
-      url: "https://cdn.jsdelivr.net/npm/@zip.js/zip.js@2.25.0/LICENSE",
-      file: "LICENSE_zipjs",
-      sha256: "1b7ebc8d7889ed25491484ab2b102370742ca6c0b26650a0c62cc2269b579b84"
-    },
-    fflate: {
-      url: "https://cdn.jsdelivr.net/npm/fflate@0.8.3/esm/browser.js",
-      file: "fflate.js",
-      sha256: "b7ca4450b19559a1d50eb381adcee94b82449674be4cd17789d9beba7e6122a1"
-    },
-    zip: {
-      url: "https://cdn.jsdelivr.net/npm/@zip.js/zip.js@2.25.0/index.min.js",
-      file: "zip.js",
-      sha256: "715a4067bb71d750d4af8e60390e48894072f65501e0442e53f252cbfc45cfbc"
-    },
-    textLayer: {
-      url: "https://cdn.jsdelivr.net/gh/mozilla/pdf.js@v6.5.438/web/text_layer_builder.css",
-      file: "pdfjs/text_layer_builder.css",
-      sha256: "5b21bcb7d703cae5b8eebf9c8579435409aaf351b62e7518327ada60bdd0946f"
-    },
-    annotationLayer: {
-      url: "https://cdn.jsdelivr.net/gh/mozilla/pdf.js@v6.5.438/web/annotation_layer_builder.css",
-      file: "pdfjs/annotation_layer_builder.css",
-      sha256: "eb7905a0db3e35b4a069c7ba47048fc131ccc2eccc8c4205e4e20dac58c80176"
-    }
-  };
-  for (const vendor of Object.values(foliateVendors)) Object.freeze(vendor);
   const readerComponentFiles = Object.freeze([
     "reader/ui/reader-document-styles.mjs",
-    "reader/core/reader-diagnostics.mjs", "reader/core/reader-lifecycle.mjs", "reader/core/reader-source.mjs", "reader/ui/reader-ui.mjs",
+    "reader/core/reader-shared-content.mjs", "reader/core/reader-diagnostics.mjs", "reader/core/reader-lifecycle.mjs", "reader/core/reader-source.mjs", "reader/ui/reader-ui.mjs",
     "reader/ui/reader-toc.mjs", "reader/search/reader-search-backends.mjs", "reader/pdf/reader-pdf-scheduler.mjs", "reader/ui/reader-navigation.mjs",
-    "reader/formats/reader-foliate-format.mjs", "reader/ui/reader-progress.mjs", "reader/ui/reader-bookmarks.mjs", "reader/formats/reader-media-format.mjs",
+    "reader/ui/reader-progress.mjs", "reader/ui/reader-bookmarks.mjs", "reader/formats/reader-media-format.mjs",
     "reader/core/reader-document-loader.mjs", "reader/pdf/reader-pdf-page-window.mjs", "reader/pdf/reader-pdf-text-runtime.mjs",
     "reader/formats/reader-html-format.mjs", "reader/pdf/reader-pdf-renderer.mjs", "reader/formats/reader-text-format.mjs",
     "reader/formats/reader-chapter-format.mjs", "reader/formats/reader-format-controller.mjs",
@@ -236,8 +203,8 @@
   const djvuDecoderAssets = (base) => ["scalar/djvu_rs.js", "scalar/djvu_rs_bg.wasm",
     "simd128/djvu_rs.js", "simd128/djvu_rs_bg.wasm"].map(file =>
       base + "vendor/djvu-rs-reader/release-06c82c74447d-03087b1edf0c/" + file);
-  /** @param {string} extension @param {string} base @param {string} [foliateSuffix] @param {string} [workerWrapper] @returns {string[]} */
-  function engineAssets(extension, base, foliateSuffix = "", workerWrapper = base + "reader/pdf/pdf-worker-wrapper.mjs") {
+  /** @param {string} extension @param {string} base @param {string} [_unusedSuffix] @param {string} [workerWrapper] @returns {string[]} */
+  function engineAssets(extension, base, _unusedSuffix = "", workerWrapper = base + "reader/pdf/pdf-worker-wrapper.mjs") {
     if (extension === "pdf")
       return [
         vendorUrl("pdf", base),
@@ -246,15 +213,6 @@
         ...pdfSupportAssets(base)
       ];
     if (["djvu", "djv"].includes(extension)) return djvuSelectedAssets(base);
-    // view.js statically imports these leaf modules; warm them with it so they
-    // are not discovered one round trip later. Format modules follow makeBook.
-    /** @param {...string} files */
-    const foliate = (...files) => [base + "foliate-reader/view.js" + foliateSuffix,
-      ...["epubcfi.js", "progress.js", "overlayer.js", "text-walker.js", ...files].map(file => base + "foliate-reader/" + file)];
-    if (extension === "epub") return foliate("vendor/zip.js", "epub.js", "paginator.js");
-    if (["mobi", "azw", "azw3"].includes(extension)) return foliate("mobi.js", "vendor/fflate.js", "paginator.js");
-    if (extension === "fb2") return foliate("fb2.js", "paginator.js");
-    if (extension === "fbz") return foliate("vendor/zip.js", "fb2.js", "paginator.js");
     if (["md", "markdown"].includes(extension))
       return [vendorUrl("marked", base), vendorUrl("purify", base)];
     if (["html", "htm"].includes(extension)) return [vendorUrl("purify", base)];
@@ -334,10 +292,6 @@
   }
   const resources = Object.freeze({
     vendors: Object.freeze(vendors),
-    foliateVendors: Object.freeze(foliateVendors),
-    foliateRevision,
-    foliateArchive,
-    foliateFiles,
     pdfArchive,
     ruffleArchive,
     ruffleAssets,

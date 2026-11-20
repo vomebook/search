@@ -110,7 +110,7 @@ def main():
       'static/reader/pdf/reader-pdf-range-cache.mjs','static/reader/pdf/reader-pdf-engine.mjs',
       'static/reader/pdf/reader-pdf-page-window.mjs','static/reader/pdf/pdf-first-page-worker-adapter.mjs',
       'static/reader/pdf/pdf-worker-wrapper.mjs','static/reader/pdf/reader-pdf-search.mjs',
-      'static/reader/ui/reader-bookmarks.mjs','static/reader/formats/reader-foliate-format.mjs']
+      'static/reader/ui/reader-bookmarks.mjs','static/reader/core/reader-shared-content.mjs']
     report={'complete':False,'runs':[],'failures':[],
       'scope':'local original Reader versus local candidate; public ETag-checked source; sampled pages only',
       'candidateSha256':{name:hashlib.sha256((ROOT/name).read_bytes()).hexdigest() for name in tracked}}

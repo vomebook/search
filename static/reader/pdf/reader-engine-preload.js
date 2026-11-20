@@ -44,7 +44,7 @@
   for (const href of assets) {
     if (support.includes(href) || href.endsWith(".wasm")) continue;
     const link = document.createElement("link");
-    link.rel = /\.mjs(?:\?|$)/.test(href) || href.includes("/foliate-reader/") ? "modulepreload" : "preload";
+    link.rel = /\.mjs(?:\?|$)/.test(href) ? "modulepreload" : "preload";
     if (link.rel === "preload") link.as = "script";
     link.href = href;
     document.head.appendChild(link);

@@ -22,7 +22,7 @@ const readerCss = fs.readFileSync("static/reader.css", "utf8");
 const readerHtml = fs.readFileSync("static/reader.html", "utf8");
 const workflow = fs.readFileSync(".github/workflows/static.yml", "utf8");
 
-test("Reader-Assets preserves native Foliate extensions from asset filenames", () => {
+test("Reader-Assets resolves assets against the bucket boundary", () => {
   assert.match(readerAssetSnapshot, /VoiceOfMLReader\.assetFields\(asset, deps\.bucketBase/);
   assert.match(app, /bucketBase: API_BASE \+ "\/api\/reader-bucket-resource"/);
 });
@@ -447,7 +447,7 @@ test("reader uses original files and lazy PDF canvas rendering", () => {
   assertCode(reader, 'result.activate(generation)');
   const contractContext = { self: {} };
   vm.runInNewContext(contract, contractContext);
-  for (const [extension, mode] of Object.entries({ pdf: 'pdf', 'pdf-pages': 'pdf-pages', epub: 'foliate', mp3: 'audio', mp4: 'video', 'epub-chapters': 'epub-chapters' })) {
+  for (const [extension, mode] of Object.entries({ pdf: 'pdf', 'pdf-pages': 'pdf-pages', epub: null, mp3: 'audio', mp4: 'video', 'epub-chapters': 'epub-chapters' })) {
     assert.strictEqual(contractContext.self.VoiceOfMLReader.capability(extension).mode, mode, extension);
   }
   assert.strictEqual(contractContext.self.VoiceOfMLReader.capability('docx').mode, null);
@@ -459,14 +459,10 @@ test("reader uses original files and lazy PDF canvas rendering", () => {
   assertCode(reader, 'VoiceOfMLReaderResources.vendorUrl("pdf", "/search/static/")');
   assert.match(reader, /const PDFJS_WASM_URL = "\/search\/static\/vendor\/wasm\/"/);
   assert.match(reader, /wasmUrl: PDFJS_WASM_URL/);
-  assert.match(reader, /\/search\/static\/foliate-reader\/view\.js/);
+  assert.doesNotMatch(reader, /foliate-reader|renderFoliate/);
   for (const value of ["epubSearchIndex", "epubSearchIndexReady", "epubZipPath", "buildEpubSearchIndex", "activateIndexedEpubResult", "runIndexedEpubSearch"]) {
     assert.doesNotMatch(reader, new RegExp(value));
   }
-  assertCode(reader, 'foliate: pair(loadMediaDocument, renderFoliate)');
-  assert.match(reader, /async function renderFoliate/);
-  assert.match(reader, /foliate-view/);
-  assert.match(reader, /foliate-continuous/);
   assert.doesNotMatch(reader, /renderFoliateClean|foliate-reader\/reader\.html/);
   assertCode(reader, 'VoiceOfMLReaderResources.vendorUrl("purify", "/search/static/")');
   assert.doesNotMatch(reader, /cdn\.jsdelivr\.net/);
@@ -639,7 +635,6 @@ test("reader uses original files and lazy PDF canvas rendering", () => {
   assert.match(reader, /VoiceOfMLReaderStore\.put/);
   assert.match(reader, /VoiceOfMLReaderStore\.get/);
   assert.match(reader, /function goToPage/);
-  assert.match(reader, /foliateContinuous/);
   assert.match(reader, /viewport\.scrollTop/);
   assert.match(readerHtml, /base-uri 'self' blob:/);
   assert.match(readerHtml, /style-src 'self' 'unsafe-inline' blob:/);
@@ -805,11 +800,9 @@ test("deployment workflow builds and uploads minified static artifacts", () => {
   assert.match(baseline.generation, /^[a-f0-9]{64}$/);
   assert.doesNotMatch(workflow, /cp -a data _site\//);
   assert.match(workflow, /python3 scripts\/build\/seo\.py --project pages --corpus _site\/data\/search_data\.json\.gz --output _site/);
-  assert.match(workflow, /node scripts\/build\/fetch_foliate_reader\.mjs _site\/static\/foliate-reader/);
   assert.match(workflow, /node scripts\/build\/copy_reader_vendor\.mjs _site\/static\/vendor/);
   assert.match(workflow, /cp -a static\/vendor\/djvu-rs-reader _site\/static\/vendor\//);
-  assert.match(workflow, /--foliate-output _site\/static\/foliate-reader\/vendor/);
-  assert.doesNotMatch(workflow, /cp -a static\/foliate-reader/);
+  assert.doesNotMatch(workflow, /foliate-reader|fetch_foliate_reader|--foliate-output/);
   assert.ok(workflow.includes('.buildFiles("github")'));
   assert.match(workflow, /esbuild@0\.28\.2 static\/sw\.js --minify/);
   assert.match(workflow, /uses: actions\/upload-pages-artifact@v5\s*\n\s*with:\s*[\s\S]*?path: '_site'/);

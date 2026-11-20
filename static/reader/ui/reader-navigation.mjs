@@ -4,7 +4,7 @@ export function createReaderNavigation(readerContext) {
     readerContext.cancelReaderDestinationHold?.();
     if (readerContext.epubSeekFrame) cancelAnimationFrame(readerContext.epubSeekFrame);
     readerContext.epubSeekFrame = 0;
-    readerContext.foliateScrollAnchors.invalidate();
+    readerContext.chapterScrollAnchors.invalidate();
     return readerContext.nextReaderGeneration("navigation");
   }
 
@@ -167,8 +167,7 @@ export function createReaderNavigation(readerContext) {
     readerContext.pdfShellWindow?.schedule();
     readerContext.scheduleVisiblePdfRenderReconciliation?.(true);
     readerContext.scheduleMarkerSync();
-    readerContext.scheduleFoliateScrollSync();
-    readerContext.foliateScrollAnchors.remember();
+    readerContext.chapterScrollAnchors.remember();
   }
 
   /** @param {string} rawUrl @param {{id: string, url: string} | null} [bookmark] @param {boolean} [resumeHistory] */

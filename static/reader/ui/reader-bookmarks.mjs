@@ -147,119 +147,9 @@ export function createReaderBookmarks(readerContext) {
     } catch (_) {}
     const exact = readerContext.excerptFromCaret(document, readerContext.content, x, y);
     if (exact) return exact;
-    const sourceText = readerContext.foliateContinuous
-        ? [
-            ...readerContext.content.querySelectorAll(
-              ".foliate-continuous article[data-section]:not(.foliate-section-placeholder)"
-            )
-          ]
-            .map((article) => readerContext.foliateSectionRoot(article).textContent)
-            .join(" ")
-        : readerContext.content.textContent,
-      text = sourceText.replace(/\s+/g, " ").trim(),
+    const text = readerContext.content.textContent.replace(/\s+/g, " ").trim(),
       start = Math.floor((text.length * readerContext.readerProgressPercent()) / 100);
     return text.slice(start, start + 160).trim();
-  }
-
-  function captureFoliateBookmarkPosition() {
-    if (!readerContext.foliateContinuous) return null;
-    const marker = readerContext.viewport.getBoundingClientRect().top + 8;
-    const rows = /** @type {NodeListOf<HTMLElement>} */ (document.querySelectorAll(".foliate-continuous article[data-section]"));
-    /** @type {{article: HTMLElement, top: number} | null} */
-    let following = null, last = null;
-    for (const article of rows) {
-      if (article.hidden) continue;
-      const { top, bottom } = article.getBoundingClientRect();
-      last = { article, top };
-      if (top <= marker && bottom > marker) { following = last; break; }
-      if (!following && top > marker) following = last;
-    }
-    const current = following || last;
-    return current ? {
-      foliateSection: Number(current.article.dataset.section),
-      foliateOffset: marker - current.top,
-      foliateTocIndex: readerContext.navigationState.currentChapterIndex
-    } : null;
-  }
-
-  /** @param {import('../../../typings/reader-progress-strict').ProgressState} entry @param {number} [generation] */
-  async function restoreFoliateBookmarkPosition(entry, generation = readerContext.beginReaderNavigation()) {
-    try {
-      if (
-        !readerContext.foliateSectionLoader ||
-        !Number.isInteger(entry.foliateSection) ||
-        !readerContext.isReaderGenerationCurrent("navigation", generation)
-      )
-        return false;
-      const section = /** @type {number} */ (entry.foliateSection);
-      let article = await readerContext.foliateSectionLoader(section);
-      if (!readerContext.isReaderGenerationCurrent("navigation", generation)) return false;
-      await readerContext.waitForReader(0, true);
-      if (!readerContext.isReaderGenerationCurrent("navigation", generation)) return false;
-      if (!article?.isConnected) article = await readerContext.foliateSectionLoader(section);
-      if (!article?.isConnected || !readerContext.isReaderGenerationCurrent("navigation", generation)) return false;
-      const marker = readerContext.viewport.getBoundingClientRect().top + 8;
-      const offset = Number(entry.foliateOffset) || 0;
-      const start = !offset
-        ? readerContext.foliateSectionRoot(article).querySelector("h1,h2,h3,h4,h5,h6,p,li,blockquote,pre") || article
-        : article;
-      readerContext.foliateScrollAnchors.invalidate();
-      readerContext.viewport.scrollTop = Math.max(
-        0,
-        readerContext.viewport.scrollTop +
-          start.getBoundingClientRect().top -
-          marker +
-          offset
-      );
-      readerContext.syncFoliateScrollLocation();
-      readerContext.updateTocCurrentMark();
-      readerContext.updateProgressTools();
-      readerContext.scheduleSave();
-      readerContext.setReaderPanelOpen(false, true);
-      readerContext.foliateScrollAnchors.remember();
-      return true;
-    } catch (error) {
-      readerContext.reportNavigationError(error, generation);
-      return false;
-    }
-  }
-
-  /** @param {number} percent @param {number} generation */
-  async function seekFoliateProgress(percent, generation) {
-    try {
-      const sections = readerContext.epubBook?.sections?.filter((section) => section.linear !== "no") || [];
-      if (
-        !sections.length ||
-        !readerContext.foliateSectionLoader ||
-        !readerContext.isReaderGenerationCurrent("navigation", generation)
-      )
-        return;
-      const position = Math.max(0, Math.min(0.999999, Number(percent) / 100)) * sections.length,
-        index = Math.min(sections.length - 1, Math.floor(position));
-      let article = await readerContext.foliateSectionLoader(index);
-      if (!readerContext.isReaderGenerationCurrent("navigation", generation)) return;
-      await readerContext.waitForReader(0, true);
-      if (!readerContext.isReaderGenerationCurrent("navigation", generation)) return;
-      if (!article?.isConnected) article = await readerContext.foliateSectionLoader(index);
-      if (!article?.isConnected || !readerContext.isReaderGenerationCurrent("navigation", generation)) return;
-      const marker = readerContext.viewport.getBoundingClientRect().top + 8,
-        offset = article.getBoundingClientRect().height * (position - index);
-      readerContext.foliateScrollAnchors.invalidate();
-      readerContext.viewport.scrollTop = Math.max(
-        0,
-        readerContext.viewport.scrollTop + article.getBoundingClientRect().top - marker + offset
-      );
-      await readerContext.waitForReader(0, true);
-      if (!readerContext.isReaderGenerationCurrent("navigation", generation)) return;
-      readerContext.viewport.scrollTop += article.getBoundingClientRect().top - marker + offset + 4;
-      readerContext.syncFoliateScrollLocation();
-      readerContext.updateTocCurrentMark();
-      readerContext.updateProgressTools();
-      readerContext.scheduleSave();
-      readerContext.foliateScrollAnchors.remember();
-    } catch (error) {
-      readerContext.reportNavigationError(error, generation);
-    }
   }
 
   async function renderBookmarks() {
@@ -339,7 +229,7 @@ export function createReaderBookmarks(readerContext) {
       };
     }
     readerContext.syncCurrentPageFromMarker();
-    const foliatePosition = readerContext.captureFoliateBookmarkPosition() || readerContext.captureChapterPosition();
+    const chapterPosition = readerContext.captureChapterPosition();
     const shell = readerContext.documentState.pageCount ? readerContext.pageAtMarker() : null;
     const pageOffset = shell ? Math.max(0, readerContext.viewport.scrollTop - readerContext.readerPageScrollTop(shell)) : 0;
     const progress = readerContext.readerProgressPercent();
@@ -347,11 +237,9 @@ export function createReaderBookmarks(readerContext) {
     const scrollTop = readerContext.viewport.scrollTop;
     const mode = readerContext.capability.mode;
     const pagedDocument = readerContext.documentState.pageCount && mode !== "text" && mode !== "markdown";
-    const locator = Number.isInteger(foliatePosition?.chapterIndex)
-      ? `chapter:${/** @type {import('../../../typings/reader-progress-strict').ChapterPosition} */ (foliatePosition).chapterIndex}:${Math.round(/** @type {import('../../../typings/reader-progress-strict').ChapterPosition} */ (foliatePosition).chapterOffset)}`
-      : foliatePosition
-        ? `foliate:${foliatePosition.foliateSection}:${Math.round(/** @type {number} */ (foliatePosition.foliateOffset))}`
-        : pagedDocument
+    const locator = chapterPosition
+      ? `chapter:${chapterPosition.chapterIndex}:${Math.round(chapterPosition.chapterOffset)}`
+      : pagedDocument
           ? `page:${readerContext.documentState.page}:${Math.round(pageOffset)}`
           : `progress:${progress}:${Math.round(readerContext.htmlFrame ? htmlScrollTop : scrollTop)}`;
     return {
@@ -365,7 +253,7 @@ export function createReaderBookmarks(readerContext) {
       pageOffset,
       scrollTop,
       htmlScrollTop,
-      ...(foliatePosition || {})
+      ...(chapterPosition || {})
     };
   }
 
@@ -421,9 +309,6 @@ export function createReaderBookmarks(readerContext) {
     consumeBookmarkHandoff,
     excerptFromCaret,
     bookmarkExcerpt,
-    captureFoliateBookmarkPosition,
-    restoreFoliateBookmarkPosition,
-    seekFoliateProgress,
     renderBookmarks,
     captureBookmarkSnapshot,
     setBookmarkDialogModal,

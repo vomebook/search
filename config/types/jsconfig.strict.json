@@ -14,9 +14,7 @@
     "moduleResolution": "bundler",
     "paths": {
       "/static/*": ["../../static/*"],
-      "/search/static/*": ["../../static/*"],
-      "/static/foliate-reader/view.js": ["../../typings/foliate/view.d.ts"],
-      "/search/static/foliate-reader/view.js?reader-v1": ["../../typings/foliate/view.d.ts"]
+      "/search/static/*": ["../../static/*"]
     }
   },
   "files": [
@@ -53,7 +51,6 @@
     "../../static/reader/pdf/reader-pdf-text-runtime.mjs",
     "../../static/reader/pdf/reader-v3.mjs",
     "../../static/reader/core/reader-contract.js",
-    "../../static/reader/formats/reader-foliate-format.mjs",
     "../../static/reader/formats/reader-html-format.mjs",
     "../../static/reader/search/reader-book-text.js",
     "../../static/reader/search/reader-chapter-search.mjs",

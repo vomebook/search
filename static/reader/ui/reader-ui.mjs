@@ -31,7 +31,7 @@ export function createReaderUi(readerContext) {
 
   /** @param {string} theme @param {boolean} [persist] @param {boolean} [animate] */
   function applyReaderTheme(theme, persist = true, animate = true) {
-    const anchor = readerContext.foliateScrollAnchors.capture();
+    const anchor = readerContext.chapterScrollAnchors.capture();
     if (animate) {
       clearTimeout(readerContext.themeAnimationTimer);
       document.documentElement.classList.add("theme-transition");
@@ -52,17 +52,15 @@ export function createReaderUi(readerContext) {
     readerContext.readerThemeToggle.title = readerContext.readerTheme === "dark" ? "切换到白天模式" : "切换到夜间模式";
     readerContext.readerThemeToggle.setAttribute("aria-label", readerContext.readerThemeToggle.title);
     readerContext.readerThemeToggle.setAttribute("aria-pressed", String(readerContext.readerTheme === "light"));
-    for (const article of readerContext.content.querySelectorAll(".foliate-continuous > article"))
-      article.classList.toggle("reader-document-dark", readerContext.readerTheme === "dark");
     if (persist) {
       try { localStorage.setItem("theme", readerContext.readerTheme); } catch (_) {}
     }
-    readerContext.foliateScrollAnchors.restore(anchor);
+    readerContext.chapterScrollAnchors.restore(anchor);
   }
 
   /** @param {number} percent @param {boolean} [persist] */
   function setZoom(percent, persist = true) {
-    const anchor = readerContext.foliateScrollAnchors.capture();
+    const anchor = readerContext.chapterScrollAnchors.capture();
     const mode = readerContext.capability.mode;
     const pdfAnchor = mode === "pdf" || mode === "pdf-pages" || mode === "image-pages"
       ? readerContext.pageAtMarker() : null;
@@ -88,14 +86,12 @@ export function createReaderUi(readerContext) {
     if (readerContext.htmlFrame && readerContext.htmlFrame.contentDocument)
       readerContext.htmlFrame.contentDocument.documentElement.style.zoom = String(readerContext.documentState.zoom);
     if (readerContext.pdfDocument) readerContext.rerenderVisiblePdfPages();
-    if (readerContext.capability.mode === "foliate")
-      readerContext.content.style.setProperty("--reader-zoom", String(readerContext.documentState.zoom));
     readerContext.viewport.scrollLeft = horizontalCenter * readerContext.viewport.scrollWidth - readerContext.viewport.clientWidth / 2;
     if (persist) {
       readerContext.zoomChangedByUser = true;
       try { localStorage.setItem("reader-zoom", String(normalized)); } catch (_) {}
     }
-    readerContext.foliateScrollAnchors.restore(anchor);
+    readerContext.chapterScrollAnchors.restore(anchor);
     if (persist) readerContext.scheduleSave();
   }
 

@@ -376,8 +376,6 @@ export function createReaderDomSearch({
     const chunks = [];
     const breaks = cached ? cached.breaks : [];
     const findLineBreaks = query.includes(BLOCK_SEPARATOR);
-    // Foliate's section-ordinal fallback must count the same concatenated text
-    // matches as the Foliate engine which produced the ordinal.
     const respectBlocks = progressive || occurrence === null;
     let length = 0;
     /** @type {(node: Text, start: number, end: number) => void} */

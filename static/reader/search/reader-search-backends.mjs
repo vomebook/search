@@ -83,9 +83,9 @@ export function createReaderSearchBackends(readerContext) {
       parts.unshift({ node: /** @type {Text} */ (heading.firstChild), start, end: Math.min(start + result.length, headText.length) });
     }
     const [mark] = readerContext.highlightTextParts(parts);
-    readerContext.foliateScrollAnchors.invalidate();
+    readerContext.chapterScrollAnchors.invalidate();
     (mark || article).scrollIntoView({ block: "center" });
-    readerContext.foliateScrollAnchors.remember();
+    readerContext.chapterScrollAnchors.remember();
     const tocIndex = readerContext.navigationState.tocEntries.findIndex(
       (entry) => typeof entry === "object" && entry !== null && "chapterIndex" in entry && entry.chapterIndex === result.chapterIndex
     );
@@ -99,147 +99,6 @@ export function createReaderSearchBackends(readerContext) {
   }
 
   /** @param {string} query @param {number} generation */
-  async function fullSearchFoliateMatches(query, generation) {
-    if (!readerContext.epubRendition?.search) return [];
-    /** @type {{index: number, count: number, label: string}[]} */
-    const groups = [];
-    /** @type {ReaderSearchBackends.FoliateResult[]} */
-    const firstPage = [];
-    // Cache only visited pages for this query; never retain every match in the book.
-    /** @type {Map<number, ReaderSearchBackends.Page<ReaderSearchBackends.FoliateResult>>} */
-    const cachedPages = new Map();
-    let total = 0;
-    /** @param {ReaderSearchBackends.FoliateItem} item @param {string} label @param {number} occurrence */
-    const toResult = (item, label, occurrence) => {
-      const excerpt = item.excerpt || { pre: "", match: query, post: "" };
-      return {
-        location: label || "电子书位置",
-        cfi: item.cfi,
-        occurrence,
-        snippet: {
-          text: `${excerpt.pre}${excerpt.match}${excerpt.post}`,
-          matchStart: excerpt.pre.length,
-          matchLength: excerpt.match.length,
-          prefix: "",
-          suffix: ""
-        }
-      };
-    };
-    readerContext.fullSearchSession.pageLoader = async (requestedOffset, pageGeneration = readerContext.readerRuntime.currentGeneration("search")) => {
-      const pageSize = 50;
-      const offset = readerContext.fullSearchPageOffset(total, requestedOffset, pageSize);
-      if (!offset) return { total, offset, pageSize, results: firstPage.slice() };
-      const cached = cachedPages.get(offset);
-      if (cached) {
-        cachedPages.delete(offset);
-        cachedPages.set(offset, cached);
-        return cached;
-      }
-      /** @type {ReaderSearchBackends.FoliateResult[]} */
-      const results = [];
-      let passed = 0;
-      for (const group of groups) {
-        if (passed + group.count <= offset) { passed += group.count; continue; }
-        const sectionOffset = Math.max(0, offset - passed);
-        const limit = Math.min(pageSize - results.length, group.count - sectionOffset);
-        for await (const batch of /** @type {ReaderSearchBackends.Rendition} */ (readerContext.epubRendition).search({
-          query, index: group.index, offset: sectionOffset, limit, lean: true,
-          current: () => readerContext.isReaderGenerationCurrent("search", pageGeneration)
-        }))
-          for (const [index, item] of batch.subitems.entries())
-            results.push(toResult(item, group.label, sectionOffset + index));
-        passed += group.count;
-        if (results.length === pageSize) break;
-      }
-      const page = { total, offset, pageSize, results };
-      if (readerContext.isReaderGenerationCurrent("search", pageGeneration) && JSON.stringify(page).length <= 128 * 1024) {
-        cachedPages.set(offset, page);
-        if (cachedPages.size > 4) cachedPages.delete(/** @type {number} */ (cachedPages.keys().next().value));
-      }
-      return page;
-    };
-    for await (const group of readerContext.epubRendition.search({
-      query, lean: true, limit: 50,
-      current: () => readerContext.isReaderGenerationCurrent("search", generation)
-    })) {
-      if (!readerContext.isReaderGenerationCurrent("search", generation)) return [];
-      if (group.count) groups.push({ index: group.index, count: group.count, label: group.label });
-      for (const [index, item] of group.subitems.entries()) {
-        if (firstPage.length === 50) break;
-        firstPage.push(toResult(item, group.label, index));
-      }
-      total += group.count;
-      readerContext.fullSearchSession.page = { total, offset: 0, pageSize: 50, results: firstPage.slice() };
-      readerContext.updateSearchState({ results: readerContext.fullSearchSession.page.results, index: -1 });
-      readerContext.renderFullSearchResults();
-      readerContext.fullSearchStatus.textContent = `${total} 个结果（正在搜索…）`;
-      await readerContext.waitForReader();
-      if (!readerContext.isReaderGenerationCurrent("search", generation)) return [];
-    }
-    readerContext.fullSearchSession.page = { total, offset: 0, pageSize: 50, results: firstPage.slice() };
-    return firstPage;
-  }
-
-  /** @param {ReaderSearchBackends.FoliateResult} result @param {number} generation */
-  async function navigateFoliateSearchResult(result, generation) {
-    const resolved = await readerContext.epubRendition?.resolveNavigation?.(result.cfi);
-    if (!resolved || !readerContext.isReaderGenerationCurrent("navigation", generation)) return false;
-    const section = readerContext.epubBook?.sections?.[resolved.index],
-      sections = readerContext.epubBook?.sections?.filter((item) => item.linear !== "no") || [],
-      visibleIndex = section ? sections.indexOf(section) : -1,
-      destinationIndex = visibleIndex >= 0 ? visibleIndex : -resolved.index - 1;
-    if (!section || !readerContext.foliateSectionLoader) return false;
-    let node = await readerContext.foliateSectionLoader(destinationIndex);
-    if (!readerContext.isReaderGenerationCurrent("navigation", generation)) return false;
-    await readerContext.waitForReader(0, true);
-    if (!readerContext.isReaderGenerationCurrent("navigation", generation)) return false;
-    if (!node?.isConnected) node = await readerContext.foliateSectionLoader(destinationIndex);
-    if (!node?.isConnected || !readerContext.isReaderGenerationCurrent("navigation", generation)) return false;
-    readerContext.clearFullSearchMarks();
-    let target;
-    if (typeof resolved.anchor === "function" && node._resolveSearchAnchor) {
-      let parts;
-      try { parts = node._resolveSearchAnchor(resolved.anchor); } catch (_) { return false; }
-      if (!parts?.length) return false;
-      [target] = readerContext.highlightTextParts(parts);
-    } else {
-      // Some non-CFI engines expose only a section locator.
-      const matches = await readerContext.fullSearchDomMatches(
-        readerContext.foliateSectionRoot(node),
-        "电子书位置",
-        readerContext.searchState.query,
-        readerContext.readerRuntime.currentGeneration("search"),
-        false,
-        result.occurrence || 0,
-        generation
-      );
-      target = matches[0]?.target;
-    }
-    if (!readerContext.isReaderGenerationCurrent("navigation", generation) || !target) return false;
-    const targetRect = target.getBoundingClientRect(),
-      viewportRect = readerContext.viewport.getBoundingClientRect();
-    readerContext.foliateScrollAnchors.invalidate();
-    readerContext.viewport.scrollTop = Math.max(
-      0,
-      readerContext.viewport.scrollTop +
-        targetRect.top -
-        viewportRect.top -
-        (readerContext.viewport.clientHeight - targetRect.height) / 2
-    );
-    const tocIndex = readerContext.navigationState.tocEntries.findIndex(
-      (entry) => typeof entry === "object" && entry !== null && "sectionIndex" in entry && entry.sectionIndex === destinationIndex
-    );
-    if (tocIndex >= 0) {
-      readerContext.updateNavigationState({ currentChapterIndex: tocIndex });
-      readerContext.updateTocCurrentMark();
-    }
-    readerContext.updateProgressTools();
-    readerContext.scheduleSave();
-    readerContext.foliateScrollAnchors.remember();
-    return true;
-  }
-
-  /** @param {string} query @param {number} generation */
   async function searchReaderText(query, generation) {
     if (readerContext.capability.mode === "pdf" && !readerContext.ocrManifestUrl) {
       await readerContext.fullSearchPdfMatches(query, generation);
@@ -247,8 +106,6 @@ export function createReaderSearchBackends(readerContext) {
     else if (readerContext.capability.mode === "pdf" || readerContext.capability.mode === "pdf-pages") {
       readerContext.publishSearchResults(generation, await readerContext.searchConcentratedPdf(query, generation));
     }
-    else if (readerContext.capability.mode === "foliate")
-      readerContext.publishSearchResults(generation, await readerContext.fullSearchFoliateMatches(query, generation));
     else if (readerContext.capability.mode === "epub-chapters") await readerContext.searchChapterBook(query, generation);
     else if (readerContext.capability.mode === "text" || readerContext.capability.mode === "markdown")
       readerContext.publishSearchResults(
@@ -278,8 +135,6 @@ export function createReaderSearchBackends(readerContext) {
     chapterSearchModule,
     searchChapterBook,
     navigateChapterSearchResult,
-    fullSearchFoliateMatches,
-    navigateFoliateSearchResult,
     searchReaderText
   };
 }

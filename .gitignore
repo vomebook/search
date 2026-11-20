@@ -3,7 +3,6 @@ _site/
 /data.candidate-*/
 static/vendor/*
 !static/vendor/djvu-rs-reader/
-static/foliate-reader/
 __pycache__/
 node_modules/
 .ruff_cache/

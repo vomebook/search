@@ -1250,85 +1250,12 @@ body {
   text-align: center;
   line-height: 1.6;
 }
-/* Chapter bundles and Foliate hosts. Chapter Shadow DOM has its own stylesheet. */
+/* Chapter bundles. */
 .epub-frame {
   width: 100%;
   height: auto;
   min-height: 100%;
   background: #181b1e;
-}
-.foliate-reader-view {
-  display: block;
-  width: 100%;
-  height: 100%;
-  min-height: 100%;
-  background: #181b1e;
-}
-.foliate-continuous {
-  --reader-book-link: #8ab4e8;
-  width: min(100%, 900px);
-  min-height: 100%;
-  margin: 0 auto;
-  padding: 24px 20px 64px;
-  background: #181b1e;
-  color: #e7e9eb;
-}
-.foliate-continuous > article {
-  min-height: 0 !important;
-  height: auto !important;
-  margin: 0 auto 32px;
-  padding-top: 0 !important;
-  line-height: 1.7;
-  break-before: auto !important;
-  page-break-before: auto !important;
-  font-size: calc(var(--reader-prose-size, 1em) * var(--reader-zoom));
-}
-/* Virtualized chapters must reserve their measured height. */
-.foliate-continuous > article.foliate-section-placeholder {
-  height: var(--foliate-placeholder-height) !important;
-  min-height: var(--foliate-placeholder-height) !important;
-  padding: 0 !important;
-  contain: strict;
-  pointer-events: none;
-}
-.foliate-continuous > article > :first-child {
-  margin-top: 0 !important;
-}
-.foliate-continuous a {
-  color: #8ab4e8 !important;
-}
-.foliate-continuous a[href]:not([href^="http:"]):not([href^="https:"]) {
-  text-decoration: none !important;
-}
-.foliate-continuous :is(p, div, span, li, td, th, blockquote, pre, code, h1, h2, h3, h4, h5, h6) {
-  color: inherit !important;
-}
-.foliate-continuous img,
-.foliate-continuous svg,
-.foliate-continuous video {
-  max-width: 100%;
-  height: auto;
-}
-:root[data-theme="light"] .foliate-continuous {
-  --reader-book-link: #185abc;
-  background: #fff;
-  color: #202124;
-}
-:root[data-theme="light"] .foliate-continuous a {
-  color: #185abc !important;
-}
-.reader-content[data-mode="foliate"] {
-  width: 100%;
-  height: calc(100vh - var(--reader-toolbar-height));
-  height: calc(100dvh - var(--reader-toolbar-height));
-  min-height: calc(100vh - var(--reader-toolbar-height));
-  min-height: calc(100dvh - var(--reader-toolbar-height));
-  padding: 0;
-}
-.reader-content[data-mode="foliate"] > .foliate-reader-view {
-  width: 100%;
-  height: 100%;
-  min-height: 320px;
 }
 /* Isolated HTML */
 .html-frame {
@@ -1491,8 +1418,7 @@ body {
     --reader-paper: #f7f3eb;
   }
   .reader-viewport:has(> .reader-content:is([data-mode="text"], [data-mode="markdown"])),
-  .reader-content[data-mode="epub-chapters"] > .epub-frame,
-  .reader-content[data-mode="foliate"] > .foliate-continuous {
+  .reader-content[data-mode="epub-chapters"] > .epub-frame {
     background-color: var(--reader-paper);
   }
 }
@@ -1580,10 +1506,7 @@ body {
     outline: 3px solid currentColor;
     outline-offset: 2px;
   }
-  /* Shadow-root chapter links need this preference in their JS-owned stylesheet. */
-  .reader-content a,
-  .foliate-continuous a,
-  .foliate-continuous a[href]:not([href^="http:"]):not([href^="https:"]) {
+  .reader-content a {
     text-decoration: underline !important;
   }
   .reader-pdf-text span.full-search-highlight,
@@ -1693,12 +1616,6 @@ body {
   .reader-markdown {
     width: 100%;
     max-width: none;
-    overflow-wrap: anywhere;
-  }
-  .foliate-continuous {
-    padding: 16px 12px 48px;
-  }
-  .foliate-continuous > article {
     overflow-wrap: anywhere;
   }
   .html-frame {

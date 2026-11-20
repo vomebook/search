@@ -87,7 +87,6 @@ class ReaderStyleTests(unittest.TestCase):
         for mode, markup, surface in (
             ('markdown','<article class="reader-markdown">Markdown</article>','#viewport'),
             ('epub-chapters','<div class="epub-frame"><article class="reader-markdown">Chapter</article></div>','.epub-frame'),
-            ('foliate','<div class="foliate-continuous"><article>Book</article></div>','.foliate-continuous'),
         ):
             with self.subTest(mode=mode):
                 self.page.locator('#content').evaluate('''(e,[mode,markup])=>{
@@ -98,7 +97,6 @@ class ReaderStyleTests(unittest.TestCase):
         for mode in ('pdf','pdf-pages','image','html','video'):
             self.page.locator('#content').evaluate('(e,mode)=>e.dataset.mode=mode', mode)
             self.assertEqual(viewport.evaluate('e=>getComputedStyle(e).backgroundColor'), 'rgb(233, 236, 239)', mode)
-            self.assertEqual(self.page.locator('.foliate-continuous').evaluate('e=>getComputedStyle(e).backgroundColor'), 'rgb(255, 255, 255)', mode)
 
     def test_back_and_download_icons_have_stable_browser_independent_geometry(self):
         self.page.evaluate("""() => {
@@ -433,11 +431,11 @@ class ReaderStyleTests(unittest.TestCase):
         cancel.click()
         self.assertTrue(dialog.is_hidden())
 
-    def test_foliate_and_video_follow_toolbar_across_breakpoint_and_resize(self):
+    def test_video_follows_toolbar_across_breakpoint_and_resize(self):
         for width, height in ((390, 844), (390, 360), (600, 500), (601, 500), (1440, 900)):
             with self.subTest(width=width, height=height):
                 self.page.set_viewport_size({"width": width, "height": height})
-                for mode in ("foliate", "video"):
+                for mode in ("video",):
                     metrics = self.page.locator("#content").evaluate("""(content, mode) => {
                         content.dataset.mode = mode;
                         content.innerHTML = mode === 'video' ? '<video class="reader-video"></video>' : '';
@@ -451,10 +449,7 @@ class ReaderStyleTests(unittest.TestCase):
                     self.assertEqual(metrics["toolbar"], expected_toolbar)
                     self.assertAlmostEqual(metrics["height"], height - expected_toolbar, delta=1)
                     self.assertEqual(metrics["padding"], "0px")
-                    if mode == "foliate":
-                        self.assertAlmostEqual(metrics["minHeight"], height - expected_toolbar, delta=1)
-                    else:
-                        self.assertAlmostEqual(metrics["video"], height - expected_toolbar, delta=1)
+                    self.assertAlmostEqual(metrics["video"], height - expected_toolbar, delta=1)
 
     def test_mobile_folder_action_and_title_follow_breakpoint(self):
         self.page.emulate_media(reduced_motion='reduce')
@@ -706,10 +701,8 @@ class ReaderStyleTests(unittest.TestCase):
             self.assertTrue(all(float(value.strip().removesuffix('s')) == 0
                                 for group in values for value in group.split(',')), values)
 
-    def test_high_contrast_overrides_light_borders_and_internal_link_reset(self):
+    def test_high_contrast_overrides_light_borders(self):
         self.page.emulate_media(contrast="more")
-        self.page.locator("#content").evaluate("""content => content.insertAdjacentHTML('beforeend',
-            '<div class="foliate-continuous"><a href="#internal">Internal link</a></div>')""")
         for theme in ("dark", "light"):
             self.page.locator("html").evaluate("(element, theme) => element.dataset.theme = theme", theme)
             for selector, border in ((".reader-toolbar", "borderBottomColor"),
@@ -722,74 +715,3 @@ class ReaderStyleTests(unittest.TestCase):
                     return [style[border], style.color];
                 }""", border)
                 self.assertEqual(colors[0], colors[1], (selector, theme, colors))
-            self.assertIn("underline", self.page.locator(".foliate-continuous a").evaluate(
-                "element => getComputedStyle(element).textDecorationLine"
-            ))
-
-    def test_rendered_foliate_shadow_tracks_contrast_without_layout_changes(self):
-        with zipfile.ZipFile(io.BytesIO(epub_with_navigation())) as archive:
-            files = {name: archive.read(name) for name in archive.namelist()}
-        # A book rule makes normal and high-contrast underlining distinguishable.
-        files["OEBPS/nav.xhtml"] = files["OEBPS/nav.xhtml"].decode().replace(
-            "a{color:#000}", "a{color:#000;text-decoration:none!important}"
-        ).replace("</a>", " ContrastTarget</a>", 1)
-        book = zip_bytes(files)
-        self.page.route("**/api/reader-content**", lambda route: route.fulfill(
-            content_type="application/epub+zip", body=book
-        ))
-        source = urllib.parse.quote(
-            "https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/contrast.epub", safe=""
-        )
-        self.page.emulate_media(contrast="no-preference")
-        self.page.goto(
-            f"{self.origin}/search/static/reader.html?url={source}&ext=epub&title=Contrast",
-            wait_until="domcontentloaded",
-        )
-        self.page.wait_for_function("() => document.documentElement.dataset.readerPhase === 'ready'")
-        support.open_reader_panel(self.page)
-        self.page.locator("#full-search-toggle").click()
-        self.page.locator("#full-search-input").fill("ContrastTarget")
-        self.page.locator("#full-search-results .full-search-result").first.click()
-        highlight = self.page.locator(".foliate-continuous mark.full-search-highlight").first
-        highlight.wait_for()
-        self.settle()
-        measure = """mark => {
-            const root = mark.getRootNode(), link = mark.closest('a[href]');
-            const style = getComputedStyle(mark);
-            const rect = element => {
-                const box = element.getBoundingClientRect();
-                return [box.x, box.y, box.width, box.height];
-            };
-            const viewport = document.querySelector('#viewport');
-            return {
-                shadow: root instanceof ShadowRoot && root.host.matches('article[data-section]'),
-                text: mark.textContent,
-                decoration: getComputedStyle(link).textDecorationLine,
-                outline: style.outlineStyle,
-                width: parseFloat(style.outlineWidth),
-                outlineColor: style.outlineColor,
-                color: style.color,
-                layout: [rect(document.querySelector('.reader-toolbar')), rect(viewport),
-                    rect(root.host), rect(link), rect(mark),
-                    [viewport.scrollWidth, viewport.scrollHeight, viewport.scrollTop]]
-            };
-        }"""
-        for theme in ("dark", "light"):
-            with self.subTest(theme=theme):
-                self.page.locator("html").evaluate(
-                    "(element, theme) => element.dataset.theme = theme", theme
-                )
-                before = highlight.evaluate(measure)
-                self.assertTrue(before["shadow"])
-                self.assertEqual(before["text"], "ContrastTarget")
-                self.assertEqual(before["decoration"], "none")
-                self.assertEqual(before["outline"], "none")
-                self.page.emulate_media(contrast="more")
-                high = highlight.evaluate(measure)
-                self.assertIn("underline", high["decoration"])
-                self.assertEqual(high["outline"], "solid")
-                self.assertEqual(high["width"], 2)
-                self.assertEqual(high["outlineColor"], high["color"])
-                self.assertEqual(high["layout"], before["layout"])
-                self.page.emulate_media(contrast="no-preference")
-                self.assertEqual(highlight.evaluate(measure), before)

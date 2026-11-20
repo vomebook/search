@@ -124,12 +124,6 @@
     "pdf-pages": "pdf-pages",
     "image-pages": "image-pages",
     image: "image",
-    epub: "foliate",
-    mobi: "foliate",
-    azw: "foliate",
-    azw3: "foliate",
-    fb2: "foliate",
-    fbz: "foliate",
     "epub-chapters": "epub-chapters",
     html: "html",
     htm: "html",
@@ -178,14 +172,6 @@
       zoom: true,
       bookmarks: true,
       pagination: true,
-      media: false
-    },
-    foliate: {
-      toc: true,
-      search: true,
-      zoom: true,
-      bookmarks: true,
-      pagination: false,
       media: false
     },
     "epub-chapters": {

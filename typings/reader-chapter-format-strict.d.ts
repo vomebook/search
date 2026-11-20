@@ -24,7 +24,7 @@ export interface ChapterFormatContext {
   chapterSearchConfiguration: import('./reader-chapter-search-strict').Configuration | null;
   readerRestorationEntry: import('./reader-progress-strict').ProgressState | null;
   navigationState: { tocEntries: unknown[] };
-  foliateScrollAnchors: ReaderScrollAnchorManager;
+  chapterScrollAnchors: ReaderScrollAnchorManager;
   assertReaderActive(): void;
   trustedReaderAssetManifestUrl(url: string): string | null;
   trustedChapterUrl(path: string, base: string): string | null;

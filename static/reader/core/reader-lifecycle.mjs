@@ -16,13 +16,11 @@
  * @property {number} themeAnimationTimer
  * @property {number} panelAnimationTimer
  * @property {number} markerFrame
- * @property {number} foliateScrollFrame
- * @property {number} foliateWindowFrame
  * @property {number} epubSeekFrame
  * @property {{mode: string | null} | null | undefined} capability
  * @property {HTMLElement} loadingIndicator
  * @property {HTMLElement} loadingStatus
- * @property {{preserve<T>(change: () => T): T}} foliateScrollAnchors
+ * @property {{preserve<T>(change: () => T): T}} chapterScrollAnchors
  * @property {(open: boolean) => unknown} setReaderPanelOpen
  * @property {() => unknown} stopReaderWork
  * @property {{dispose(): unknown}} readerRequestManager
@@ -123,8 +121,8 @@ export function createReaderLifecycle(readerContext) {
   }
 
   function markReaderContentReady() {
-    if ((readerContext.capability?.mode === "foliate" || readerContext.capability?.mode === "epub-chapters") && readerContext.loadingIndicator.isConnected)
-      readerContext.foliateScrollAnchors.preserve(() => readerContext.loadingIndicator.remove());
+    if (readerContext.capability?.mode === "epub-chapters" && readerContext.loadingIndicator.isConnected)
+      readerContext.chapterScrollAnchors.preserve(() => readerContext.loadingIndicator.remove());
     else readerContext.loadingIndicator.remove();
     readerContext.loadingStatus.hidden = true;
   }
@@ -156,14 +154,12 @@ export function createReaderLifecycle(readerContext) {
     clearTimeout(readerContext.saveTimer);
     clearTimeout(readerContext.themeAnimationTimer);
     clearTimeout(readerContext.panelAnimationTimer);
-    for (const frame of [readerContext.markerFrame, readerContext.foliateScrollFrame, readerContext.foliateWindowFrame, readerContext.epubSeekFrame])
+    for (const frame of [readerContext.markerFrame, readerContext.epubSeekFrame])
       if (frame) cancelAnimationFrame(frame);
     readerContext.saveTimer =
       readerContext.themeAnimationTimer =
       readerContext.panelAnimationTimer =
       readerContext.markerFrame =
-      readerContext.foliateScrollFrame =
-      readerContext.foliateWindowFrame =
       readerContext.epubSeekFrame =
         0;
     VoiceOfMLReaderStore.dispose?.();

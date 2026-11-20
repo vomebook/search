@@ -1,6 +1,7 @@
 import { createReaderDomSearch, fullSearchEscape, fullSearchSnippet, fullSearchPageOffset } from "./reader/search/reader-dom-search.mjs";
 import { createReaderSearchController } from "./reader/search/reader-search-controller.mjs";
 import { createReaderImageLoader } from "./reader/formats/reader-image-loader.mjs";
+import { chapterAnchorCandidates, createImageSettler } from "./reader/core/reader-shared-content.mjs";
 import "/search/static/reader-resources.js";
 import "/search/static/reader/core/reader-contract.js";
 import "/search/static/reader/core/reader-request-manager.js";
@@ -33,7 +34,6 @@ import {
   createReaderSearchBackends,
   createReaderPdfScheduler,
   createReaderNavigation,
-  createReaderFoliateFormat,
   createReaderProgress,
   createReaderBookmarks,
   createReaderMediaFormat,
@@ -59,8 +59,6 @@ const readerContext = {
   get DISCOURSE_TITLE_SELECTOR() { return DISCOURSE_TITLE_SELECTOR; },
   get EPUB_HTML_TAGS() { return EPUB_HTML_TAGS; },
   get EPUB_HTML_VOID_TAGS() { return EPUB_HTML_VOID_TAGS; },
-  get FOLIATE_LOADED_SECTION_LIMIT() { return FOLIATE_LOADED_SECTION_LIMIT; },
-  get FOLIATE_PREFETCH_MARGIN() { return FOLIATE_PREFETCH_MARGIN; },
   get HTML_FRAME_STYLE() { return HTML_FRAME_STYLE; },
   get MARKED_URL() { return MARKED_URL; },
   get PDFJS_CMAP_URL() { return PDFJS_CMAP_URL; },
@@ -94,7 +92,6 @@ const readerContext = {
   get seedPdfPageGeometry() { return seedPdfPageGeometry; }, set seedPdfPageGeometry(value) { seedPdfPageGeometry = value; },
   get acquirePdfRenderSlot() { return acquirePdfRenderSlot; }, set acquirePdfRenderSlot(value) { acquirePdfRenderSlot = value; },
   get acquirePdfTextSlot() { return acquirePdfTextSlot; }, set acquirePdfTextSlot(value) { acquirePdfTextSlot = value; },
-  get activateFoliateTocEntry() { return activateFoliateTocEntry; }, set activateFoliateTocEntry(value) { activateFoliateTocEntry = value; },
   get applyChapterSearchPage() { return applyChapterSearchPage; },
   get applyInitialRestoration() { return applyInitialRestoration; }, set applyInitialRestoration(value) { applyInitialRestoration = value; },
   get applyReaderMetadata() { return applyReaderMetadata; }, set applyReaderMetadata(value) { applyReaderMetadata = value; },
@@ -111,7 +108,6 @@ const readerContext = {
   get cancelSpeculativePdfRenders() { return cancelSpeculativePdfRenders; }, set cancelSpeculativePdfRenders(value) { cancelSpeculativePdfRenders = value; },
   get capability() { return capability; }, set capability(value) { capability = value; },
   get captureChapterPosition() { return captureChapterPosition; }, set captureChapterPosition(value) { captureChapterPosition = value; },
-  get captureFoliateBookmarkPosition() { return captureFoliateBookmarkPosition; }, set captureFoliateBookmarkPosition(value) { captureFoliateBookmarkPosition = value; },
   get chapterManifestCleanup() { return chapterManifestCleanup; }, set chapterManifestCleanup(value) { chapterManifestCleanup = value; },
   get chapterManifestLoader() { return chapterManifestLoader; }, set chapterManifestLoader(value) { chapterManifestLoader = value; },
   get chapterManifestObserver() { return chapterManifestObserver; }, set chapterManifestObserver(value) { chapterManifestObserver = value; },
@@ -141,9 +137,7 @@ const readerContext = {
   get downloadUrl() { return downloadUrl; }, set downloadUrl(value) { downloadUrl = value; },
   get drainPdfTextWaiters() { return drainPdfTextWaiters; }, set drainPdfTextWaiters(value) { drainPdfTextWaiters = value; },
   get emptyPanel() { return emptyPanel; }, set emptyPanel(value) { emptyPanel = value; },
-  get epubBook() { return epubBook; }, set epubBook(value) { epubBook = value; },
   get epubContentBody() { return epubContentBody; }, set epubContentBody(value) { epubContentBody = value; },
-  get epubRendition() { return epubRendition; }, set epubRendition(value) { epubRendition = value; },
   get epubSeekFrame() { return epubSeekFrame; }, set epubSeekFrame(value) { epubSeekFrame = value; },
   get epubSeekPromise() { return epubSeekPromise; }, set epubSeekPromise(value) { epubSeekPromise = value; },
   get epubSeekTarget() { return epubSeekTarget; }, set epubSeekTarget(value) { epubSeekTarget = value; },
@@ -154,16 +148,7 @@ const readerContext = {
   get filterPanel() { return filterPanel; }, set filterPanel(value) { filterPanel = value; },
   get folderNavigationTarget() { return folderNavigationTarget; }, set folderNavigationTarget(value) { folderNavigationTarget = value; },
   get folderReturnUrl() { return folderReturnUrl; },
-  get foliateChapterRepository() { return foliateChapterRepository; }, set foliateChapterRepository(value) { foliateChapterRepository = value; },
-  get foliateContinuous() { return foliateContinuous; }, set foliateContinuous(value) { foliateContinuous = value; },
-  get foliateScrollAnchors() { return foliateScrollAnchors; },
-  get foliateScrollFrame() { return foliateScrollFrame; }, set foliateScrollFrame(value) { foliateScrollFrame = value; },
-  get foliateSectionLoader() { return foliateSectionLoader; }, set foliateSectionLoader(value) { foliateSectionLoader = value; },
-  get foliateSectionObserver() { return foliateSectionObserver; }, set foliateSectionObserver(value) { foliateSectionObserver = value; },
-  get foliateSectionRoot() { return foliateSectionRoot; }, set foliateSectionRoot(value) { foliateSectionRoot = value; },
-  get foliateSectionSettler() { return foliateSectionSettler; }, set foliateSectionSettler(value) { foliateSectionSettler = value; },
-  get foliateSectionVirtualizer() { return foliateSectionVirtualizer; }, set foliateSectionVirtualizer(value) { foliateSectionVirtualizer = value; },
-  get foliateWindowFrame() { return foliateWindowFrame; }, set foliateWindowFrame(value) { foliateWindowFrame = value; },
+  get chapterScrollAnchors() { return chapterScrollAnchors; },
   get formatAdapters() { return formatAdapters; },
   get formatMediaTime() { return formatMediaTime; }, set formatMediaTime(value) { formatMediaTime = value; },
   get fullSearchButton() { return fullSearchButton; },
@@ -190,7 +175,6 @@ const readerContext = {
   get imageLoader() { return imageLoader; },
   get independentTextCaret() { return independentTextCaret; },
   get initialReaderPage() { return initialReaderPage; }, set initialReaderPage(value) { initialReaderPage = value; },
-  get initialReaderTargetSection() { return initialReaderTargetSection; }, set initialReaderTargetSection(value) { initialReaderTargetSection = value; },
   get installReaderTapSelectionClear() { return installReaderTapSelectionClear; }, set installReaderTapSelectionClear(value) { installReaderTapSelectionClear = value; },
   get isPdfPageVisible() { return isPdfPageVisible; }, set isPdfPageVisible(value) { isPdfPageVisible = value; },
   get isReaderGenerationCurrent() { return isReaderGenerationCurrent; }, set isReaderGenerationCurrent(value) { isReaderGenerationCurrent = value; },
@@ -338,7 +322,6 @@ const readerContext = {
   get releasePdfWorker() { return releasePdfWorker; }, set releasePdfWorker(value) { releasePdfWorker = value; },
   get renderBookmarks() { return renderBookmarks; }, set renderBookmarks(value) { renderBookmarks = value; },
   get renderChapterManifest() { return renderChapterManifest; }, set renderChapterManifest(value) { renderChapterManifest = value; },
-  get renderFoliate() { return renderFoliate; }, set renderFoliate(value) { renderFoliate = value; },
   get renderFullSearchResults() { return renderFullSearchResults; },
   get renderHtml() { return renderHtml; }, set renderHtml(value) { renderHtml = value; },
   get renderImageDocument() { return renderImageDocument; }, set renderImageDocument(value) { renderImageDocument = value; },
@@ -361,20 +344,17 @@ const readerContext = {
   get resolvedReaderData() { return resolvedReaderData; }, set resolvedReaderData(value) { resolvedReaderData = value; },
   get restorationFailed() { return restorationFailed; }, set restorationFailed(value) { restorationFailed = value; },
   get restoreChapterPosition() { return restoreChapterPosition; }, set restoreChapterPosition(value) { restoreChapterPosition = value; },
-  get restoreFoliateBookmarkPosition() { return restoreFoliateBookmarkPosition; }, set restoreFoliateBookmarkPosition(value) { restoreFoliateBookmarkPosition = value; },
   get restoreFormat() { return restoreFormat; }, set restoreFormat(value) { restoreFormat = value; },
   get retryReaderProxy() { return retryReaderProxy; }, set retryReaderProxy(value) { retryReaderProxy = value; },
   get retryableReaderProxyError() { return retryableReaderProxyError; }, set retryableReaderProxyError(value) { retryableReaderProxyError = value; },
   get returnHistoryKey() { return returnHistoryKey; },
   get runFullSearch() { return runFullSearch; },
   get sanitizeEpubDocument() { return sanitizeEpubDocument; }, set sanitizeEpubDocument(value) { sanitizeEpubDocument = value; },
-  get sanitizeFoliateStyles() { return sanitizeFoliateStyles; }, set sanitizeFoliateStyles(value) { sanitizeFoliateStyles = value; },
   get saveDeadline() { return saveDeadline; }, set saveDeadline(value) { saveDeadline = value; },
   get saveProgress() { return saveProgress; }, set saveProgress(value) { saveProgress = value; },
   get progressNotSaved() { return progressNotSaved; },
   get captureProgressEntry() { return captureProgressEntry; },
   get saveTimer() { return saveTimer; }, set saveTimer(value) { saveTimer = value; },
-  get scheduleFoliateScrollSync() { return scheduleFoliateScrollSync; }, set scheduleFoliateScrollSync(value) { scheduleFoliateScrollSync = value; },
   get scheduleMarkerSync() { return scheduleMarkerSync; }, set scheduleMarkerSync(value) { scheduleMarkerSync = value; },
   get schedulePdfBookSearchPrefetch() { return schedulePdfBookSearchPrefetch; }, set schedulePdfBookSearchPrefetch(value) { schedulePdfBookSearchPrefetch = value; },
   get schedulePdfManifestPrefetch() { return schedulePdfManifestPrefetch; }, set schedulePdfManifestPrefetch(value) { schedulePdfManifestPrefetch = value; },
@@ -382,7 +362,6 @@ const readerContext = {
   get scheduleSave() { return scheduleSave; }, set scheduleSave(value) { scheduleSave = value; },
   get searchConcentratedPdf() { return searchConcentratedPdf; }, set searchConcentratedPdf(value) { searchConcentratedPdf = value; },
   get searchState() { return searchState; },
-  get seekFoliateProgress() { return seekFoliateProgress; }, set seekFoliateProgress(value) { seekFoliateProgress = value; },
   get selectPanel() { return selectPanel; }, set selectPanel(value) { selectPanel = value; },
   get setPdfPageLoadingState() { return setPdfPageLoadingState; }, set setPdfPageLoadingState(value) { setPdfPageLoadingState = value; },
   get setReaderPanelOpen() { return setReaderPanelOpen; }, set setReaderPanelOpen(value) { setReaderPanelOpen = value; },
@@ -401,7 +380,6 @@ const readerContext = {
   get status() { return status; },
   get swfPlayer() { return swfPlayer; }, set swfPlayer(value) { swfPlayer = value; },
   get syncCurrentPageFromMarker() { return syncCurrentPageFromMarker; }, set syncCurrentPageFromMarker(value) { syncCurrentPageFromMarker = value; },
-  get syncFoliateScrollLocation() { return syncFoliateScrollLocation; }, set syncFoliateScrollLocation(value) { syncFoliateScrollLocation = value; },
   get syncHeadingLocation() { return syncHeadingLocation; }, set syncHeadingLocation(value) { syncHeadingLocation = value; },
   get takePdfManifestPrefetch() { return takePdfManifestPrefetch; }, set takePdfManifestPrefetch(value) { takePdfManifestPrefetch = value; },
   get themeAnimationTimer() { return themeAnimationTimer; }, set themeAnimationTimer(value) { themeAnimationTimer = value; },
@@ -488,8 +466,6 @@ const readerContext = {
   get cancelPdfManifestPrefetch() { return cancelPdfManifestPrefetch; }, set cancelPdfManifestPrefetch(value) { cancelPdfManifestPrefetch = value; },
   get chapterSearchModule() { return chapterSearchModule; }, set chapterSearchModule(value) { chapterSearchModule = value; },
   get cleanTocLabel() { return cleanTocLabel; }, set cleanTocLabel(value) { cleanTocLabel = value; },
-  get cloneFoliateDocument() { return cloneFoliateDocument; }, set cloneFoliateDocument(value) { cloneFoliateDocument = value; },
-  get createFoliateSection() { return createFoliateSection; }, set createFoliateSection(value) { createFoliateSection = value; },
   get createHeadingLocationCache() { return createHeadingLocationCache; }, set createHeadingLocationCache(value) { createHeadingLocationCache = value; },
   get createPdfShellWindow() { return createPdfShellWindow; }, set createPdfShellWindow(value) { createPdfShellWindow = value; },
   get createTocRow() { return createTocRow; }, set createTocRow(value) { createTocRow = value; },
@@ -500,10 +476,6 @@ const readerContext = {
   get estimatePdfTextContentBytes() { return estimatePdfTextContentBytes; }, set estimatePdfTextContentBytes(value) { estimatePdfTextContentBytes = value; },
   get excerptFromCaret() { return excerptFromCaret; }, set excerptFromCaret(value) { excerptFromCaret = value; },
   get fetchWithReaderTimeout() { return fetchWithReaderTimeout; }, set fetchWithReaderTimeout(value) { fetchWithReaderTimeout = value; },
-  get foliateSearchAnchor() { return foliateSearchAnchor; }, set foliateSearchAnchor(value) { foliateSearchAnchor = value; },
-  get foliateSectionQuery() { return foliateSectionQuery; }, set foliateSectionQuery(value) { foliateSectionQuery = value; },
-  get foliateTocEntries() { return foliateTocEntries; }, set foliateTocEntries(value) { foliateTocEntries = value; },
-  get fullSearchFoliateMatches() { return fullSearchFoliateMatches; }, set fullSearchFoliateMatches(value) { fullSearchFoliateMatches = value; },
   get getPdfPersistentTextStore() { return getPdfPersistentTextStore; }, set getPdfPersistentTextStore(value) { getPdfPersistentTextStore = value; },
   get highlightPanelItem() { return highlightPanelItem; }, set highlightPanelItem(value) { highlightPanelItem = value; },
   get loadPdfEngine() { return loadPdfEngine; }, set loadPdfEngine(value) { loadPdfEngine = value; },
@@ -530,20 +502,15 @@ const readerContext = {
   get publishSearchResults() { return publishSearchResults; }, set publishSearchResults(value) { publishSearchResults = value; },
   get readPdfOcrJson() { return readPdfOcrJson; }, set readPdfOcrJson(value) { readPdfOcrJson = value; },
   get readerAssetObjectFamily() { return readerAssetObjectFamily; }, set readerAssetObjectFamily(value) { readerAssetObjectFamily = value; },
-  get refreshFoliateWindow() { return refreshFoliateWindow; }, set refreshFoliateWindow(value) { refreshFoliateWindow = value; },
   get renderPdfImageShell() { return renderPdfImageShell; }, set renderPdfImageShell(value) { renderPdfImageShell = value; },
   get renderVirtualToc() { return renderVirtualToc; }, set renderVirtualToc(value) { renderVirtualToc = value; },
   get repairHtmlContrast() { return repairHtmlContrast; }, set repairHtmlContrast(value) { repairHtmlContrast = value; },
   get resolveReaderSource() { return resolveReaderSource; }, set resolveReaderSource(value) { resolveReaderSource = value; },
   get restoreInitialPosition() { return restoreInitialPosition; }, set restoreInitialPosition(value) { restoreInitialPosition = value; },
-  get rewriteFoliateResources() { return rewriteFoliateResources; }, set rewriteFoliateResources(value) { rewriteFoliateResources = value; },
   get sanitizeOfflineHtml() { return sanitizeOfflineHtml; }, set sanitizeOfflineHtml(value) { sanitizeOfflineHtml = value; },
   get sanitizeReaderDocument() { return sanitizeReaderDocument; }, set sanitizeReaderDocument(value) { sanitizeReaderDocument = value; },
-  get scheduleFoliateWindowRefresh() { return scheduleFoliateWindowRefresh; }, set scheduleFoliateWindowRefresh(value) { scheduleFoliateWindowRefresh = value; },
   get searchChapterBook() { return searchChapterBook; }, set searchChapterBook(value) { searchChapterBook = value; },
   get setBookmarkDialogModal() { return setBookmarkDialogModal; }, set setBookmarkDialogModal(value) { setBookmarkDialogModal = value; },
-  get setupFoliateWindow() { return setupFoliateWindow; }, set setupFoliateWindow(value) { setupFoliateWindow = value; },
-  get trimFoliateSections() { return trimFoliateSections; }, set trimFoliateSections(value) { trimFoliateSections = value; },
   get trimPdfManifestPrefetches() { return trimPdfManifestPrefetches; }, set trimPdfManifestPrefetches(value) { trimPdfManifestPrefetches = value; },
   get trimPdfSurfaces() { return trimPdfSurfaces; }, set trimPdfSurfaces(value) { trimPdfSurfaces = value; },
   get waitForSpreadsheetImages() { return waitForSpreadsheetImages; }, set waitForSpreadsheetImages(value) { waitForSpreadsheetImages = value; }
@@ -584,7 +551,7 @@ let {
 
 let {
   updateSearchState, publishSearchResults, clearSearchHighlights, chapterSearchModule,
-  searchChapterBook, navigateChapterSearchResult, fullSearchFoliateMatches, navigateFoliateSearchResult,
+  searchChapterBook, navigateChapterSearchResult,
   searchReaderText
 } = createReaderSearchBackends(readerContext);
 
@@ -605,14 +572,6 @@ let {
 } = createReaderNavigation(readerContext);
 
 let {
-  foliateSectionRoot, foliateSectionQuery, foliateSectionCandidates, syncFoliateScrollLocation,
-  refreshFoliateWindow, scheduleFoliateWindowRefresh, trimFoliateSections, scheduleFoliateScrollSync,
-  activateFoliateTocEntry, cloneFoliateDocument, foliateSearchAnchor, settleReaderImages,
-  rewriteFoliateResources, createFoliateSection, setupFoliateWindow, foliateTocEntries,
-  renderFoliate
-} = createReaderFoliateFormat(readerContext);
-
-let {
   scheduleSave, saveProgress, progressNotSaved, captureProgressEntry, placeReadingProgress, currentReaderUrl,
   loadReaderRestoration, getInitialReaderRestoration, initialReaderPage, readerProgressPercent,
   pageAtMarker, syncCurrentPageFromMarker, scheduleMarkerSync, restoreFormat,
@@ -622,8 +581,7 @@ let {
 } = createReaderProgress(readerContext);
 
 let {
-  consumeBookmarkHandoff, excerptFromCaret, bookmarkExcerpt, captureFoliateBookmarkPosition,
-  restoreFoliateBookmarkPosition, seekFoliateProgress, renderBookmarks, captureBookmarkSnapshot,
+  consumeBookmarkHandoff, excerptFromCaret, bookmarkExcerpt, renderBookmarks, captureBookmarkSnapshot,
   setBookmarkDialogModal, openBookmarkPopover, closeBookmarkPopover
 } = createReaderBookmarks(readerContext);
 
@@ -653,7 +611,7 @@ let {
 } = createReaderPdfTextRuntime(readerContext);
 
 let {
-  normalizeEpubDocument, sanitizeReaderDocument, sanitizeEpubDocument, sanitizeFoliateStyles, parseChapterDocument,
+  normalizeEpubDocument, sanitizeReaderDocument, sanitizeEpubDocument, parseChapterDocument,
   epubContentBody, renderText, sanitizeOfflineHtml, buildDiscourseDocument,
   prepareHtmlDocument, buildHtmlFrameSource, waitForSpreadsheetImages, renderHtml,
   detectHtmlEncoding, repairHtmlContrast
@@ -895,29 +853,8 @@ let pdfManifestPrefetchCount = 0;
 let pdfManifestPrefetchWrapped = false;
 
 readerBindings.ownPdfPrefetchAndQueues();
-/** @type {import('../typings/reader-foliate-format-strict').FoliateView | null} */
-let epubRendition = null;
-/** @type {import('../typings/reader-foliate-format-strict').FoliateBook | null} */
-let epubBook = null;
-let foliateContinuous = false;
-/** @type {ReturnType<ReaderChaptersApi['createChapterRepository']> | null} */
-let foliateChapterRepository = null;
-/** @type {ReturnType<ReaderVirtualApi['createSectionVirtualizer']> | null} */
-let foliateSectionVirtualizer = null;
-/** @type {import('../typings/reader-foliate-format-strict').FoliateLoader | null} */
-let foliateSectionLoader = null;
-/** @type {(() => Promise<unknown>) | null} */
-let foliateSectionSettler = null;
-/** @type {IntersectionObserver | null} */
-let foliateSectionObserver = null;
-let foliateScrollFrame = 0, foliateWindowFrame = 0;
-/** @type {number | null} */
-let initialReaderTargetSection = null;
 /** @type {(() => void) | null} */
 let chapterManifestCleanup = null;
-const FOLIATE_PREFETCH_SECTIONS = 6;
-const FOLIATE_PREFETCH_MARGIN = 4000;
-const FOLIATE_LOADED_SECTION_LIMIT = 12;
 const PDF_PREFETCH_MARGIN = 2400;
 const TOC_VIRTUALIZATION_THRESHOLD = 500;
 const TOC_VIRTUAL_ROW_HEIGHT = 40;
@@ -1085,10 +1022,11 @@ const holdReaderDestination = (target, offset = 0) => {
   return release;
 };
 
-const foliateScrollAnchors = readerRuntime.track(
+let settleReaderImages = createImageSettler(readerContext);
+const chapterScrollAnchors = readerRuntime.track(
   VoiceOfMLReaderScroll.createScrollAnchorManager({
     viewport,
-    candidates: foliateSectionCandidates
+    candidates: () => chapterAnchorCandidates(content)
   })
 );
 
@@ -1147,9 +1085,6 @@ readerBindings.bindSelectionAndPageLifecycle();
 
 // Resolve once, then keep source URLs, capability, and presentation in sync.
 
-// Foliate keeps a source-to-rendered text mapping because CFI addresses the
-// original document, before sanitization and insertion into a shadow root.
-
 // Reading progress controls and undo.
 const progressTools = document.createElement("div");
 readerBindings.mountProgressControls();
@@ -1174,7 +1109,7 @@ readerBindings.bindProgressActions();
 const domSearch = createReaderDomSearch({
   content, runtime: readerRuntime, isCurrent: isReaderGenerationCurrent,
   yieldTask: waitForReader, getTocEntries: () => navigationState.tocEntries,
-  unwrapRoot: foliateSectionRoot,
+  unwrapRoot: root => root,
   publishPage: (page, loader, partial) => {
     fullSearchSession.pageLoader = async offset => loader(offset);
     fullSearchSession.page = page;
@@ -1203,8 +1138,7 @@ const fullSearchController = createReaderSearchController({
     pdfClient: () => pdfBookSearchClient,
     chapterResult: result => ({ ...result,
       activate: (generation = readerRuntime.currentGeneration("navigation")) => navigateChapterSearchResult(result, generation) }),
-    activate: (result, generation) => "activate" in result
-      ? result.activate(generation) : navigateFoliateSearchResult(result, generation)
+    activate: (result, generation) => result.activate(generation)
   },
   navigation: {
     begin: beginReaderNavigation,

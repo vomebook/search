@@ -13,7 +13,9 @@ function get(url) { return new Promise((resolve, reject) => https.get(url, { hea
     const matches = pinned.filter(url => url.startsWith('/search/static/' + stem + '.') && url.endsWith(extension));
     assert.strictEqual(matches.length, 1, file); return matches[0];
   };
-  const files = ["static/reader.html", ...require('../../static/reader-resources.js').readerFiles.map(current), "static/foliate-reader/view.js"];
+  const inventory = require('../../static/reader-resources.js').readerFiles;
+  assert.ok(inventory.every(file => !file.toLowerCase().includes('foliate')), 'reader inventory must not ship Foliate');
+  const files = ["static/reader.html", ...inventory.map(current)];
   for (const file of files) { const response = await get(new URL(file, root)); assert.strictEqual(response.status, 200, file); assert.ok(response.body.length > 20, file); }
   const reader = await get(new URL(current('reader.js'), root)); assert.match(reader.body, /createReaderRuntime|VoiceOfMLReaderRuntime/); assert.match(reader.body, /createAdapterRegistry|VoiceOfMLReaderAdapters/);
   console.log("reader live smoke ok");

@@ -25,7 +25,6 @@ export function createReaderHtmlFormat(readerContext) {
       }
       // HTML parsing treats prefixed void tags as containers. Keep the following
       // content as siblings: serializing real <br>/<hr>/<img> drops their children.
-      // Move the existing text nodes so Foliate's source/CFI mapping stays intact.
       const fragment = doc.createDocumentFragment();
       fragment.appendChild(replacement);
       if (readerContext.EPUB_HTML_VOID_TAGS.has(localName)) {
@@ -116,8 +115,6 @@ export function createReaderHtmlFormat(readerContext) {
   const CSS_REFERENCE_FUNCTIONS = new Set([
     "url", "src", "image", "image-set", "-webkit-image-set", "cross-fade", "-webkit-cross-fade"
   ]);
-  const CSS_BLOB_STYLESHEET_MAX_BYTES = 4 * 1024 * 1024;
-  const CSS_IMPORT_MAX_DEPTH = 4;
   const CSS_IMPORT_MAX_PER_SHEET = 32;
 
   /** @param {number} code */
@@ -377,99 +374,6 @@ export function createReaderHtmlFormat(readerContext) {
   /** @param {string | null} css @param {import('../../../typings/reader-html-format-strict').CssOptions} [options] */
   function sanitizeCssReferences(css, options = {}) {
     return scanCss(css, options);
-  }
-
-  /** @param {string} url */
-  async function readBlobStylesheet(url) {
-    try {
-      const response = await fetch(url);
-      if (!response.ok) return null;
-      const declared = Number(response.headers.get("content-length") || 0);
-      if (declared > CSS_BLOB_STYLESHEET_MAX_BYTES) return null;
-      const blob = await response.blob();
-      return blob.size > CSS_BLOB_STYLESHEET_MAX_BYTES ? null : await blob.text();
-    } catch (_) {
-      return null;
-    }
-  }
-
-  // Replace blob @imports with their sanitized contents, preserving cascade
-  // position and media conditions. Cycles, excessive depth and unreadable
-  // sheets are dropped rather than loaded unsanitized.
-  /** @param {string} css @param {number} [depth] @param {Set<string>} [ancestors] @returns {Promise<string>} */
-  async function inlineCssImports(css, depth = 0, ancestors = new Set()) {
-    /** @type {{url: string, media: string}[]} */
-    const blobImports = [];
-    const nonce = `reader-import-${Math.random().toString(36).slice(2)}${Date.now().toString(36)}`;
-    const sanitized = scanCss(css, { blobImports, nonce });
-    if (!blobImports.length) return sanitized;
-    const bodies = await Promise.all(blobImports.map(async ({ url, media }) => {
-      if (depth >= CSS_IMPORT_MAX_DEPTH || ancestors.has(url)) return "";
-      const text = await readBlobStylesheet(url);
-      if (text === null) return "";
-      const body = (await inlineCssImports(text, depth + 1, new Set([...ancestors, url])))
-        .replace(/^\ufeff/, "").replace(/^\s*@charset\s+"[^"]*"\s*;/i, "");
-      return media && !/^all$/i.test(media) ? `@media ${media} {\n${body}\n}` : body;
-    }));
-    return sanitized.replace(new RegExp(`/\\*${nonce}:(\\d+)\\*/`, "g"), (_, index) => bodies[Number(index)] ?? "");
-  }
-
-  // Foliate rewrites chapter stylesheets to blob: URLs. Load them as sanitized
-  // inline styles so remote references inside packaged CSS cannot escape the
-  // archive-only resource policy. Results are cached per blob URL.
-  /** @type {Map<string, Promise<string | null>>} */
-  const foliateStyleCache = new Map();
-  const FOLIATE_STYLE_CACHE_MAX = 64;
-
-  /** @param {Element} node @returns {Promise<Element | null>} */
-  async function sanitizeFoliateStyle(node) {
-    if (node.localName !== "link") {
-      const style = /** @type {Element} */ (node.cloneNode(false));
-      style.textContent = await inlineCssImports(node.textContent || "");
-      return style;
-    }
-    const href = node.getAttribute("href") || "";
-    if (!/^blob:/i.test(href)) return null;
-    let pending = foliateStyleCache.get(href);
-    if (!pending) {
-      pending = readBlobStylesheet(href).then(text => {
-        if (text !== null) return inlineCssImports(text, 0, new Set([href]));
-        // An old failed read must not evict a newer entry after cache rotation.
-        if (foliateStyleCache.get(href) === pending) foliateStyleCache.delete(href);
-        return null;
-      });
-      foliateStyleCache.set(href, pending);
-      while (foliateStyleCache.size > FOLIATE_STYLE_CACHE_MAX) {
-        const oldest = foliateStyleCache.keys().next();
-        if (oldest.done) break;
-        foliateStyleCache.delete(oldest.value);
-      }
-    }
-    const text = await pending;
-    if (text === null) return null;
-    const style = document.createElement("style");
-    const media = node.getAttribute("media");
-    if (media) style.setAttribute("media", media);
-    style.textContent = text;
-    return style;
-  }
-
-  /** @param {Iterable<Element>} nodes */
-  async function sanitizeFoliateStyles(nodes) {
-    const ordered = Array.from(nodes);
-    /** @type {(Element | null)[]} */
-    const output = [];
-    let next = 0;
-    // Overlap the archive's independent sheets without starting every read at
-    // once. Insert only sanitized output, in the original cascade order.
-    await Promise.all(Array.from({ length: Math.min(3, ordered.length) }, async () => {
-      while (next < ordered.length) {
-        readerContext.assertReaderActive();
-        const index = next++;
-        output[index] = await sanitizeFoliateStyle(/** @type {Element} */ (ordered[index]));
-      }
-    }));
-    return output.filter(style => style !== null);
   }
 
   /** @param {Document} doc @param {{keepBlobImports?: boolean}} [options] */
@@ -842,7 +746,6 @@ export function createReaderHtmlFormat(readerContext) {
     sanitizeReaderDocument,
     sanitizeEpubDocument,
     sanitizeCssReferences,
-    sanitizeFoliateStyles,
     parseChapterDocument,
     epubContentBody,
     renderText,

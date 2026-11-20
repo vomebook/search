@@ -484,8 +484,7 @@ function warmReaderIntent(rawUrl, urgent = false) {
   /** @param {string} href */
   var preload = function(href) {
     var link = document.createElement("link");
-    // Foliate files are all ES modules; a classic preload would not be reused.
-    var module = href.endsWith(".mjs") || href.includes("/foliate-reader/") || (href.endsWith(".js") && !engineAssets.includes(href));
+    var module = href.endsWith(".mjs") || (href.endsWith(".js") && !engineAssets.includes(href));
     link.rel = module ? "modulepreload" : "preload";
     if (!module) link.as = href.endsWith(".css") ? "style" : "script";
     link.fetchPriority = "low";

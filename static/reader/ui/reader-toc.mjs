@@ -106,7 +106,7 @@ export function createReaderToc(readerContext) {
     }
     const marker = readerContext.htmlFrame ? 8 : readerContext.viewport.getBoundingClientRect().top + 8;
     const root = readerContext.htmlFrame?.contentDocument?.body || readerContext.content;
-    if (!["foliate", "epub-chapters"].some(mode => mode === readerContext.capability.mode)) {
+    if (readerContext.capability.mode !== "epub-chapters") {
       if (readerContext.headingLocationCache?.root !== root || readerContext.headingLocationCache?.entries !== readerContext.navigationState.tocEntries) {
         readerContext.headingLocationCache?.dispose();
         readerContext.headingLocationCache = readerContext.createHeadingLocationCache(root, tocEntries());
@@ -148,9 +148,7 @@ export function createReaderToc(readerContext) {
     if (!entry || entry.group) return;
     const generation = readerContext.beginReaderNavigation();
     try {
-      const activated = readerContext.foliateContinuous
-        ? await readerContext.activateFoliateTocEntry(entry, generation, { closePanel: false })
-        : await entry.activate(generation);
+      const activated = await entry.activate(generation);
       if (activated === false || !readerContext.isReaderGenerationCurrent("navigation", generation)) return;
       readerContext.updateNavigationState({ currentChapterIndex: index });
       readerContext.updateTocCurrentMark();

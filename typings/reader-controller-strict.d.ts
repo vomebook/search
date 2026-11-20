@@ -17,9 +17,6 @@ export interface ReaderFormatControllerContext {
   clearPdfManifestPrefetches(): void;
   pdfBookSearchClient: Disposable | null; pdfShellWindow: Disposable | null; pdfFirstPagePreload: HTMLElement | null;
   content: HTMLElement;
-  foliateSectionObserver: IntersectionObserver | null; foliateSectionVirtualizer: Disposable | null; foliateChapterRepository: Disposable | null;
-  foliateSectionLoader: unknown; foliateSectionSettler: unknown;
-  epubRendition: { close?(): Promise<void> | void } | null; epubBook: unknown;
   htmlFrame: HTMLIFrameElement | null; mediaElement: HTMLMediaElement | null;
   extension: string;
   fetchReaderResponse(): Promise<Response>;
@@ -32,7 +29,7 @@ export interface ReaderFormatControllerContext {
   loadHtmlDocument(): {response: Promise<Response>; engine: Promise<unknown[]>}; renderHtml(prepared: {response: Promise<Response>; engine: Promise<unknown[]>}): unknown;
   loadChapterManifestDocument(): Promise<Response>; renderChapterManifest(prepared: Response): unknown;
   loadMediaDocument(): Promise<null>; renderMedia(mode: string): unknown;
-  loadSwfDocument(): Promise<unknown>; renderSwf(prepared: unknown): unknown; renderFoliate(): Promise<unknown>;
+  loadSwfDocument(): Promise<unknown>; renderSwf(prepared: unknown): unknown;
   releasePdfWorker?: (() => void) | null;
   formatAdapters: { register(mode: string, adapter: Adapter): unknown; activate(mode: string): unknown; dispose(): unknown; readonly active: Adapter | null };
   restoreFormat(mode: string, entry: unknown, generation: number): unknown; disposeFormatResources(mode: string): void;
@@ -48,9 +45,9 @@ export interface ReaderFormatControllerContext {
   syncCapabilityControls(): void; downloadButton: HTMLAnchorElement; documentState: { title: string };
   readerDownloadUrl(title: string, url: string): string; fail(message: string, code: string): void;
   params: URLSearchParams;
-  foliateContinuous: boolean; loadReaderRestoration(): Promise<import('./reader-progress-strict').ProgressState | null>; readerRestorationPromise: Promise<unknown> | null;
+  loadReaderRestoration(): Promise<import('./reader-progress-strict').ProgressState | null>; readerRestorationPromise: Promise<unknown> | null;
   awaitReader<T>(value: T | PromiseLike<T>): Promise<Awaited<T>>;
-  applyInitialRestoration(entry: unknown, generation: number): Promise<unknown>; initialReaderTargetSection: unknown;
+  applyInitialRestoration(entry: unknown, generation: number): Promise<unknown>;
   setReaderPhase(phase: string): boolean; updateDocumentState(state: { restorationReady?: boolean; page?: number; pageCount?: number }): void;
   restorationFailed: boolean; scheduleSave(): void; readerResources: Set<() => void>;
   markReaderContentReady(): void; isReaderGenerationCurrent(kind: string, generation: number): boolean;

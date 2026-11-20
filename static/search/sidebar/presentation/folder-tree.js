@@ -240,13 +240,12 @@ function persistFolderSelection(subtreeSet, selfSet) {
   deps.commitSelection(Array.from(subtreeSet), Array.from(selfSet));
 }
 
-/** @param {VoiceOfMLFilterFolder[]} nodes @param {string[]} subtreePaths @param {string[]} selfPaths */
-function collectFolderNodePaths(nodes, subtreePaths, selfPaths) {
+/** @param {VoiceOfMLFilterFolder[]} nodes @param {string[]} selfPaths */
+function collectFolderNodePaths(nodes, selfPaths) {
   for (const node of nodes) {
-    if (!node.isRoot && node.path) subtreePaths.push(node.path);
     if (node.hasDirectFiles) selfPaths.push(node.path);
     if (node.children && node.children.length > 0) {
-      collectFolderNodePaths(node.children, subtreePaths, selfPaths);
+      collectFolderNodePaths(node.children, selfPaths);
     }
   }
 }
@@ -361,7 +360,7 @@ function appendFilterTreeNode(container, node, depth, subtreeSet, selfSet, looku
 function handleFolderCheckboxChange(node) {
   const subtreeSet = getFolderSubtreeSet();
   const selfSet = getFolderSelfSet();
-  const { full } = deps.selection.folderSelectionState(node, subtreeSet, selfSet);
+  const { full } = deps.selection.folderSelectionState(node, subtreeSet, selfSet, getFolderSelectionLookup(subtreeSet, selfSet));
   setNodeSubtreeSelection(node, !full, subtreeSet, selfSet);
   persistFolderSelection(subtreeSet, selfSet);
   refreshFilterFolderSelectionState();
@@ -400,9 +399,8 @@ function invertSelection() {
     if (!deps.readView().tree || deps.readView().tree.length === 0) return;
     var subtreeSet = getFolderSubtreeSet();
     var selfSet = getFolderSelfSet();
-    var allSubtreePaths = /** @type {string[]} */ ([]);
     var allSelfPaths = /** @type {string[]} */ ([]);
-    collectFolderNodePaths(deps.readView().tree, allSubtreePaths, allSelfPaths);
+    collectFolderNodePaths(deps.readView().tree, allSelfPaths);
     var nextSubtreeSet = new Set(/** @type {string[]} */ ([]));
     var nextSelfSet = new Set();
     for (const path of allSelfPaths) {

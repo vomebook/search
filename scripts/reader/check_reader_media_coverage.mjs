@@ -43,7 +43,7 @@ if (result.status !== 0 || rows.length !== 1 || rows[0].some((value, index) => v
 } else {
   // Keep these independent of the TAP and coverage checks above.
   for (const args of [
-    ['--test', '--test-concurrency=1', '--test-reporter=tap', 'tests/reader/copy_reader_vendor.test.mjs', 'tests/reader/test_foliate_proxy.mjs'],
+    ['--test', '--test-concurrency=1', '--test-reporter=tap', 'tests/reader/copy_reader_vendor.test.mjs'],
     ['tests/reader/media/test_ruffle_closure.mjs'],
     ['tests/service_worker/test_ruffle_retention.js']
   ]) {

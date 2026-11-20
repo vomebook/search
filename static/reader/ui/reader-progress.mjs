@@ -36,7 +36,7 @@ export function createReaderProgress(readerContext) {
     const pageOffset = shell ? Math.max(0, readerContext.viewport.scrollTop - readerContext.readerPageScrollTop(shell)) : 0;
     const htmlScrollTop = readerContext.htmlFrame && readerContext.htmlFrame.contentWindow ? readerContext.htmlFrame.contentWindow.scrollY : 0;
     const readerUrl = readerContext.currentReaderUrl();
-    const foliatePosition = readerContext.captureFoliateBookmarkPosition() || readerContext.captureChapterPosition();
+    const chapterPosition = readerContext.captureChapterPosition();
     return {
       url: readerContext.sourceUrl,
       title: readerContext.documentState.title,
@@ -50,7 +50,7 @@ export function createReaderProgress(readerContext) {
       scrollTop: readerContext.viewport.scrollTop,
       htmlScrollTop,
       zoom: Math.round(readerContext.documentState.zoom * 100),
-      ...(foliatePosition || {})
+      ...(chapterPosition || {})
     };
   }
 
@@ -157,33 +157,6 @@ export function createReaderProgress(readerContext) {
       return readerContext.mediaElement.duration
         ? Math.round((readerContext.mediaElement.currentTime / readerContext.mediaElement.duration) * 1000) / 10
         : 0;
-    if (readerContext.foliateContinuous) {
-      const position = readerContext.captureFoliateBookmarkPosition(),
-        count = readerContext.epubBook?.sections?.filter((section) => section.linear !== "no").length || 0,
-        article =
-          position &&
-          document.querySelector(
-            `.foliate-continuous article[data-section="${position.foliateSection}"]`
-          ),
-        fraction = article
-          ? Math.max(
-              0,
-              Math.min(
-                1,
-                position.foliateOffset / Math.max(1, article.getBoundingClientRect().height)
-              )
-            )
-          : 0;
-      if (position && position.foliateSection < 0) {
-        const index = -position.foliateSection - 1, spine = readerContext.epubBook?.sections || [];
-        if (!spine[index]) return 0;
-        const preceding = spine.slice(0, index).filter(item => item.linear !== "no").length;
-        return count ? Math.round((preceding / count) * 1000) / 10 : 0;
-      }
-      return count && position
-        ? Math.round(((position.foliateSection + fraction) / count) * 1000) / 10
-        : 0;
-    }
     if (readerContext.capability.mode === "epub-chapters")
       return Math.round((readerContext.chapterManifestLoader?.progressFraction() ?? 0) * 1000) / 10;
     if (readerContext.htmlFrame && readerContext.htmlFrame.contentDocument) {
@@ -270,8 +243,6 @@ export function createReaderProgress(readerContext) {
         if (Number.isInteger(entry.chapterIndex)) {
           if (!(await readerContext.restoreChapterPosition(entry, generation))) return false;
         } else if (!(await readerContext.restoreProgressState(entry, generation))) return false;
-      } else if (mode === "foliate" && Number.isInteger(entry.foliateSection)) {
-        if (!(await readerContext.restoreFoliateBookmarkPosition(entry, generation))) return false;
       } else if (readerContext.documentState.pageCount && entry.page) {
         if (
           !(await readerContext.goToPage(entry.page, generation)) ||
@@ -351,9 +322,7 @@ export function createReaderProgress(readerContext) {
   }
 
   function captureProgressState() {
-    return readerContext.foliateContinuous
-      ? readerContext.captureFoliateBookmarkPosition()
-      : readerContext.capability.mode === "epub-chapters"
+    return readerContext.capability.mode === "epub-chapters"
         ? readerContext.captureChapterPosition()
         : readerContext.mediaElement
           ? { mediaTime: readerContext.mediaElement.currentTime }
@@ -366,8 +335,6 @@ export function createReaderProgress(readerContext) {
    * @param {number} [generation] */
   async function restoreProgressState(state, generation = readerContext.beginReaderNavigation()) {
     if (!state || !readerContext.isReaderGenerationCurrent("navigation", generation)) return false;
-    if (readerContext.foliateContinuous && Number.isInteger(state.foliateSection))
-      return readerContext.restoreFoliateBookmarkPosition(state, generation);
     if (readerContext.capability.mode === "epub-chapters" && Number.isInteger(state.chapterIndex))
       return readerContext.restoreChapterPosition(state, generation);
     try {
@@ -426,11 +393,6 @@ export function createReaderProgress(readerContext) {
   }
 
   function flushEpubSeek() {
-    if (readerContext.epubSeekFrame) {
-      cancelAnimationFrame(readerContext.epubSeekFrame);
-      readerContext.epubSeekFrame = 0;
-      readerContext.epubSeekPromise = readerContext.seekFoliateProgress((/** @type {{percent: number, generation: number}} */ (readerContext.epubSeekTarget)).percent, (/** @type {{percent: number, generation: number}} */ (readerContext.epubSeekTarget)).generation);
-    }
     return readerContext.epubSeekPromise;
   }
 
@@ -443,13 +405,7 @@ export function createReaderProgress(readerContext) {
     if (!readerContext.isReaderGenerationCurrent("navigation", generation)) return;
     if (readerContext.mediaElement && readerContext.mediaElement.duration)
       readerContext.mediaElement.currentTime = (readerContext.mediaElement.duration * percent) / 100;
-    else if (readerContext.foliateContinuous) {
-      readerContext.epubSeekTarget = { percent, generation };
-      readerContext.epubSeekFrame = requestAnimationFrame(() => {
-        readerContext.epubSeekFrame = 0;
-        readerContext.epubSeekPromise = readerContext.seekFoliateProgress(percent, generation);
-      });
-    } else if (readerContext.capability.mode === "epub-chapters") {
+    else if (readerContext.capability.mode === "epub-chapters") {
       const target = Number.isFinite(percent) ? readerContext.chapterManifestLoader?.progressTarget(percent / 100) : null;
       if (target) {
         readerContext.epubSeekPromise = readerContext.restoreChapterPosition({

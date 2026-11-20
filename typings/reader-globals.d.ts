@@ -248,7 +248,6 @@ interface ReaderSecurityApi {
 
 interface ReaderResourcesApi {
   readonly vendors: Record<string, { readonly url: string; readonly file: string; readonly sha256: string }>;
-  readonly foliateVendors: Record<string, { readonly url: string; readonly file: string; readonly sha256: string }>;
   readonly readerFiles: readonly string[];
   readonly readerComponentFiles: readonly string[];
   vendorUrl(name: string, base: string): string;
@@ -259,7 +258,7 @@ interface ReaderResourcesApi {
   djvuSelectedAssets(base: string): string[];
   djvuSupportsSIMD(): boolean;
   ruffleAssets(base: string): string[];
-  engineAssets(extension: string, base: string, foliateSuffix?: string, workerWrapper?: string): string[];
+  engineAssets(extension: string, base: string, unusedSuffix?: string, workerWrapper?: string): string[];
 }
 
 interface ReaderContractApi {
@@ -313,7 +312,7 @@ interface ReaderRuntimeState {
   navigation: {tocEntries: unknown[]; currentChapterIndex: number};
   search: {query: string; results: unknown[]; index: number};
   panel: {open: boolean; selected: string; showingAllBookmarks: boolean; editingBookmark: import('./reader-store-strict').BookmarkEntry | null};
-  formats: {active: unknown; pdf: Record<string, unknown>; foliate: Record<string, unknown>; html: Record<string, unknown>; media: Record<string, unknown>; [key: string]: unknown};
+  formats: {active: unknown; pdf: Record<string, unknown>; html: Record<string, unknown>; media: Record<string, unknown>; [key: string]: unknown};
   capability: ReaderRuntimeCapability | null;
 }
 type ReaderRuntimeDisposable = (() => void) | {dispose?: () => void};
@@ -327,7 +326,6 @@ type ReaderRuntimeFormatSnapshot = Readonly<Record<string, unknown>>;
 interface ReaderRuntimeFormatsSnapshot {
   readonly active: ReaderRuntimeFormatSnapshot;
   readonly pdf: ReaderRuntimeFormatSnapshot;
-  readonly foliate: ReaderRuntimeFormatSnapshot;
   readonly html: ReaderRuntimeFormatSnapshot;
   readonly media: ReaderRuntimeFormatSnapshot;
   readonly [key: string]: ReaderRuntimeFormatSnapshot | undefined;
@@ -518,13 +516,6 @@ declare var VoiceOfMLSearchSession: SearchSessionApi;
 declare var VoiceOfMLDownloadController: DownloadControllerApi;
 declare var VoiceOfMLReaderNavigation: SearchReaderNavigationApi;
 
-// The imported module registers this custom element; it does not export the
-// book to our code. The concrete sections are provided by the chosen engine.
-interface FoliateViewElement extends HTMLElement {
-  open(file: File): Promise<void>;
-  book: { sections: Array<{linear?: string}> };
-}
-interface HTMLElementTagNameMap { "foliate-view": FoliateViewElement }
 declare var DOMPurify: {
   sanitize(input: string, options: {RETURN_DOM_FRAGMENT: true; [key: string]: unknown}): DocumentFragment;
   sanitize(input: string, options?: object): string;

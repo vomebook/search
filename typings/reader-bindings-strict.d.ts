@@ -40,15 +40,14 @@ export interface ReaderBindingsContext {
   setZoom(value: string | number, persist?: boolean): void; zoomInput: HTMLInputElement; pageInput: HTMLInputElement; goToPage(value: string | number): unknown;
   handleReaderKeydown(event: KeyboardEvent): void; turnViewport(direction: number): void;
   handleReaderOutsideClick(event: MouseEvent): void; headingLocationCache: Disposable | null;
-  epubRendition: {book?: {isExternal?(url: string): boolean; sections: {linear?: string; resolveHref?(raw: string): string}[]}} | null;
-  beginReaderNavigation(): number; activateFoliateTocEntry(entry: {href: string}, generation: number): Promise<unknown>; reportNavigationError(error: unknown, generation: number): void;
+  beginReaderNavigation(): number; reportNavigationError(error: unknown, generation: number): void;
   bookmarkRibbon: HTMLElement; closeBookmarkPopover(): void; pendingBookmarkSnapshot: BookmarkSnapshot | null; captureBookmarkSnapshot(): BookmarkSnapshot; currentReaderUrl(): URL; bookmarkInvoker: HTMLElement | null;
   selectPanel(panel: string | undefined): void; updatePanelState(state: {showingAllBookmarks: boolean}): void; setPanelSearchOpen(button: HTMLButtonElement, open: boolean): void; filterPanel(view: Element): void;
   progressSaveChain: Promise<unknown>; progressNotSaved(error: {name: string}): void; disposeReader(): void;
   handleReaderPositionChange(event: Event): void; notePdfScrollIntent(event: Event): void;
   installReaderTapSelectionClear(viewport: HTMLElement): void; independentTextCaret(doc: Document, x: number, y: number): Caret | null;
   pdfSelectionPointer: SelectionPointer | null; correctPdfCrossPageSelection(x: number, y: number, pointer: SelectionPointer): void; pdfSelectionBoundaryUpdate: boolean;
-  scheduleFoliateScrollSync(): void; updateProgressTools(): void; stopPdfManifestPrefetch(): void; queuePdfManifestPrefetch(): void;
+  updateProgressTools(): void; stopPdfManifestPrefetch(): void; queuePdfManifestPrefetch(): void;
   progressTools: HTMLElement; readingProgressSummary: HTMLElement; updateReadingProgressSummary(): void; syncTocTab(): void;
   progressSeeking: boolean; previousProgressState: ProgressState | null; captureProgressState(): ProgressState | null; isReaderGenerationCurrent(kind: string, generation: number): boolean; flushEpubSeek(): Promise<unknown>;
   progressRange: HTMLInputElement; progressPercent: HTMLElement; seekProgress(value: string, user: boolean): void; progressUndo: HTMLElement; restoreProgressState(state: ProgressState | null): unknown;

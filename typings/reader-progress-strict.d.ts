@@ -14,7 +14,6 @@ export interface ProgressState {
   chapterManifest?: string;
   chapterOffset?: number;
 }
-export interface FoliatePosition extends ProgressState { foliateSection: number; foliateOffset: number; foliateTocIndex: number }
 export interface ChapterPosition extends ProgressState { chapterIndex: number; chapterManifest: string; chapterOffset: number }
 export interface ProgressContext {
   readerLifecycle: { disposed: boolean };
@@ -27,7 +26,7 @@ export interface ProgressContext {
   mediaElement: (HTMLMediaElement & { _readerSourceRetry?: boolean }) | null;
   syncCurrentPageFromMarker(): void; content: HTMLElement; viewport: HTMLElement;
   readerPageScrollTop(shell: Element): number; htmlFrame: HTMLIFrameElement | null;
-  currentReaderUrl(): URL; captureFoliateBookmarkPosition(): FoliatePosition | null;
+  currentReaderUrl(): URL;
   captureChapterPosition(): ChapterPosition | null; extension: string;
   showDownloadFeedback(message: string, duration: number): void;
   lastSavedProgress: string; progressSaveChain: Promise<void>;
@@ -36,8 +35,7 @@ export interface ProgressContext {
   params: URLSearchParams; restorationFailed: boolean;
   readerRestorationPromise: Promise<ProgressState | null> | null; readerRestorationLoaded: boolean;
   readerRestorationEntry: ProgressState | null; awaitReader<T>(promise: Promise<T>): Promise<T>;
-  waitForReader(delay?: number): Promise<void>; foliateContinuous: boolean;
-  epubBook: { sections?: { linear?: string }[] } | null; bookmarkRibbon: HTMLElement;
+  waitForReader(delay?: number): Promise<void>; bookmarkRibbon: HTMLElement;
   pageNavigationLockUntil: number; pageAtMarker(): HTMLElement | null;
   updateDocumentState(state: { page?: number; restoredEntry?: ProgressState | null }): void;
   pageInput: HTMLInputElement; updateTocCurrentMark(): void; updateProgressTools(): void;
@@ -45,7 +43,6 @@ export interface ProgressContext {
   beginReaderNavigation(): number; isReaderGenerationCurrent(kind: string, generation: number): boolean;
   restoreChapterPosition(entry: ProgressState, generation: number, progressFraction?: number): Promise<boolean>;
   restoreProgressState(entry: ProgressState, generation: number): Promise<boolean>;
-  restoreFoliateBookmarkPosition(entry: ProgressState, generation: number): Promise<boolean>;
   goToPage(page: number, generation: number): Promise<boolean>;
   consumeBookmarkHandoff(entry: ProgressState): void; reportNavigationError(error: unknown, generation: number): void;
   formatAdapters: { active: { restore(entry: ProgressState, generation: number): unknown } | null };
@@ -57,7 +54,7 @@ export interface ProgressContext {
   previousProgressState: ProgressState | null; updateReadingProgressSummary(): void; placeReadingProgress(): void;
   trackReaderResource(cleanup: () => void): () => void; readerAbortError(): Error;
   epubSeekFrame: number; epubSeekTarget: { percent: number; generation: number } | null;
-  epubSeekPromise: Promise<boolean | void>; seekFoliateProgress(percent: number, generation: number): Promise<void>;
+  epubSeekPromise: Promise<boolean | void>;
   captureProgressState(): ProgressState | null;
   chapterManifestLoader: import('./reader-chapter-format-strict').ChapterLoader | null;
   navigateTocEntry(index: number, options: { closePanel: boolean }): Promise<void>;

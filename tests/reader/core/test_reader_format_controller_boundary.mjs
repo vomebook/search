@@ -52,7 +52,7 @@ test("resolution retains string and legacy DJVU semantics", async () => {
 });
 
 test("classification is narrowed at the fail boundary without coercion", async () => {
-  for (const mode of ["text", "foliate"]) {
+  for (const mode of ["text", "epub-chapters"]) {
     for (const value of ["READER_RESTORE", undefined, 42, Symbol("code"), hostile]) {
       const f = fixture({});
       let calls = 0, failure;
@@ -64,11 +64,11 @@ test("classification is narrowed at the fail boundary without coercion", async (
         downloadButton: {}, documentState: { title: "book" }, readerDownloadUrl: () => "download",
         formatAdapters: { activate() {}, active: { open: async () => { throw error; } } },
         readerResources: new Set(), loadReaderRestoration: async () => null, awaitReader: promise => promise,
-        renderFoliate: async () => { throw error; }, readerAbortController: new AbortController(),
+        readerAbortController: new AbortController(),
         classifyReaderError: (received, fallback) => {
           calls++;
           assert.equal(received, error);
-          assert.equal(fallback, mode === "foliate" ? "READER_CORRUPT" : "READER_PARSE");
+          assert.equal(fallback, "READER_PARSE");
           return value;
         },
         fail: (message, code) => { failure = [message, code]; }
@@ -77,7 +77,7 @@ test("classification is narrowed at the fail boundary without coercion", async (
       const savedError = console.error;
       try { console.error = () => {}; await f.controller.start(); } finally { console.error = savedError; }
       assert.equal(calls, 1);
-      assert.deepEqual(failure, ["failure", typeof value === "string" ? value : mode === "foliate" ? "READER_CORRUPT" : "READER_PARSE"]);
+      assert.deepEqual(failure, ["failure", typeof value === "string" ? value : "READER_PARSE"]);
     }
   }
 });

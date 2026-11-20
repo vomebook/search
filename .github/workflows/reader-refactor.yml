@@ -84,12 +84,9 @@ jobs:
         if: ${{ matrix.shard != 'static' }}
         timeout-minutes: 10
         run: python -m playwright install chromium firefox
-      - name: Install pinned Foliate runtime
-        timeout-minutes: 10
-        run: node scripts/build/fetch_foliate_reader.mjs static/foliate-reader
       - name: Install pinned Reader vendors
         timeout-minutes: 5
-        run: node scripts/build/copy_reader_vendor.mjs static/vendor --foliate-output static/foliate-reader/vendor
+        run: node scripts/build/copy_reader_vendor.mjs static/vendor
       - name: Materialize pinned Pages test data and independent Reader sidecar
         timeout-minutes: 10
         run: npm run data:prepare
@@ -428,12 +425,9 @@ jobs:
       - name: Install Playwright browsers
         timeout-minutes: 10
         run: python -m playwright install firefox
-      - name: Install pinned Foliate runtime
-        timeout-minutes: 10
-        run: node scripts/build/fetch_foliate_reader.mjs static/foliate-reader
       - name: Install pinned Reader vendors
         timeout-minutes: 5
-        run: node scripts/build/copy_reader_vendor.mjs static/vendor --foliate-output static/foliate-reader/vendor
+        run: node scripts/build/copy_reader_vendor.mjs static/vendor
       - name: Materialize pinned Pages test data and independent Reader sidecar
         timeout-minutes: 10
         run: npm run data:prepare
@@ -596,14 +590,10 @@ jobs:
         timeout-minutes: 10
         working-directory: huggingface-search
         run: python -m playwright install chromium firefox
-      - name: Install pinned Foliate runtime
-        timeout-minutes: 10
-        working-directory: huggingface-search
-        run: node scripts/build/fetch_foliate_reader.mjs static/foliate-reader
       - name: Install pinned Reader vendors
         timeout-minutes: 5
         working-directory: huggingface-search
-        run: node scripts/build/copy_reader_vendor.mjs static/vendor --foliate-output static/foliate-reader/vendor
+        run: node scripts/build/copy_reader_vendor.mjs static/vendor
       - name: Mark setup complete
         id: setup-complete
         run: echo 'ready=true' >> "$GITHUB_OUTPUT"
@@ -938,7 +928,7 @@ jobs:
         working-directory: huggingface-search
         run: |
           python3 -B ../scripts/ci/run_unittest_suite.py \
-            --require tests.reader.browser.test_reader_ebook_flow.EbookFlowTests.test_native_first_chapter_reads_packaged_styles_in_parallel_and_keeps_cascade \
+            --require tests.reader.browser.test_reader_ebook_flow.EbookFlowTests.test_chapter_xhtml_packaged_css_cascade \
             --require tests.reader.browser.test_reader_store_preservation.ReaderStorePreservationTests.test_v1_and_v2_upgrade_preserves_raw_history_bookmarks_and_unknown_store \
             --require tests.search.browser.test_prefetch_pipeline.PrefetchPipelineTests.test_three_page_lookahead_joins_foreground_and_retains_later_pages \
             --require tests.search.backend.test_wildcard_index_oracle.WildcardIndexOracleTests.test_generated_index_is_exact_for_metadata_fields \

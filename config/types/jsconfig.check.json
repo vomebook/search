@@ -15,12 +15,6 @@
       ],
       "/search/static/*": [
         "../../static/*"
-      ],
-      "/static/foliate-reader/view.js": [
-        "../../typings/foliate/view.d.ts"
-      ],
-      "/search/static/foliate-reader/view.js?reader-v1": [
-        "../../typings/foliate/view.d.ts"
       ]
     }
   },

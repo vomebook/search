@@ -140,7 +140,7 @@ class ReaderWorkflowParallelTests(unittest.TestCase):
             for command in ('python-version: "3.15.2"', 'playwright==1.65.2', 'pypdf==7.1.1',
                             'npm ci --ignore-scripts --no-audit --no-fund', 'install -y qpdf',
                             f'install_playwright_system_deps.sh {browsers}', f'playwright install {browsers}',
-                            'fetch_foliate_reader.mjs', 'copy_reader_vendor.mjs'):
+                            'node scripts/build/copy_reader_vendor.mjs static/vendor'):
                 self.assertIn(command, job)
             for cache in ('~/.cache/pip', '~/.npm', '~/.cache/ms-playwright',
                           '${{ runner.os }}', '${{ runner.arch }}', '${{ steps.distro.outputs.version }}-1.65.2'):
@@ -151,11 +151,13 @@ class ReaderWorkflowParallelTests(unittest.TestCase):
                         'playwright==1.65.2 Pillow==13.0.0 httpx==0.28.1',
                         'npm ci --ignore-scripts --no-audit --no-fund',
                         'install_playwright_system_deps.sh chromium firefox', 'playwright install chromium firefox',
-                        'fetch_foliate_reader.mjs', 'copy_reader_vendor.mjs',
+                        'node scripts/build/copy_reader_vendor.mjs static/vendor',
                         "hashFiles('huggingface-search/requirements.txt', 'huggingface-search/config/dependencies/static-check.txt')",
                         "hashFiles('huggingface-search/package-lock.json')", '${{ steps.distro.outputs.version }}-1.65.2'):
             self.assertIn(command, hf)
         for job in (github, firefox, hf):
+            self.assertNotIn('fetch_foliate_reader.mjs', job)
+            self.assertNotIn('--foliate-output', job)
             self.assertIn('runs-on: ubuntu-24.04', job)
             mirror = 'python3 -B scripts/ci/ci_ubuntu_mirror.py'
             self.assertLess(job.index(mirror), job.index('install_playwright_system_deps.sh'))
@@ -478,7 +480,7 @@ class AdditionalSuitesCiTests(unittest.TestCase):
                          'tests.search.browser.test_search_positions',
                          'tests.search.backend.test_wildcard_index_oracle',
                          'READER_STORE_TEST_BROWSER=firefox python3 -B ../scripts/ci/run_unittest_suite.py',
-                         'test_native_first_chapter_reads_packaged_styles_in_parallel_and_keeps_cascade',
+                         'test_chapter_xhtml_packaged_css_cascade',
                          'test_incompatible_upgrade_rolls_back_all_new_indexes_and_bookmark_store'):
             self.assertIn(required, additional)
         self.assertEqual(additional.count('python3 -B ../scripts/ci/run_unittest_suite.py'), 2)

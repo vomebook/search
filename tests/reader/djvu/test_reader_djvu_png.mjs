@@ -39,7 +39,7 @@ assert.equal(isV3Path(ref('pages/page-000001.png').path), true);
 assert.throws(() => validateResource({...ref('pages/page-000001.png'), bucket: 'vomebook/reader-assets-v2'}, source), /PDF_V3_INVALID/);
 for (const mode of ['pdf', 'pdf-pages', 'image-pages']) {
   const anchor = {isConnected: true, getBoundingClientRect: () => ({top: 238, height: 577})};
-  const reader = {capability: {mode}, foliateScrollAnchors: {capture: () => null, restore() {}},
+  const reader = {capability: {mode}, chapterScrollAnchors: {capture: () => null, restore() {}},
     pageAtMarker: () => anchor, documentState: {zoom: 1}, content: {style: {setProperty() {}}}, zoomInput: {},
     viewport: {scrollTop: 385, scrollHeight: 1193, clientHeight: 808, scrollLeft: 0, scrollWidth: 390, clientWidth: 390,
       getBoundingClientRect: () => ({top: 36})},

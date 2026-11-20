@@ -83,6 +83,49 @@ class ReaderMatrixContractTests(unittest.TestCase):
                     with self.assertRaisesRegex(gate.ContractError, 'setup changed|job changed'):
                         self.check()
 
+    def test_foliate_transition_fails_closed(self):
+        for job in (*gate.JOBS, 'firefox-staged-pdf'):
+            records = job in gate.JOBS
+            steps = (self.contract['matrix_jobs'][job]['steps'] if records else
+                     self.contract['fixed_jobs'][job]['steps'])
+            def name(item):
+                return item.get('label') if records else item.get('name')
+            install = next(item for item in steps if name(item) == 'Install pinned Foliate runtime')
+            vendor = next(item for item in steps if name(item) == 'Install pinned Reader vendors')
+            with self.subTest(job=job):
+                changed = gate.remove_foliate_setup(steps, hf=job == 'huggingface-search', records=records)
+                self.assertEqual(len(changed), len(steps) - 1)
+                for target in (install, vendor):
+                    for mutation in ('missing', 'duplicate', 'field', 'run'):
+                        modified = copy.deepcopy(steps)
+                        index = next(i for i, item in enumerate(modified) if name(item) == name(target))
+                        if mutation == 'missing':
+                            modified.pop(index)
+                        elif mutation == 'duplicate':
+                            modified.insert(index, copy.deepcopy(modified[index]))
+                        else:
+                            step = modified[index]['setup'] if records else modified[index]
+                            if mutation == 'field':
+                                step['env'] = {'BYPASS': '1'}
+                            else:
+                                step['run'] += ' || true'
+                        with self.subTest(target=name(target), mutation=mutation), self.assertRaises(gate.ContractError):
+                            gate.remove_foliate_setup(modified, hf=job == 'huggingface-search', records=records)
+                for mutation in ('restore_install', 'old_vendor', 'extra_vendor_field', 'reorder'):
+                    workflow = copy.deepcopy(self.workflow)
+                    current = workflow['jobs'][job]['steps']
+                    index = next(i for i, item in enumerate(current) if item.get('name') == 'Install pinned Reader vendors')
+                    if mutation == 'restore_install':
+                        current.insert(index, copy.deepcopy(install['setup'] if records else install))
+                    elif mutation == 'old_vendor':
+                        current[index]['run'] += ' --foliate-output static/foliate-reader/vendor'
+                    elif mutation == 'extra_vendor_field':
+                        current[index]['env'] = {'BYPASS': '1'}
+                    else:
+                        current[index], current[index + 1] = current[index + 1], current[index]
+                    with self.subTest(mutation=mutation), self.assertRaises(gate.ContractError):
+                        gate.validate(workflow, self.contract)
+
     def test_against_git_baseline_when_available(self):
         import hashlib
         root = str(gate.ROOT)

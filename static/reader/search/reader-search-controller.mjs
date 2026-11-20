@@ -176,7 +176,7 @@ export function createReaderSearchController({
     initialSearch = null;
     if (interrupted) {
       if (mode === "epub-chapters") backend.chapterClient()?.cancel();
-      else if (mode === "pdf" || mode === "pdf-pages" || mode === "foliate") backend.pdfClient()?.cancel();
+      else if (mode === "pdf" || mode === "pdf-pages") backend.pdfClient()?.cancel();
       resetResults();
     }
     cancel.hidden = retry.hidden = true;
@@ -251,7 +251,7 @@ export function createReaderSearchController({
     state.failedPage = null;
     const generation = nextGeneration();
     navigation.begin();
-    if (!(/** @type {(string | null)[]} */ (["foliate", "epub-chapters"])).includes(backend.mode())) cancel.hidden = false;
+    if (backend.mode() !== "epub-chapters") cancel.hidden = false;
     retry.hidden = true;
     status.textContent = `${state.page.total} 个结果`;
     try {

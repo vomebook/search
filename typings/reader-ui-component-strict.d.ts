@@ -27,7 +27,7 @@ export interface ReaderUiContext {
   };
   pageInverted: boolean;
   pageInvertToggle: HTMLElement;
-  foliateScrollAnchors: { capture(): ReaderUiScrollAnchor | null; restore(anchor: ReaderUiScrollAnchor | null): boolean };
+  chapterScrollAnchors: { capture(): ReaderUiScrollAnchor | null; restore(anchor: ReaderUiScrollAnchor | null): boolean };
   themeAnimationTimer: number;
   readerTheme: string;
   readerThemeToggle: HTMLElement;

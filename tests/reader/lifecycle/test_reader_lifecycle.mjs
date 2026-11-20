@@ -116,12 +116,12 @@ test('waitForReader rejects on cancellation and resolves on its timer', async ()
   }
 });
 
-test('reader readiness preserves Foliate anchor only when loading node is connected', () => {
+test('reader readiness preserves chapter anchor only when loading node is connected', () => {
   const {context,events}=fixture();
   context.loadingIndicator={isConnected:true,remove(){events.push('remove');}};
   context.loadingStatus={hidden:false};
-  context.foliateScrollAnchors={preserve(callback){events.push('preserve');return callback();}};
-  context.capability={mode:'foliate'};context.markReaderContentReady();
+  context.chapterScrollAnchors={preserve(callback){events.push('preserve');return callback();}};
+  context.capability={mode:'epub-chapters'};context.markReaderContentReady();
   assert.deepEqual(events,['preserve','remove']);assert.equal(context.loadingStatus.hidden,true);
   events.length=0;context.capability={mode:'pdf'};context.markReaderContentReady();
   assert.deepEqual(events,['remove']);
@@ -148,15 +148,15 @@ test('dispose is idempotent, releases observer and clears all timer handles', ()
   context.updateDocumentState=value=>events.push(value);
   context.contentSanitizerObserver={disconnect(){events.push('observer');}};
   const handles=['saveTimer','themeAnimationTimer','panelAnimationTimer','markerFrame',
-    'foliateScrollFrame','foliateWindowFrame','epubSeekFrame'];
+    'epubSeekFrame'];
   handles.forEach((key,index)=>context[key]=index+1);
   try {
     context.disposeReader();context.disposeReader();
     assert.deepEqual(events,[{restorationReady:false},'observer',['clear',1],['clear',2],['clear',3],
-      ['cancel',4],['cancel',5],['cancel',6],['cancel',7],'store']);
+      ['cancel',4],['cancel',5],'store']);
     assert.equal(context.readerLifecycle.disposed,true);
     assert.equal(context.contentSanitizerObserver,null);
-    assert.deepEqual(handles.map(key=>context[key]),[0,0,0,0,0,0,0]);
+    assert.deepEqual(handles.map(key=>context[key]),[0,0,0,0,0]);
   } finally {globalThis.VoiceOfMLReaderStore=store;globalThis.clearTimeout=oldClear;globalThis.cancelAnimationFrame=oldCancel;}
 });
 

@@ -1,8 +1,7 @@
 declare namespace ReaderSearchController {
   interface Snippet { text: string; matchStart: number; matchLength: number; prefix: string; suffix: string }
   interface DomResult { location: string; snippet: Snippet; cfi?: undefined; target?: HTMLElement; activate(generation?: number): Promise<boolean> }
-  interface FoliateResult { location: string; snippet: Snippet; cfi: string; occurrence: number }
-  type Result = DomResult | FoliateResult;
+  type Result = DomResult;
   interface ChapterResult { location: string; snippet: Snippet; chapterIndex: number; start: number; length: number }
   interface Page<T = Result | ChapterResult> { total: number; offset: number; pageSize: number; results: T[] }
   interface State {

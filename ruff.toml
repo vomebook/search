@@ -1,5 +1,5 @@
 target-version = "py311"
-extend-exclude = ["static/vendor", "static/foliate-reader"]
+extend-exclude = ["static/vendor"]
 
 [lint]
 select = ["F", "E9"]

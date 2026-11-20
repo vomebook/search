@@ -601,17 +601,6 @@ class ReaderSpeechTest(unittest.TestCase):
         finally:
             context.close()
 
-    def test_foliate_epub_reads_sections_in_order(self):
-        if not (ROOT / "static/foliate-reader/view.js").exists():
-            self.skipTest("fetch Foliate first: node scripts/build/fetch_foliate_reader.mjs")
-        context, page, posts, errors = self.open("epub", epub_with_navigation(), "application/epub+zip")
-        try:
-            job = self.play(page, posts)
-            self.assertTrue(any(word in job["text"] for word in ("目录", "第一章")), job["text"][:60])
-            self.stop(page)
-            self.assertFalse(errors, errors)
-        finally:
-            context.close()
 
 
 if __name__ == "__main__":

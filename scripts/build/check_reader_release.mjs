@@ -19,7 +19,7 @@ const args = Object.fromEntries(
     )
 );
 const sourceRequired = ["reader.html", ...resources.readerFiles];
-const required = [...sourceRequired, ...resources.foliateFiles.map(file => `foliate-reader/${file}`)];
+const required = sourceRequired;
 // Source smoke assertions, not a substitute for runtime behavior tests.
 const behavioral = [
   /\bVoiceOfMLReaderRuntime\s*\.\s*createReaderRuntime\s*\(/,
@@ -90,15 +90,6 @@ function checkAssets(output, hashed = false) {
   for (const [file, digest] of Object.entries(djvuFiles))
     assert(hash(path.join(output, "vendor/djvu-rs-reader", file)) === digest, `DjVu decoder integrity mismatch: ${file}`);
   assert(fs.statSync(path.join(output, "vendor/djvu-rs-reader/NOTICE.txt")).isFile(), "missing DjVu decoder notice");
-  for (const vendor of Object.values(resources.foliateVendors)) {
-    const filename = path.join("foliate-reader/vendor", vendor.file);
-    assert(hash(path.join(output, filename)) === vendor.sha256,
-      `Foliate vendor integrity mismatch: ${filename}`);
-  }
-  for (const [name, filename] of [["pdf", "pdf.mjs"], ["pdfWorker", "pdf.worker.mjs"]]) {
-    assert(hash(path.join(output, "foliate-reader/vendor/pdfjs", filename)) === resources.vendors[name].sha256,
-      `Foliate PDF engine mismatch: ${filename}`);
-  }
   for (const vendor of Object.values(resources.vendors)) {
     assert(
       hash(path.join(output, vendor.path)) === vendor.sha256,
@@ -151,12 +142,6 @@ function checkAssets(output, hashed = false) {
       `missing or empty Reader vendor directory: ${directory}`
     );
   }
-  for (const directory of ["foliate-reader/vendor/pdfjs/cmaps", "foliate-reader/vendor/pdfjs/standard_fonts",
-    "foliate-reader/vendor/pdfjs/wasm"]) {
-    const target = path.join(output, directory);
-    assert(fs.existsSync(target) && fs.statSync(target).isDirectory() && fs.readdirSync(target).length > 0,
-      `missing or empty Foliate PDF.js directory: ${directory}`);
-  }
 }
 
 function currentAsset(output, filename) {
@@ -192,6 +177,7 @@ function checkProject(root, artifact) {
   const output = staticRoot(root, artifact);
   checkAssets(output, !!artifact);
   if (artifact) {
+    assert(!fs.existsSync(path.join(output, "foliate-reader")), "obsolete Foliate runtime in release");
     const project = args.project || (fs.existsSync(path.join(root, "Dockerfile")) ? "hf" : "github");
     for (const file of resources.buildFiles(project)) currentAsset(output, file);
     const shellPath = fs.existsSync(path.join(output, "index.html"))
@@ -215,10 +201,7 @@ function checkProject(root, artifact) {
       "unexpanded Reader cache inventory"
     );
   }
-  const manifest = [
-    ...sourceRequired.map(file => `${file}:${hash(path.join(source, file))}`),
-    ...resources.foliateFiles.map(file => `foliate-reader/${file}:${hash(path.join(output, "foliate-reader", file))}`)
-  ].join("\n");
+  const manifest = sourceRequired.map(file => `${file}:${hash(path.join(source, file))}`).join("\n");
   return crypto.createHash("sha256").update(manifest).digest("hex");
 }
 
@@ -332,7 +315,7 @@ function crossCheck(githubRoot, hfRoot) {
       `cross-project drift: ${file}`
     );
   }
-  for (const file of ["compose_app.mjs", "copy_reader_vendor.mjs", "fetch_foliate_reader.mjs", "foliate-local.patch.b64", "check_reader_release.mjs"]) {
+  for (const file of ["compose_app.mjs", "copy_reader_vendor.mjs", "check_reader_release.mjs"]) {
     assert(
       hash(path.join(githubRoot, "scripts/build", file)) === hash(path.join(hfRoot, "scripts/build", file)),
       `cross-project drift: scripts/build/${file}`

@@ -36,22 +36,6 @@ export function createReaderFormatController(readerContext) {
       }
       for (const image of readerContext.content.querySelectorAll(".reader-page img")) image.removeAttribute("src");
     }
-    if (mode === "foliate") {
-      readerContext.foliateSectionObserver?.disconnect();
-      readerContext.foliateSectionObserver = null;
-      readerContext.foliateSectionVirtualizer?.dispose();
-      readerContext.foliateChapterRepository?.dispose();
-      readerContext.foliateSectionVirtualizer = null;
-      readerContext.foliateChapterRepository = null;
-      readerContext.foliateSectionLoader = null;
-      readerContext.foliateSectionSettler = null;
-      try {
-        const closing = readerContext.epubRendition?.close?.();
-        if (closing) closing.catch?.(() => {});
-      } catch (_) {}
-      readerContext.epubRendition = null;
-      readerContext.epubBook = null;
-    }
     if (mode === "html") {
       readerContext.htmlFrame?.remove();
       readerContext.htmlFrame = null;
@@ -102,8 +86,7 @@ export function createReaderFormatController(readerContext) {
       "epub-chapters": pair(readerContext.loadChapterManifestDocument, readerContext.renderChapterManifest),
       audio: pair(readerContext.loadMediaDocument, () => readerContext.renderMedia("audio")),
       video: pair(readerContext.loadMediaDocument, () => readerContext.renderMedia("video")),
-      swf: pair(readerContext.loadSwfDocument, readerContext.renderSwf),
-      foliate: pair(readerContext.loadMediaDocument, readerContext.renderFoliate)
+      swf: pair(readerContext.loadSwfDocument, readerContext.renderSwf)
     };
     for (const [mode, {open, render}] of Object.entries(formats))
       readerContext.formatAdapters.register(mode, {
@@ -167,13 +150,6 @@ export function createReaderFormatController(readerContext) {
     readerContext.readerSourcePromise = readerContext.measurePdf(readerContext.resolveReaderSource(), "resolve");
     await readerContext.readerSourcePromise;
     readerContext.assertReaderActive();
-    if (readerContext.readerId && /\/calibre-chm-epub-[^/]+\/document\.epub(?:$|\?)/i.test(readerContext.sourceUrl)) {
-      readerContext.extension = "epub";
-      readerContext.readerRuntime.update("source", { extension: readerContext.extension });
-      readerContext.capability = readerContext.readerRuntime.negotiate(VoiceOfMLReader.capability(readerContext.extension));
-      readerContext.content.dataset.mode = readerContext.capability.mode || "unsupported";
-      /** @type {HTMLElement} */ (document.querySelector(".page-controls")).hidden = true;
-    }
     readerContext.syncCapabilityControls();
     readerContext.downloadButton.href = readerContext.readerDownloadUrl(readerContext.documentState.title, readerContext.downloadUrl);
     if (
@@ -185,22 +161,6 @@ export function createReaderFormatController(readerContext) {
     readerContext.formatAdapters.activate(readerContext.capability.mode);
     readerContext.applyReaderMetadata(readerContext.resolvedReaderData);
     try {
-      if (readerContext.capability.mode === "foliate") {
-        readerContext.setReaderStage("foliate");
-        readerContext.foliateContinuous = true;
-        const restorationPromise = readerContext.loadReaderRestoration();
-        readerContext.readerRestorationPromise = restorationPromise;
-        await readerContext.awaitReader(readerContext.renderFoliate());
-        readerContext.assertReaderActive();
-        const restored = await readerContext.awaitReader(restorationPromise);
-        await readerContext.applyInitialRestoration(restored, generation);
-        readerContext.initialReaderTargetSection = null;
-        readerContext.assertReaderActive();
-        if (!readerContext.setReaderPhase("ready")) return;
-        readerContext.updateDocumentState({ restorationReady: !readerContext.restorationFailed });
-        readerContext.scheduleSave();
-        return;
-      }
       readerContext.setReaderStage("prepare");
       const restorationPromise = readerContext.loadReaderRestoration();
       readerContext.readerRestorationPromise = restorationPromise;
@@ -268,7 +228,7 @@ export function createReaderFormatController(readerContext) {
       console.error(error);
       const message = detail && "code" in detail && detail.code === "READER_PDF_RATE_LIMIT" ? "请求过于频繁，请稍后重试加载。" :
         detail && "message" in detail && typeof detail.message === "string" && detail.message ? detail.message : "原文件加载失败";
-      const fallback = readerContext.capability.mode === "foliate" ? "READER_CORRUPT" : "READER_PARSE";
+      const fallback = "READER_PARSE";
       const code = readerContext.classifyReaderError(error, fallback);
       readerContext.fail(message, typeof code === "string" ? code : fallback);
     }

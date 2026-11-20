@@ -317,10 +317,10 @@ assert.strictEqual(assets.isAssetSourcePath, undefined)
 for (const path of [assetRoot + '../linearized.pdf', assetRoot + 'private.json', 'objects/invalid/document.pdf'])
   assert.strictEqual(assets.assetFields({s: 2, m: 'p', p: path}), null)
 
-for (const extension of ['pdf', 'pdf-pages', 'txt', 'md', 'markdown', 'html', 'htm', 'epub', 'mobi', 'azw', 'azw3', 'fb2', 'fbz', 'jpg', 'png', 'mp3', 'm4a', 'flac', 'mpga', 'audio', 'mp4', 'mov', 'video']) {
+for (const extension of ['pdf', 'pdf-pages', 'txt', 'md', 'markdown', 'html', 'htm', 'epub-chapters', 'jpg', 'png', 'mp3', 'm4a', 'flac', 'mpga', 'audio', 'mp4', 'mov', 'video']) {
   assert.ok(sandbox.self.VoiceOfMLReader.capability(extension).mode, extension)
 }
-for (const extension of ['epub', 'mobi', 'azw', 'azw3', 'fb2', 'fbz']) assert.strictEqual(sandbox.self.VoiceOfMLReader.capability(extension).mode, 'foliate')
+for (const extension of ['epub', 'mobi', 'azw', 'azw3', 'fb2', 'fbz']) assert.strictEqual(sandbox.self.VoiceOfMLReader.capability(extension).mode, null)
 for (const extension of sandbox.self.VoiceOfMLReader.articleExtensions) assert.deepStrictEqual(Object.keys(sandbox.self.VoiceOfMLReader.capability(extension).features).sort(), ['bookmarks', 'media', 'pagination', 'search', 'toc', 'zoom'])
 assert.strictEqual(sandbox.self.VoiceOfMLReader.capability('pdf-pages').mode, 'pdf-pages')
 assert.strictEqual(sandbox.self.VoiceOfMLReader.capability('pdf-pages').features.toc, true)
@@ -332,13 +332,13 @@ assert.strictEqual(sandbox.self.VoiceOfMLReader.capability('docx').mode, null)
 assert.strictEqual(sandbox.self.VoiceOfMLReader.capability('epub-chapters').mode, 'epub-chapters')
 const convertedUrl = sandbox.self.VoiceOfMLReader.readerUrl({
   Link: 'https://download.example.test/books/book.mobi',
-  File: '原始书名', Extension: 'mobi', ReaderExtension: 'epub',
+  File: '原始书名', Extension: 'mobi', ReaderExtension: 'epub-chapters',
   DownloadLink: 'https://download.example.test/books/book.mobi',
   ReaderFallback: 'https://huggingface.co/datasets/vomebook/Reader-Assets/resolve/main/fallback.pdf',
   ReaderChapterManifest: 'https://huggingface.co/datasets/vomebook/Reader-Assets/resolve/main/chapters.json',
 }, '/static/reader.html')
 const convertedParams = new URL(`https://example.test${convertedUrl}`).searchParams
-assert.strictEqual(convertedParams.get('ext'), 'epub')
+assert.strictEqual(convertedParams.get('ext'), 'epub-chapters')
 assert.strictEqual(convertedParams.get('title'), '原始书名.mobi')
 assert.strictEqual(convertedParams.get('download'), 'https://download.example.test/books/book.mobi')
 assert.strictEqual(convertedParams.get('fallback'), null)
@@ -352,9 +352,9 @@ assert.strictEqual(pageAssetParams.get('url'), 'https://huggingface.co/datasets/
 assert.strictEqual(pageAssetParams.get('ext'), 'pdf-pages')
 const sharedAssetSource = 'https://huggingface.co/datasets/VoiceOfML/Teachers/resolve/main/books/shared.mobi'
 const sharedAssetUrl = sandbox.self.VoiceOfMLReader.readerUrl({
-  ReaderLink: 'https://huggingface.co/datasets/vomebook/Reader-Assets/resolve/main/objects/aa/' + 'a'.repeat(64) + '/document.epub',
+  ReaderLink: 'https://api.test/api/reader-bucket-resource?path=' + encodeURIComponent(ebookChapterPath),
   Link: sharedAssetSource,
-  File: '选中的原书', Extension: 'mobi', ReaderExtension: 'epub',
+  File: '选中的原书', Extension: 'mobi', ReaderExtension: 'epub-chapters',
 })
 const sharedAssetParams = new URL(`https://example.test${sharedAssetUrl}`).searchParams
 assert.strictEqual(sharedAssetParams.get('id'), sandbox.self.VoiceOfMLReader.shortSourceId(sharedAssetSource))
@@ -370,7 +370,7 @@ assert.strictEqual(sandbox.self.VoiceOfMLReader.capability('PDF').readerMode, sa
 assert.strictEqual(sandbox.self.VoiceOfMLReader.capability('PDF').article, true)
 assert.strictEqual(sandbox.self.VoiceOfMLReader.capability('zip').readerMode, sandbox.self.VoiceOfMLReader.ReaderMode.UNSUPPORTED)
 assert.strictEqual(sandbox.self.VoiceOfMLReader.capability('zip').article, false)
-for (const extension of ['pdf', 'pdf-pages', 'epub', 'epub-chapters', 'mobi', 'azw', 'azw3', 'fb2', 'fbz', 'txt', 'md', 'html', 'jpg', 'png', 'webp', 'mp3', 'm4a', 'flac', 'mp4', 'mov']) assert.ok(sandbox.self.VoiceOfMLReader.articleExtensions.includes(extension), extension)
+for (const extension of ['pdf', 'pdf-pages', 'epub-chapters', 'txt', 'md', 'html', 'jpg', 'png', 'webp', 'mp3', 'm4a', 'flac', 'mp4', 'mov']) assert.ok(sandbox.self.VoiceOfMLReader.articleExtensions.includes(extension), extension)
 assert.ok(!sandbox.self.VoiceOfMLReader.articleExtensions.includes('docx'))
 assert.strictEqual(Object.isFrozen(sandbox.self.VoiceOfMLReader.articleExtensions), true)
 assert.strictEqual(Object.isFrozen(sandbox.self.VoiceOfMLReader.capability('pdf')), true)
@@ -383,7 +383,6 @@ assert.strictEqual((reader.match(/function setToc\(/g) || []).length, 1)
 assertCode(reader, 'const previousList = /** @type {HTMLElement} */ (document.querySelector("#toc-list"))')
 assertCode(reader, 'previousList.cloneNode(false)')
 assertCode(reader, 'previousList.replaceWith(list)')
-assert.strictEqual((reader.match(/function activateFoliateTocEntry\(/g) || []).length, 1)
 assert.match(reader, /reader-source:/)
 assert.match(reader, /reader-zoom/)
 assert.match(reader, /readerRuntime\.track\(readerRequestManager\)/)

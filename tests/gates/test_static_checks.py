@@ -2883,9 +2883,9 @@ const options = {signal: undefined};
                  'scripts/reader/check_reader_media_coverage.mjs', 'scripts/check_tap_contracts.mjs',
                  'tests/reader/media/test_reader_media_baseline.mjs',
                  'tests/reader/media/test_reader_media_metadata.mjs',
-                 'tests/reader/copy_reader_vendor.test.mjs', 'tests/reader/test_foliate_proxy.mjs',
+                 'tests/reader/copy_reader_vendor.test.mjs',
                  'tests/reader/media/test_ruffle_closure.mjs', 'tests/service_worker/test_ruffle_retention.js',
-                 'scripts/build/copy_reader_vendor.mjs', 'scripts/build/fetch_foliate_reader.mjs',
+                 'scripts/build/copy_reader_vendor.mjs',
                  'scripts/build/check_reader_release.mjs', 'static/reader-resources.js', 'static/sw.js',
                  'static/reader/core/reader-source.mjs', 'static/reader/core/reader-document-loader.mjs']
         for path in paths:

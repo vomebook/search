@@ -1,24 +1,53 @@
-"""Focused native EPUB TOC demand acceptance, using the shared two-site server."""
+"""TOC UI and chapter-bundle navigation latency, using the shared two-site server."""
 import unittest
-from urllib.parse import urlencode
+from urllib.parse import parse_qs, urlencode, urlsplit
 
 from tests.reader.browser import test_reader_pdf_followup as support
-from tests.performance.test_reader_performance import epub_with_many_chapters
+from tests.reader.browser.test_reader_toc_navigation import chapter_body, chapter_manifest
 
 
 class ReaderTocLatencyTests(unittest.TestCase):
     setUpClass = classmethod(support.PdfFollowupTests.setUpClass.__func__)
     setUp = support.PdfFollowupTests.setUp
 
-    def open_toc_book(self):
-        self.page.route('**/api/reader-content**',lambda route:route.fulfill(
-            content_type='application/epub+zip',body=epub_with_many_chapters(),
-            headers={'Access-Control-Allow-Origin':'*'}))
-        self.page.goto(self.origin+support.PREFIX+'/static/reader.html?'+urlencode(dict(
-            url='https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/toc-hint.epub',ext='epub')))
+    def open_toc_book(self, held_chapters=None):
+        manifest = chapter_manifest(14)
+        for entry in manifest['toc']:
+            entry['fragment'] = f"chapter-{entry['chapter']}"
+
+        def resource(route):
+            path = parse_qs(urlsplit(route.request.url).query)['path'][0]
+            filename = path.rsplit('/', 1)[-1]
+            if filename == 'chapter-manifest.json':
+                route.fulfill(json=manifest)
+                return
+            index = int(filename.removeprefix('chapter-').removesuffix('.xhtml'))
+            body = chapter_body(index)
+            if index == 10:
+                body = body.replace('</h1>', '</h1><p><a href="chapter-0008.xhtml#chapter-8">Book contents</a></p>', 1)
+            if held_chapters is not None and index in held_chapters:
+                held_chapters[index].append((route, body))
+            else:
+                route.fulfill(content_type='text/html', body=body)
+
+        self.page.route('**/api/reader-bucket-resource**', resource)
+        source = ('https://voiceofml-search.hf.space/api/reader-bucket-resource?path=chapters/ebook/epub/'
+                  + 'a' * 64 + '/1234567890abcdef/chapter-manifest.json')
+        self.page.goto(self.origin + support.PREFIX + '/static/reader.html?' +
+                       urlencode(dict(url=source, ext='epub-chapters')),
+                       wait_until='domcontentloaded')
         self.page.wait_for_function("()=>document.documentElement.dataset.readerPhase==='ready'")
         self.page.wait_for_function("()=>document.querySelectorAll('#toc-list .toc-item').length===14")
         self.page.wait_for_function("()=>document.querySelector('#history-panel').classList.contains('is-open')", timeout=2500)
+
+    def toc_link(self, chapter):
+        return self.page.locator(f'#toc-list [data-toc-index="{chapter - 1}"] .panel-item-main')
+
+    def wait_for_chapter_landing(self, chapter):
+        self.page.wait_for_function('''chapter=>{
+          const target=document.querySelector(`.reader-epub-chapter[data-chapter="${chapter}"] #chapter-${chapter}`);
+          return target && Math.abs(target.getBoundingClientRect().top-document.querySelector('#viewport').getBoundingClientRect().top)<3;
+        }''', arg=chapter, timeout=1500)
 
     def expose_toc(self):
         def instrument(route):
@@ -171,51 +200,44 @@ class ReaderTocLatencyTests(unittest.TestCase):
         self.assertTrue(self.page.locator('#history-panel').evaluate('node=>node.hidden'))
 
     def test_unrelated_text_selection_does_not_disable_sidebar_navigation(self):
-        self.page.route('**/api/reader-content**',lambda route:route.fulfill(
-            content_type='application/epub+zip',body=epub_with_many_chapters(),
-            headers={'Access-Control-Allow-Origin':'*'}))
-        self.page.goto(self.origin+support.PREFIX+'/static/reader.html?'+urlencode(dict(
-            url='https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/toc-selection.epub',ext='epub')))
-        self.page.wait_for_function("()=>document.querySelectorAll('#toc-list .toc-item').length===14")
-        for index,number in [(9,10),(4,5)]:
-            self.page.evaluate('''index=>{
-              const range=document.createRange();range.selectNodeContents(document.querySelector('#title'));
-              getSelection().removeAllRanges();getSelection().addRange(range);
-              document.querySelectorAll('#toc-list .panel-item-main')[index].click();
-            }''',index)
-            self.page.wait_for_function('''number=>{
-              const a=document.querySelector('article[data-section="'+number+'"]'),target=a?.shadowRoot?.querySelector('#chapter-'+number);
-              return target && Math.abs(target.getBoundingClientRect().top-document.querySelector('#viewport').getBoundingClientRect().top-8)<3;
-            }''',arg=number,timeout=1500)
+        self.open_toc_book()
+        for current, chapter in ((1, 10), (10, 5)):
+            if self.page.locator('#history').get_attribute('aria-expanded') != 'true':
+                self.page.locator('#history').click()
+            selected = self.toc_link(chapter).evaluate('''(link, current)=>{
+              const range=document.createRange();
+              range.selectNodeContents(document.querySelector(`#chapter-${current}`));
+              const selection=getSelection();selection.removeAllRanges();selection.addRange(range);
+              const selected=selection.toString();
+              link.click();
+              return selected;
+            }''', current)
+            self.assertTrue(selected)
+            self.wait_for_chapter_landing(chapter)
 
     def test_sidebar_and_book_links_do_not_wait_for_unrelated_prefetch(self):
-        self.page.route('**/api/reader-content**',lambda route:route.fulfill(
-            content_type='application/epub+zip',body=epub_with_many_chapters(),
-            headers={'Access-Control-Allow-Origin':'*'}))
-        self.page.goto(self.origin+support.PREFIX+'/static/reader.html?'+urlencode(dict(
-            url='https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/toc-latency.epub',ext='epub')))
-        self.page.wait_for_function("()=>document.querySelectorAll('#toc-list .toc-item').length===14")
-        self.page.evaluate('''()=>{
-          const sections=document.querySelector('foliate-view').book.sections.filter(s=>s.linear!=='no');
-          for(const index of [9,11]){const original=sections[index].createDocument.bind(sections[index]);
-            sections[index].createDocument=()=>new Promise(resolve=>{
-              (window.__heldNeighbors||=[]).push(()=>original().then(resolve));});}
-          document.querySelectorAll('#toc-list .panel-item-main')[9].click();
-        }''')
-        self.page.wait_for_function('''()=>{
-          const a=document.querySelector('article[data-section="10"]'),target=a?.shadowRoot?.querySelector('#chapter-10');
-          return target && Math.abs(target.getBoundingClientRect().top-document.querySelector('#viewport').getBoundingClientRect().top-8)<3;
-        }''',timeout=1500)
-        self.page.evaluate('''()=>{
-          const root=document.querySelector('article[data-section="10"]').shadowRoot;
-          const link=document.createElement('a');link.href='chapter-8.xhtml#chapter-8';link.textContent='Book contents';
-          root.querySelector('#chapter-10').append(link);link.click();
-        }''')
-        self.page.wait_for_function('''()=>{
-          const a=document.querySelector('article[data-section="8"]'),target=a?.shadowRoot?.querySelector('#chapter-8');
-          return target && Math.abs(target.getBoundingClientRect().top-document.querySelector('#viewport').getBoundingClientRect().top-8)<3;
-        }''',timeout=1500)
-        self.page.evaluate('()=>{for(const release of window.__heldNeighbors||[])release();}')
+        # Stall the opening prefetch, then the neighbors of the sidebar destination.
+        held = {chapter: [] for chapter in (2, 3, 9, 11)}
+        with (
+            self.page.expect_request(lambda request: request.url.endswith('chapter-0002.xhtml'), timeout=1500),
+            self.page.expect_request(lambda request: request.url.endswith('chapter-0003.xhtml'), timeout=1500),
+        ):
+            self.open_toc_book(held)
+        with (
+            self.page.expect_request(lambda request: request.url.endswith('chapter-0009.xhtml'), timeout=1500),
+            self.page.expect_request(lambda request: request.url.endswith('chapter-0011.xhtml'), timeout=1500),
+        ):
+            self.toc_link(10).click()
+            self.wait_for_chapter_landing(10)
+        self.page.get_by_role('link', name='Book contents', exact=True).click()
+        self.wait_for_chapter_landing(8)
+
+        self.assertTrue(all(held.values()), 'both jumps must run with chapter responses withheld')
+        responses = [response for chapter in held.values() for response in chapter]
+        held.clear()
+        for route, body in responses:
+            route.fulfill(content_type='text/html', body=body)
+        self.page.locator('.reader-epub-chapter[data-chapter="9"]').wait_for(state='attached', timeout=1500)
         self.page.wait_for_timeout(250)
         self.assertLess(abs(self.page.locator('#chapter-8').evaluate(
-            "e=>e.getBoundingClientRect().top-document.querySelector('#viewport').getBoundingClientRect().top-8")),3)
+            "e=>e.getBoundingClientRect().top-document.querySelector('#viewport').getBoundingClientRect().top")), 3)

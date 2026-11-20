@@ -1,11 +1,7 @@
-"""Shared ebook loading/navigation regressions; actual EPUB engine, bounded fixtures."""
-import io
-import json
+"""Shared chapter ebook loading and navigation regressions."""
 import unittest
-import zipfile
 from urllib.parse import unquote, urlencode
 from tests.reader.browser import test_reader_pdf_followup as support
-from tests.performance.test_reader_performance import epub_with_many_chapters
 
 
 class EbookFlowTests(unittest.TestCase):
@@ -53,104 +49,15 @@ class EbookFlowTests(unittest.TestCase):
         self.assertEqual(self.page.locator('.reader-error').count(), 0)
 
     def expose(self):
-        def instrument_foliate(route):
-            response = route.fetch()
-            needle = 'readerContext.foliateSectionLoader.refresh = refresh;'
-            script = response.text()
-            self.assertIn(needle, script)
-            route.fulfill(response=response, body=script.replace(needle,
-                needle + ' window.__nativeStats=()=>({active:scheduler.activeCount,pending:scheduler.pendingCount});'))
-        self.page.route('**/static/reader/formats/reader-foliate-format.mjs*', instrument_foliate)
         def instrument(route):
             response = route.fetch()
-            script=response.text()
-            route.fulfill(response=response, body=script+'''
-              window.__ebook={restore:restoreFoliateBookmarkPosition,capture:captureFoliateBookmarkPosition,
-                captureChapter:captureChapterPosition,seek:seekFoliateProgress,
-                begin:beginReaderNavigation,anchor:foliateScrollAnchors,
-                load:i=>foliateSectionLoader(i),jump:i=>navigateTocEntry(i-1),
+            route.fulfill(response=response, body=response.text() + '''
+              window.__ebook={captureChapter:captureChapterPosition,
                 chapter:i=>navigationState.tocEntries[i-1].activate(beginReaderNavigation()),
                 progress:seekProgress,seekTask:()=>epubSeekPromise,
-                percent:readerProgressPercent,restoreProgress:restoreProgressState,save:saveProgress,
-                search:fullSearchFoliateMatches,searchGo:navigateFoliateSearchResult,
-                searchGeneration:()=>readerRuntime.currentGeneration('search'),
-                toc:activateFoliateTocEntry};
+                percent:readerProgressPercent,restoreProgress:restoreProgressState,save:saveProgress};
             ''')
         self.page.route('**/static/reader.js*', instrument)
-
-    def native(self, short=False, image=False):
-        with zipfile.ZipFile(io.BytesIO(epub_with_many_chapters())) as archive:
-            files={name:archive.read(name) for name in archive.namelist()}
-        for name in files:
-            if name.endswith('.xhtml'):
-                text=files[name].decode()
-                if short:text=text.replace('height:1200px','height:20px')
-                if image:text=text.replace('</body>','<img src="slow.png" width="100" height="100"/></body>')
-                files[name]=text.encode()
-        stream=io.BytesIO()
-        with zipfile.ZipFile(stream,'w',zipfile.ZIP_DEFLATED) as archive:
-            for name,body in files.items():archive.writestr(name,body)
-        self.page.route('**/api/reader-content**',lambda route:route.fulfill(content_type='application/epub+zip',body=stream.getvalue(),headers={'Access-Control-Allow-Origin':'*'}))
-        self.expose()
-        self.page.goto(self.origin+support.PREFIX+'/static/reader.html?'+urlencode(dict(url='https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/flow.epub',ext='epub')),wait_until='domcontentloaded')
-
-    def test_native_supplement_navigation_bookmark_and_resources(self):
-        with zipfile.ZipFile(io.BytesIO(epub_with_many_chapters(count=2))) as archive:
-            files = {name: archive.read(name) for name in archive.namelist()}
-        files['OEBPS/content.opf'] = files['OEBPS/content.opf'].replace(
-            b'</manifest>', b'<item id="extra" href="extra.xhtml" media-type="application/xhtml+xml"/></manifest>'
-        ).replace(b'</spine>', b'<itemref idref="extra" linear="no"/></spine>')
-        files['OEBPS/nav.xhtml'] = files['OEBPS/nav.xhtml'].replace(
-            b'</ol>', b'<li><a href="extra.xhtml#note">Supplement</a></li></ol>')
-        files['OEBPS/chapter-1.xhtml'] = files['OEBPS/chapter-1.xhtml'].replace(
-            b'</body>', b'<a id="note-link" href="extra.xhtml#note">Note link</a></body>')
-        files['OEBPS/extra.xhtml'] = b'''<html xmlns="http://www.w3.org/1999/xhtml"><body>
-          <h1 id="note">Supplement target</h1><p>uniqueSupplementNeedle</p>
-          <a id="back" href="chapter-1.xhtml#chapter-1">Back</a>
-          <img id="safe" src="images/picture.png#view%20one"/>
-          <img id="unsafe" src="https://evil.invalid/a.png#x"/>
-          <img id="badfragment" src="images/picture.png#%XX"/>
-          </body></html>'''
-        packed = io.BytesIO()
-        with zipfile.ZipFile(packed, 'w', zipfile.ZIP_DEFLATED) as archive:
-            for name, body in files.items(): archive.writestr(name, body)
-        self.page.route('**/api/reader-content**', lambda route: route.fulfill(
-            content_type='application/epub+zip', body=packed.getvalue(), headers={'Access-Control-Allow-Origin':'*'}))
-        self.expose()
-        self.page.goto(self.origin+support.PREFIX+'/static/reader.html?'+urlencode(dict(
-            url='https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/supplement.epub', ext='epub')))
-        self.page.wait_for_function("()=>document.documentElement.dataset.readerPhase==='ready'")
-        self.page.get_by_role('link', name='Supplement', exact=True).wait_for()
-        self.assertEqual(self.page.locator('article[data-supplement]').count(), 0)
-        self.page.get_by_role('link', name='Supplement', exact=True).click()
-        extra = self.page.locator('article[data-supplement]')
-        extra.wait_for()
-        self.assertEqual(extra.locator('#note').text_content(), 'Supplement target')
-        self.assertIn('path=OEBPS%2Fimages%2Fpicture.png#view%20one', extra.locator('#safe').get_attribute('src'))
-        self.assertIsNone(extra.locator('#unsafe').get_attribute('src'))
-        self.assertIsNone(extra.locator('#badfragment').get_attribute('src'))
-        saved = self.page.evaluate('__ebook.capture()')
-        self.assertLess(saved['foliateSection'], 0)
-        extra.locator('#back').click()
-        self.page.wait_for_function("()=>!document.querySelector('article[data-supplement]')")
-        self.assertTrue(self.page.evaluate('p=>__ebook.restore(p,__ebook.begin())', saved))
-        self.assertEqual(self.page.evaluate('__ebook.capture().foliateSection'), saved['foliateSection'])
-        self.assertEqual(self.page.locator('article[data-supplement]').count(), 1)
-        extra.locator('#back').click()
-        self.page.wait_for_function("()=>!document.querySelector('article[data-supplement]')")
-        result = self.page.evaluate("async()=> (await __ebook.search('uniqueSupplementNeedle',__ebook.searchGeneration()))[0]")
-        self.assertIsNotNone(result)
-        self.assertTrue(self.page.evaluate('r=>__ebook.searchGo(r,__ebook.begin())', result))
-        self.assertEqual(self.page.locator('article[data-supplement] mark.full-search-highlight').count(), 1)
-        self.assertTrue(self.page.evaluate("async()=>{const book=document.querySelector('foliate-view').book;"
-            "const resolve=book.resolveHref.bind(book);book.resolveHref=async href=>{const t=await resolve('OEBPS/extra.xhtml#note');"
-            "return t&&{...t,anchor:()=>{throw Error('bad anchor')}}};"
-            "try{return await __ebook.toc({href:'extra.xhtml#%XX'},__ebook.begin());}"
-            "finally{book.resolveHref=resolve}}"))
-        self.page.locator('article[data-supplement] #back').click()
-        self.page.wait_for_function("()=>!document.querySelector('article[data-supplement]')")
-        self.page.locator('#note-link').click()
-        self.page.locator('article[data-supplement] #note').wait_for()
 
     def test_ebook_prose_stays_in_paper_and_wide_blocks_scroll(self):
         body = '''<h1>Ebook layout</h1>
@@ -162,20 +69,12 @@ class EbookFlowTests(unittest.TestCase):
           <svg id="figure" xmlns="http://www.w3.org/2000/svg" width="900" height="100" viewBox="0 0 900 100"
             style="min-width:800px"><rect width="900" height="100" fill="blue"/></svg>
           <p id="after">正文仍可阅读</p>''' % ('unbroken' * 55, '0123456789 ' * 50)
-        with zipfile.ZipFile(io.BytesIO(epub_with_many_chapters(count=1))) as archive:
-            files = {name:archive.read(name) for name in archive.namelist()}
-        files['OEBPS/nav.xhtml'] = files['OEBPS/nav.xhtml'].replace(b'</body>', body.encode() + b'</body>')
-        packed = io.BytesIO()
-        with zipfile.ZipFile(packed, 'w', zipfile.ZIP_DEFLATED) as archive:
-            for name, data in files.items(): archive.writestr(name, data)
         source = 'https://voiceofml-search.hf.space/api/reader-bucket-resource?path=chapters/ebook/chm/' + 'a'*64 + '/1234567890abcdef/chapter-manifest.json'
         manifest = {'version':1,'kind':'epub-chapters','chapters':[{'index':1,'path':'chapters/chapter-0001.xhtml','bytes':len(body.encode())}]}
-        self.page.route('**/api/reader-content**', lambda route:route.fulfill(content_type='application/epub+zip',
-            body=packed.getvalue(),headers={'Access-Control-Allow-Origin':'*'}))
         self.page.route('**/api/reader-bucket-resource**', lambda route:route.fulfill(json=manifest) if 'chapter-manifest' in route.request.url
             else route.fulfill(content_type='text/html', body=body,headers={'Access-Control-Allow-Origin':'*'}))
         self.page.set_viewport_size({'width':320,'height':750})
-        for mode, url in [('epub','https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/mobile.epub'), ('epub-chapters',source)]:
+        for mode, url in [('epub-chapters',source)]:
             with self.subTest(mode=mode):
                 self.page.goto(self.origin+support.PREFIX+'/static/reader.html?'+urlencode(dict(url=url, ext=mode)))
                 self.page.wait_for_function("()=>document.documentElement.dataset.readerPhase==='ready'")
@@ -206,6 +105,40 @@ class EbookFlowTests(unittest.TestCase):
                     self.assertEqual(self.page.locator('#wide-table caption').text_content(),'Table caption')
                     self.assertEqual(self.page.locator('#wide-pre').text_content(),'0123456789 ' * 50)
 
+    def test_chapter_xhtml_packaged_css_cascade(self):
+        source = ('https://voiceofml-search.hf.space/api/reader-bucket-resource?path=chapters/ebook/epub/'
+                  + 'a' * 64 + '/1234567890abcdef/chapter-manifest.json')
+        # The chapter renderer mounts the sanitized body, not the document head.
+        chapter = '''<?xml version="1.0" encoding="utf-8"?>
+          <html xmlns="http://www.w3.org/1999/xhtml"><head><title>CSS chapter</title></head>
+          <body><h1>CSS chapter</h1>
+          <style type="text/css">.book-text { color: rgb(10, 20, 30); letter-spacing: 2px; }
+            .book-text.special { color: rgb(40, 50, 60); }</style>
+          <style type="text/css">.book-text { color: rgb(70, 80, 90); word-spacing: 4px; }</style>
+          <p id="css-base" class="book-text">Base</p>
+          <p id="css-specific" class="book-text special">Specific</p>
+          <p id="css-inline" class="book-text special" style="color: rgb(100, 110, 120)">Inline</p>
+          </body></html>'''
+        manifest = {'version': 1, 'kind': 'epub-chapters', 'chapters': [
+            {'index': 1, 'path': 'chapters/chapter-0001.xhtml', 'bytes': len(chapter.encode())}]}
+        self.page.route('**/api/reader-bucket-resource**', lambda route: route.fulfill(json=manifest)
+            if 'chapter-manifest.json' in route.request.url else route.fulfill(
+                content_type='application/xhtml+xml', body=chapter, headers={'Access-Control-Allow-Origin': '*'}))
+        # Dark mode deliberately overrides book colors; test their cascade in light mode.
+        self.page.add_init_script("localStorage.setItem('theme', 'light')")
+        self.page.goto(self.origin + support.PREFIX + '/static/reader.html?' + urlencode(
+            dict(url=source, ext='epub-chapters')))
+        self.page.wait_for_function("()=>document.documentElement.dataset.readerPhase==='ready' && "
+                                    "document.documentElement.dataset.theme==='light'")
+        for element, color in [('css-base', 'rgb(70, 80, 90)'),
+                               ('css-specific', 'rgb(40, 50, 60)'),
+                               ('css-inline', 'rgb(100, 110, 120)')]:
+            with self.subTest(element=element):
+                node = self.page.locator('.reader-epub-chapter #' + element)
+                self.assertTrue(node.is_visible())
+                style = node.evaluate('n => {const s = getComputedStyle(n); return [s.color, s.letterSpacing, s.wordSpacing]}')
+                self.assertEqual(style, [color, '2px', '4px'])
+
     def test_ebook_first_content_does_not_import_pdf_hit_projection(self):
         requested = []
 
@@ -229,181 +162,8 @@ class EbookFlowTests(unittest.TestCase):
         heading = self.page.locator('.reader-epub-chapter h1')
         self.assertTrue(heading.is_visible())
         self.assertEqual(heading.text_content(), 'Visible converted chapter')
-        self.page.route('**/api/reader-content**', lambda route: route.fulfill(
-            content_type='application/epub+zip', body=epub_with_many_chapters(count=2),
-            headers={'Access-Control-Allow-Origin': '*'}))
-        self.page.goto(self.origin + support.PREFIX + '/static/reader.html?' + urlencode(dict(
-            url='https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/flow.epub', ext='epub')))
-        self.page.wait_for_function("()=>document.documentElement.dataset.readerPhase==='ready'")
-        self.assertTrue(self.page.locator('.reader-section-body').first.is_visible())
         self.assertEqual(requested, [])
 
-    def test_native_first_text_does_not_wait_for_image_body(self):
-        held=[]
-        self.page.route('**/api/reader-resource?**',lambda route:held.append(route))
-        self.native(image=True)
-        self.page.wait_for_function("()=>document.documentElement.dataset.readerPhase==='ready'",timeout=1200)
-        self.assertTrue(self.page.locator('.reader-section-body').first.text_content())
-        for route in held:route.abort()
-
-    def test_native_first_chapter_reads_packaged_styles_in_parallel_and_keeps_cascade(self):
-        with zipfile.ZipFile(io.BytesIO(epub_with_many_chapters(count=1))) as archive:
-            files = {name: archive.read(name) for name in archive.namelist()}
-        links = ''.join(f'<link rel="stylesheet" href="style-{i}.css"/>' for i in range(1, 5))
-        sheets = ''.join(f'<item id="style-{i}" href="style-{i}.css" media-type="text/css"/>' for i in range(1, 5))
-        files['OEBPS/content.opf'] = files['OEBPS/content.opf'].replace(b'</manifest>', sheets.encode() + b'</manifest>')
-        files['OEBPS/nav.xhtml'] = files['OEBPS/nav.xhtml'].replace(b'<body>', f'<head>{links}</head><body><p id="cascade-probe">styles</p>'.encode())
-        for i in range(1, 5):
-            files[f'OEBPS/style-{i}.css'] = f'#cascade-probe {{letter-spacing:{i}px}}'.encode()
-        body = io.BytesIO()
-        with zipfile.ZipFile(body, 'w', zipfile.ZIP_DEFLATED) as archive:
-            for name, data in files.items(): archive.writestr(name, data)
-
-        self.page.add_init_script('''(() => {
-          const fetchNative = window.fetch;
-          const blobNative = Response.prototype.blob;
-          window.__heldStyles = {};
-          window.fetch = async (url, ...rest) => {
-            const response = await fetchNative(url, ...rest);
-            if (!String(url).startsWith('blob:') || !response.headers.get('content-type')?.includes('text/css')) return response;
-            const blob = await blobNative.call(response);
-            const marker = /letter-spacing:(\\d)px/.exec(await blob.text());
-            if (!marker) return new Response(blob, {headers: response.headers});
-            await new Promise(resolve => { window.__heldStyles[marker[1]] = resolve; });
-            return new Response(blob, {headers: response.headers});
-          };
-        })()''')
-        self.page.route('**/api/reader-content**', lambda route: route.fulfill(
-            content_type='application/epub+zip', body=body.getvalue(), headers={'Access-Control-Allow-Origin':'*'}))
-        self.page.goto(self.origin+support.PREFIX+'/static/reader.html?'+urlencode(dict(
-            url='https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/style-order.epub',ext='epub')),
-            wait_until='domcontentloaded')
-        self.page.wait_for_function("()=>['1','2','3'].every(key=>!!window.__heldStyles[key])")
-        self.assertFalse(self.page.evaluate("()=>!!window.__heldStyles['4']"))
-        # Finish out of order. The last sheet in document order must still win.
-        self.page.evaluate("()=>window.__heldStyles['3']()")
-        self.page.wait_for_function("()=>!!window.__heldStyles['4']")
-        self.page.evaluate("()=>{for(const key of ['4','2','1']) window.__heldStyles[key]();}")
-        self.page.wait_for_function('''()=>{
-          const probe = document.querySelector('article[data-section="0"]')?.shadowRoot?.querySelector('#cascade-probe');
-          return probe && getComputedStyle(probe).letterSpacing === '4px';
-        }''')
-
-    def test_native_restore_and_progress_do_not_wait_for_unrelated_neighbors(self):
-        self.native()
-        self.page.wait_for_function("()=>document.documentElement.dataset.readerPhase==='ready'")
-        self.page.wait_for_function("()=>document.querySelectorAll('#toc-list .toc-item').length===14")
-        self.page.evaluate('''()=>{
-          const sections=document.querySelector('foliate-view').book.sections.filter(s=>s.linear!=='no');
-          for(const index of [9,11])sections[index].createDocument=()=>new Promise(()=>{});
-          window.__result=null;
-          __ebook.restore({foliateSection:10,foliateOffset:350}).then(value=>__result=value);
-        }''')
-        self.page.wait_for_function('()=>window.__result===true',timeout=1500)
-        self.page.evaluate('''()=>{window.__seekDone=false;__ebook.seek(100*8.2/15,__ebook.begin()).then(()=>__seekDone=true);}''')
-        self.page.wait_for_function('()=>window.__seekDone',timeout=1500)
-
-    def test_initial_restore_does_not_wait_for_previous_chapter(self):
-        self.page.goto(self.origin+support.PREFIX+'/static/manifest.json')
-        self.page.add_script_tag(url=self.origin+support.PREFIX+'/static/reader/core/reader-store.js')
-        source='https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/flow.epub'
-        self.page.evaluate('''async source=>{await VoiceOfMLReaderStore.clearHistory();
-          await VoiceOfMLReaderStore.put({url:source,foliateSection:10,foliateOffset:0,zoom:100});}''',source)
-        def hold_previous(route):
-            response=route.fetch();script=response.text()
-            needle='const source = await readerContext.awaitReader(section.createDocument(), signal);'
-            self.assertIn(needle,script)
-            route.fulfill(response=response,body=script.replace(needle,
-                'if (index === 9) { window.__heldPrevious = true; await new Promise(resolve => { window.__releasePrevious = resolve; }); }\n'+needle))
-        self.page.route('**/static/reader/formats/reader-foliate-format.mjs*',hold_previous)
-        self.page.route('**/api/reader-content**',lambda route:route.fulfill(content_type='application/epub+zip',body=epub_with_many_chapters(),headers={'Access-Control-Allow-Origin':'*'}))
-        self.page.goto(self.origin+support.PREFIX+'/static/reader.html?'+urlencode(dict(url=source,ext='epub')),wait_until='domcontentloaded')
-        self.page.wait_for_function('()=>!!window.__heldPrevious',timeout=5000)
-        self.page.wait_for_function("()=>document.documentElement.dataset.readerPhase==='ready'",timeout=2000)
-        article=self.page.locator('article[data-section="10"]')
-        self.assertTrue(article.is_visible())
-        self.assertIn('章节 10',article.locator('.reader-section-body').inner_text())
-        before=self.page.locator('#viewport').evaluate('node=>node.scrollTop')
-        self.page.evaluate('window.__releasePrevious()')
-        self.page.wait_for_function('''()=>!!document.querySelector('article[data-section="9"]:not(.foliate-section-placeholder)')''',timeout=5000)
-        self.page.wait_for_timeout(150)
-        self.assertLess(abs(article.evaluate('node=>node.getBoundingClientRect().top-document.querySelector("#viewport").getBoundingClientRect().top')),20)
-        self.assertGreaterEqual(self.page.locator('#viewport').evaluate('node=>node.scrollTop'),before)
-
-    def test_native_position_reads_each_section_once_and_keeps_gap_fallback(self):
-        self.native()
-        self.page.wait_for_function("()=>document.documentElement.dataset.readerPhase==='ready'")
-        result=self.page.evaluate('''()=>{
-          const host=document.querySelector('.foliate-continuous'), orig=host.className;
-          host.classList.remove('foliate-continuous');
-          const stream=document.createElement('div');stream.className='foliate-continuous';document.body.append(stream);
-          const top=document.querySelector('#viewport').getBoundingClientRect().top+8;
-          const rows=[0,1,2].map(i=>{
-            const row=document.createElement('article');row.dataset.section=i;stream.append(row);return row;
-          });
-          try {
-            return [[[-50,-10],[20,30],[45,70]], [[-30,8],[15,25],[35,80]], [[-90,-70],[-65,-35],[-30,-5]]].map(rects=>{
-              const reads=[0,0,0];
-              rows.forEach((row,i)=>{row.getBoundingClientRect=()=>{reads[i]++;return {top:top+rects[i][0],bottom:top+rects[i][1]}}});
-              return [__ebook.capture(),reads];
-            });
-          } finally {stream.remove();host.className=orig;}
-        }''')
-        self.assertEqual([(v['foliateSection'],v['foliateOffset'],reads) for v,reads in result],
-                         [(1,-20,[1,1,1]),(0,30,[1,0,0]),(2,30,[1,1,1])])
-
-    def test_native_jump_keeps_previous_chapter_reachable_and_position_stable(self):
-        self.native()
-        self.page.wait_for_function("()=>document.querySelectorAll('#toc-list .toc-item').length===14")
-        self.page.evaluate('__ebook.jump(13)')
-        self.page.wait_for_function("()=>!!document.querySelector('article[data-section=\"12\"]:not(.foliate-section-placeholder)')",timeout=1500)
-        self.page.wait_for_timeout(200)
-        self.assertLess(abs(self.page.locator('#chapter-13').evaluate('n=>n.getBoundingClientRect().top-document.querySelector("#viewport").getBoundingClientRect().top-8')),3)
-        self.page.locator('#chapter-12').evaluate('n=>n.scrollIntoView()')
-        self.page.wait_for_timeout(250)
-        self.assertTrue(self.page.locator('#chapter-12').is_visible())
-
-    def test_superseded_native_jump_releases_slots_and_ignores_late_section(self):
-        self.native()
-        self.page.wait_for_function("()=>document.querySelectorAll('#toc-list .toc-item').length===14")
-        self.page.evaluate('''()=>{
-          const sections=document.querySelector('foliate-view').book.sections.filter(s=>s.linear!=='no');
-          const original=sections[10].createDocument.bind(sections[10]);
-          sections[10].createDocument=()=>new Promise(resolve=>{window.__releaseOld=()=>original().then(resolve);});
-          __ebook.jump(10);
-        }''')
-        self.page.wait_for_function('()=>!!window.__releaseOld')
-        self.page.evaluate('__ebook.jump(13)')
-        self.page.wait_for_function('''()=>{const n=document.querySelector('article[data-section="13"]')?.shadowRoot?.querySelector('#chapter-13');
-          return n&&Math.abs(n.getBoundingClientRect().top-document.querySelector('#viewport').getBoundingClientRect().top-8)<3;}''',timeout=1500)
-        self.assertLessEqual(self.page.evaluate('__nativeStats().active'),3)
-        self.page.evaluate('__releaseOld()')
-        self.page.wait_for_timeout(250)
-        self.assertEqual(self.page.locator('article[data-section="10"]:not(.foliate-section-placeholder)').count(),0)
-
-    def test_native_short_chapters_do_not_recursively_decode_whole_book(self):
-        self.native(short=True)
-        self.page.wait_for_function("()=>document.documentElement.dataset.readerPhase==='ready'")
-        self.page.wait_for_timeout(400)
-        self.assertLessEqual(self.page.locator('article[data-section]:not(.foliate-section-placeholder)').count(),9)
-        self.assertLessEqual(self.page.evaluate('__nativeStats().active'),3)
-        self.assertTrue(self.page.evaluate("!!document.querySelector('foliate-view').renderer"))
-
-    def test_anchor_preserves_reading_line_when_previous_chapter_arrives_mid_scroll(self):
-        self.native()
-        self.page.wait_for_function("()=>document.documentElement.dataset.readerPhase==='ready'")
-        result=self.page.evaluate('''()=>{
-          const article=document.querySelector('article[data-section]');
-          const root=article.shadowRoot.querySelector('.reader-section-body');
-          root.innerHTML='<p style="height:800px">Before</p><p id="line">Reading line</p><p style="height:1600px">After</p>';
-          const viewport=document.querySelector('#viewport'),line=root.querySelector('#line');
-          viewport.scrollTop+=line.getBoundingClientRect().top-viewport.getBoundingClientRect().top-80;
-          viewport.dispatchEvent(new WheelEvent('wheel',{deltaY:-1}));
-          const before=line.getBoundingClientRect().top;
-          __ebook.anchor.preserve(()=>{const previous=document.createElement('div');previous.style.height='700px';article.before(previous);});
-          return {before,after:line.getBoundingClientRect().top};
-        }''')
-        self.assertAlmostEqual(result['before'],result['after'],delta=2)
 
     def test_converted_position_reads_each_chapter_once_and_preserves_identity(self):
         self.expose()

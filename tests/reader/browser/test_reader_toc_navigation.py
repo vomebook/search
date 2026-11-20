@@ -1,18 +1,14 @@
 """Shared table-of-contents navigation regressions: sidebar jumps land where the entry says.
 
-Covers chapter bundles (`epub-chapters`) and the Foliate EPUB engine, early and late
-entries, fragments inside large chapters, re-jumps after window trimming, rapid
-successive clicks, group headings, the virtualized directory and the opening hint.
+Covers chapter bundles (`epub-chapters`): early and late entries, fragments inside
+large chapters, re-jumps after window trimming, rapid successive clicks, the
+virtualized directory and the opening hint. Also covers PDF and HTML navigation.
 """
-import io
-import json
 import re
 import unittest
-import zipfile
 from urllib.parse import unquote, urlencode
 
 from tests.reader.browser import test_reader_pdf_followup as support
-from tests.performance.test_reader_performance import epub_with_many_chapters, zip_bytes
 
 BODY = '<p style="height:1400px">正文</p>'
 
@@ -33,32 +29,6 @@ def chapter_body(index):
             f'<h2 id="sec-{index}-b">第{index}章 第二节</h2>{BODY}')
 
 
-def epub_with_group_headings(count, groups=4):
-    """EPUB whose navigation groups chapters under href-less headings."""
-    manifest = '<item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>'
-    spine = '<itemref idref="nav"/>'
-    files, items = {}, []
-    per_group = max(1, count // groups)
-    for index in range(1, count + 1):
-        manifest += f'<item id="chapter-{index}" href="chapter-{index}.xhtml" media-type="application/xhtml+xml"/>'
-        spine += f'<itemref idref="chapter-{index}"/>'
-        files[f"OEBPS/chapter-{index}.xhtml"] = (
-            f'<html xmlns="http://www.w3.org/1999/xhtml"><body>'
-            f'<h1 id="chapter-{index}">第{index}章</h1><p style="height:900px">正文</p></body></html>')
-        if (index - 1) % per_group == 0:
-            items.append(f'<li><span>分组 {(index - 1) // per_group + 1}</span><ol>')
-        items.append(f'<li><a href="chapter-{index}.xhtml#chapter-{index}">第{index}章</a></li>')
-        if index % per_group == 0 or index == count:
-            items.append('</ol></li>')
-    files.update({
-        "META-INF/container.xml": '<?xml version="1.0"?><container xmlns="urn:oasis:names:tc:opendocument:xmlns:container" version="1.0"><rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>',
-        "OEBPS/content.opf": f'<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="id"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:identifier id="id">reader-toc-groups</dc:identifier><dc:title>Reader Toc Groups</dc:title><dc:language>zh</dc:language></metadata><manifest>{manifest}</manifest><spine>{spine}</spine></package>',
-        "OEBPS/nav.xhtml": ('<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">'
-                            f'<body><nav epub:type="toc"><ol>{"".join(items)}</ol></nav></body></html>'),
-    })
-    return zip_bytes(files, ("mimetype", "application/epub+zip"))
-
-
 class TocNavigationTests(unittest.TestCase):
     setUpClass = classmethod(support.PdfFollowupTests.setUpClass.__func__)
     setUp = support.PdfFollowupTests.setUp
@@ -72,7 +42,7 @@ class TocNavigationTests(unittest.TestCase):
             response = route.fetch()
             route.fulfill(response=response, body=response.text() + '''
               window.__replaceTocForSearch=setToc;
-              window.__toc={nav:()=>navigationState, jump:i=>navigateTocEntry(i), syncFoliate:syncFoliateScrollLocation,
+              window.__toc={nav:()=>navigationState, jump:i=>navigateTocEntry(i),
                 set:setToc, filter:()=>filterPanel(document.querySelector('#toc-panel')),
                 setPageCount:count=>updateDocumentState({pageCount:count}),
                 setPage:page=>{updateDocumentState({page});updateTocCurrentMark()},
@@ -113,17 +83,6 @@ class TocNavigationTests(unittest.TestCase):
         self.page.wait_for_function("()=>document.documentElement.dataset.readerPhase==='ready'")
         self.page.wait_for_function(
             f"()=>document.querySelectorAll('#toc-list .toc-item').length>={min_rows}")
-        self.assert_instrumented()
-
-    def open_epub(self, body):
-        self.expose()
-        self.page.route("**/api/reader-content**", lambda route: route.fulfill(
-            content_type="application/epub+zip", body=body,
-            headers={"Access-Control-Allow-Origin": "*"}))
-        self.page.goto(self.origin + support.PREFIX + "/static/reader.html?" + urlencode(
-            dict(url="https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/toc.epub", ext="epub")),
-            wait_until="domcontentloaded")
-        self.page.wait_for_function("()=>document.documentElement.dataset.readerPhase==='ready'")
         self.assert_instrumented()
 
     def test_pdf_outline_uses_destination_page_not_title(self):
@@ -215,12 +174,6 @@ class TocNavigationTests(unittest.TestCase):
             return null;
         }""")
 
-    def directory_rows(self):
-        return self.page.evaluate("""() => [...document.querySelectorAll('#toc-list .toc-item')].map(row => ({
-            index: Number(row.dataset.tocIndex), text: row.textContent.trim().slice(0, 12),
-            group: row.classList.contains('toc-group'),
-            role: row.querySelector('.panel-item-main')?.getAttribute('role') || null}))""")
-
     def panel_open(self):
         return self.page.evaluate("()=>document.querySelector('#history').getAttribute('aria-expanded') === 'true'")
 
@@ -250,53 +203,6 @@ class TocNavigationTests(unittest.TestCase):
                 self.page.keyboard.press('Escape')
                 self.assertFalse(self.panel_open())
                 self.assertEqual(self.page.evaluate('document.activeElement.id'),'history')
-
-    def test_foliate_scroll_only_checks_the_active_sections_toc_entries(self):
-        self.open_epub(epub_with_group_headings(6,groups=2))
-        self.page.wait_for_function('()=>__toc.nav().tocEntries.length===8')
-        result = self.page.evaluate('''()=>{
-          const viewport=document.querySelector('#viewport'), top=viewport.getBoundingClientRect().top+80;
-          const article=document.querySelector('.foliate-continuous article[data-section="0"]');
-          const position=y=>()=>({top:y});
-          article.getBoundingClientRect=position(top-20);
-          const target={getBoundingClientRect:position(top-5)};
-          const after={getBoundingClientRect:position(top+5)};
-          const entry=(label,sectionIndex,props={})=>({label,sectionIndex,activate:()=>true,...props});
-          const items=[entry('first',0,{anchor:()=>target}),entry('later tie',0,{anchor:()=>target}),
-            ...Array.from({length:1000},(_,i)=>entry('other '+i,500+i))];
-          __toc.set(items);
-          const nav=()=>__toc.nav().currentChapterIndex;
-          let offSectionReads=0;
-          for(const e of __toc.nav().tocEntries.slice(2)) {
-            const n=e.sectionIndex;
-            Object.defineProperty(e,'sectionIndex',{get(){offSectionReads++;return n}});
-          }
-          __toc.syncFoliate();const tied=nav();offSectionReads=0;
-          __toc.syncFoliate();const warm=offSectionReads;
-          __toc.set([entry('different section',1),entry('fallback',0,{anchor:()=>after,target}),
-            entry('later fallback',0,{anchor:()=>after,target:after})]);
-          __toc.syncFoliate();
-          return {tied,warm,fallback:nav()};
-        }''')
-        self.assertEqual(result,dict(tied=1,warm=0,fallback=1))
-
-    def test_foliate_chapter_buttons_skip_group_headings_and_keep_directory_open(self):
-        self.open_epub(epub_with_group_headings(6,groups=2))
-        self.page.wait_for_function("()=>document.querySelectorAll('#toc-list .toc-item').length===8")
-        for width in (390, 1280):
-            with self.subTest(width=width):
-                self.page.set_viewport_size({'width':width,'height':844})
-                self.page.emulate_media(reduced_motion='reduce')
-                self.click_entry(3)
-                self.page.wait_for_function("()=>document.querySelector('#history').getAttribute('aria-expanded')==='false'")
-                self.page.locator('#history').click()
-                self.page.locator('#toc-tab').click()
-                for selector,index in [('.reader-chapter-next',5),('.reader-chapter-prev',3)]:
-                    self.page.locator(selector).click()
-                    self.page.wait_for_function('index=>__toc.nav().currentChapterIndex===index',arg=index)
-                    self.assertTrue(self.panel_open(),selector)
-                    self.assertEqual(self.page.locator('#toc-tab').get_attribute('aria-selected'),'true')
-                    self.assertEqual(self.page.locator('#toc-list [aria-current="location"]').count(),1)
 
     def test_chapter_buttons_boundaries_do_not_close_directory(self):
         self.open_chapters(6)
@@ -1101,21 +1007,6 @@ class TocNavigationTests(unittest.TestCase):
         self.assertGreaterEqual(result["after"] - result["before"], 1400,
                                 "a reader scroll must not be pulled back by the hold")
 
-    def test_new_navigation_supersedes_the_previous_landing_hold(self):
-        self.open_epub(epub_with_many_chapters())
-        self.page.wait_for_function("()=>document.querySelectorAll('#toc-list .toc-item').length===14")
-        for index, chapter in [(9, 10), (4, 5), (7, 8)]:
-            self.page.evaluate("index => __toc.jump(index)", index)
-            self.page.wait_for_function('''chapter=>{
-              const node=document.querySelector(`article[data-section="${chapter}"]`)?.shadowRoot?.querySelector(`#chapter-${chapter}`);
-              return node && Math.abs(node.getBoundingClientRect().top-document.querySelector('#viewport').getBoundingClientRect().top-8)<3;
-            }''', arg=chapter, timeout=1500)
-            self.page.wait_for_timeout(160)
-            offset = self.page.locator(f'article[data-section="{chapter}"] #chapter-{chapter}').evaluate(
-                "node=>node.getBoundingClientRect().top-document.querySelector('#viewport').getBoundingClientRect().top")
-            self.assertLess(abs(offset - 8), 3,
-                            'the previous hold must not pull a newer jump back')
-
     def test_landing_hold_is_cancelled_on_disposal(self):
         self.open_chapters(40)
         self.page.evaluate("index => __toc.jump(index)", 19)
@@ -1155,35 +1046,7 @@ class TocNavigationTests(unittest.TestCase):
         self.assertEqual(result["before"], result["after"],
                          "re-assertion must not pull a reader who scrolled away back")
 
-    # ---- group headings and the opening hint ----
-
-    def test_group_heading_rows_are_not_links(self):
-        self.open_epub(epub_with_group_headings(40, groups=4))
-        self.page.wait_for_function("()=>document.querySelectorAll('#toc-list .toc-item').length>4")
-        rows = self.directory_rows()
-        headings = [row for row in rows if row["group"]]
-        self.assertEqual(len(headings), 4, "href-less navigation headings must still be listed")
-        self.assertTrue(all(row["role"] == "heading" for row in headings))
-        navigable = [row for row in rows if not row["group"]]
-        self.assertTrue(all(row["role"] == "link" for row in navigable))
-        before = self.page.evaluate("()=>document.querySelector('#viewport').scrollTop")
-        self.page.evaluate("""(index) => {
-            document.querySelector(`#toc-list .toc-item[data-toc-index="${index}"] .panel-item-main`).click();
-        }""", headings[0]["index"])
-        self.page.wait_for_timeout(800)
-        self.assertEqual(self.page.evaluate("()=>document.querySelector('#viewport').scrollTop"), before,
-                         "a group heading must not navigate anywhere")
-
-    def test_navigation_ignores_a_group_entry_index(self):
-        self.open_epub(epub_with_group_headings(20, groups=2))
-        self.page.wait_for_function("()=>document.querySelectorAll('#toc-list .toc-item').length>4")
-        rows = self.directory_rows()
-        group = next(row for row in rows if row["group"])
-        before = self.page.evaluate("()=>__toc.nav().currentChapterIndex")
-        self.page.evaluate("(index)=>__toc.jump(index)", group["index"])
-        self.page.wait_for_timeout(900)
-        self.assertEqual(self.page.evaluate("()=>__toc.nav().currentChapterIndex"), before,
-                         "a group index must not navigate or change the current entry")
+    # ---- opening hint ----
 
     def test_directory_hint_opens_for_more_than_three_entries(self):
         self.open_chapters(6)
@@ -1198,12 +1061,6 @@ class TocNavigationTests(unittest.TestCase):
                 self.page.wait_for_timeout(500)
                 self.assertFalse(self.panel_open(),
                                  f"a {count}-entry directory must not open the panel on its own")
-
-    def test_directory_hint_skips_a_three_entry_grouped_navigation(self):
-        self.open_epub(epub_with_group_headings(2, groups=1))
-        self.page.wait_for_timeout(500)
-        self.assertFalse(self.panel_open(),
-                         "two chapters under one heading is still a trivial directory")
 
 
 if __name__ == "__main__":

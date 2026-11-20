@@ -366,10 +366,6 @@
       "kind": "script",
       "source": "scripts/reader/check_reader_media_coverage.mjs"
     },
-    "tests/reader/test_foliate_proxy.mjs": {
-      "kind": "script",
-      "source": "scripts/reader/check_reader_media_coverage.mjs"
-    },
     "tests/reader/media/test_reader_media_baseline.mjs": {
       "kind": "script",
       "source": "scripts/reader/check_reader_media_coverage.mjs"

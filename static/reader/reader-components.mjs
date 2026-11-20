@@ -6,7 +6,6 @@ export { createReaderToc } from "./ui/reader-toc.mjs";
 export { createReaderSearchBackends } from "./search/reader-search-backends.mjs";
 export { createReaderPdfScheduler } from "./pdf/reader-pdf-scheduler.mjs";
 export { createReaderNavigation } from "./ui/reader-navigation.mjs";
-export { createReaderFoliateFormat } from "./formats/reader-foliate-format.mjs";
 export { createReaderProgress } from "./ui/reader-progress.mjs";
 export { createReaderBookmarks } from "./ui/reader-bookmarks.mjs";
 export { createReaderMediaFormat } from "./formats/reader-media-format.mjs";
