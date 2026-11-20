@@ -876,8 +876,8 @@ process.stdout.write(stripBundledScripts(readFileSync('static/index.html','utf8'
         try:
             self.assertTrue(self.page.evaluate('__lateCalls.length === 2 && __lateCalls[0].signal.aborted'))
             frame=self.page.frame_locator('.reader-overlay')
-            frame.locator('.reader-text').wait_for(state='visible',timeout=12000)
-            self.assertIn('Reader independent of delayed warmup',frame.locator('.reader-text').inner_text())
+            text=frame.locator('.reader-text').filter(has_text='Reader independent of delayed warmup')
+            text.wait_for(state='visible',timeout=12000)
             self.assertEqual(len(lookups),1)
             self.page.evaluate('''url=>__lateCalls[1].resolve({ok:true,json:async()=>({url,extension:'txt'})})''', source)
             self.page.wait_for_function('readerWarmupInFlight === 0')
