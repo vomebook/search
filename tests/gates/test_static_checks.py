@@ -5026,7 +5026,7 @@ for (const [project, base] of [['github','/search/static/'], ['hf','/static/']])
             checked.update(Path(line).resolve() for line in result.stdout.splitlines())
         sources = {path.resolve() for path in (ROOT / "static").rglob("*")
                    if path.is_file() and path.suffix in (".js", ".mjs")
-                   and "vendor" not in path.parts and "foliate-reader" not in path.parts}
+                   and "vendor" not in path.parts}
         self.assertFalse(sources - checked, f"browser scripts missing from type check: {sorted(sources - checked)}")
         for path in sources:
             self.assertNotRegex(path.read_text(), r"@ts-(?:nocheck|ignore|expect-error)\b", str(path))
@@ -5036,7 +5036,7 @@ for (const [project, base] of [['github','/search/static/'], ['hf','/static/']])
         # merely checking that the two entry paths appear in --listFilesOnly.
         for path in (ROOT / "static").rglob("*"):
             if (path.is_file() and path.suffix in (".js", ".mjs")
-                    and "vendor" not in path.parts and "foliate-reader" not in path.parts):
+                    and "vendor" not in path.parts):
                 target = self.root / path.relative_to(ROOT)
                 target.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copyfile(path, target)
@@ -5118,7 +5118,7 @@ for (const [project, base] of [['github','/search/static/'], ['hf','/static/']])
         self.assertIn('"static/**/*.{js,mjs}"', config)
         self.assertIn('"{scripts,tests}/**/*.{js,mjs}"', config)
         self.assertIn('"**/vendor/**"', config)
-        self.assertIn('"**/foliate-reader/**"', config)
+        self.assertNotIn('"**/foliate-reader/**"', config)
         self.assertIn('"no-undef"', config)
         self.assertIn('"tests/**/*.py" = ["F401", "F841"', (ROOT / "ruff.toml").read_text())
         paths = (self.root / "scripts/check_python_static.py").read_text()

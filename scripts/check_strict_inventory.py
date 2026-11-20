@@ -20,7 +20,7 @@ DEBT_FILE = "quality/baselines/strict-inventory-debt.json"
 def browser_sources(root: Path) -> set[str]:
     return {path.relative_to(root).as_posix() for path in (root / "static").rglob("*")
             if path.is_file() and path.suffix in (".js", ".mjs")
-            and path.relative_to(root).parts[1] not in ("vendor", "foliate-reader")}
+            and path.relative_to(root).parts[1] != "vendor"}
 
 
 def backend_sources(root: Path) -> set[str]:
@@ -240,17 +240,17 @@ if __name__ == "__main__":
                     (root / "static/worker.js").unlink()
                     (root / "config/types/jsconfig.check.json").write_text(json.dumps({"compilerOptions": options,
                         "files": ["../../static/main.js"]}))
-                    for name in ("vendor", "foliate-reader"):
-                        (root / "static" / name).mkdir()
-                        (root / "static" / name / "ignored.js").write_text("const x = 1;\n")
-                        nested = root / "static/reader" / name
-                        nested.mkdir(parents=True)
-                        (nested / "new.js").write_text("const x = 1;\n")
+                    (root / "static/vendor").mkdir()
+                    (root / "static/vendor/ignored.js").write_text("const x = 1;\n")
+                    (root / "static/reader/vendor").mkdir(parents=True)
+                    (root / "static/reader/vendor/new.js").write_text("const x = 1;\n")
+                    (root / "static/foliate-reader").mkdir()
+                    (root / "static/foliate-reader/new.js").write_text("const x = 1;\n")
                     result = run()
                     self.assertNotEqual(result.returncode, 0)
-                    for name in ("vendor", "foliate-reader"):
-                        self.assertIn(f"static/reader/{name}/new.js", result.stderr)
-                        self.assertNotIn(f"static/{name}/ignored.js", result.stderr)
+                    self.assertIn("static/reader/vendor/new.js", result.stderr)
+                    self.assertIn("static/foliate-reader/new.js", result.stderr)
+                    self.assertNotIn("static/vendor/ignored.js", result.stderr)
 
         unittest.main(argv=[sys.argv[0]])
     else:
