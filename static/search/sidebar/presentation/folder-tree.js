@@ -176,7 +176,7 @@ function getFolderSelfSet() {
   return new Set(deps.readView().selfs || []);
 }
 
-/** @type {{tree: VoiceOfMLFilterFolder[], subtrees: string[], selfs: string[], lookup: Map<VoiceOfMLFolderSelectionNode, VoiceOfMLFolderSelectionState>} | null} */
+/** @type {{tree: VoiceOfMLFilterFolder[], subtrees: string[], selfs: string[], lookup: Map<VoiceOfMLFolderSelectionNode, VoiceOfMLFolderSelectionState>, canonical: boolean} | null} */
 let folderSelectionMemo = null;
 
 /** @param {Set<string>} subtreeSet @param {Set<string>} selfSet */
@@ -184,8 +184,10 @@ function getFolderSelectionLookup(subtreeSet, selfSet) {
   if (!folderSelectionMemo || folderSelectionMemo.tree !== deps.readView().tree
       || !sameValues(deps.readView().subtrees, folderSelectionMemo.subtrees)
       || !sameValues(deps.readView().selfs, folderSelectionMemo.selfs)) {
-    folderSelectionMemo = { tree: deps.readView().tree, subtrees: deps.readView().subtrees.slice(),
-      selfs: deps.readView().selfs.slice(), lookup: deps.selection.createFolderSelectionLookup(deps.readView().tree, subtreeSet, selfSet) };
+    const view = deps.readView();
+    folderSelectionMemo = { tree: view.tree, subtrees: view.subtrees.slice(), selfs: view.selfs.slice(),
+      lookup: deps.selection.createFolderSelectionLookup(view.tree, subtreeSet, selfSet),
+      canonical: folderSelectionMemo?.tree === view.tree && folderSelectionMemo.canonical };
   }
   return folderSelectionMemo.lookup;
 }
@@ -221,23 +223,64 @@ function setNodeSubtreeSelection(node, enabled, subtreeSet, selfSet) {
 
 /** @param {Set<string>} subtreeSet @param {Set<string>} selfSet */
 function normalizeFolderSelection(subtreeSet, selfSet) {
-  const lookup = deps.selection.createFolderSelectionLookup(deps.readView().tree, subtreeSet, selfSet);
+  const tree = deps.readView().tree;
+  const lookup = deps.selection.createFolderSelectionLookup(tree, subtreeSet, selfSet);
   for (const [node, state] of lookup) if (!node.isRoot && state.full) subtreeSet.add(node.path);
   for (const path of subtreeSet) {
     const slash = path.lastIndexOf("/");
     if (slash >= 0 && deps.selection.folderPathCovered(path.slice(0, slash), subtreeSet)) subtreeSet.delete(path);
   }
   for (const path of selfSet) if (deps.selection.folderPathCovered(path, subtreeSet)) selfSet.delete(path);
+  return { tree, lookup };
+}
+
+/** @param {ReturnType<typeof normalizeFolderSelection>} normalized */
+function hasCanonicalSelectionPaths({tree, lookup}) {
+  // Inheritance follows tree edges, but pruning follows slash prefixes.
+  if (tree.some(node => typeof node.path !== "string" || node.path.includes("/"))) return false;
+  const paths = new Set();
+  for (const node of lookup.keys()) {
+    const { path, children } = node;
+    if (typeof path !== "string" || Boolean(node.isRoot) !== !path || paths.has(path)) return false;
+    paths.add(path);
+    if (!children?.length) continue;
+    if (!node.isRoot && !node.hasChildren) return false;
+    const prefix = path ? path + "/" : "";
+    for (const {path: childPath} of children) {
+      if (typeof childPath !== "string" || childPath.length <= prefix.length ||
+          childPath.lastIndexOf("/") !== prefix.length - 1 || !childPath.startsWith(prefix)) return false;
+    }
+  }
+  return true;
 }
 
 /** @param {Set<string>} subtreeSet @param {Set<string>} selfSet */
 function persistFolderSelection(subtreeSet, selfSet) {
-  normalizeFolderSelection(subtreeSet, selfSet);
+  const memo = folderSelectionMemo;
+  const canonical = memo?.tree === deps.readView().tree && memo.canonical;
+  const before = canonical ? null : { subtrees: Array.from(subtreeSet), selfs: Array.from(selfSet) };
+  const normalized = normalizeFolderSelection(subtreeSet, selfSet);
+  const { tree } = normalized;
   if (subtreeSet.size > 10000 || selfSet.size > 10000) {
     deps.notify("目录筛选最多支持 10000 项，请缩小选择范围");
     return;
   }
-  deps.commitSelection(Array.from(subtreeSet), Array.from(selfSet));
+  const subtrees = Array.from(subtreeSet), selfs = Array.from(selfSet);
+  const nextMemo = deps.container && tree?.length
+    ? { ...normalized, subtrees: subtrees.slice(), selfs: selfs.slice(), canonical: memo?.tree === tree && memo.canonical } : null;
+  deps.commitSelection(subtrees, selfs);
+  if (!nextMemo || folderSelectionMemo !== memo) return;
+  const view = deps.readView();
+  if (view.tree !== tree || !sameValues(nextMemo.subtrees, view.subtrees) || !sameValues(nextMemo.selfs, view.selfs)) return;
+  // An unchanged selection needs no topology scan. When normalization changes it,
+  // promoted branches already have full descendants and pruned entries stay covered
+  // on a canonical tree. A successful proof lasts until render or tree replacement.
+  if (!nextMemo.canonical && !(before && sameValues(before.subtrees, nextMemo.subtrees) && sameValues(before.selfs, nextMemo.selfs))) {
+    nextMemo.canonical = hasCanonicalSelectionPaths(normalized);
+    if (!nextMemo.canonical) return;
+  }
+  // Self toggles still read the committed sets, not the normalization lookup.
+  folderSelectionMemo = nextMemo;
 }
 
 /** @param {VoiceOfMLFilterFolder[]} nodes @param {string[]} selfPaths */
