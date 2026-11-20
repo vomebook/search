@@ -834,6 +834,10 @@
       "kind": "helper",
       "source": "tests/search/reader-navigation/test_search_history_races.mjs"
     },
+    "tests/search/ui/test_shift_selection_range.mjs": {
+      "kind": "helper",
+      "source": "tests/search/ui/test_sidebar_directory.mjs"
+    },
     "tests/search/ui/test_sidebar_filters.js": {
       "kind": "helper",
       "source": "tests/search/ui/test_sidebar_directory.mjs"
