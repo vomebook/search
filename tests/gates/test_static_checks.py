@@ -4781,16 +4781,21 @@ for (const [project, base] of [['github','/search/static/'], ['hf','/static/']])
         check=['node',ROOT / 'node_modules/typescript/bin/tsc','--project',config]
         prefix=(f'import {{countMatches, resultPage, scanText, queryBigramFilters}} from "{module.as_posix()}";\n'
                 'const chapters=[{index:1,title:"t",path:"1",text:"hello"}];\n')
-        source.write_text(prefix + 'countMatches(chapters,"a",()=>true).then(value=>value.total);\n'
-                          'resultPage(chapters,"a",[1],0,()=>true).then(rows=>rows[0]?.snippet.text);\n'
-                          'scanText("a","a",(offset,length)=>offset+length);\n')
+        valid = ('countMatches(chapters,"a",()=>true).then(value=>value.total);\n'
+                 'resultPage(chapters,"a",[1],0,()=>true).then(rows=>rows[0]?.snippet.text);\n'
+                 'scanText("a","a",(offset,length)=>offset+length);\n'
+                 'queryBigramFilters("章节");\n')
+        source.write_text(prefix + valid)
         self.assert_check(self.run_check(*check),True,'')
         for bad in ('countMatches(chapters,42,()=>true);','resultPage(chapters,"a",[1],"0",()=>true);',
                     'scanText("a","a",42);','queryBigramFilters(null);',
                     'resultPage(chapters,"a",[1],0,()=>true).then(rows=>rows[0].snippet.text);',
                     'countMatches(chapters,"a",()=>true).then(value=>value.notAField);'):
             with self.subTest(invalid=bad):
-                source.write_text(prefix+bad+'\n');self.assert_check(self.run_check(*check),False,'error TS')
+                source.write_text(prefix + valid + bad + '\n')
+                result = self.run_check(*check)
+                self.assert_check(result, False, 'error TS')
+                self.assertNotIn('TS6133', result.stdout)
         local=self.root / 'static/reader/search/reader-chapter-search-core.mjs'
         local.parent.mkdir(parents=True,exist_ok=True)
         original=module.read_text();local.write_text(original)
