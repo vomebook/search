@@ -24,7 +24,7 @@ CATEGORY_METHODS = {
         "test_unsupported_format_hides_inapplicable_controls",
         "test_txt_displays_before_stream_finishes_and_preserves_split_utf8",
         "test_text_reader_uses_scroll_mode_without_pagination_controls",
-        "test_reader_tab_is_hidden_for_document_without_toc",
+        "test_reading_tab_remains_available_for_document_without_toc",
         "test_scanned_pdf_bookmark_has_empty_excerpt",
          "test_txt_detects_gb18030_and_utf16_bom",
         "test_txt_detects_encoding_across_tiny_initial_chunks",

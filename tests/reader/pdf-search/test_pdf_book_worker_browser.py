@@ -957,7 +957,7 @@ class PdfBookWorkerBrowserTests(unittest.TestCase):
           let highlights=[];
           const context={readerAbortController:{signal:{aborted:false}},searchState:{query:''},
             pdfSearchText,pdfSourceOffset,normalizePdfSearchText,fullSearchEscape:x=>x,
-            highlightTextParts:parts=>highlights.push(parts.map(p=>p.node.data.slice(p.start,p.end)))};
+            highlightTextParts:parts=>{highlights.push(parts.map(p=>p.node.data.slice(p.start,p.end))); return [];}};
           const search=createReaderPdfTextRuntime(context);
           try {
             for(const text of ['手',' ', '机','', '😀','nee','dle',' ','手','\n','机']) {
