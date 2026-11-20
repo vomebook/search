@@ -38,7 +38,9 @@ interface SearchSnapshotHost {
 }
 interface SearchSnapshotStore {
   readonly snapshots: ReadonlyMap<string, SearchResultSnapshot>;
-  put(key: string, snapshot: SearchResultSnapshot): void; remove(key: string): void;
+  put(key: string, snapshot: SearchResultSnapshot): void;
+  putRestored(key: string, snapshot: SearchResultSnapshot): void;
+  remove(key: string): void;
   readonly budget: SearchSnapshotBudget;
   readonly cloneTask: SearchSnapshotCloneTask | null;
   source(snapshot: object): SearchSnapshotSource | undefined;
@@ -51,5 +53,6 @@ interface SearchSnapshotStore {
 }
 declare var VoiceOfMLSnapshotPolicy: {
   VERSION: number; MAX: number; BYTES_MAX: number; cloneResult(result: unknown): unknown; createBudget(): SearchSnapshotBudget;
+  measureRestoreSnapshot(snapshot: SearchResultSnapshot): number | undefined;
 };
 declare var VoiceOfMLResultSnapshots: {create(host: SearchSnapshotHost): SearchSnapshotStore};

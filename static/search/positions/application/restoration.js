@@ -83,7 +83,7 @@
           host.release();
           if (task.preview && found === position.index) host.applyPreview(snapshot);
           else {
-            host.snapshots.put(key, snapshot);
+            host.snapshots.putRestored(key, snapshot);
             host.restoreSnapshot(key);
           }
           host.completed();

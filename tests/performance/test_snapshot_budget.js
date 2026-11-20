@@ -58,6 +58,75 @@ for (const { name: project, root } of searchTestProjects()) {
       assert.strictEqual(c.getSearchSnapshotResultsBytes(records, true), new TextEncoder().encode(JSON.stringify(records)).length);
     }
   });
+  test(project + " restore accounting includes the exact envelope and reserve at the eviction boundary", () => {
+    const {c,encoded} = fixture(source, root);
+    const [snapshot, older] = vm.runInContext(`(() => {
+      const results = new Array(10000);
+      results[1] = null;
+      results[2] = undefined;
+      results[5000] = {File: '书📚\\n"', Folder: ['路径'], size: Infinity};
+      Object.defineProperty(results, '9999', {value: {File: '\\ud800'}});
+      for (let i = 100; i < 297; i++) results[i] = {File: '批次 ' + i};
+      results['01'] = {File: 'not an index'};
+      results['4294967295'] = 'not an index';
+      Object.defineProperty(results, 'extra', {get() { throw Error('ignored by array JSON'); }});
+      return [{key: '查询', results, window: {pages: [1, 50], count: 201},
+        pageCache: {1: [{File: '页'}]}, scroll: {index: 9999, offset: 8}, heightCache: [['行', {height: 40}]]},
+        {key: 'older', results: []}];
+    })()`, c);
+    const store = c.resultSnapshots, cap = c.VoiceOfMLSnapshotPolicy.BYTES_MAX;
+    const expected = value => new TextEncoder().encode(JSON.stringify(value)).length + 256;
+    for (const delta of [-1, 0, 1]) {
+      delete snapshot.bytes;
+      snapshot.padding = '';
+      snapshot.padding = 'x'.repeat(cap - expected(snapshot) + delta);
+      store.put(older.key, older);
+      store.putRestored(snapshot.key, snapshot);
+      encoded.length = 0;
+      store.trim();
+      assert.strictEqual(snapshot.bytes, cap + delta);
+      assert.strictEqual(store.snapshots.has(snapshot.key), delta <= 0);
+      assert.strictEqual(store.snapshots.has(older.key), delta > 0);
+      assert.strictEqual(store.budget.has(snapshot.results), false);
+      assert(encoded.some(value => value.startsWith('{"key":"查询","results":[],')));
+      assert(!encoded.some(value => value.includes('null,null,null,null')));
+      store.remove(snapshot.key);
+    }
+  });
+  test(project + " restore accounting ignores stale result budgets and preserves native JSON fallback", () => {
+    const {c,encoded} = fixture(source, root);
+    const store = c.resultSnapshots;
+    const snapshot = vm.runInContext(`({key: 'restore', results: [, {File: 'old'}, ,]})`, c);
+    const expected = value => new TextEncoder().encode(JSON.stringify(value)).length + 256;
+    const prior = store.budget.measure(snapshot.results, true);
+    snapshot.results[1] = {File: 'changed 📚'};
+    store.putRestored(snapshot.key, snapshot);
+    const bytes = expected(snapshot);
+    store.trim();
+    assert.strictEqual(snapshot.bytes, bytes);
+    assert.strictEqual(store.budget.measure(snapshot.results, true), prior);
+    store.budget.invalidate(snapshot.results);
+    assert.strictEqual(store.budget.measure(snapshot.results, true), expected(snapshot.results) - 256);
+    for (const target of ['getter', 'record toJSON', 'array toJSON', 'array prototype', 'envelope toJSON', 'ordinary put']) {
+      const value = vm.runInContext(`(() => {
+        const snapshot = {key: 'restore', results: [, {File: 'plain'}, ,]};
+        switch (${JSON.stringify(target)}) {
+          case 'getter': Object.defineProperty(snapshot.results[1], 'File', {enumerable: true, get() {return 'getter 📚';}}); break;
+          case 'record toJSON': Object.defineProperty(snapshot.results[1], 'toJSON', {value: key => key.repeat(3)}); break;
+          case 'array toJSON': snapshot.results.toJSON = key => [key]; break;
+          case 'array prototype': Object.setPrototypeOf(snapshot.results, {0: 'inherited'}); break;
+          case 'envelope toJSON': snapshot.toJSON = () => ({custom: true}); break;
+        }
+        return snapshot;
+      })()`, c);
+      const json = JSON.stringify(value);
+      store[target === 'ordinary put' ? 'put' : 'putRestored'](value.key, value);
+      encoded.length = 0;
+      store.trim();
+      assert.strictEqual(value.bytes, new TextEncoder().encode(json).length + 256, target);
+      assert.deepStrictEqual(encoded, [json], target);
+    }
+  });
   test(project + " oversized snapshots skip cloning and remember rejection across height changes and appends", () => {
     const {c,encoded,view} = fixture(source, root);
     view([{File:"x".repeat(c.VoiceOfMLSnapshotPolicy.BYTES_MAX)}]);

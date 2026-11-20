@@ -5,6 +5,8 @@
     const policy = VoiceOfMLSnapshotPolicy, budget = policy.createBudget();
     /** @type {Map<string, SearchResultSnapshot>} */
     const snapshots = new Map();
+    /** @type {WeakSet<SearchResultSnapshot>} */
+    const pendingRestores = new WeakSet();
     /** @type {WeakMap<object, SearchSnapshotSource>} */
     const sources = new WeakMap();
     /** @type {WeakMap<unknown[], SearchResultSnapshot>} */
@@ -22,7 +24,11 @@
       let bytes = 0;
       for (const [key, snapshot] of Array.from(snapshots).reverse()) {
         // Reserve room for position-only updates without serializing results again.
-        if (!snapshot.bytes) snapshot.bytes = new TextEncoder().encode(JSON.stringify(snapshot)).byteLength + 256;
+        const restored = pendingRestores.delete(snapshot);
+        if (!snapshot.bytes) {
+          const measured = restored ? policy.measureRestoreSnapshot(snapshot) : undefined;
+          snapshot.bytes = (measured ?? new TextEncoder().encode(JSON.stringify(snapshot)).byteLength) + 256;
+        }
         if (bytes + snapshot.bytes > policy.BYTES_MAX) snapshots.delete(key);
         else bytes += snapshot.bytes;
       }
@@ -135,7 +141,10 @@
       task.frame = requestAnimationFrame(() => { task.frame = 0; task.timer = setTimeout(step, 0); });
     }
     return { snapshots, budget, get cloneTask() { return cloneTask; }, source: snapshot => sources.get(snapshot),
-      put: (key, snapshot) => { snapshots.set(key, snapshot); }, remove: key => { snapshots.delete(key); },
+      put: (key, snapshot) => { pendingRestores.delete(snapshot); snapshots.set(key, snapshot); },
+      // Keep accounting in trim, after the existing restore/publication sequence.
+      putRestored: (key, snapshot) => { pendingRestores.add(snapshot); snapshots.set(key, snapshot); },
+      remove: key => { snapshots.delete(key); },
       save, trim, copyPageCache, cancelClone, materializeRange, restoreResults, startClone };
   }
   globalThis.VoiceOfMLResultSnapshots = { create };

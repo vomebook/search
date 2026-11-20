@@ -15,8 +15,10 @@ const flush = async () => {for (let i = 0; i < 16; i++) await Promise.resolve();
 // Run the real host composition as well as the coordinator. All geometry stays
 // behind the same ports as production; tests can replace the live page hook.
 function fixture() {
-  const calls = [], events = [], snapshots = new Map(), timers = [];
-  const c = vm.createContext({AbortController, setTimeout(fn, ms) {assert.equal(ms, 30); timers.push(fn);},
+  const calls = [], events = [], encoded = [], timers = [];
+  const c = vm.createContext({AbortController, TextEncoder: class extends TextEncoder {
+    encode(value) {encoded.push(value); return super.encode(value);}
+  }, setTimeout(fn, ms) {assert.equal(ms, 30); timers.push(fn);},
     positionRestore: null, positionEntryId: 0, resultWindow: null, searchIntentId: 0, searchId: 0,
     STATE: {isLoading: false, results: []}, VSCROLL: {isDraggingThumb: false, estimatedHeight: 40},
     readerHost: {overlay: null}, getSearchViewKey: () => key,
@@ -32,11 +34,15 @@ function fixture() {
     showSavedSearchViewport(viewport, saved, task) {events.push('preview'); if (viewport) task.preview = true;},
     captureReaderReturnScroll: () => ({index: 4, offset: 7}), getResultStableId: record => record?.id || '',
     applyValidatedSearchViewport(snapshot) {events.push('apply'); c.snapshot = snapshot; c.STATE.isLoading = false;},
-    resultSnapshots: {put(k, value) {snapshots.set(k, value); events.push('put');}, trim() {events.push('trim');}},
-    restoreSearchViewSnapshot(k) {events.push('restore'); c.snapshot = snapshots.get(k); c.STATE.isLoading = false;},
+    restoreSearchViewSnapshot(k) {events.push('restore'); c.snapshot = store.snapshots.get(k); c.STATE.isLoading = false;},
     resetPositionControlScroll() {events.push('reset-controls');}, showToast(message) {events.push(['toast', message]);}
   });
   installClassicSearchModules(process.cwd(), c);
+  const store = c.VoiceOfMLResultSnapshots.create({});
+  c.resultSnapshots = {
+    putRestored(k, snapshot) {store.putRestored(k, snapshot); events.push('put');},
+    trim() {store.trim(); events.push('trim');}
+  };
   c.validatePositionWindowPage = (...args) => c.VoiceOfMLSearchWindowPage.validate(...args);
   c.apiAvailable = true;
   c.navigator = {onLine: true};
@@ -45,8 +51,25 @@ function fixture() {
     vm.runInContext(source.match(new RegExp('^(?:async )?function ' + name + '\\([^]*?^}', 'm'))[0], c);
   const make = (previous, saved = position) => c.VoiceOfMLPositionRestoration.createTask({key, position: saved, previous});
   const run = (task, viewport = null) => {c.positionRestore = task; return vm.runInContext('positionRestoration', c).run(task, viewport);};
-  return {c, calls, events, timers, make, run};
+  return {c, calls, events, encoded, timers, make, run};
 }
+
+test('authoritative restore trims the exact sparse budget without serializing the holes', async () => {
+  const f = fixture(), index = 49_994;
+  f.c.fetchPositionPageWithRecovery = vm.runInContext(`async (query, page) => ({page, page_size: 2,
+    total: 50_000, generation: '版本', anchor_index: ${index}, results: [0, 1].map(offset => ({
+      id: 'r' + ((page - 1) * 2 + offset), File: '书📚', Folder: ['路径']
+    }))})`, f.c);
+  await f.run(f.make(null, {...position, index, anchorId: 'r' + index, loadedPage: 25_000}));
+  const {bytes, ...envelope} = f.c.snapshot;
+  assert.equal(bytes, new TextEncoder().encode(JSON.stringify(envelope)).length + 256);
+  assert.equal(envelope.results.length, 50_000);
+  assert.equal(2 in envelope.results, false);
+  assert.equal(envelope.results[index].id, 'r' + index);
+  assert.ok(f.encoded.some(text => text.includes('"results":[]')));
+  assert.ok(f.encoded.every(text => text.length < 1024));
+  assert.deepEqual(f.events.filter(event => ['put', 'restore', 'trim'].includes(event)), ['put', 'restore', 'trim']);
+});
 
 test('restoration retries retain lookup and partial-neighbor buffer identity without duplicate rendering', async () => {
   const f = fixture(), original = f.c.fetchPositionPageWithRecovery;

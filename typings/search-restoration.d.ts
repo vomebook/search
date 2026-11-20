@@ -24,7 +24,7 @@ interface SearchPositionRestorationHost {
   capturePreviewAnchor(): Readonly<{index: number; offset: number; anchorId: string}> | null;
   stableId(record: unknown): string; estimatedHeight(): number;
   release(): void; applyPreview(snapshot: SearchResultSnapshot): void;
-  snapshots: Pick<SearchSnapshotStore, 'put' | 'trim'>;
+  snapshots: Pick<SearchSnapshotStore, 'putRestored' | 'trim'>;
   restoreSnapshot(key: string): void; completed(): void;
   failed(message: string): void; notify(message: string): void;
 }
