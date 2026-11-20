@@ -74,7 +74,7 @@ export function createReaderPdfTextRuntime(readerContext) {
     const pending = readerContext.pdfOcrPagePromises.get(page);
     if (pending) return pending;
     if (!retry && automaticOcrBlocked(page)) return Promise.reject(new Error("PDF_OCR_PAGE_UNAVAILABLE"));
-    const zoom = readerContext.documentState.zoom;
+    const attemptZoom = readerContext.documentState.zoom;
     const task = Promise.resolve().then(() => {
       // OCR is published as its own manifest. The image page manifest may be
       // intentionally lean and contain only page_count.
@@ -114,7 +114,7 @@ export function createReaderPdfTextRuntime(readerContext) {
       return payload;
     }, error => {
       if (!readerContext.readerAbortController.signal.aborted && error?.name !== "AbortError")
-        failedOcrPages.set(page, {zoom, attempts: (failedOcrPages.get(page)?.attempts ?? 0) + 1});
+        failedOcrPages.set(page, {zoom: attemptZoom, attempts: (failedOcrPages.get(page)?.attempts ?? 0) + 1});
       throw error;
     }).finally(() => readerContext.pdfOcrPagePromises.delete(page));
     readerContext.pdfOcrPagePromises.set(page, task);

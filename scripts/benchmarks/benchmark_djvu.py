@@ -224,7 +224,8 @@ def measure(browser, reader_url, *, fixture, prefix, mode, stall_ms, target, tim
         jump = page.evaluate("""async ({target,timeout})=>{
           const input=document.querySelector('#page-number'),start=performance.now();
           const before=!!document.querySelector(`.reader-page[data-page="${target}"] canvas.ready`);
-          input.value=String(target);input.dispatchEvent(new Event('change',{bubbles:true}));
+          input.value=String(target);input.dispatchEvent(new Event('input',{bubbles:true}));
+          input.dispatchEvent(new Event('change',{bubbles:true}));
           return new Promise((resolve,reject)=>{function check(){
             const c=document.querySelector(`.reader-page[data-page="${target}"] canvas.ready`);
             if(c && input.value===String(target)) return resolve({ms:performance.now()-start,readyBefore:before,width:c.width,height:c.height});

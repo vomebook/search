@@ -304,7 +304,7 @@ function fixture(simd = true) {
 
   const consumed=fixture();
   await warmBook(consumed,'consumed');
-  consumed.run(fs.readFileSync('static/reader/core/reader-bindings.mjs','utf8').replace(/^export /m,''));
+  consumed.run(fs.readFileSync('static/reader/core/reader-bindings.mjs','utf8').replace(/^export /gm,''));
   const metadata=consumed.run(`(() => {
     const context={readerId:'consumed'};
     createReaderBindings(context).applySourceSessionAndCachedMetadata();

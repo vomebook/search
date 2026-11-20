@@ -1612,13 +1612,17 @@ class ReaderPerformanceTest(unittest.TestCase):
         self.page.locator("#viewport").evaluate("element => { element.scrollTop = element.scrollHeight; element.dispatchEvent(new Event('scroll')); }")
         self.assertGreater(self.page.locator("#viewport").evaluate("element => element.scrollTop"), 0)
 
-    def test_reader_tab_is_hidden_for_document_without_toc(self):
+    def test_reading_tab_remains_available_for_document_without_toc(self):
         self.page.route("**/api/reader-content**", lambda route: route.fulfill(status=200, content_type="text/plain", body=b"No table of contents"))
         source = "https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/no-toc.txt"
         self.page.goto(f"{self.origin}/search/static/reader.html?url={urllib.parse.quote(source, safe='')}&ext=txt&title=NoToc", wait_until="domcontentloaded")
         self.page.locator(".reader-text").wait_for()
         self.page.locator("#history").click()
-        self.assertTrue(self.page.locator("#toc-tab").is_hidden())
+        reading = self.page.get_by_role("tab", name="阅读", exact=True)
+        reading.wait_for(state="visible")
+        self.assertEqual(reading.get_attribute("aria-selected"), "true")
+        self.assertEqual(reading.get_attribute("tabindex"), "0")
+        self.assertEqual(self.page.locator("#toc-list .toc-item").count(), 0)
 
     def test_txt_detects_gb18030_and_utf16_bom(self):
         cases = [
