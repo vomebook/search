@@ -1,6 +1,9 @@
 /** @param {import('../../../typings/reader-pdf-scheduler-strict').SchedulerContext} readerContext */
 export function createReaderPdfScheduler(readerContext) {
   let pdfVisibleReconcileFrame = 0;
+  /** @typedef {import('../../../typings/reader-pdf-scheduler-strict').PdfShell} PdfShell */
+  /** @type {HTMLCollectionOf<PdfShell> | undefined} */
+  let reconciliationPages;
   // Ordinary image-page downloads use a pool separate from canvas renders.
   const PDF_PREVIEW_SLOTS = 2;
   /** @type {Map<import('../../../typings/reader-pdf-scheduler-strict').PdfShell | null, { shell: import('../../../typings/reader-pdf-scheduler-strict').PdfShell | null, cancel(): void }>} */
@@ -512,22 +515,47 @@ export function createReaderPdfScheduler(readerContext) {
     }
   }
 
+  /** @param {HTMLCollectionOf<PdfShell>} pages @param {number} top */
+  function firstPageBelowTop(pages, top) {
+    let low = 0, high = pages.length;
+    while (low < high) {
+      const middle = (low + high) >> 1;
+      const shell = pages.item(middle);
+      if (shell && shell.getBoundingClientRect().bottom > top) high = middle;
+      else low = middle + 1;
+    }
+    return low;
+  }
+
+  /** @param {boolean} force */
+  function reconcileVisiblePdfRenders(force) {
+    // Page shells are in vertical document order, including partially mounted
+    // chunks. The live collection follows replacement and window movement.
+    const pages = reconciliationPages ??= /** @type {HTMLCollectionOf<PdfShell>} */ (
+      readerContext.content.getElementsByClassName("reader-page"));
+    if (!pages.length) return;
+    const view = readerContext.viewport.getBoundingClientRect();
+    for (let i = firstPageBelowTop(pages, view.top); i < pages.length; i++) {
+      const shell = pages.item(i);
+      if (!shell) break;
+      if (shell.getBoundingClientRect().top >= view.bottom) break;
+      if (shell.dataset.renderState === "rendered" || shell._backgroundRender || shell.dataset.renderFailed === "1") continue;
+      if (!force && !shell._pdfRenderNeedsRequeue) continue;
+      delete shell._pdfRenderNeedsRequeue;
+      readerContext.renderPdfInBackground(shell, false, readerContext.pdfPagePriority(shell))?.catch?.(() => {});
+    }
+  }
+
   function scheduleVisiblePdfRenderReconciliation(force = false) {
     if (!/** @type {(string | null | undefined)[]} */ (["pdf", "pdf-pages", "image-pages"]).includes(readerContext.capability?.mode) ||
         pdfVisibleReconcileFrame || readerContext.readerAbortController.signal.aborted ||
-        typeof readerContext.content?.querySelectorAll !== "function") return;
+        typeof readerContext.content?.getElementsByClassName !== "function") return;
     const enqueue = typeof requestAnimationFrame === "function"
       ? requestAnimationFrame
       : (/** @type {FrameRequestCallback} */ callback) => setTimeout(callback, 0);
     pdfVisibleReconcileFrame = enqueue(() => {
       pdfVisibleReconcileFrame = 0;
-      if (readerContext.readerAbortController.signal.aborted) return;
-      for (const shell of /** @type {NodeListOf<import('../../../typings/reader-pdf-scheduler-strict').PdfShell>} */ (readerContext.content.querySelectorAll('.reader-page:not([data-render-state="rendered"])'))) {
-        if (!readerContext.isPdfPageVisible(shell) || shell._backgroundRender || shell.dataset.renderFailed === "1") continue;
-        if (!force && !shell._pdfRenderNeedsRequeue) continue;
-        delete shell._pdfRenderNeedsRequeue;
-        readerContext.renderPdfInBackground(shell, false, readerContext.pdfPagePriority(shell))?.catch?.(() => {});
-      }
+      if (!readerContext.readerAbortController.signal.aborted) reconcileVisiblePdfRenders(force);
     });
   }
 

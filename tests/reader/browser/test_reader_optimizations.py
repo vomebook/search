@@ -249,6 +249,72 @@ class ReaderOptimizationTests(unittest.TestCase):
         self.assertEqual((result['percent'],result['input']), ('100.0%','4'))
         self.assertGreaterEqual(result['offset'],0)
 
+    def test_pdf_scroll_reconciliation_bounds_geometry_reads(self):
+        self.expose()
+        self.serve('visible render fixture')
+        self.open(self.reader_url('txt'))
+        runs = self.page.evaluate('''() => {
+          const c=__pdfRenderContext, root=c.content, viewport=c.viewport;
+          const raf=window.requestAnimationFrame, render=c.renderPdfInBackground, bounds=viewport.getBoundingClientRect;
+          const originalCapability=c.capability, originalMode=root.dataset.mode;
+          let view, frame, reads=0, calls=[];
+          const makePage=page=>{
+            const node=document.createElement('section');
+            node.className='reader-page';node.dataset.page=String(page);
+            node.style.height=(160+(page%5)*75)+'px';
+            const rect=node.getBoundingClientRect.bind(node);
+            node.getBoundingClientRect=()=>{reads++;return rect()};
+            return node;
+          };
+          function run(force) {
+            reads=0;calls=[];frame=null;
+            c.scheduleVisiblePdfRenderReconciliation(force);
+            if (!frame) throw Error('No reconciliation scheduled');
+            frame();
+            return {reads,calls};
+          }
+          try {
+            window.requestAnimationFrame=fn=>{frame=fn;return 1};
+            viewport.getBoundingClientRect=()=>view;
+            c.renderPdfInBackground=(shell,force,priority)=>calls.push([Number(shell.dataset.page),force,priority]);
+            return ['pdf','image-pages'].map(mode=>{
+              c.capability={...originalCapability,mode};root.dataset.mode=mode;
+              const pages=Array.from({length:256},(_,i)=>makePage(i+1));
+              const chunks=[0,128].map(start=>{
+                const chunk=document.createElement('div');chunk.className='reader-pdf-chunk';
+                chunk.append(...pages.slice(start,start+128));return chunk;
+              });
+              root.replaceChildren(...chunks);
+              const page=n=>pages[n-1];
+              page(130).dataset.renderState='rendered';page(131)._backgroundRender=Promise.resolve();
+              page(132).dataset.renderFailed='1';page(133)._pdfRenderNeedsRequeue=true;
+              view={top:page(128).getBoundingClientRect().bottom,bottom:page(134).getBoundingClientRect().top};
+              const release=run(false), cleared=!page(133)._pdfRenderNeedsRequeue;
+              const forced=run(true);
+              view.top=page(129).getBoundingClientRect().top+50;
+              const partial=run(true);
+              const replacement=makePage(600);root.replaceChildren(replacement);
+              view={top:replacement.getBoundingClientRect().top-1,bottom:replacement.getBoundingClientRect().bottom+1};
+              const replaced=run(true);
+              root.replaceChildren();const empty=run(true);
+              return {mode,release,cleared,forced,partial,replaced,empty};
+            });
+          } finally {
+            window.requestAnimationFrame=raf;c.renderPdfInBackground=render;viewport.getBoundingClientRect=bounds;
+            c.capability=originalCapability;root.dataset.mode=originalMode;
+          }
+        }''')
+        for run in runs:
+            with self.subTest(mode=run['mode']):
+                self.assertTrue(run['cleared'])
+                self.assertEqual(run['release']['calls'], [[133, False, 3]])
+                self.assertEqual(run['forced']['calls'], [[129, False, 3], [133, False, 3]])
+                self.assertEqual(run['partial']['calls'], [[129, False, 2], [133, False, 3]])
+                self.assertEqual(run['replaced']['calls'], [[600, False, 3]])
+                self.assertEqual(run['empty'], {'reads': 0, 'calls': []})
+                for key in ('release', 'forced', 'partial'):
+                    self.assertLessEqual(run[key]['reads'], 18, run)
+
     def test_pdf_zoom_rerender_reads_priority_once_per_nearby_shell(self):
         self.expose()
         self.serve('zoom priority fixture')
