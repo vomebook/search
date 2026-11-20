@@ -19,7 +19,7 @@ export interface SpeechContext {
 }
 export interface SpeechSource {
   units: number; first: number; root(unit: number): Node | null;
-  load(unit: number): string | Promise<string>;
+  load(unit: number, probing?: boolean): string | Promise<string>;
   ready?: (unit: number) => boolean; locate?: (unit: number) => unknown;
   page?: boolean; frame?: HTMLIFrameElement | null; dom?: boolean;
 }

@@ -249,6 +249,45 @@ class ReaderOptimizationTests(unittest.TestCase):
         self.assertEqual((result['percent'],result['input']), ('100.0%','4'))
         self.assertGreaterEqual(result['offset'],0)
 
+    def test_immediate_pdf_progress_capture_respects_jump_then_manual_scroll(self):
+        self.expose_progress()
+        self.serve('progress fixture')
+        self.open(self.reader_url('txt'))
+        result = self.page.evaluate('''async () => {
+          const c = __progressContext, viewport = c.viewport;
+          c.content.replaceChildren();
+          c.capability = {...c.capability, mode:'pdf'};
+          c.updateDocumentState({page:1, pageCount:3});
+          c.renderPdfInBackground = () => null;
+          for (const [i, height] of [2400, 40, 2400].entries()) {
+            const shell = document.createElement('section');
+            shell.className = 'reader-page';
+            shell.dataset.page = String(i + 1);
+            shell.dataset.renderState = 'rendered';
+            shell.style.cssText = `height:${height}px;min-height:0`;
+            c.content.append(shell);
+          }
+          // The ribbon can point to page 3 immediately after a deliberate jump
+          // to short page 2. The programmatic scroll event is not manual input.
+          const pagehide = new Event('pagehide');
+          const jumped = await c.goToPage(2);
+          viewport.dispatchEvent(new Event('scroll'));
+          const marker = Number(c.pageAtMarker()?.dataset.page);
+          const explicit = [c.captureProgressEntry().page, c.captureProgressEntry(pagehide).page];
+          const move = () => {
+            viewport.dispatchEvent(new WheelEvent('wheel', {deltaY:150}));
+            viewport.scrollTop = c.readerPageScrollTop(c.content.lastElementChild) + 150;
+          };
+          move();
+          const pagehideEntry = c.captureProgressEntry(pagehide);
+          const published = c.documentState.page;
+          const closeEntry = c.captureProgressEntry();
+          return {jumped, marker, explicit, published, hidden:pagehideEntry.page,
+            hiddenOffset:pagehideEntry.pageOffset, close:closeEntry.page, closeOffset:closeEntry.pageOffset};
+        }''')
+        self.assertEqual(result, dict(jumped=True, marker=3, explicit=[2, 2], published=2,
+                                      hidden=3, hiddenOffset=150, close=3, closeOffset=150))
+
     def test_pdf_scroll_reconciliation_bounds_geometry_reads(self):
         self.expose()
         self.serve('visible render fixture')

@@ -234,7 +234,66 @@ test("preloads are single-owner and fall back on failure or mismatched identity"
     assert.deepEqual(targets, [h.context.sourceUrl], "falling back must not catch and retry its own errors");
     delete window.__VOICE_READER_CHAPTER_PRELOAD__;
     globalThis.location = undefined;
-    assert.throws(() => h.loader.loadChapterManifestDocument(), error => error === fetchError);
+    await assert.rejects(h.loader.loadChapterManifestDocument(), error => error === fetchError);
+  } finally {globalThis.window = oldWindow; globalThis.location = oldLocation;}
+});
+
+test("Bucket CHM and EPUB opening manifests retry transient responses, not permanent preloads or cancelled loads", async () => {
+  const oldWindow = globalThis.window, oldLocation = globalThis.location;
+  const window = globalThis.window = {};
+  globalThis.location = {href: "https://reader.test/static/reader.html"};
+  try {
+    for (const format of ["chm", "epub"]) {
+      const url = `https://voiceofml-search.hf.space/api/reader-bucket-resource?path=chapters/ebook/${format}/${'a'.repeat(64)}/${'b'.repeat(16)}/chapter-manifest.json`;
+      for (const [preload, statuses, expected] of [[null, [503, 200], null], [503, [503, 200], null],
+        [404, [], 404], [null, [404], 404], [null, [503, 503, 503], "READER_CHAPTER_MANIFEST_TRANSIENT"]]) {
+        const {loader, context, waits} = fixture();
+        context.chapterManifestUrl = url;
+        context.awaitReader = promise => promise;
+        const calls = [];
+        const early = preload && new Response("preloaded error body", {status: preload});
+        window.__VOICE_READER_CHAPTER_PRELOAD__ = early && {manifestUrl: url, manifest: Promise.resolve(early)};
+        context.fetchWithReaderTimeout = async (target, _timeout, options) => {
+          assert.equal(options.signal, context.readerAbortController.signal);
+          calls.push(target);
+          return new Response("manifest", {status: statuses[calls.length - 1]});
+        };
+        const loading = loader.loadChapterManifestDocument();
+        if (typeof expected === "number") await assert.rejects(loading, {status: expected});
+        else if (expected) await assert.rejects(loading, error => error.code === expected && error.cause?.status === 503);
+        else assert.equal(await (await loading).text(), "manifest");
+        assert.deepEqual(calls, Array(statuses.length).fill(url));
+        assert.deepEqual(waits, [350, 700].slice(0, Math.max(0, statuses.length - 1)));
+        if (early) assert.equal(early.bodyUsed, true, "failed preload body must be released");
+      }
+      const {loader, context, requests} = fixture();
+      const preload = Promise.withResolvers();
+      context.chapterManifestUrl = url;
+      context.assertReaderActive = () => context.readerAbortController.signal.throwIfAborted();
+      window.__VOICE_READER_CHAPTER_PRELOAD__ = {manifestUrl: url, manifest: preload.promise};
+      const pending = loader.loadChapterManifestDocument();
+      context.readerAbortController.abort();
+      const response = new Response(new ReadableStream({cancel() {throw new Error("late cleanup failed");}}));
+      preload.resolve(response);
+      await assert.rejects(pending, {name: "AbortError"});
+      assert.equal(response.bodyUsed, true);
+      await assert.rejects(loader.loadChapterManifestDocument(), {name: "AbortError"});
+      assert.deepEqual(requests, []);
+
+      const closing = fixture();
+      closing.context.chapterManifestUrl = url;
+      closing.context.awaitReader = async promise => {
+        closing.context.readerAbortController.abort();
+        await promise;
+      };
+      let requestsBeforeAbort = 0;
+      closing.context.fetchWithReaderTimeout = async () => {
+        requestsBeforeAbort++;
+        return new Response("busy", {status: 503});
+      };
+      await assert.rejects(closing.loader.loadChapterManifestDocument(), {name: "AbortError"});
+      assert.equal(requestsBeforeAbort, 1);
+    }
   } finally {globalThis.window = oldWindow; globalThis.location = oldLocation;}
 });
 

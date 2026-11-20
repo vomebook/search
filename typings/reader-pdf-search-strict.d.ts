@@ -33,13 +33,13 @@ declare namespace ReaderPdfSearch {
     assertReaderActive(): void; pdfBookSearchClient: Client | null; pdfOcrSource(): { assetUrl(path: string): string } | null;
     documentState: { pageCount: number }; readerAbortController: AbortController; pdfBookSearchPrefetchPromise: Promise<void> | null;
     ocrManifestUrl: string | null; capability: { mode?: string | null | undefined }; PDF_BOOK_SEARCH_PREFETCH_MAX_BYTES: number;
-    loadPdfOcrManifest(): Promise<Manifest | null>; ensurePdfBookSearchClient(manifest: Manifest): Promise<Client>;
+    loadPdfOcrManifest(): Promise<Manifest | null>; ensurePdfBookSearchClient(manifest: Manifest, current?: () => boolean): Promise<Client>;
     pdfBookSearchPrefetchTimer: ReturnType<typeof setTimeout> | 0; PDF_BOOK_SEARCH_PREFETCH_DELAY: number; prefetchPdfBookSearch(): Promise<void>;
     goToPage(page: number, generation: number): Promise<boolean>; isReaderGenerationCurrent(kind: "search" | "navigation", generation: number): boolean;
     content: HTMLElement; pdfV3Manifest: Manifest | null;
     loadPdfOcrPage(page: number, priority?: RequestPriority, retry?: boolean): Promise<import('./reader-pdf-text-runtime-strict').OcrPayload>;
     renderPdfOcrText(shell: Element, loaded?: import('./reader-pdf-text-runtime-strict').OcrPayload): Promise<unknown>;
-    renderPdfText(page: PdfPage, shell: Element): Promise<unknown>;
+    renderPdfText(page: PdfPage, shell: Element, signal?: AbortSignal | null, ownsNativeResult?: () => boolean): Promise<unknown>;
     clearFullSearchMarks(): void;
     viewport: HTMLElement; bookmarkRibbon: HTMLElement; readerPageScrollTop(shell: Element): number;
     fullSearchSession: ReaderSearchController.State;

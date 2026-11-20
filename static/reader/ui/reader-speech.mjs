@@ -142,26 +142,42 @@ export function createReaderSpeech(readerContext, loadPlayer) {
     if (current === "pdf" || current === "pdf-pages") {
       /** @param {number} page */
       const shell = (page) => /** @type {HTMLElement | null} */ (readerContext.content.querySelector(`.reader-page[data-page="${page}"]`));
-      const ocr = current === "pdf-pages" && (readerContext.ocrManifestUrl || readerContext.pdfOcrManifest);
+      const ocr = !!(readerContext.ocrManifestUrl || readerContext.pdfOcrManifest);
+      /** @param {number} page */
+      const root = (page) => {
+        const node = shell(page);
+        return node?.dataset.textReady === "1" ? node.querySelector(".reader-pdf-text") : null;
+      };
       return {
-        units: pageCount() + 1, first: 1,
-        root: (page) => { const node = shell(page); return node?.dataset.textReady === "1" ? node.querySelector(".reader-pdf-text") : null; },
-        // Text the renderer has extracted or is extracting. Only these pages are
-        // probed: extracting another page loads all its resources first, which
-        // for a scanned page means downloading its full page image.
-        ready: (page) => shell(page)?.dataset.textReady === "1" || !!readerContext.pdfTextContentCache?.has(page) ||
+        units: pageCount() + 1, first: 1, root,
+        // Passive probes wait for the renderer. Only playback requests OCR
+        // ahead of it; native extraction may also pull the full page image.
+        ready: (page) => !!root(page) || !!readerContext.pdfTextContentCache?.has(page) ||
           !!readerContext.pdfTextContentPromises?.get(page)?.request?.demanded,
-        load: async (page) => {
-          const rendered = shell(page);
-          if (rendered?.dataset.textReady === "1" && rendered.querySelector(".reader-pdf-text")) return spokenPageText(rootText(rendered.querySelector(".reader-pdf-text")));
-          if (ocr) {
-            const payload = await readerContext.loadPdfOcrPage(page, "low");
-            if (payload?.kind === "pdf-text-layer") return spokenPageText(String(payload.text || ""));
-            return spokenPageText((payload?.blocks || []).map((block) => String(block?.t || "")).filter(Boolean).join("\n"));
+        load: async (page, probing = false) => {
+          // The displayed layer owns selection and range offsets, including
+          // when it is already showing the native fallback.
+          const layer = root(page), renderedText = rootText(layer);
+          if (renderedText.trim() || (layer && !ocr)) return spokenPageText(renderedText);
+          if (ocr && !probing) {
+            try {
+              const payload = await readerContext.loadPdfOcrPage(page, "low");
+              const text = payload?.kind === "pdf-text-layer" ? payload.text :
+                (payload?.blocks || []).map(block => block.t).filter(Boolean).join("\n");
+              const rendered = rootText(root(page));
+              if (rendered.trim()) return spokenPageText(rendered);
+              if (text?.trim()) return spokenPageText(text);
+            } catch (error) {
+              if (!readerContext.pdfDocument || /** @type {{name?: string} | null} */ (error)?.name === "AbortError") throw error;
+              const rendered = rootText(root(page));
+              if (rendered.trim()) return spokenPageText(rendered);
+            }
           }
-          if (!readerContext.pdfDocument) return "";
-          const items = await readerContext.loadPdfTextContent(page, await readerContext.pdfDocument.getPage(page), null);
-          return spokenPageText(readerContext.pdfTextContent(Array.isArray(items) ? items : items?.items || []));
+          const pdf = readerContext.pdfDocument;
+          if (!pdf) return "";
+          const items = await readerContext.loadPdfTextContent(page, await pdf.getPage(page), null);
+          const rendered = rootText(root(page));
+          return spokenPageText(rendered.trim() ? rendered : readerContext.pdfTextContent(Array.isArray(items) ? items : items?.items || []));
         },
         locate: (page) => readerContext.goToPage(page),
         page: true
@@ -584,9 +600,18 @@ export function createReaderSpeech(readerContext, loadPlayer) {
       // probed once its text is extracted (see attach).
       if (!probeSeen.has(unit) && info.ready && !info.ready(unit)) continue;
       if (!probeSeen.has(unit)) {
-        const text = Promise.resolve().then(() => owner === generation ? info.load(unit) : "").then((value) => String(value || ""));
+        const text = Promise.resolve().then(() => owner === generation ? info.load(unit, true) : "").then((value) => String(value || ""));
         probeText.set(unit, text);
-        probeSeen.set(unit, text.then((value) => !!value.trim()));
+        probeSeen.set(unit, text.then((value) => {
+          if (value.trim()) return true;
+          // A native probe can finish before the OCR renderer. Do not cache
+          // the blank result for playback or for the next text-ready mutation.
+          if (info.page && (readerContext.ocrManifestUrl || readerContext.pdfOcrManifest) && probeText.get(unit) === text) {
+            probeText.delete(unit);
+            probeSeen.delete(unit);
+          }
+          return false;
+        }));
       }
       let found;
       try { found = await probeSeen.get(unit); }

@@ -9,7 +9,8 @@ declare namespace ReaderSearchController {
     failedPage: { offset: number; selectLast: boolean | null; query: string } | null;
     complete: boolean;
     highlightsEnabled: boolean;
-    pageLoader: ((offset: number, generation?: number) => Promise<Page<Result>>) | null;
+    nativePdfSearch: boolean;
+    pageLoader: (((offset: number, generation?: number) => Promise<Page<Result>>) & { needsRebuild?(): boolean }) | null;
   }
   interface Options {
     document: Document;

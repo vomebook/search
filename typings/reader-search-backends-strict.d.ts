@@ -47,6 +47,8 @@ declare namespace ReaderSearchBackends {
     searchState: { query: string };
     capability: { mode: string | null };
     ocrManifestUrl: string | null;
+    pdfDocument: ReaderPdfSearch.PdfDocument | null;
+    fullSearchController: { resetBackendResults(): void };
     content: HTMLElement;
     htmlFrame: HTMLIFrameElement | null;
     fullSearchSession: { page: Page | null; pageLoader: ((offset: number, generation?: number) => Promise<Page>) | null };

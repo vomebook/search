@@ -59,18 +59,20 @@ class PdfLoadingTests(unittest.TestCase):
         self.assertEqual(self.page.locator('#status').text_content(), '1 页')
         self.assertEqual(self.errors, [])
 
-    def open_ocr_hit(self):
-        # A result only the OCR worker can find; native PDF text cannot mask failures.
-        text, sha = '索引独有文字', 'a' * 64
+    def open_ocr_search(self, *, text='索引独有文字', book_status=200, corrupt=False):
+        sha = 'a' * 64
         root = f'objects/aa/{sha}/' + 'b' * 16
         manifest_path, book_path = root + '/ocr-manifest.json', root + '/ocr/book-text.json.gz'
         book = gzip.compress(json.dumps({'version': 2, 'kind': 'pdf-book-text', 'complete': True,
             'offset_unit': 'unicode-codepoint', 'source_sha256': sha, 'page_count': 1,
             'pages': [{'page': 1, 'text': text, 'layout': {'offset_unit': 'unicode-codepoint'},
                 'text_spans': [{'start': 0, 'end': len(text), 'box': [0.1, 0.2, 0.4, 0.3]}]}]}).encode())
+        page_path = root + '/ocr/page-000001.json.gz'
+        ocr_page = gzip.compress(json.dumps({'version': 1, 'kind': 'pdf-ocr-page', 'page': 1, 'width': 200, 'height': 200,
+            'blocks': [{'t': 'Different OCR page text', 'b': [0.1, 0.2, 0.4, 0.3]}]}).encode())
         manifest = {'version': 1, 'kind': 'pdf-ocr', 'complete': True, 'source_sha256': sha,
             'profile': 'test-layout-v1-index', 'page_count': 1,
-            'pages': [{'p': 1, 'o': root + '/ocr/page-000001.json.gz'}],
+            'pages': [{'p': 1, 'o': page_path, 'ob': len(ocr_page), 'os': hashlib.sha256(ocr_page).hexdigest()}],
             'book_text': {'path': book_path, 'bytes': len(book), 'sha256': hashlib.sha256(book).hexdigest()}}
 
         def resource(route):
@@ -79,7 +81,10 @@ class PdfLoadingTests(unittest.TestCase):
             if path == manifest_path:
                 route.fulfill(json=manifest, headers=headers)
             elif path == book_path:
-                route.fulfill(content_type='application/gzip', body=book, headers=headers)
+                route.fulfill(status=book_status, content_type='application/gzip',
+                              body=b'x' * len(book) if corrupt else book, headers=headers)
+            elif path == page_path:
+                route.fulfill(content_type='application/gzip', body=ocr_page, headers=headers)
             else:
                 route.fulfill(status=404, headers=headers)
 
@@ -95,10 +100,111 @@ class PdfLoadingTests(unittest.TestCase):
             .map(entry => entry.name)'''), [])
         self.page.locator('#history').click()
         self.page.locator('#full-search-toggle').click()
+
+    def open_ocr_hit(self):
+        # A result only the OCR worker can find; native PDF text cannot mask failures.
+        self.open_ocr_search()
         self.page.locator('#full-search-input').fill('索引独有')
         self.page.wait_for_function("() => document.querySelector('#full-search-status').textContent === '1 个结果'")
         self.page.evaluate('() => { window.pdfHitTestDocument = true; }')
         return self.page.locator('.full-search-result')
+
+    def test_pdf_search_uses_native_offsets_when_external_index_is_unavailable(self):
+        self.open_ocr_search(book_status=503)
+        layer = self.page.locator('.reader-page[data-page="1"] .reader-pdf-text')
+        self.page.wait_for_function("() => document.querySelector('.reader-pdf-text')?.textContent.includes('Different OCR')")
+        self.page.locator('#full-search-input').fill('Accessible')
+        self.page.wait_for_function("() => document.querySelector('#full-search-status').textContent === '1 个结果'")
+        self.assertEqual(layer.locator('.full-search-highlight').count(), 0)
+        self.page.locator('.full-search-result').click()
+        mark = layer.locator('.full-search-highlight')
+        mark.wait_for(state='attached')
+        self.assertEqual(mark.text_content(), 'Accessible')
+        self.assertEqual(layer.locator('xpath=..').get_attribute('data-native-text-fallback'), '1')
+        self.assertEqual(self.errors, [])
+
+    def test_pdf_search_rejects_bad_ocr_index_even_when_native_text_matches(self):
+        self.open_ocr_search(corrupt=True)
+        self.page.locator('#full-search-input').fill('Accessible')
+        self.page.wait_for_function("() => document.querySelector('#full-search-status').textContent.includes('PDF_OCR_HASH_MISMATCH')")
+        self.assertEqual(self.page.locator('.full-search-result').count(), 0)
+        self.assertTrue(self.page.locator('#full-search-retry').is_visible())
+        self.assertEqual(self.errors, [])
+
+    def assert_pdf_search_worker_page_retry(self, *, cancel_rebuild=False):
+        worker = '**/static/reader/search/workers/reader-pdf-book-search-worker.mjs*'
+
+        def crash_worker(route):
+            response = route.fetch()
+            route.fulfill(response=response, body=response.text() + '''
+                const receive = self.onmessage;
+                self.onmessage = event => {
+                    if (event.data.testCrash) throw new Error('test: page worker crashed');
+                    return receive(event);
+                };
+            ''')
+
+        self.page.route(worker, crash_worker)
+        self.page.add_init_script('''
+          window.pdfSearchTrace = [];
+          let workers = 0;
+          window.Worker = class extends Worker {
+            constructor(url, options) {
+              super(url, options);
+              this.searchWorker = String(url).includes('/reader-pdf-book-search-worker.mjs') ? ++workers : 0;
+            }
+            postMessage(data, ...args) {
+              if (this.searchWorker && ['search', 'page'].includes(data.type)) {
+                pdfSearchTrace.push([this.searchWorker, data.type, data.query ?? data.offset]);
+                if (this.searchWorker === 1 && data.type === 'page') data = {...data, testCrash: true};
+                if (window.holdPdfSearchRebuild && this.searchWorker === 2 && data.type === 'search') {
+                  window.releasePdfSearchRebuild = () => {
+                    try { super.postMessage(data, ...args); } catch (_) {}
+                  };
+                  return;
+                }
+              }
+              return super.postMessage(data, ...args);
+            }
+          };
+        ''')
+        self.open_ocr_search(text='needle ' * 130)
+        self.page.locator('#full-search-input').fill('needle')
+        self.page.wait_for_function("() => document.querySelector('#full-search-status').textContent === '130 个结果'")
+        self.page.locator('#full-search-page').fill('3')
+        self.page.locator('#full-search-page').dispatch_event('change')
+        retry = self.page.locator('#full-search-retry')
+        retry.wait_for()
+        self.assertEqual(retry.text_content(), '重试本页')
+        self.assertEqual(self.page.locator('.full-search-rank').first.text_content(), '1.')
+        if cancel_rebuild:
+            self.page.evaluate('window.holdPdfSearchRebuild = true')
+        retry.click()
+        if cancel_rebuild:
+            self.page.wait_for_function('() => !!window.releasePdfSearchRebuild')
+            self.page.locator('#full-search-cancel').click()
+            self.page.evaluate('window.releasePdfSearchRebuild()')
+            self.page.evaluate('window.holdPdfSearchRebuild = false')
+            retry.click()
+            self.page.wait_for_function("() => document.querySelector('#full-search-status').textContent === '130 个结果'")
+            self.assertEqual(self.page.locator('.full-search-rank').first.text_content(), '1.')
+            trace = self.page.evaluate('pdfSearchTrace')
+            self.assertEqual(trace[:3], [[1, 'search', 'needle'], [1, 'page', 100], [2, 'search', 'needle']])
+            self.assertEqual(len(trace), 4)
+            self.assertEqual(trace[-1][1:], ['search', 'needle'])
+            self.assertEqual(self.errors, [])
+            return
+        self.page.wait_for_function("() => document.querySelector('.full-search-rank')?.textContent === '101.'")
+        self.assertEqual(self.page.locator('.full-search-result').count(), 30)
+        self.assertEqual(self.page.evaluate('pdfSearchTrace'), [
+            [1, 'search', 'needle'], [1, 'page', 100], [2, 'search', 'needle'], [2, 'page', 100]])
+        self.assertEqual(self.errors, [])
+
+    def test_pdf_search_retry_rebuilds_crashed_worker_and_restores_offset(self):
+        self.assert_pdf_search_worker_page_retry()
+
+    def test_pdf_search_retry_does_not_restore_offset_after_cancelled_rebuild(self):
+        self.assert_pdf_search_worker_page_retry(cancel_rebuild=True)
 
     def test_pdf_hit_projection_cold_success_has_one_request(self):
         result = self.open_ocr_hit()

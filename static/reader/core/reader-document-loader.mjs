@@ -15,7 +15,7 @@
  * @property {(path: string) => string} readerDownloadApiUrl
  * @property {(url: string, timeoutMs?: number, requestInit?: ReaderRequestInit) => Promise<Response>} fetchWithReaderTimeout
  * @property {<T>(open: () => Promise<T>, signal?: AbortSignal | null) => Promise<T>} retryReaderProxy
- * @property {(url: string, requestInit?: RequestInit) => Promise<Response>} fetchReaderUrl
+ * @property {(url: string, requestInit?: RequestInit, policy?: {retryBucket?: boolean}) => Promise<Response>} fetchReaderUrl
  * @property {() => Promise<Response>} fetchReaderResponse
  * @property {(tasks: Promise<unknown>[]) => PreparedReaderDocument} prepareReaderDocument
  * @property {(url: string) => Promise<void>} loadScript
@@ -133,13 +133,17 @@ export function createReaderDocumentLoader(readerContext) {
     return pending;
   }
 
-  /** @param {string} target @param {ReaderManifestPreload | undefined} early */
-  function fetchManifestWithPreload(target, early) {
+  /** @param {string} target @param {ReaderManifestPreload | undefined} early @param {boolean} [retryBucket] */
+  function fetchManifestWithPreload(target, early, retryBucket = false) {
     const pending = takeMatchingManifestPreload(target, early);
-    const fallback = () => readerContext.fetchReaderUrl(target);
+    const fallback = () => retryBucket
+      ? readerContext.fetchReaderUrl(target, { signal: readerContext.readerAbortController.signal }, {retryBucket})
+      : readerContext.fetchReaderUrl(target);
     if (!pending) return fallback();
     return pending.then(response => {
-      if (response?.ok) return response;
+      // A matching chapter preload can also tell us the manifest is missing.
+      // Do not fetch it again just to rediscover a permanent HTTP error.
+      if (response?.ok || (retryBucket && response && !readerContext.retryableReaderProxyError(response))) return response;
       void response?.body?.cancel().catch(() => {});
       return fallback();
     }, fallback);
@@ -197,9 +201,21 @@ export function createReaderDocumentLoader(readerContext) {
     return readerContext.imageLoader.load(image, readerContext.readerContentUrl(target), readerContext.readerAbortController.signal, deadline);
   }
 
-  function loadChapterManifestDocument() {
+  async function loadChapterManifestDocument() {
+    readerContext.assertReaderActive();
     const target = readerContext.chapterManifestUrl || readerContext.sourceUrl;
-    return fetchManifestWithPreload(target, window.__VOICE_READER_CHAPTER_PRELOAD__);
+    try {
+      const response = await fetchManifestWithPreload(target, window.__VOICE_READER_CHAPTER_PRELOAD__, true);
+      if (!response.ok || readerContext.readerAbortController.signal.aborted)
+        void response.body?.cancel().catch(() => {});
+      readerContext.assertReaderActive();
+      if (!response.ok) throw Object.assign(new Error(`HTTP ${response.status}`), { status: response.status });
+      return response;
+    } catch (error) {
+      readerContext.assertReaderActive();
+      if (!readerContext.retryableReaderProxyError(error)) throw error;
+      throw Object.assign(new Error("Chapter manifest request failed", {cause: error}), {code: "READER_CHAPTER_MANIFEST_TRANSIENT"});
+    }
   }
 
   return {

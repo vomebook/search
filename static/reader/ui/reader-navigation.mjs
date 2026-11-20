@@ -44,6 +44,7 @@ export function createReaderNavigation(readerContext) {
 
   /** @param {number} direction */
   function turnViewport(direction) {
+    readerContext.pageNavigationLockUntil = 0;
     readerContext.beginReaderNavigation();
     const target = readerContext.htmlFrame?.contentWindow || readerContext.viewport;
     target.scrollBy({
@@ -207,6 +208,8 @@ export function createReaderNavigation(readerContext) {
   }
 
   function notePdfScrollIntent() {
+    // Real scroll input supersedes the explicit page jump, not its scroll event.
+    readerContext.pageNavigationLockUntil = 0;
     readerContext.pdfUserHasScrolled = true;
     readerContext.beginReaderNavigation();
   }

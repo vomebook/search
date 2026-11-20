@@ -279,17 +279,22 @@ export function createReaderPdfTextRuntime(readerContext) {
     const layer = shell.querySelector(".reader-pdf-text"), page = Number(shell.dataset.page);
     if (!layer || (!loaded && automaticOcrBlocked(page))) return;
     const epoch = shell._textEpoch || 0;
+    // Native search offsets belong to the embedded text, not the OCR layer.
+    const keepNative = () => {
+      const search = readerContext.fullSearchController?.state;
+      return shell.dataset.nativeTextFallback === "1" &&
+        (readerContext.pdfSelectionIntersects?.(shell) || (search?.nativePdfSearch && search.highlightsEnabled));
+    };
     const task = (async () => {
       try {
-        // Never replace the DOM underneath an active native-text selection.
-        if (shell.dataset.nativeTextFallback === "1" && readerContext.pdfSelectionIntersects?.(shell)) return;
+        if (keepNative()) return;
         await readerContext.acquirePdfTextSlot(readerContext.isPdfPageVisible(shell));
         try {
           if (epoch !== (shell._textEpoch || 0)) return;
           const payload = loaded ?? await readerContext.loadPdfOcrPage(page, readerContext.isPdfPageVisible(shell) ? "high" : "low");
           readerContext.assertReaderActive();
           if (epoch !== (shell._textEpoch || 0)) return;
-          if (shell.dataset.nativeTextFallback === "1" && readerContext.pdfSelectionIntersects?.(shell)) return;
+          if (keepNative()) return;
           // An empty external layer must not mask text embedded in the original.
           if (payload.kind === "pdf-text-layer" ? !payload.text?.trim() :
               !(payload.blocks || []).some(block => String(block?.t || "").trim())) return;
@@ -319,16 +324,20 @@ export function createReaderPdfTextRuntime(readerContext) {
     return task;
   }
 
-  /** @param {import('../../../typings/reader-pdf-text-runtime-strict').PdfPage} page @param {import('../../../typings/reader-pdf-text-runtime-strict').Shell} shell @param {AbortSignal | null} [signal] */
-  async function renderPdfText(page, shell, signal = null) {
-    if (readerContext.ocrManifestUrl) {
+  /** @param {import('../../../typings/reader-pdf-text-runtime-strict').PdfPage} page @param {import('../../../typings/reader-pdf-text-runtime-strict').Shell} shell @param {AbortSignal | null} [signal]
+   * @param {() => boolean} [ownsNativeResult] */
+  async function renderPdfText(page, shell, signal = null, ownsNativeResult) {
+    if (readerContext.ocrManifestUrl && !ownsNativeResult) {
       await readerContext.renderPdfOcrText(shell);
       // If a historical external text object disappeared or failed to load,
       // the source's own text remains usable without creating another copy.
       if (signal?.aborted || (shell.dataset.textReady === "1" && shell.dataset.nativeTextFallback !== "1")) return;
     }
-    if (shell.dataset.textReady === "1") return;
-    const layer = shell.querySelector(".reader-pdf-text");
+    const canRenderNative = () => (!ownsNativeResult || ownsNativeResult()) &&
+      (shell.dataset.textReady !== "1" || (ownsNativeResult && readerContext.ocrManifestUrl &&
+        shell.dataset.nativeTextFallback !== "1" && !readerContext.pdfSelectionIntersects?.(shell)));
+    if (!canRenderNative()) return;
+    const layer = /** @type {HTMLElement | null} */ (shell.querySelector(".reader-pdf-text"));
     if (!layer || typeof page.getTextContent !== "function") return;
     const epoch = shell._textEpoch || 0;
     try {
@@ -337,9 +346,10 @@ export function createReaderPdfTextRuntime(readerContext) {
       readerContext.assertReaderActive();
       if (signal?.aborted) return;
       if (readerContext.ocrManifestUrl && !text.items?.some(item => String(item.str || "").trim())) return;
-      if (shell.dataset.textReady === "1") return;
+      if (!canRenderNative()) return;
       readerContext.cachePdfTextContent(pageNumber, text);
       if (epoch !== (shell._textEpoch || 0) || !shell.isConnected) return;
+      if (ownsNativeResult && shell.dataset.textReady === "1") delete layer.dataset.textGeneration;
       const pdfViewport = page.getViewport({ scale: 1 });
       if (Array.isArray(text.readerTextZones)) {
         const raw = readerContext.pdfTextContent(text.items);
@@ -380,7 +390,9 @@ export function createReaderPdfTextRuntime(readerContext) {
   /** @param {import('../../../typings/reader-pdf-text-runtime-strict').Shell | null} shell @param {string} [query] @param {{start: number, value: string}} [selected] */
   function highlightPdfText(shell, query = readerContext.searchState.query, selected) {
     if (!shell || readerContext.readerAbortController.signal.aborted ||
-        (!selected && (!query || readerContext.fullSearchController?.state?.highlightsEnabled === false))) return;
+        (!selected && (!query || readerContext.fullSearchController?.state?.highlightsEnabled === false ||
+          (readerContext.fullSearchController?.state?.nativePdfSearch && readerContext.ocrManifestUrl &&
+            shell.dataset.nativeTextFallback !== "1")))) return;
     const layer = shell.querySelector(".reader-pdf-text");
     if (!layer || layer.querySelector("mark.full-search-highlight")) return;
     const walker = document.createTreeWalker(layer, NodeFilter.SHOW_TEXT), runs = [];

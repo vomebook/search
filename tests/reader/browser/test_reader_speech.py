@@ -218,6 +218,78 @@ class ReaderSpeechTest(unittest.TestCase):
         finally:
             context.close()
 
+    def test_original_pdf_speech_uses_ocr_only_on_playback_and_falls_back_to_native(self):
+        context, page, _, errors = self.open('txt', TEXT.encode(), 'text/plain; charset=utf-8')
+        try:
+            result = page.evaluate('''async () => {
+              const {createReaderSpeech} = await import('./reader/ui/reader-speech.mjs');
+              const content = document.createElement('div'), viewport = document.createElement('div');
+              viewport.style.cssText = 'position:fixed;left:0;top:0;z-index:9999;user-select:text';
+              content.innerHTML = `<div class="reader-page" data-page="1"><div class="reader-pdf-text" style="position:static;user-select:text"></div></div>`;
+              viewport.append(content);
+              document.body.append(viewport);
+              const shell = content.firstElementChild, layer = shell.firstElementChild;
+              const original = window.CCRDSpeech;
+              let phase, adapter, nativeReads = [], ocrReads = [];
+              const published = Promise.withResolvers(), blankProbe = Promise.withResolvers();
+              window.CCRDSpeech = {previewClosed(){}, previewLoaded(value) {
+                adapter = value.adapter; published.resolve();
+              }};
+              try {
+                const speech = createReaderSpeech({capability:{mode:'pdf'}, documentState:{page:1,pageCount:5},
+                  content, viewport, ocrManifestUrl:'ocr-manifest.json', pdfTextContentCache:new Map([[1,{}]]),
+                  pdfDocument:{getPage: async n => n},
+                  loadPdfTextContent: async n => {
+                    nativeReads.push(n);
+                    if (n === 1) blankProbe.resolve();
+                    return {items:[{str: n === 1 ? '' : `Native ${n}.`}]};
+                  },
+                  pdfTextContent: items => items.map(item => item.str).join(''),
+                  loadPdfOcrPage: async (n, priority) => {
+                    ocrReads.push([n, priority]);
+                    if (n === 2) return {kind:'pdf-text-layer', text:'External\\ntext.'};
+                    if (n === 3) throw new Error('OCR unavailable');
+                    if (n === 4) return {blocks:[{t:'   '}]};
+                    if (n === 5) return {blocks:[{t:'Legacy OCR.'}]};
+                    throw new Error('Unexpected OCR request');
+                  },
+                  readerRuntime:{events:{on(_name, callback){phase=callback}}}}, async()=>{});
+                speech.installReaderSpeech(); phase({phase:'ready'});
+                await blankProbe.promise;
+                await new Promise(resolve => setTimeout(resolve, 0));
+                const before = [!!adapter, [...nativeReads], [...ocrReads]];
+                layer.textContent = 'Rendered first page.';
+                shell.dataset.textReady = '1';
+                const appeared = await Promise.race([published.promise.then(() => true),
+                  new Promise(resolve => setTimeout(() => resolve(false), 2000))]);
+                if (!appeared) return {before, appeared};
+                const selection = document.createRange();
+                selection.setStart(layer.firstChild, 9);
+                selection.setEnd(layer.firstChild, 14);
+                getSelection().removeAllRanges();
+                getSelection().addRange(selection);
+                const start = adapter.selectionStart();
+                if (!start) return {before, appeared, selected: getSelection().toString()};
+                const offset = await start();
+                const range = adapter.range(offset, offset + 5).toString();
+                await adapter.ensureUnit(5);
+                return {before, appeared, offset, range, nativeReads, ocrReads, text:adapter.text};
+              } finally {
+                phase({phase:'disposed'});
+                getSelection().removeAllRanges();
+                viewport.remove();
+                window.CCRDSpeech = original;
+              }
+            }''')
+            self.assertEqual(result, {
+                'before': [False, [1], []], 'appeared': True, 'offset': 9, 'range': 'first',
+                'nativeReads': [1, 3, 4], 'ocrReads': [[2, 'low'], [3, 'low'], [4, 'low'], [5, 'low']],
+                'text': 'Rendered first page.\nExternal text.\nNative 3.\nNative 4.\nLegacy OCR.',
+            })
+            self.assertFalse(errors, errors)
+        finally:
+            context.close()
+
     def test_chapter_load_failure_retries_without_losing_offsets(self):
         context, page, posts, errors = self.open("txt", TEXT.encode(), "text/plain; charset=utf-8")
         try:

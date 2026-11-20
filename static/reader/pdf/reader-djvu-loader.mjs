@@ -12,6 +12,7 @@ import { resolveDjvuSource } from "./reader-djvu-identity.mjs";
  * fetchReaderUrl(url: string, options: RequestInit): Promise<Response>,
  * readPdfOcrJson(url: string, limit: number, sha: string, retry: number, priority: string): Promise<unknown>,
  * trackReaderResource(cleanup: () => void): () => void, assertReaderActive(): void, v3ResourceUrl(ref: DjvuPrimaryRef): string}} DjvuContext */
+/** @typedef {DjvuContext & {fail(message: string, code: string): void}} NativeDjvuContext */
 /** @typedef {Awaited<ReturnType<typeof openDjvuRange>>} DjvuRange */
 /** @param {unknown} error @returns {error is Record<string, unknown>} */
 function isErrorDetail(error) { return error !== null && (typeof error === 'object' || typeof error === 'function'); }
@@ -98,7 +99,7 @@ async function attachHistoricalOcr(context,hash,signal) {
 const workerUrl = new URL("./reader-djvu-engine-worker.mjs", import.meta.url);
 
 // Native URLs can be read directly without creating or fetching a page map.
-/** @param {DjvuContext} context */
+/** @param {NativeDjvuContext} context */
 export async function openNativeDjvu(context) {
   const signal = context.readerAbortController.signal;
   signal.throwIfAborted();
@@ -123,7 +124,7 @@ function checkNativeFallback(error, prepareFailure, rangeAuthorized, signal, tra
   requireSupportedFallback(transportFailure,error);
 }
 
-/** @param {DjvuContext} context @param {Promise<URL>} resolving @param {AbortSignal} signal @param {number} cacheBytes */
+/** @param {NativeDjvuContext} context @param {Promise<URL>} resolving @param {AbortSignal} signal @param {number} cacheBytes */
 async function openRangedNative(context,resolving,signal,cacheBytes) {
   /** @type {DjvuRange | undefined} */
   let range;
@@ -135,14 +136,19 @@ async function openRangedNative(context,resolving,signal,cacheBytes) {
   if (signal.aborted) abortBootstrap();
   // Preparing the decoder needs no source bytes. Only begin Range I/O once
   // revision resolution succeeds, even if decoder preparation fails first.
-  let rangeAuthorized = false;
+  let rangeAuthorized = false, documentOpened = false;
   /** @type {import('./reader-djvu-worker.mjs').DjvuRangeReader} */
   const deferredRange = {get total(){return rangeAuthorized ? (range?.total ?? 0) : 0}, get failure(){return range?.failure},
     read:(offset,length)=>requireRange(rangeAuthorized ? range : undefined).read(offset,length), close:()=>range?.close()};
   const prepareFailure = {error: /** @type {unknown} */ (null)};
   const preparing=Promise.resolve().then(()=>{
     stopBootstrap.signal.throwIfAborted();
-    documentWorker=createDjvuWorkerAdapter(workerUrl,{cacheBytes,rangeReader:deferredRange});
+    documentWorker=createDjvuWorkerAdapter(workerUrl,{cacheBytes,rangeReader:deferredRange,onRangeFailure(error){
+      // Text, outline and speculative reads share this worker. Their caller
+      // can disappear even though the terminal failure affects the whole book.
+      if (documentOpened && !signal.aborted && isErrorDetail(error) && error.code === 'DJVU_RANGE_TRANSIENT')
+        context.fail('DjVu 数据读取失败。','READER_DJVU_TRANSPORT');
+    }});
     return documentWorker.prepare(stopBootstrap.signal);
   }).catch(error=>{
     prepareFailure.error = error;
@@ -182,6 +188,7 @@ async function openRangedNative(context,resolving,signal,cacheBytes) {
     context.trackReaderResource(()=>{stopOutline.abort();stopBootstrap.abort();
       signal.removeEventListener('abort',abortOutline);signal.removeEventListener('abort',abortBootstrap);document.destroy();});
     context.assertReaderActive();
+    documentOpened = true;
     return document;
   } catch (error) {
     stopOutline.abort();stopBootstrap.abort();signal.removeEventListener('abort',abortOutline);

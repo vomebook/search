@@ -67,6 +67,8 @@ test('error classification preserves dynamic getter access and uncoerced matchin
   assert.throws(()=>context.classifyReaderError(broken),/getter/);
   assert.equal(context.classifyReaderError({name:'HTTP 503',message:'corrupt'}),'READER_NETWORK');
   assert.equal(context.classifyReaderError({message:'DJVU_RANGE_HTTP_404'}),'READER_NETWORK');
+  assert.equal(context.classifyReaderError({code:'DJVU_RANGE_TRANSIENT',message:'DJVU_RANGE_HTTP_503'}),'READER_DJVU_TRANSPORT');
+  assert.equal(context.classifyReaderError({code:'READER_CHAPTER_MANIFEST_TRANSIENT'}),'READER_CHAPTER_MANIFEST_TRANSIENT');
   const interrupted={name:'TimeoutError',code:'READER_BODY_INTERRUPTED'};
   for (const mode of ['text','markdown','html']) {
     context.capability={mode};
@@ -228,8 +230,39 @@ test('retry click waits for progress and reloads only while reader remains live'
     context.progressSaveChain=new Promise(()=>{});
     context.fail('engine','READER_ENGINE_NETWORK');
     await errorNode.retry.callback();assert.equal(reloads,3,'engine retry does not wait for progress');
+    context.fail('manifest','READER_CHAPTER_MANIFEST_TRANSIENT');
+    assert.match(errorNode.textContent,/章节列表.*重试/);
+    await errorNode.retry.callback();assert.equal(reloads,4);
     delete errorNode.retry;
     context.fail('parse error');
     assert.equal(errorNode.retry,undefined);
+  } finally {globalThis.document=oldDocument;globalThis.window=oldWindow;globalThis.location=oldLocation;}
+});
+
+test('terminal DjVu transport captures progress before invalidation and reloads the unchanged reader URL', async () => {
+  const {context, events}=fixture();
+  const oldDocument=globalThis.document,oldWindow=globalThis.window,oldLocation=globalThis.location;
+  const errorNode={append(_br,retry){this.retry=retry;}};
+  globalThis.document={createElement:tag=>({tag,addEventListener(_type,callback){this.callback=callback;}})};
+  globalThis.window={};
+  const href='https://reader.test/static/reader.html?id=book&nav=parked&return=%2Fcatalog%2F';
+  globalThis.location={href, reload(){events.push(['reload',this.href]);}};
+  const progress=Promise.withResolvers();
+  Object.assign(context,{updateDocumentState(){events.push('disable saving');},setReaderPanelOpen(){},stopReaderWork(){},
+    saveProgress(){events.push('capture progress');return progress.promise;},
+    readerRequestManager:{dispose(){}},formatAdapters:{dispose(){}},content:{dataset:{},querySelector:()=>errorNode},
+    status:{},loadingIndicator:{remove(){}},progressSaveChain:progress.promise});
+  try {
+    context.fail('range 503','READER_DJVU_TRANSPORT');
+    assert.deepEqual(events,['capture progress','disable saving',['fail','READER_DJVU_TRANSPORT']]);
+    assert.match(errorNode.textContent,/DjVu 数据.*重试加载整本/);
+    const reopening=errorNode.retry.callback();
+    await new Promise(resolve=>setImmediate(resolve));
+    assert.equal(events.length,3,'do not navigate before an eligible save settles');
+    progress.resolve(); await reopening;
+    assert.deepEqual(events.at(-1),['reload',href]);
+    context.saveProgress=()=>Promise.reject(new Error('progress store unavailable'));
+    context.fail('range 503','READER_DJVU_TRANSPORT');
+    await errorNode.retry.callback();assert.deepEqual(events.at(-1),['reload',href]);
   } finally {globalThis.document=oldDocument;globalThis.window=oldWindow;globalThis.location=oldLocation;}
 });

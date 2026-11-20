@@ -156,6 +156,66 @@ class ReaderStorePreservationTests(unittest.TestCase):
                         status=200, content_type='text/html', body='<!doctype html><title>isolated fixture</title>'))
                     self.page.goto(self.origin + '/store-preservation-fixture', wait_until='domcontentloaded')
 
+    def check_delayed_host_progress(self, clear_all):
+        self.page.evaluate('window.BroadcastChannel = undefined')
+        self.load_store()
+        self.page.evaluate('''async () => {
+          const store = VoiceOfMLReaderStore;
+          await store.put({url:'book', lastReadAt:50});
+          await store.put({url:'other', lastReadAt:50});
+          await store.putBookmark({id:'saved-mark', url:'book', createdAt:50});
+        }''')
+        host = self.context.new_page()
+        host.route('**/store-preservation-fixture', lambda route: route.fulfill(
+            content_type='text/html', body='<!doctype html><title>host fixture</title>'))
+        host.goto(self.origin + '/store-preservation-fixture')
+        host.evaluate('window.BroadcastChannel = undefined')
+        host.add_script_tag(path=str(ROOT / 'static/search/reader-host/application/navigation.js'))
+        held = []
+        script = ROOT / 'static/reader/core/reader-store.js'
+        pattern = '**/static/reader/core/reader-store.js'
+        host.route(pattern, lambda route: held.append(route))
+        with host.expect_request(pattern):
+            host.evaluate('''() => {
+              const navigation = VoiceOfMLReaderNavigation.createNavigation('/static/reader.html');
+              navigation.persistProgress({url:'book', page:6, closeTime:100});
+              // Cover a snapshot to an absent key and a same-ms deletion tie.
+              navigation.persistProgress({url:'missing', page:7, closeTime:200});
+            }''')
+        self.page.evaluate('''async clearAll => {
+          const clock = Date.now;
+          Date.now = () => 200;
+          try {
+            if (!clearAll) await VoiceOfMLReaderStore.remove('book');
+            await VoiceOfMLReaderStore.remove('missing');
+            if (clearAll) await VoiceOfMLReaderStore.clearHistory();
+          } finally { Date.now = clock; }
+        }''', clear_all)
+        self.assertEqual(len(held), 1, 'the host store script must be held across deletion')
+        held[0].fulfill(content_type='text/javascript', body=script.read_text(encoding='utf-8') + '''
+          window.hostWrites = [];
+          const store = VoiceOfMLReaderStore;
+          window.VoiceOfMLReaderStore = {...store, put(entry) {
+            const write = store.put(entry); hostWrites.push(write); return write;
+          }};
+        ''')
+        host.wait_for_function('window.hostWrites?.length === 2')
+        host.evaluate('Promise.all(hostWrites)')
+        self.assertEqual(self.page.evaluate('''async () =>
+          (await VoiceOfMLReaderStore.list()).map(entry => entry.url)'''), [] if clear_all else ['other'])
+        self.assertEqual(self.page.evaluate('''async () =>
+          (await VoiceOfMLReaderStore.listAllBookmarks()).map(entry => entry.id)'''), ['saved-mark'])
+        self.assertEqual(host.evaluate('''async () => {
+          await VoiceOfMLReaderStore.put({url:'book', lastReadAt:201, page:8});
+          return (await VoiceOfMLReaderStore.get('book')).page;
+        }'''), 8)
+
+    def test_cross_tab_clear_wins_over_delayed_host_close(self):
+        self.check_delayed_host_progress(clear_all=True)
+
+    def test_cross_tab_remove_wins_over_delayed_host_close(self):
+        self.check_delayed_host_progress(clear_all=False)
+
     def test_history_capacity_refuses_new_entry_without_evicting_existing(self):
         self.load_store()
         result = self.page.evaluate('''async () => {
@@ -248,6 +308,7 @@ class ReaderStorePreservationTests(unittest.TestCase):
             try { await action(); } catch (_) { errors.push(true); }
           }
           await store.removeBookmark('legacy-mark');
+          await store.remove('absent-book');
           await store.clearHistory();
           const db=await new Promise((resolve,reject)=>{const req=indexedDB.open(store.DB_NAME);
             req.onsuccess=()=>resolve(req.result);req.onerror=()=>reject(req.error);});
@@ -258,7 +319,9 @@ class ReaderStorePreservationTests(unittest.TestCase):
         }''')
         self.assertEqual(result['errors'], [True, True])
         self.assertEqual({x['url'] for x in result['raw']['history']}, {'future-book', 'unindexed-book'})
-        self.assertEqual([x['id'] for x in result['raw']['bookmarks']], ['future-mark'])
+        self.assertEqual([x['id'] for x in result['raw']['bookmarks'] if isinstance(x['id'], str)], ['future-mark'])
+        self.assertEqual([x['id'] for x in result['raw']['bookmarks'] if isinstance(x['id'], list)], [
+            ['reader-history-order-v1']])
         self.assertEqual(result['raw']['foreign'], [{'key': 'unrelated', 'value': 'preserve'}])
 
     def test_current_database_with_incompatible_indexes_fails_closed(self):

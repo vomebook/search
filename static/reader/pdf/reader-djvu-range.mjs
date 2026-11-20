@@ -83,8 +83,15 @@ export async function openDjvuRange({url, signal, fetchResponse = fetch,
         void response?.body?.cancel().catch(() => {});
         if (abortSignal.aborted || closed) throw failure || cancelled();
         const timedOut = controller.signal.aborted && controller.signal.reason?.name === 'TimeoutError';
-        const detail = /** @type {{retryable?: boolean, name?: string} | null | undefined} */ (error);
-        if (attempt < retries && (detail?.retryable || detail?.name === 'TypeError' || timedOut)) continue;
+        const detail = /** @type {{retryable?: boolean, name?: string, code?: string, status?: number, message?: string} | null | undefined} */ (error);
+        const retryable = detail?.retryable || detail?.name === 'TypeError' || timedOut;
+        if (attempt < retries && retryable) continue;
+        // Carry the transport verdict outside the decoder, without making
+        // malformed ranges or identity changes eligible for reopening UI.
+        if (retryable || detail?.name === 'TimeoutError' || detail?.code === 'READER_BODY_INTERRUPTED')
+          throw Object.assign(new Error(detail?.message || 'DJVU_RANGE_TRANSIENT', {cause:error}), {
+            code:'DJVU_RANGE_TRANSIENT', status:detail?.status
+          });
         throw error;
       } finally {
         clearTimeout(timer);owner.signal.removeEventListener('abort',abort);

@@ -62,9 +62,10 @@ function isOutlineEntry(value) {
 
 /** @param {string | URL} workerUrl
  * @param {{maxPixels?: number, timeoutMs?: number, cacheBytes?: number | undefined,
- * rangeReader?: DjvuRangeReader | null | undefined, createWorker?: ((url: string | URL) => Worker) | undefined}} [options] */
+ * rangeReader?: DjvuRangeReader | null | undefined, onRangeFailure?: (error: unknown) => void,
+ * createWorker?: ((url: string | URL) => Worker) | undefined}} [options] */
 export function createDjvuWorkerAdapter(workerUrl, { maxPixels = 50_000_000, timeoutMs = 60000,
-  cacheBytes = 32 * 1024 * 1024, rangeReader = null, createWorker = url => new Worker(url, { type: 'module' }) } = {}) {
+  cacheBytes = 32 * 1024 * 1024, rangeReader = null, onRangeFailure, createWorker = url => new Worker(url, { type: 'module' }) } = {}) {
   const worker = createWorker(workerUrl);
   let closed = false, sequence = 0, pageCount = 0, outlineNeedsFullSource = false, outstandingRange = 0;
   /** @type {unknown} */
@@ -107,11 +108,18 @@ export function createDjvuWorkerAdapter(workerUrl, { maxPixels = 50_000_000, tim
       worker.postMessage({id,operation:'range-result',rangeId,ok:true,bytes:buffer},[buffer]);
     }).catch(error=>{
       if (closed || active?.id !== id) return;
+      const failure=reader.failure;
+      if (failure) {
+        // The pinned handle is dead. Never let the decoder reinterpret a
+        // terminal transport/identity error or continue with cached bytes.
+        close(failure);
+        onRangeFailure?.(failure);
+        return;
+      }
       const code=rangeErrorCode(error);
       outstandingRange=0;
       armTimer();
       worker.postMessage({id,operation:'range-result',rangeId,ok:false,error:code});
-      if (reader.failure) close(reader.failure);
     });
   }
   worker.onmessage = event => {

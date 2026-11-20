@@ -26,6 +26,7 @@
  * @property {HTMLElement} content
  * @property {HTMLElement} status
  * @property {() => unknown} markReaderContentReady
+ * @property {() => Promise<unknown>} saveProgress
  * @property {Promise<unknown>} progressSaveChain
  */
 /** @param {ReaderLifecycleContext} readerContext */
@@ -107,8 +108,9 @@ export function createReaderLifecycle(readerContext) {
   /** @param {unknown} error @param {string} [fallback] */
   function classifyReaderError(error, fallback = "READER_PARSE") {
     if ((/** @type {{code?: unknown} | null | undefined} */ (error))?.code === "READER_PDF_RATE_LIMIT") return "READER_PDF_TRANSPORT";
-    if ((/** @type {unknown[]} */ (["READER_ENGINE_NETWORK", "READER_RESTORE", "READER_PDF_TRANSPORT"]))
+    if ((/** @type {unknown[]} */ (["READER_ENGINE_NETWORK", "READER_RESTORE", "READER_PDF_TRANSPORT", "READER_CHAPTER_MANIFEST_TRANSIENT"]))
       .includes((/** @type {{code?: unknown} | null | undefined} */ (error))?.code)) return (/** @type {{code?: unknown}} */ (error)).code;
+    if ((/** @type {{code?: unknown} | null | undefined} */ (error))?.code === "DJVU_RANGE_TRANSIENT") return "READER_DJVU_TRANSPORT";
     if ((/** @type {{code?: unknown} | null | undefined} */ (error))?.code === "READER_BODY_INTERRUPTED" &&
         ["text", "markdown", "html"].includes(readerContext.capability?.mode || "")) return "READER_DOCUMENT_INTERRUPTED";
     const value = `${(/** @type {{name?: unknown} | null | undefined} */ (error))?.name || ""} ${(/** @type {{message?: unknown} | null | undefined} */ (error))?.message || error || ""}`;
@@ -164,9 +166,12 @@ export function createReaderLifecycle(readerContext) {
   /** @param {string} message @param {string} [code] */
   function fail(message, code = "READER_PARSE") {
     if (readerContext.readerLifecycle.disposed || readerContext.readerAbortController.signal.aborted) return;
+    // Capture the current eligible position before clearing the page shells.
+    // saveProgress itself rejects unrestored positions and honours history opt-out.
+    if (code === "READER_DJVU_TRANSPORT") void readerContext.saveProgress().catch(() => {});
     readerContext.updateDocumentState({ restorationReady: false });
     readerContext.readerRuntime.fail(code);
-    if (["READER_PDF_TRANSPORT", "READER_MEDIA"].includes(code)) readerContext.setReaderPanelOpen(false);
+    if (["READER_PDF_TRANSPORT", "READER_DJVU_TRANSPORT", "READER_MEDIA"].includes(code)) readerContext.setReaderPanelOpen(false);
     readerContext.stopReaderWork();
     readerContext.readerRequestManager.dispose();
     readerContext.formatAdapters.dispose();
@@ -175,18 +180,22 @@ export function createReaderLifecycle(readerContext) {
     // The error surface also ends loading, without marking restoration ready.
     readerContext.markReaderContentReady();
     const description = code === "READER_DOCUMENT_INTERRUPTED"
-      ? "正文下载中断，原阅读进度已保留。请重试加载完整文件。" : message;
+      ? "正文下载中断，原阅读进度已保留。请重试加载完整文件。"
+      : code === "READER_CHAPTER_MANIFEST_TRANSIENT" ? "章节列表暂时无法加载，请重试加载。"
+      : code === "READER_DJVU_TRANSPORT" ? "DjVu 数据暂时无法读取，请重试加载整本文件。"
+      : message;
     const visibleMessage = `${description} [${readerContext.readerLifecycle.stage}]`;
     readerContext.content.innerHTML = `<div class="reader-error" role="alert"></div>`;
     (/** @type {Element} */ (readerContext.content.querySelector(".reader-error"))).textContent = visibleMessage;
-    const waitForProgress = ["READER_PDF_TRANSPORT", "READER_MEDIA", "READER_DOCUMENT_INTERRUPTED"].includes(code);
-    if (waitForProgress || ["READER_ENGINE_NETWORK", "READER_RESTORE"].includes(code)) {
+    const waitForProgress = ["READER_PDF_TRANSPORT", "READER_DJVU_TRANSPORT", "READER_MEDIA", "READER_DOCUMENT_INTERRUPTED"].includes(code);
+    if (waitForProgress || ["READER_ENGINE_NETWORK", "READER_RESTORE", "READER_CHAPTER_MANIFEST_TRANSIENT"].includes(code)) {
       const retry = document.createElement("button");
       retry.type = "button";
       retry.className = "text-button";
       retry.id = "reader-engine-retry";
       retry.textContent = "重试加载";
-      // Reload clears the browser's failed module map and preserves this book URL.
+      // Reopen this reader, not a source or return URL. A new load also
+      // creates a fresh decoder rather than reusing a failed worker.
       retry.addEventListener("click", async () => {
         if (waitForProgress) {
           let timer;

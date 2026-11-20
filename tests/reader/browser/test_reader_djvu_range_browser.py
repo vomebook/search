@@ -81,6 +81,53 @@ class DjvuRangeBrowserTests(unittest.TestCase):
         self.assertTrue(state['source'] and all(row['range'] for row in state['source']))
         self.assert_no_page_images()
 
+    def test_late_range_503_reopens_document_and_restores_current_page(self):
+        hold_followup, unavailable, held, failed_ranges = True, False, [], []
+        state = None
+
+        def source(route):
+            byte_range = route.request.headers.get('range')
+            if byte_range and not byte_range.startswith('bytes=0-'):
+                if hold_followup:
+                    held.append(route)
+                    return
+                if unavailable:
+                    failed_ranges.append((byte_range, route.request.headers.get('if-range')))
+                    route.fulfill(status=503, body='temporary range failure', headers={'Access-Control-Allow-Origin': '*'})
+                    return
+            state['respond_source'](route)
+
+        state = install(self.page, self.origin, prefix=PREFIX, body=separated_pages(), source_handler=source)
+        reader_url = state['url'] + '&nav=fixture-nav&return=%2Fsearch%2F'
+        self.page.goto(reader_url, wait_until='domcontentloaded')
+        self.page.locator('.reader-page[data-page="1"] canvas.ready').wait_for()
+        self.page.wait_for_function("() => document.documentElement.dataset.readerPhase === 'ready'")
+        self.page.locator('#page-number').fill('3')
+        self.page.locator('#page-number').press('Enter')
+        self.page.wait_for_function("() => document.querySelector('#page-number').value === '3'")
+        # Hold an early speculative read so it cannot warm the byte cache.
+        hold_followup, unavailable = False, True
+        for route in held:
+            source(route)
+        retry = self.page.get_by_role('button', name='重试加载')
+        retry.wait_for()
+        self.assertEqual(self.page.locator('#content').get_attribute('data-error-code'), 'READER_DJVU_TRANSPORT')
+        self.assertEqual(len(failed_ranges), 3)
+        self.assertEqual(len(set(failed_ranges)), 1)
+        self.assertEqual(failed_ranges[0][1], '"synthetic-reader"')
+        self.assertEqual(self.page.locator('canvas.ready').count(), 0)
+        self.assertTrue(all(row['range'] for row in state['source']))
+        fresh_opens = sum(row['range'].startswith('bytes=0-') for row in state['source'])
+        unavailable = False
+        retry.click()
+        self.page.locator('.reader-page[data-page="3"] canvas.ready').wait_for()
+        self.page.wait_for_function("() => document.documentElement.dataset.readerPhase === 'ready'")
+        self.assertEqual(self.page.locator('#page-number').input_value(), '3')
+        self.assertEqual(self.page.url, reader_url)
+        self.assertTrue(all(row['range'] for row in state['source']))
+        self.assertEqual(sum(row['range'].startswith('bytes=0-') for row in state['source']), fresh_opens + 1)
+        self.assert_no_page_images()
+
     def test_embedded_text_remains_selectable(self):
         state = install(self.page, self.origin, prefix=PREFIX)
         self.page.goto(state['url'], wait_until='domcontentloaded')

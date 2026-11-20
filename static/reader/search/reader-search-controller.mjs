@@ -9,7 +9,7 @@ export function createReaderSearchController({
   const search = /** @type {{query: string, results: ReaderSearchController.Result[], index: number}} */ (runtime.state.search);
   /** @type {ReaderSearchController.State} */
   const state = {
-    page: null, failedPage: null, complete: false, pageLoader: null, highlightsEnabled: false
+    page: null, failedPage: null, complete: false, pageLoader: null, highlightsEnabled: false, nativePdfSearch: false
   };
   /** @type {{generation: number, mode: string | null} | null} */
   let initialSearch = null;
@@ -166,12 +166,24 @@ export function createReaderSearchController({
     renderedResults = search.results.slice();
     renderedOffset = offset;
   }
+  function clearResults(query = search.query) {
+    state.page = state.failedPage = state.pageLoader = null;
+    state.nativePdfSearch = false;
+    updateSearch({ query, results: [], index: -1 });
+    render();
+  }
   function resetResults(query = search.query) {
     state.complete = false;
     initialSearch = null;
-    state.page = state.failedPage = state.pageLoader = null;
-    updateSearch({ query, results: [], index: -1 });
-    render();
+    clearResults(query);
+  }
+  function resetBackendResults() {
+    // A failed OCR scan can have visible partial results and an active jump.
+    // Discard those without cancelling the search that will scan native text.
+    supersedeSearchNavigation();
+    backend.clearMarks();
+    clearResults();
+    status.textContent = "正在搜索正文…";
   }
   function supersedeSearchNavigation(hasQuery = false) {
     // Blank input must leave restoration and other navigation alone, but may
@@ -255,6 +267,7 @@ export function createReaderSearchController({
       render();
       const total = state.page?.total ?? search.results.length;
       status.textContent = total ? `${total}${!state.page && total === 100 ? "+" : ""} 个结果` : "未找到正文匹配";
+      return generation;
     } catch (error) {
       if (ownsSearch()) {
         const failure = /** @type {{code?: string, message?: string} | null | undefined} */ (error);
@@ -274,6 +287,7 @@ export function createReaderSearchController({
         updateNavigation();
       }
     }
+    return undefined;
   }
   /** @param {ReaderSearchController.Page<ReaderSearchController.ChapterResult>} page */
   function applyChapterPage(page) {
@@ -418,9 +432,10 @@ export function createReaderSearchController({
   listen(retry, "click", async () => {
     const failed = state.failedPage;
     if (!failed || search.query !== failed.query) return run();
-    if (backend.chapterClient()?.failed) {
-      await run();
-      if (!state.complete || search.query !== failed.query) return;
+    const needsRebuild = state.pageLoader ? state.pageLoader.needsRebuild?.() : backend.chapterClient()?.failed;
+    if (needsRebuild) {
+      const generation = await run();
+      if (generation === undefined || !current(generation) || !state.complete || search.query !== failed.query) return;
     }
     return loadPage(failed.offset, failed.selectLast);
   });
@@ -463,6 +478,6 @@ export function createReaderSearchController({
   }
   return Object.freeze({
     state, elements: Object.freeze({ view, button, input, status, results, pagination, cancel, retry }),
-    render, updatePagination, applyChapterPage, loadPage, run, close, resetAvailability, activate, move, dispose
+    render, updatePagination, applyChapterPage, loadPage, run, close, resetAvailability, resetBackendResults, activate, move, dispose
   });
 }

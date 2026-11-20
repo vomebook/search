@@ -9,6 +9,10 @@
   const DB_NAME = "voiceofml-reader";
   const STORE_NAME = "entries";
   const BOOKMARK_STORE_NAME = "bookmarks";
+  // Unindexed array keys in the bookmarks store cannot collide with string
+  // bookmark IDs. This keeps v3 readable and leaves history capacity unchanged.
+  const HISTORY_ORDER_KEY = "reader-history-order-v1";
+  const HISTORY_WRITE_STORES = [STORE_NAME, BOOKMARK_STORE_NAME];
   const MAX_ENTRIES = 200;
   const SCHEMA_VERSION = 1;
   const DB_VERSION = 3;
@@ -190,6 +194,33 @@
     });
   }
 
+  /** @param {string} [url] */
+  function historyOrderKey(url) {
+    return url === undefined ? [HISTORY_ORDER_KEY] : [HISTORY_ORDER_KEY, url];
+  }
+
+  /** @param {IDBObjectStore} order @param {string} [url] */
+  function recordHistoryDeletion(order, url) {
+    const id = historyOrderKey(url), previous = order.get(id);
+    const deletedAt = Date.now();
+    previous.onsuccess = () => {
+      const cutoff = Math.max(deletedAt, previous.result?.deletedAt ?? 0);
+      order.put({ id, deletedAt: cutoff });
+      if (url !== undefined) return;
+      // Clear supersedes older per-book markers. Keep any newer ones if the
+      // wall clock moved backwards, and leave all bookmark keys untouched.
+      const books = order.openCursor(IDBKeyRange.bound(id, [HISTORY_ORDER_KEY, []], true, true));
+      books.onsuccess = () => {
+        const cursor = books.result;
+        if (!cursor) return;
+        const key = cursor.primaryKey;
+        if (Array.isArray(key) && key.length === 2 && typeof key[1] === "string" &&
+            cursor.value?.deletedAt <= cutoff) cursor.delete();
+        cursor.continue();
+      };
+    };
+  }
+
   /** @param {StoreHistoryInput} supplied */
   async function put(supplied) {
     const entry = normalizeHistoryEntry(supplied);
@@ -198,10 +229,16 @@
     await /** @type {Promise<void>} */ (new Promise((resolve, reject) => {
       /** @type {Error | null} */
       let abortReason = null;
-      const tx = database.transaction(STORE_NAME, "readwrite");
-      const store = tx.objectStore(STORE_NAME);
+      let written = false;
+      const tx = database.transaction(HISTORY_WRITE_STORES, "readwrite");
+      const store = tx.objectStore(STORE_NAME), order = tx.objectStore(BOOKMARK_STORE_NAME);
+      const cleared = order.get(historyOrderKey()), removed = order.get(historyOrderKey(entry.url));
       const existing = store.get(entry.url);
       existing.onsuccess = () => {
+        // Compare capture time, not arrival time: the host can first load
+        // this script after the deletion. Deletion wins same-ms ties.
+        if (entry.lastReadAt <= (cleared.result?.deletedAt ?? -Infinity) ||
+            entry.lastReadAt <= (removed.result?.deletedAt ?? -Infinity)) return;
         if (existing.result) {
           if (existing.result.schemaVersion != null && existing.result.schemaVersion !== SCHEMA_VERSION) {
             tx.abort();
@@ -219,12 +256,14 @@
           if (!Object.prototype.hasOwnProperty.call(supplied, "title")) merged.title = previous.title;
           if (!Object.prototype.hasOwnProperty.call(supplied, "extension")) merged.extension = previous.extension;
           store.put(merged);
+          written = true;
           return;
         }
         const count = store.count();
         count.onsuccess = () => {
           if (count.result < MAX_ENTRIES) {
             store.put(entry);
+            written = true;
             return;
           }
           // Refuse a new entry at the existing limit rather than evicting
@@ -235,7 +274,7 @@
         };
       };
       tx.oncomplete = () => {
-        notify({ type: "history", url: entry.url, lastReadAt: entry.lastReadAt });
+        if (written) notify({ type: "history", url: entry.url, lastReadAt: entry.lastReadAt });
         resolve();
       };
       tx.onerror = () => reject(tx.error);
@@ -298,13 +337,14 @@
   async function remove(url) {
     const database = await openDatabase();
     await /** @type {Promise<void>} */ (new Promise((resolve, reject) => {
-      const tx = database.transaction(STORE_NAME, "readwrite"), store = tx.objectStore(STORE_NAME);
+      const tx = database.transaction(HISTORY_WRITE_STORES, "readwrite"), store = tx.objectStore(STORE_NAME);
       const request = store.get(url);
       request.onsuccess = () => {
         const value = request.result;
         if (value && ((value.schemaVersion != null && value.schemaVersion !== SCHEMA_VERSION)
             || !normalizeHistoryEntry(value))) return tx.abort();
         store.delete(url);
+        recordHistoryDeletion(tx.objectStore(BOOKMARK_STORE_NAME), url);
       };
       tx.oncomplete = () => { notify({ type: "history-remove", url }); resolve(); };
       tx.onerror = () => reject(tx.error);
@@ -314,10 +354,13 @@
   async function clearHistory() {
     const database = await openDatabase();
     await /** @type {Promise<void>} */ (new Promise((resolve, reject) => {
-      const tx = database.transaction(STORE_NAME, "readwrite"), request = tx.objectStore(STORE_NAME).openCursor();
+      const tx = database.transaction(HISTORY_WRITE_STORES, "readwrite"), request = tx.objectStore(STORE_NAME).openCursor();
       request.onsuccess = () => {
         const cursor = request.result;
-        if (!cursor) return;
+        if (!cursor) {
+          recordHistoryDeletion(tx.objectStore(BOOKMARK_STORE_NAME));
+          return;
+        }
         const value = cursor.value;
         if (value && (value.schemaVersion == null || value.schemaVersion === SCHEMA_VERSION)
             && normalizeHistoryEntry(value) && typeof value.lastReadAt === "number"

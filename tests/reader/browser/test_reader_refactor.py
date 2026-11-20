@@ -1396,7 +1396,7 @@ class ReaderRefactorTest(unittest.TestCase):
         self.assertEqual(self.page.locator("#full-search-page").input_value(), "3")
         self.assertEqual(self.page.locator("#full-search-status").text_content(), "180 个结果")
 
-    def test_pdf_with_unavailable_ocr_index_does_not_fall_back(self):
+    def test_pdf_with_unavailable_ocr_index_falls_back_to_native_text(self):
         self.page.route("**/static/vendor/pdf.min.*.mjs", lambda route: route.fulfill(
             content_type="text/javascript", body=support.PDF_MODULE))
         manifest = "https://voiceofml-search.hf.space/api/reader-bucket-resource?path=objects/aa/" + "a" * 64 + "/" + "b" * 16 + "/ocr-manifest.json"
@@ -1406,8 +1406,8 @@ class ReaderRefactorTest(unittest.TestCase):
         self.page.locator("#history").click()
         self.page.locator("#full-search-toggle").click()
         self.page.locator("#full-search-input").fill("Accessible")
-        self.page.wait_for_function("() => document.querySelector('#full-search-status').textContent.includes('503')")
-        self.assertEqual(self.page.locator(".full-search-result").count(), 0)
+        self.page.wait_for_function("() => document.querySelector('#full-search-status').textContent === '30 个结果'")
+        self.assertEqual(self.page.locator(".full-search-result").count(), 30)
 
     def test_pdf_with_valid_ocr_index_searches_index_not_native_text(self):
         self.page.route("**/static/vendor/pdf.min.*.mjs", lambda route: route.fulfill(

@@ -511,6 +511,37 @@ for (const invalid of [
     },trackReaderResource(){}});
   await assert.rejects(openNativeDjvu(value),/DJVU_SOURCE_CHANGED/);assert.equal(fullReads,0);assert.equal(closed,1);
 }
+// A terminal late range failure must reach the document even when the read
+// was initiated by text or outline rather than by the renderer.
+for (const status of [503,404]) {
+  let closed=0, attempts=0;
+  const failures=[];
+  globalThis.Worker=class {
+    postMessage(message){
+      if (message.operation==='prepare' || message.operation==='open-range')
+        queueMicrotask(()=>this.onmessage({data:{id:message.id,ok:true,count:1}}));
+      else if (message.operation==='outline')
+        queueMicrotask(()=>this.onmessage({data:{id:message.id,operation:'range',rangeId:1,offset:1024*1024,length:1}}));
+      else assert.fail('the closed worker must not receive any more data');
+    }
+    terminate(){closed++;}
+  };
+  const value=context(async()=>assert.fail('must not fetch full source'));
+  Object.assign(value,{sourceUrl:url,ocrManifestUrl:'',readerDownloadApiUrl:x=>x,readerContentUrl:x=>x,READER_PROXY_TIMEOUT_MS:1000,
+    fetchWithReaderTimeout:async(_actual,_timeout,options)=>{
+      if (options.headers.Range.startsWith('bytes=0-')) return new Response(new Uint8Array(1024*1024),{status:206,headers:{
+        ETag:'"stable"','Content-Range':'bytes 0-1048575/1048577','Content-Length':'1048576'}});
+      attempts++;
+      assert.equal(options.headers['If-Range'],'"stable"');
+      return new Response('unavailable',{status});
+    },trackReaderResource(){},fail(_message,code){assert.equal(closed,1);failures.push(code);}});
+  const opened=await openNativeDjvu(value);
+  await assert.rejects(opened.getOutline(), {status, message:`DJVU_RANGE_HTTP_${status}`});
+  assert.equal(attempts,status===503?3:1);
+  assert.equal(closed,1);
+  assert.deepEqual(failures,status===503?['READER_DJVU_TRANSPORT']:[]);
+  opened.destroy();
+}
 // A decoder asking for bytes while it is still preparing must not be sent
 // unvalidated source bytes, nor leave the initial Range fetch running.
 {

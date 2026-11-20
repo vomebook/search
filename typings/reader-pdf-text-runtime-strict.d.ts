@@ -20,7 +20,7 @@ export interface Context {
   pdfOcrPagePromises: Map<number, Promise<OcrPayload>>; pdfTextLayerRepository: Repository | null;
   pdfV3Map: {pages: {width: number; height: number}[]} | null;
   pdfDocument: PdfDocument | null; capability: {mode?: string | null} | null;
-  fullSearchController: {resetAvailability(): void; state: {highlightsEnabled: boolean}}; syncCapabilityControls(): void;
+  fullSearchController: {resetAvailability(): void; state: {highlightsEnabled: boolean; nativePdfSearch: boolean}}; syncCapabilityControls(): void;
   PDF_TEXT_CONTENT_CACHE_BYTES: number; pdfTextContentCacheBytes: number; pdfTextContentCache: Map<number, {content: TextContent; bytes: number}>;
   PDF_OCR_PAGE_CACHE_BYTES: number; pdfOcrPageCacheBytes: number; pdfOcrPageCache: Map<number, {payload: OcrPayload; bytes: number}>;
   pdfTextContentPromises: Map<number, TextTask>; searchState: {query: string};

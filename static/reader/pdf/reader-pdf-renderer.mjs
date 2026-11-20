@@ -100,7 +100,12 @@ export function createReaderPdfRenderer(readerContext) {
             pageState.dataset.state = 'error';
             pageState.removeAttribute('aria-label');
             pageState.hidden = false;
-            pageState.textContent = `DjVu 页面解码失败（${error?.message}），请重新打开原文件。`;
+            const message = error?.message || '';
+            // Terminal transient range failures are handled at the document
+            // level. Don't call integrity/transport failures decode errors.
+            pageState.textContent = /^DJVU_(?:RANGE_|SOURCE_CHANGED)/.test(message)
+              ? `DjVu 原文件读取或校验失败（${message}），请检查原文件。`
+              : `DjVu 页面解码失败（${message}），请重新打开原文件。`;
           }
           shell.dataset.renderFailed = '1';
           return;

@@ -692,24 +692,34 @@ class ApiIntegrationTest(unittest.TestCase):
                 STATE.total = Math.max(STATE.total, STATE.pageSize * 3);
                 STATE._pageCache = {};
                 searchResponseStore.cache.clear();
-                let calls = 0;
+                const requested = [];
                 const nativeFetch = window.fetch;
                 window.fetch = function(_input, options) {
-                    calls += 1;
+                    requested.push(JSON.parse(options.body).page);
                     return new Promise((_resolve, reject) => {
                         options.signal.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')), { once: true });
                     });
                 };
-                const first = prefetchNextPage();
-                const second = prefetchNextPage();
-                const result = first === second && calls === 2;
-                searchPrefetchAbortController.abort();
-                await first;
-                window.fetch = nativeFetch;
-                return result;
+                try {
+                    const first = prefetchNextPage();
+                    const second = prefetchNextPage();
+                    const firstTurn = requested.slice();
+                    // The second speculative slot opens only after the foreground frame.
+                    const until = performance.now() + 2000;
+                    while (requested.length < 2 && performance.now() < until) {
+                        await new Promise(resolve => setTimeout(resolve, 10));
+                    }
+                    const result = {shared: first === second, firstTurn, requested: requested.slice()};
+                    searchPrefetchAbortController?.abort();
+                    await first;
+                    return result;
+                } finally {
+                    searchPrefetchAbortController?.abort();
+                    window.fetch = nativeFetch;
+                }
             }"""
         )
-        self.assertTrue(reused)
+        self.assertEqual(reused, {'shared': True, 'firstTurn': [2], 'requested': [2, 3]})
 
     def test_three_failures_open_circuit_and_fast_probe_recovers(self):
         self.page.add_init_script(

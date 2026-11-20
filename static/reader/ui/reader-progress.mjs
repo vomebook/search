@@ -26,13 +26,27 @@ export function createReaderProgress(readerContext) {
       readerContext.mediaElement?._readerSourceRetry
     )
       return;
-    if (event?.type !== "pagehide" && document.visibilityState !== "hidden")
-      readerContext.syncCurrentPageFromMarker();
-    const shell = readerContext.documentState.pageCount
-      ? readerContext.content.querySelector(
-          `.reader-page[data-page="${readerContext.documentState.page}"]`
-        )
-      : null;
+    const hiding = event?.type === "pagehide" || document.visibilityState === "hidden";
+    if (!hiding) readerContext.syncCurrentPageFromMarker();
+    let page = readerContext.documentState.page;
+    let shell = null;
+    if (readerContext.documentState.pageCount) {
+      // A final scroll may not have reached the marker frame. Snapshot the
+      // live marker without publishing UI during pagehide, but respect jumps
+      // and ignore collapsed or offscreen shells if layout is already gone.
+      if (hiding && !(performance.now() < readerContext.pageNavigationLockUntil)) {
+        const marked = readerContext.pageAtMarker();
+        const next = Number(marked?.dataset.page);
+        if (marked && next > 0 && next <= readerContext.documentState.pageCount) {
+          const rect = marked.getBoundingClientRect(), view = readerContext.viewport.getBoundingClientRect();
+          if (rect.height > 0 && view.height > 0 && rect.bottom > view.top && rect.top < view.bottom) {
+            page = next;
+            shell = marked;
+          }
+        }
+      }
+      shell ??= readerContext.content.querySelector(`.reader-page[data-page="${page}"]`);
+    }
     const pageOffset = shell ? Math.max(0, readerContext.viewport.scrollTop - readerContext.readerPageScrollTop(shell)) : 0;
     const htmlScrollTop = readerContext.htmlFrame && readerContext.htmlFrame.contentWindow ? readerContext.htmlFrame.contentWindow.scrollY : 0;
     const readerUrl = readerContext.currentReaderUrl();
@@ -42,7 +56,7 @@ export function createReaderProgress(readerContext) {
       title: readerContext.documentState.title,
       extension: readerContext.extension,
       readerUrl: readerUrl.href,
-      page: readerContext.documentState.page,
+      page,
       pageCount: readerContext.documentState.pageCount,
       pageOffset,
       mediaTime:

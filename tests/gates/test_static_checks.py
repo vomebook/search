@@ -4851,7 +4851,7 @@ for (const [project, base] of [['github','/search/static/'], ['hf','/static/']])
         config.write_text(json.dumps({'compilerOptions':options,
             'files':[str(ROOT / 'typings/reader-globals.d.ts'),str(local)]}))
         self.assert_check(self.run_check(*check),True,'')
-        marker='/** @param {DjvuContext} context */'
+        marker='/** @param {NativeDjvuContext} context */'
         self.assertEqual(original.count(marker),1)
         local.write_text(original.replace(marker,''))
         self.assert_check(self.run_check(*check),False,'TS7006')

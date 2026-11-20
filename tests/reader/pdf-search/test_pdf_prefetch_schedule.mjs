@@ -7,8 +7,10 @@ import * as bookSearch from '../../../static/reader/search/reader-pdf-book-searc
 const flush = async () => { for (let i = 0; i < 20; i++) await Promise.resolve(); };
 
 test('missing OCR manifest reports no concentrated text', async () => {
-  const api = createReaderPdfSearch({loadPdfOcrManifest: async () => null});
+  const api = createReaderPdfSearch({loadPdfOcrManifest: async () => null,
+    isReaderGenerationCurrent: (kind, generation) => kind === 'search' && generation === 1});
   await assert.rejects(api.searchConcentratedPdf('query', 1), /本书集中全文尚未生成/);
+  assert.deepEqual(await api.searchConcentratedPdf('query', 2), [], 'superseded search cannot report a missing manifest');
 });
 
 test('missing OCR source rejects before constructing a search client', async () => {

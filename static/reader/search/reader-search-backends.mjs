@@ -1,5 +1,13 @@
 /// <reference path="../../../typings/reader-search-backends-strict.d.ts" />
 
+/** @param {{name?: string, message?: string, code?: string} | null} failure */
+function pdfSearchUnavailable(failure) {
+  const message = failure?.message || "";
+  return failure?.name === "TimeoutError" || failure?.code === "READER_BODY_INTERRUPTED" ||
+    /^(?:HTTP (?:40[348]|410|429|5\d\d)\b|本书集中全文尚未生成$|PDF 全文搜索组件加载失败|全文搜索已取消或加载超时)/.test(message) ||
+    /^(?:Failed to fetch|error loading dynamically imported module|importing a module script failed|NetworkError|Load failed)/i.test(message);
+}
+
 /** @param {ReaderSearchBackends.Context} readerContext */
 export function createReaderSearchBackends(readerContext) {
   /** @param {ReaderSearchBackends.SearchPatch} patch */
@@ -100,11 +108,37 @@ export function createReaderSearchBackends(readerContext) {
 
   /** @param {string} query @param {number} generation */
   async function searchReaderText(query, generation) {
-    if (readerContext.capability.mode === "pdf" && !readerContext.ocrManifestUrl) {
-      await readerContext.fullSearchPdfMatches(query, generation);
-    }
-    else if (readerContext.capability.mode === "pdf" || readerContext.capability.mode === "pdf-pages") {
-      readerContext.publishSearchResults(generation, await readerContext.searchConcentratedPdf(query, generation));
+    if (readerContext.capability.mode === "pdf" || readerContext.capability.mode === "pdf-pages") {
+      if (readerContext.capability.mode === "pdf" && !readerContext.ocrManifestUrl) {
+        await readerContext.fullSearchPdfMatches(query, generation);
+        return;
+      }
+      // Keep the OCR query contract outside the fallback so invalid input is
+      // never reinterpreted as a failure of the external index.
+      if (!query || query.length > 2048) throw new Error("请输入 1–2048 个字符");
+      const pdf = readerContext.capability.mode === "pdf" ? readerContext.pdfDocument : null;
+      let results;
+      try {
+        results = await readerContext.searchConcentratedPdf(query, generation);
+      } catch (error) {
+        if (!readerContext.isReaderGenerationCurrent("search", generation)) return;
+        const failure = /** @type {{name?: string, message?: string, code?: string} | null} */ (error);
+        if (failure?.name === "AbortError") throw error;
+        readerContext.fullSearchController.resetBackendResults();
+        // Only availability failures switch backends. Surface invalid manifests,
+        // hashes, or shapes rather than silently treating them as unavailable.
+        if (!pdfSearchUnavailable(failure) || !pdf || pdf !== readerContext.pdfDocument || pdf._pdfInfo?.readerPageCountPending) throw error;
+        try {
+          await readerContext.fullSearchPdfMatches(query, generation);
+        } catch (nativeError) {
+          // Without confirmed native text, keep the actionable OCR error and
+          // let the user retry. Do not mark an OCR book as unsearchable.
+          if (/** @type {{code?: string} | null} */ (nativeError)?.code === "READER_TEXT_UNCONFIRMED") throw error;
+          throw nativeError;
+        }
+        return;
+      }
+      readerContext.publishSearchResults(generation, results);
     }
     else if (readerContext.capability.mode === "epub-chapters") await readerContext.searchChapterBook(query, generation);
     else if (readerContext.capability.mode === "text" || readerContext.capability.mode === "markdown")
