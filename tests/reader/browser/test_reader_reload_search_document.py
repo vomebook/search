@@ -285,6 +285,9 @@ class ReaderReloadSearchDocumentCases:
         # restore the original Reader entry after the one requested Back.
         for route in held:
             route.abort()
+        # The search state is already ready behind the overlay. Wait for Back
+        # to remove the iframe, not just for the overlay to be visually dismissed.
+        self.page.locator('iframe.reader-overlay').wait_for(state='detached')
         self.wait_search('paging')
         self.assertEqual(self.page.url, before)
         self.assertEqual(self.page.evaluate('__backCalls'), 1)

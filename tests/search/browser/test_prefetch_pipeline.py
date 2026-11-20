@@ -188,7 +188,7 @@ class PrefetchPipelineTests(unittest.TestCase):
           rememberSearchPageMetadata(metadata);
           const cached=[];
           for(let page=2;page<=4;page++) {
-            const entry={key,id:[key,page],page,page_size:100,total:STATE.total,generation:'stable',savedAt:Date.now(),
+            const entry={key,id:[key,page],page,page_size:100,total:STATE.total,generation:'stable',resultBackend:'api',savedAt:Date.now(),
               results:Array.from({length:Math.min(100,STATE.total-(page-1)*100)},(_,i)=>({ID:String((page-1)*100+i),File:'cached'}))};
             cached.push(entry);positionPersistence.recentPages.set(JSON.stringify(entry.id), entry);
           }
