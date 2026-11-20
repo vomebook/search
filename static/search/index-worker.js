@@ -405,7 +405,7 @@ async function readBoundedBytes(stream, limit) {
 }
 
 /** @param {string} url */
-async function fetchGzipJSON(url) {
+async function fetchGzipBytes(url) {
   const response = await fetch(url);
   if (!response.ok) throw protocolError("CORPUS_FETCH_FAILED", "HTTP " + response.status);
   if (!response.body || typeof DecompressionStream === "undefined") {
@@ -418,15 +418,21 @@ async function fetchGzipJSON(url) {
   }
   const compressed = await readBoundedBytes(response.body, MAX_CORPUS_COMPRESSED_BYTES);
   const stream = /** @type {ReadableStream<BufferSource>} */ (new Response(compressed).body).pipeThrough(new DecompressionStream("gzip"));
-  const expanded = await readBoundedBytes(/** @type {ReadableStream<Uint8Array>} */ (stream), MAX_CORPUS_EXPANDED_BYTES);
-  return new TextDecoder("utf-8", {fatal:true}).decode(expanded);
+  return readBoundedBytes(/** @type {ReadableStream<Uint8Array>} */ (stream), MAX_CORPUS_EXPANDED_BYTES);
 }
 
-/** @param {string} source */
-async function corpusFingerprint(source) {
-  if (typeof crypto === "undefined" || !crypto.subtle || typeof TextEncoder === "undefined") return null;
-  const bytes = new TextEncoder().encode(source || "");
-  const hash = await crypto.subtle.digest("SHA-256", bytes);
+function canFingerprintCorpus() {
+  return typeof crypto !== "undefined" && !!crypto.subtle && typeof TextEncoder !== "undefined";
+}
+
+/** @param {Uint8Array<ArrayBuffer>} bytes */
+function corpusFingerprintBytes(bytes) {
+  return finishCorpusFingerprint(crypto.subtle.digest("SHA-256", bytes));
+}
+
+/** @param {Promise<ArrayBuffer>} contentHash */
+async function finishCorpusFingerprint(contentHash) {
+  const hash = await contentHash;
   // Keep snapshots isolated across runtime and Unicode-version changes.
   const runtime = typeof navigator !== "undefined" ? navigator.userAgent : "";
   const versionHash = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(SEARCH_SEMANTICS_VERSION + runtime));
@@ -435,23 +441,36 @@ async function corpusFingerprint(source) {
   return "worker:" + hex(versionHash) + ":" + hex(hash);
 }
 
+/** @param {string} source */
+async function corpusFingerprint(source) {
+  if (!canFingerprintCorpus()) return null;
+  return corpusFingerprintBytes(new TextEncoder().encode(source || ""));
+}
+
 /** @param {unknown} data @param {string | null} [fingerprint] @param {boolean} [fromJSON] */
 async function installCorpus(data, fingerprint, fromJSON = false) {
   if (fingerprint == null) fingerprint = await corpusFingerprint(JSON.stringify(data));
-  const result = replaceCorpus(decodeSearchPayload(data), fromJSON);
+  const nextRecords = decodeSearchPayload(data);
   data = null;
+  const result = replaceCorpus(nextRecords, fromJSON);
   snapshotGeneration = fingerprint;
   return result;
 }
 
-/** @param {string | null} source */
-async function installCorpusFromSource(source) {
-  const fingerprint = await corpusFingerprint(/** @type {string} */ (source));
-  /** @type {unknown} */
-  const data = JSON.parse(/** @type {string} */ (source));
-  source = null;
-  const result = await installCorpus(data, fingerprint, true);
-  return result;
+/** @param {string} url */
+async function fetchGzipJSON(url) {
+  /** @type {Uint8Array<ArrayBuffer> | null} */
+  let expanded = await fetchGzipBytes(url);
+  const source = new TextDecoder("utf-8", {fatal:true}).decode(expanded);
+  // For valid UTF-8 the decoded text re-encodes to the original bytes, except
+  // TextDecoder strips one leading UTF-8 BOM. Both byte caps count it as usual.
+  const hasBOM = expanded[0] === 0xef && expanded[1] === 0xbb && expanded[2] === 0xbf;
+  const pendingFingerprint = canFingerprintCorpus()
+    ? corpusFingerprintBytes(hasBOM ? expanded.subarray(3) : expanded) : null;
+  // Leave only the decoded text in this frame while WebCrypto settles.
+  expanded = null;
+  const fingerprint = await pendingFingerprint;
+  return { data: /** @type {unknown} */ (JSON.parse(source)), fingerprint };
 }
 
 /** @param {SearchRecord} record @param {number} occurrence */
@@ -1404,7 +1423,8 @@ async function dispatch(type, input, job) {
     return {cancelled: !!pending};
   }
   if (type === "load-corpus") {
-    return installCorpusFromSource(await fetchGzipJSON(/** @type {string} */ (payload.url)));
+    const {data, fingerprint} = await fetchGzipJSON(/** @type {string} */ (payload.url));
+    return installCorpus(data, fingerprint, true);
   }
   if (type === "replace-corpus") return installCorpus(payload.data);
   if (!records.length) throw protocolError("CORPUS_NOT_READY", "Search corpus is not ready");

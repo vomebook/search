@@ -44,11 +44,14 @@ function compact(input) {
   };
 }
 
+function gzipWorker(options = {}, workerSource = source) {
+  return makeWorker(workerSource, { ReadableStream, Response, TextDecoder, DecompressionStream, ...options });
+}
+
 function makeWorker(workerSource = source, options = {}) {
   const listeners = {};
   const messages = [];
   const context = {
-    ...options,
     console,
     Math,
     TextEncoder: require('util').TextEncoder,
@@ -56,6 +59,7 @@ function makeWorker(workerSource = source, options = {}) {
       const hash = require('crypto').createHash('sha256').update(bytes).digest();
       return hash.buffer.slice(hash.byteOffset, hash.byteOffset + hash.byteLength);
     }}},
+    ...options,
     self: {
       addEventListener(type, listener) { listeners[type] = listener; },
       postMessage(message) { messages.push(clone(message)); },
@@ -134,10 +138,10 @@ test('JSON corpus install preserves stable IDs, collisions, and snapshot stamps'
       [0, 'same', '', 3, 1, 0], [0, 'same', '', 4, 1, 0],
       [0, 'same', '', 5, 1, 0], [1, {name: 'file'}, true, 6, 0, 0],
       [2, null, ['x', 'y'], 6, 0, 0], null]};
-  const plain = makeWorker(), json = makeWorker();
+  const plain = makeWorker(), json = gzipWorker();
   await plain.request('replace-corpus', {data});
-  json.context.serialized = JSON.stringify(data);
-  await vm.runInContext('installCorpusFromSource(serialized)', json.context);
+  json.context.fetch = async () => new Response(require('node:zlib').gzipSync(JSON.stringify(data)));
+  await json.request('load-corpus', {url:'/corpus'});
   const params = {q: '', sort: 'relevance', pageSize: 20};
   const fromJSON = await json.request('local-search', params);
   const fromObject = await plain.request('local-search', params);
@@ -1366,21 +1370,108 @@ test("non-exact results include literal filename and repository hits", async () 
   assert.deepStrictEqual(await namesWithCorpus(input, {q:"repo", searchFolders:false}), ["Marxist"]);
 });
 
-test("corpus stream rejects oversized compressed and expanded bodies", async () => {
-  const stream = bytes => new ReadableStream({start(controller) { controller.enqueue(bytes); controller.close(); }});
-  const tiny = makeWorker(source.replace('32 * 1024 * 1024', '64').replace('256 * 1024 * 1024', '128'), {
-    ReadableStream, Response, TextDecoder, DecompressionStream,
-  });
-  tiny.context.fetch = async () => new Response(stream(new Uint8Array(65)));
-  await assert.rejects(tiny.context.fetchGzipJSON('/corpus'), {code:'CORPUS_TOO_LARGE'});
-  const zlib = require('node:zlib');
-  const bomb = zlib.gzipSync(Buffer.from('x'.repeat(129)));
-  assert(bomb.length < 64);
-  tiny.context.fetch = async () => new Response(stream(bomb));
-  await assert.rejects(tiny.context.fetchGzipJSON('/corpus'), {code:'CORPUS_TOO_LARGE'});
-  const valid = zlib.gzipSync(Buffer.from('{"v":2}'));
-  tiny.context.fetch = async () => new Response(stream(valid));
-  assert.strictEqual(await tiny.context.fetchGzipJSON('/corpus'), '{"v":2}');
+test('gzip fingerprints use the validated source bytes, not re-encoded text or gzip bytes', async () => {
+  const {gzipSync} = require('node:zlib');
+  const {createHash, webcrypto} = require('node:crypto');
+  const hash = bytes => createHash('sha256').update(bytes).digest('hex');
+  const navigator = {userAgent:'test-runtime'};
+  const encoded = [];
+  const worker = gzipWorker({navigator, crypto:webcrypto, TextEncoder: class extends TextEncoder {
+    encode(text) { encoded.push(text); return super.encode(text); }
+  }});
+  const version = vm.runInContext('SEARCH_SEMANTICS_VERSION', worker.context);
+  const stamp = plain => `worker:${hash(version + navigator.userAgent)}:${hash(plain)}`;
+  const data = compact([{...records[0], File:'中📚\ufeff'}]);
+  const plain = JSON.stringify(data);
+  const canonical = stamp(plain);
+  for (const [raw, level, expected] of [
+    [plain, 0, canonical], [plain, 9, canonical], ['\ufeff' + plain, 6, canonical],
+    [plain + '\n', 6, stamp(plain + '\n')],
+    [plain.replace('\ufeff', '\\ufeff'), 6, stamp(plain.replace('\ufeff', '\\ufeff'))],
+  ]) {
+    encoded.length = 0;
+    worker.context.fetch = async () => new Response(gzipSync(raw, {level}));
+    await worker.request('load-corpus', {url:'/corpus'});
+    const page = await worker.request('local-search', {q:''});
+    assert.strictEqual(page.snapshot_generation, expected);
+    assert.strictEqual(page.records[0].File, '中📚\ufeff');
+    assert.deepStrictEqual(encoded, [version + navigator.userAgent]);
+  }
+  encoded.length = 0;
+  await worker.request('replace-corpus', {data});
+  assert.strictEqual((await worker.request('local-search', {q:''})).snapshot_generation, canonical);
+  assert.deepStrictEqual(encoded, [plain, version + navigator.userAgent]);
+});
+
+test('gzip decode, digest, parse, and install failures leave the published corpus unchanged', async () => {
+  const {gzipSync} = require('node:zlib');
+  const worker = gzipWorker();
+  const original = JSON.stringify(compact(records));
+  worker.context.fetch = async () => new Response(gzipSync(original));
+  await worker.request('load-corpus', {url:'/corpus'});
+  const params = {q:'alpha', exact:true};
+  const before = await worker.request('local-search', params);
+  const metadata = await worker.request('metadata');
+  const digest = worker.context.crypto.subtle.digest;
+  for (const [gzip, rejectDigest, expectedDigests, code] of [
+    [gzipSync(Buffer.concat([Buffer.from(original), Buffer.from([0xe4, 0xb8])])), false, 0, 'ERR_ENCODING_INVALID_ENCODED_DATA'],
+    [gzipSync('\ufeff\ufeff' + original), false, 2, 'WORKER_ERROR'],
+    [gzipSync(original).subarray(0, -1), false, 0, 'Z_BUF_ERROR'],
+    [gzipSync(original), true, 1, 'WORKER_ERROR'],
+    [gzipSync('{"v":1}'), false, 2, 'UNSUPPORTED_CORPUS'],
+    [gzipSync('{"v":2,"rp":[{"toString":null,"valueOf":null}],"fd":[[]],"rc":[[0,"new","txt",0,1,0]]}'), false, 2, 'WORKER_ERROR'],
+  ]) {
+    let digestCalls = 0;
+    worker.context.fetch = async () => new Response(gzip);
+    worker.context.crypto.subtle.digest = (...args) => {
+      digestCalls++;
+      return rejectDigest ? Promise.reject(new Error('digest failed')) : digest(...args);
+    };
+    await assert.rejects(worker.request('load-corpus', {url:'/corpus'}), {code});
+    assert.deepStrictEqual(await worker.request('metadata'), metadata);
+    assert.deepStrictEqual(await worker.request('local-search', params), before);
+    assert.strictEqual(digestCalls, expectedDigests);
+  }
+});
+
+test('gzip and replace-corpus keep the per-worker generation fallback without fingerprint support', async () => {
+  const {gzipSync} = require('node:zlib');
+  const data = compact(records);
+  for (const opts of [{crypto:undefined}, {crypto:{}}, {TextEncoder:undefined}]) {
+    const worker = gzipWorker(opts);
+    worker.context.fetch = async () => new Response(gzipSync('\ufeff' + JSON.stringify(data)));
+    await worker.request('load-corpus', {url:'/corpus'});
+    const first = await worker.request('local-search', {q:''});
+    assert.match(first.snapshot_generation, /^worker:[^:]+:1$/);
+    await worker.request('replace-corpus', {data});
+    const second = await worker.request('local-search', {q:''});
+    assert.deepStrictEqual(second, {...first, generation:2, snapshot_generation:first.snapshot_generation.slice(0, -1) + '2'});
+  }
+});
+
+test('corpus stream enforces inclusive compressed and expanded byte limits', async () => {
+  const {gzipSync} = require('node:zlib');
+  const stream = bytes => new ReadableStream({start(controller) {
+    controller.enqueue(bytes.subarray(0, 2));
+    controller.enqueue(bytes.subarray(2));
+    controller.close();
+  }});
+  const tiny = gzipWorker({}, source.replace('32 * 1024 * 1024', '80').replace('256 * 1024 * 1024', '128'));
+  const plain = '{"v":2,"rp":["r"],"fd":[[]],"rc":[[0,"f","txt",0,0,0]]}';
+  const padded = count => '\ufeff' + plain.padEnd(count - 3);
+  async function load(gzip, declaredLength) {
+    tiny.context.fetch = async () => new Response(stream(gzip), {headers: declaredLength ? {'content-length':declaredLength} : {}});
+    return tiny.request('load-corpus', {url:'/corpus'});
+  }
+  const compressedBoundary = gzipSync(plain.padEnd(80 - 23), {level:0});
+  assert.strictEqual(compressedBoundary.length, 80);
+  assert.strictEqual((await load(compressedBoundary)).count, 1);
+  assert.strictEqual((await load(gzipSync(padded(128)))).count, 1);
+  const before = await tiny.request('local-search', {q:''});
+  await assert.rejects(load(gzipSync(plain.padEnd(81 - 23), {level:0})), {code:'CORPUS_TOO_LARGE'});
+  await assert.rejects(load(compressedBoundary, '81'), {code:'CORPUS_TOO_LARGE'});
+  await assert.rejects(load(gzipSync(padded(129))), {code:'CORPUS_TOO_LARGE'});
+  assert.deepStrictEqual(await tiny.request('local-search', {q:''}), before);
 });
 
 test("large fuzzy posting does not exceed the engine argument limit", async () => {
