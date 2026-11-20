@@ -139,22 +139,20 @@ test('phase and stage forward return values unchanged', () => {
   assert.deepEqual(events,[['phase','ready'],['stage','prepare']]);
 });
 
-test('dispose is idempotent, releases observer and clears all timer handles', () => {
+test('dispose is idempotent and clears all timer handles', () => {
   const {context,events}=fixture();
   const store=globalThis.VoiceOfMLReaderStore, oldClear=globalThis.clearTimeout, oldCancel=globalThis.cancelAnimationFrame;
   globalThis.VoiceOfMLReaderStore={dispose(){events.push('store');}};
   globalThis.clearTimeout=handle=>events.push(['clear',handle]);
   globalThis.cancelAnimationFrame=handle=>events.push(['cancel',handle]);
   context.updateDocumentState=value=>events.push(value);
-  context.contentSanitizerObserver={disconnect(){events.push('observer');}};
   const handles=['saveTimer','themeAnimationTimer','panelAnimationTimer','markerFrame'];
   handles.forEach((key,index)=>context[key]=index+1);
   try {
     context.disposeReader();context.disposeReader();
-    assert.deepEqual(events,[{restorationReady:false},'observer',['clear',1],['clear',2],['clear',3],
+    assert.deepEqual(events,[{restorationReady:false},['clear',1],['clear',2],['clear',3],
       ['cancel',4],'store']);
     assert.equal(context.readerLifecycle.disposed,true);
-    assert.equal(context.contentSanitizerObserver,null);
     assert.deepEqual(handles.map(key=>context[key]),[0,0,0,0]);
 
     const idle=fixture().context;

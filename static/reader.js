@@ -123,7 +123,6 @@ const readerContext = {
   get clearSearchHighlights() { return clearSearchHighlights; }, set clearSearchHighlights(value) { clearSearchHighlights = value; },
   get consumeBookmarkHandoff() { return consumeBookmarkHandoff; }, set consumeBookmarkHandoff(value) { consumeBookmarkHandoff = value; },
   get content() { return content; },
-  get contentSanitizerObserver() { return contentSanitizerObserver; }, set contentSanitizerObserver(value) { contentSanitizerObserver = value; },
   get contentUrl() { return contentUrl; }, set contentUrl(value) { contentUrl = value; },
   get createPdfFetchPolicy() { return createPdfFetchPolicy; },
   get createPdfV3Repository() { return createPdfV3Repository; }, set createPdfV3Repository(value) { createPdfV3Repository = value; },
@@ -744,8 +743,6 @@ const sourceName = (() => {
 })();
 /** @type {IntersectionObserver | null} */
 let chapterManifestObserver = null;
-/** @type {MutationObserver | null} */
-let contentSanitizerObserver = null;
 const documentState = readerRuntime.state.document,
   navigationState = readerRuntime.state.navigation,
   searchState = readerRuntime.state.search,
@@ -1027,7 +1024,7 @@ const chapterScrollAnchors = readerRuntime.track(
   })
 );
 
-readerBindings.applyMetadataAndWatchSanitizedContent();
+readerBindings.applyMetadataAndConfigureBookmarkPopover();
 const bookmarkLabelInput = document.createElement("input"),
   bookmarkExcerptInput = document.createElement("textarea"),
   bookmarkEditFields = document.createElement("div");

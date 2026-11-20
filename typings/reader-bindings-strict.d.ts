@@ -29,7 +29,7 @@ export interface ReaderBindingsContext {
   chapterSearchClient: Disposable | null; pdfV3Repository: Disposable | null; pdfTextLayerRepository: Disposable | null;
   pdfBookSearchClient: Disposable | null; pdfBookSearchPrefetchTimer: number; pdfBookSearchPrefetchPromise: Promise<unknown> | null;
   clearPdfManifestPrefetches(): void; pdfRenderWaiters: {reject(error: Error): void}[]; pdfTextWaiters: {reject(error: Error): void}[]; readerAbortError(): Error; nextReaderGeneration(name: string): number;
-  applyReaderMetadata(data: unknown): void; contentSanitizerObserver: MutationObserver | null;
+  applyReaderMetadata(data: unknown): void;
   bookmarkPopover: HTMLElement; bookmarkLabelInput: HTMLInputElement; bookmarkExcerptInput: HTMLTextAreaElement; bookmarkEditFields: HTMLElement;
   bookmarksAllButton: HTMLButtonElement; bookmarksSearchButton: Element; bookmarksHeaderActions: HTMLElement; bookmarksHeader: Element;
   mediaTab: HTMLButtonElement; mediaPanel: HTMLElement; status: HTMLElement; openBookmarkPopover(invoker?: HTMLElement): void;

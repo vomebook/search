@@ -272,7 +272,7 @@ export function createReaderBindings(readerContext) {
       if (selector && label) document.querySelector(selector)?.setAttribute("aria-label", label);
   }
 
-  function applyMetadataAndWatchSanitizedContent() {
+  function applyMetadataAndConfigureBookmarkPopover() {
     readerContext.applyReaderMetadata(readerContext.resolvedReaderData);
     readerContext.bookmarkPopover.className = "bookmark-popover";
     readerContext.bookmarkPopover.setAttribute("role", "dialog");
@@ -895,7 +895,7 @@ export function createReaderBindings(readerContext) {
     ownPdfPrefetchAndQueues,
     initializeGenerations,
     labelToolbarControls,
-    applyMetadataAndWatchSanitizedContent,
+    applyMetadataAndConfigureBookmarkPopover,
     initializeBookmarkEditor,
     initializeBookmarkSearchControls,
     mountBookmarkHeaderActions,

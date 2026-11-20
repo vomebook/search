@@ -121,24 +121,32 @@ test("preloads are single-owner and fall back on failure or mismatched identity"
   try {
     const h = fixture(), source = h.context.sourceUrl;
     window.__VOICE_PDF_PRELOAD__ = {manifestUrl: source, manifest: Promise.resolve(new Response("early"))};
-    assert.equal(await (await h.loader.fetchReaderResponse()).text(), "early");
+    const pdf = h.loader.fetchReaderResponse();
     assert.equal(window.__VOICE_PDF_PRELOAD__.manifest, null);
+    assert.equal(h.requests.length, 0);
+    assert.equal(await (await pdf).text(), "early");
     assert.equal(await (await h.loader.fetchReaderResponse()).text(), "content");
     assert.equal(h.requests.length, 1);
     window.__VOICE_PDF_PRELOAD__ = {manifestUrl: source, manifest: Promise.resolve(new Response("bad", {status: 503}))};
     assert.equal(await (await h.loader.fetchReaderResponse()).text(), "content");
-    window.__VOICE_PDF_PRELOAD__ = {manifestUrl: "https://books.test/other", manifest: Promise.resolve(new Response("wrong"))};
+    const wrong = Promise.resolve(new Response("wrong"));
+    window.__VOICE_PDF_PRELOAD__ = {manifestUrl: "https://books.test/other", manifest: wrong};
     assert.equal(await (await h.loader.fetchReaderResponse()).text(), "content");
-    h.context.chapterManifestUrl = "https://books.test/chapter.json";
-    window.__VOICE_READER_CHAPTER_PRELOAD__ = {manifestUrl: h.context.chapterManifestUrl,
+    assert.equal(window.__VOICE_PDF_PRELOAD__.manifest, wrong);
+    h.context.chapterManifestUrl = "./chapter.json";
+    const chapterUrl = new URL(h.context.chapterManifestUrl, globalThis.location.href).href;
+    window.__VOICE_READER_CHAPTER_PRELOAD__ = {manifestUrl: chapterUrl,
       manifest: Promise.resolve(new Response("chapters"))};
     assert.equal(await (await h.loader.loadChapterManifestDocument()).text(), "chapters");
     assert.equal(window.__VOICE_READER_CHAPTER_PRELOAD__.manifest, null);
-    window.__VOICE_READER_CHAPTER_PRELOAD__ = {manifestUrl: h.context.chapterManifestUrl,
+    window.__VOICE_READER_CHAPTER_PRELOAD__ = {manifestUrl: chapterUrl,
       manifest: Promise.reject(new Error("preload failed"))};
     assert.equal(await (await h.loader.loadChapterManifestDocument()).text(), "content");
-    window.__VOICE_READER_CHAPTER_PRELOAD__ = {manifestUrl: "https://books.test/wrong", manifest: Promise.resolve(new Response("wrong"))};
+    assert.equal(h.requests.at(-1).url, h.context.readerContentUrl("./chapter.json"));
+    window.__VOICE_READER_CHAPTER_PRELOAD__ = {manifestUrl: source, manifest: wrong};
     assert.equal(await (await h.loader.loadChapterManifestDocument()).text(), "content");
+    assert.equal(h.requests.at(-1).url, h.context.readerContentUrl("./chapter.json"));
+    assert.equal(window.__VOICE_READER_CHAPTER_PRELOAD__.manifest, wrong);
     h.context.chapterManifestUrl = undefined;
     window.__VOICE_READER_CHAPTER_PRELOAD__ = {manifestUrl: source,
       manifest: Promise.resolve(new Response("unavailable", {status: 503}))};
@@ -147,8 +155,25 @@ test("preloads are single-owner and fall back on failure or mismatched identity"
     assert.equal(window.__VOICE_READER_CHAPTER_PRELOAD__.manifest, null);
     assert.equal(h.requests.length, beforeFallback + 1);
     assert.equal(h.requests.at(-1).url, h.context.readerContentUrl(source));
-    window.__VOICE_PDF_PRELOAD__ = {manifestUrl: source, manifest: Promise.reject(new Error("preload failed"))};
-    assert.equal(await (await h.loader.fetchReaderResponse()).text(), "content");
+    const preload = Promise.withResolvers();
+    window.__VOICE_PDF_PRELOAD__ = {manifestUrl: source, manifest: preload.promise};
+    const pending = h.loader.fetchReaderResponse();
+    assert.equal(window.__VOICE_PDF_PRELOAD__.manifest, null);
+    assert.equal(h.requests.length, beforeFallback + 1);
+    h.context.sourceUrl = "https://books.test/next";
+    preload.reject(new Error("preload failed"));
+    assert.equal(await (await pending).text(), "content");
+    assert.equal(h.requests.length, beforeFallback + 2);
+    assert.equal(h.requests.at(-1).url, h.context.readerContentUrl(source));
+
+    const fetchError = new Error("fallback failed"), targets = [];
+    h.context.fetchReaderUrl = target => {targets.push(target); throw fetchError;};
+    window.__VOICE_PDF_PRELOAD__ = {manifestUrl: h.context.sourceUrl, manifest: Promise.resolve(new Response("bad", {status: 503}))};
+    await assert.rejects(h.loader.fetchReaderResponse(), error => error === fetchError);
+    assert.deepEqual(targets, [h.context.sourceUrl], "falling back must not catch and retry its own errors");
+    delete window.__VOICE_READER_CHAPTER_PRELOAD__;
+    globalThis.location = undefined;
+    assert.throws(() => h.loader.loadChapterManifestDocument(), error => error === fetchError);
   } finally {globalThis.window = oldWindow; globalThis.location = oldLocation;}
 });
 

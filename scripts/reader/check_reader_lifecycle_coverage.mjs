@@ -26,7 +26,7 @@ const required = [
   'waitForReader rejects on cancellation and resolves on its timer',
   'reader readiness preserves chapter anchor only when loading node is connected',
   'phase and stage forward return values unchanged',
-  'dispose is idempotent, releases observer and clears all timer handles',
+  'dispose is idempotent and clears all timer handles',
   'failure cleanup preserves message, lifecycle stage and retry control semantics',
   'retry click waits for progress and reloads only while reader remains live'
 ].map(name => ({name}));

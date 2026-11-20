@@ -103,17 +103,26 @@ export function createReaderDocumentLoader(readerContext) {
     });
   }
 
+  /** @param {string} target @param {ReaderManifestPreload | undefined} early */
+  function takeMatchingManifestPreload(target, early) {
+    if (!early) return null;
+    const pending = early.manifest;
+    if (!pending) return null;
+    if (early.manifestUrl !== new URL(target, location.href).href) return null;
+    early.manifest = null;
+    return pending;
+  }
+
+  /** @param {string} target @param {ReaderManifestPreload | undefined} early */
+  function fetchManifestWithPreload(target, early) {
+    const pending = takeMatchingManifestPreload(target, early);
+    const fallback = () => readerContext.fetchReaderUrl(target);
+    if (!pending) return fallback();
+    return pending.then(response => response?.ok ? response : fallback(), fallback);
+  }
+
   function fetchReaderResponse() {
-    const early = /** @type {ReaderManifestPreload | undefined} */ (window.__VOICE_PDF_PRELOAD__);
-    if (early?.manifest && early.manifestUrl === new URL(readerContext.sourceUrl, location.href).href) {
-      const pending = early.manifest;
-      early.manifest = null;
-      return pending.then(
-        (response) => (response?.ok ? response : readerContext.fetchReaderUrl(readerContext.sourceUrl)),
-        () => readerContext.fetchReaderUrl(readerContext.sourceUrl)
-      );
-    }
-    return readerContext.fetchReaderUrl(readerContext.sourceUrl);
+    return fetchManifestWithPreload(readerContext.sourceUrl, window.__VOICE_PDF_PRELOAD__);
   }
 
   /** @param {Promise<unknown>[]} engineTasks @returns {PreparedReaderDocument} */
@@ -165,13 +174,8 @@ export function createReaderDocumentLoader(readerContext) {
   }
 
   function loadChapterManifestDocument() {
-    const target = readerContext.chapterManifestUrl || readerContext.sourceUrl, early = /** @type {ReaderManifestPreload | undefined} */ (window.__VOICE_READER_CHAPTER_PRELOAD__);
-    if (early?.manifest && early.manifestUrl === new URL(target, location.href).href) {
-      const pending = early.manifest;
-      early.manifest = null;
-      return pending.then(response => response.ok ? response : readerContext.fetchReaderUrl(target), () => readerContext.fetchReaderUrl(target));
-    }
-    return readerContext.fetchReaderUrl(target);
+    const target = readerContext.chapterManifestUrl || readerContext.sourceUrl;
+    return fetchManifestWithPreload(target, window.__VOICE_READER_CHAPTER_PRELOAD__);
   }
 
   return {

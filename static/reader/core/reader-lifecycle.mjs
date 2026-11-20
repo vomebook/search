@@ -11,7 +11,6 @@
  * @property {() => void} drainPdfTextWaiters
  * @property {(name: string, value: number) => boolean} isReaderGenerationCurrent
  * @property {(update: {restorationReady: boolean}) => unknown} updateDocumentState
- * @property {MutationObserver | null} contentSanitizerObserver
  * @property {number} saveTimer
  * @property {number} themeAnimationTimer
  * @property {number} panelAnimationTimer
@@ -148,8 +147,6 @@ export function createReaderLifecycle(readerContext) {
     if (readerContext.readerLifecycle.disposed) return;
     readerContext.updateDocumentState({ restorationReady: false });
     readerContext.readerRuntime.dispose();
-    readerContext.contentSanitizerObserver?.disconnect();
-    readerContext.contentSanitizerObserver = null;
     clearTimeout(readerContext.saveTimer);
     clearTimeout(readerContext.themeAnimationTimer);
     clearTimeout(readerContext.panelAnimationTimer);
