@@ -17,7 +17,7 @@ const rows = text.split(/\r?\n/).filter(line =>
 const required = [
   "site key projection preserves native sorting and site-specific fields",
   "memo stays identical for unchanged inputs and invalidates aliased edits",
-  "explicit folders hide legacy folders without overwriting their state",
+  "canonical snapshot keys keep their exact bytes for empty and mixed folder selections",
   "site-specific sort defaults and missing sort control retain original bytes",
   "sparse arrays and custom iterators keep each site copy semantics",
   "encoder failures do not replace a previously usable memo",
@@ -27,7 +27,7 @@ const required = [
   "both site projections use exact field order, defaults and filtering",
   "projection preserves per-site iterator and sparse-array copy behavior",
   "cache hits retain identity and invalidations never reuse stale snapshots",
-  "both explicit-folder paths hide legacy values and preserve identity",
+  "both explicit-folder paths preserve identity and invalidate on in-place changes",
   "explicit callbacks preserve evaluation order and failures propagate"
 ].map(name => ({name}));
 if (result.status !== 0 || rows.length !== 1 || !hasPassingTapContracts(text, required)) {
