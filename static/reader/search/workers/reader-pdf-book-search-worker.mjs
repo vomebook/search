@@ -51,9 +51,8 @@ async function loadBook() {
     /** @type {{pages: import('../reader-pdf-book-compact.mjs').SearchPage[]}} */
     const compact = { pages: validated.pages };
     let deadline = performance.now() + 8;
-    for (let index = 0; index < compact.pages.length; index++) {
+    for (const [index, page] of compact.pages.entries()) {
       if (request.signal.aborted) throw aborted();
-      const page = compact.pages[index];
       compact.pages[index] = compactPdfBookPage(page);
       if (index % 16 === 15 && performance.now() >= deadline) {
         await pause();
@@ -97,6 +96,7 @@ async function loadSearchPartition(part, current, owners = null, prefetched = nu
  * @param {import('../../../../typings/reader-pdf-worker-strict').Progress} progress */
 async function searchPartitions(query, current, progress) {
   validatePdfPartitionConfiguration(configuration, self.location.href, limit);
+  const partitions = /** @type {PartitionReference[]} */ (configuration.partitions);
   /** @type {number[]} */ const counts = [];
   /** @type {import('../../../../typings/reader-pdf-worker-strict').FirstHits} */ const first = [];
   let total = 0, complete = false;
@@ -116,17 +116,20 @@ async function searchPartitions(query, current, progress) {
     if (!offset) return {total, offset, pageSize: 50, results: first.slice(), complete};
     /** @type {import('../../../../typings/reader-pdf-worker-strict').FirstHits} */ const results = [];
     let skipped = 0;
-    for (let i = 0; i < counts.length && results.length < 50; i++) {
+    for (const [i, count] of counts.entries()) {
+      if (results.length >= 50) break;
       if (!current()) throw aborted();
-      if (skipped + counts[i] <= offset) {skipped += counts[i]; continue;}
+      if (skipped + count <= offset) {skipped += count; continue;}
       let part, local;
       if (retained?.number === i) ({part, local} = retained);
       else {
         retained = null;
-        part = await loadSearchPartition(/** @type {PartitionReference[]} */ (configuration.partitions)[i], current);
+        const reference = partitions[i];
+        if (!reference) throw new Error("PDF_V3_GENERATION_CHANGED");
+        part = await loadSearchPartition(reference, current);
         local = await searchBookText(part, query, {current, yieldTask: pause});
         if (!current()) throw aborted();
-        if (local.total !== counts[i]) throw new Error("PDF_V3_GENERATION_CHANGED");
+        if (local.total !== count) throw new Error("PDF_V3_GENERATION_CHANGED");
         remember(i, part, local);
       }
       if (!current()) throw aborted();
@@ -138,18 +141,17 @@ async function searchPartitions(query, current, progress) {
         results.push(...decoratePdfPartitionHits(hits, part.pages));
         position += hits.length;
       }
-      skipped += counts[i];
+      skipped += count;
     }
     return {total, offset, pageSize: 50, results, complete};
   }};
   const owners = new Set();
   const connection = (/** @type {typeof self.navigator & {connection?: {saveData?: unknown, effectiveType?: unknown}}} */ (self.navigator))?.connection;
   /** @type {Promise<import('../../../../typings/reader-pdf-worker-strict').PrefetchOutcome> | null} */ let pending = null;
-  const partitions = /** @type {PartitionReference[]} */ (configuration.partitions);
   try {
-    for (let position = 0; position < partitions.length; position++) {
+    for (const [position, part] of partitions.entries()) {
       if (!current()) throw aborted();
-      const part = partitions[position], ahead = pending;
+      const ahead = pending;
       pending = null;
       const valuePromise = ahead ? ahead.then(outcome => {
         if ("error" in outcome) throw outcome.error;
