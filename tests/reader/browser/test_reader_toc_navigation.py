@@ -1007,6 +1007,58 @@ class TocNavigationTests(unittest.TestCase):
         self.assertGreaterEqual(result["after"] - result["before"], 1400,
                                 "a reader scroll must not be pulled back by the hold")
 
+    def test_new_navigation_supersedes_the_previous_landing_hold(self):
+        held = []
+        delayed_chapter = '**/api/reader-bucket-resource?path=*chapter-0012.xhtml'
+
+        def delay_chapter():
+            self.page.route(delayed_chapter, lambda route: held.append(route))
+
+        self.open_chapters(12, fragments=True, before_open=delay_chapter)
+
+        def wait_for_landing(index, selector):
+            self.page.wait_for_function('''([index, selector]) => {
+                const target = document.querySelector(selector);
+                const viewport = document.querySelector('#viewport');
+                return __toc.hasHold() && __toc.nav().currentChapterIndex === index && target &&
+                    Math.abs(target.getBoundingClientRect().top - viewport.getBoundingClientRect().top) < 2;
+            }''', arg=[index, selector])
+
+        old_target = '.reader-epub-chapter[data-chapter="4"]'
+        self.page.locator('#toc-list [data-toc-index="3"] .panel-item-main').dispatch_event('click')
+        wait_for_landing(3, old_target)
+
+        # Use the sidebar handler without sending input to the reading viewport:
+        # viewport input would release the hold independently of navigation.
+        new_index, new_target = 23, '#sec-12-b'
+        with self.page.expect_request(delayed_chapter):
+            holds = self.page.locator(f'#toc-list [data-toc-index="{new_index}"] .panel-item-main').evaluate('''row => {
+                const before = __toc.hasHold();
+                row.click();
+                return [before, __toc.hasHold()];
+            }''')
+        self.assertEqual(holds, [True, False], 'the old hold must release before the new chapter arrives')
+        self.assertIsNone(self.offset_of(new_target), 'the new chapter should still be loading')
+        self.assertEqual(len(held), 1)
+        held[0].fulfill(content_type='text/html', body=chapter_body(12))
+        wait_for_landing(new_index, new_target)
+
+        # Keep the old destination mounted, so detaching it cannot hide a stale hold.
+        frames = self.page.locator(new_target).evaluate('''async target => {
+            const viewport = document.querySelector('#viewport');
+            const offsets = [];
+            for (let frame = 0; frame < 6; frame++) {
+                await new Promise(resolve => requestAnimationFrame(resolve));
+                offsets.push(target.getBoundingClientRect().top - viewport.getBoundingClientRect().top);
+            }
+            return offsets;
+        }''')
+        previous_offset = self.offset_of(old_target)
+        self.assertIsNotNone(previous_offset, 'the previous destination must remain mounted')
+        self.assertLess(previous_offset, -100, 'the new landing must be distinct from the previous one')
+        self.assertTrue(all(abs(offset) < 2 for offset in frames), f'the previous hold pulled back: {frames}')
+        self.assertEqual(self.page.evaluate('()=>__toc.nav().currentChapterIndex'), new_index)
+
     def test_landing_hold_is_cancelled_on_disposal(self):
         self.open_chapters(40)
         self.page.evaluate("index => __toc.jump(index)", 19)
