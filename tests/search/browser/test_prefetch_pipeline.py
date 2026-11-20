@@ -24,11 +24,20 @@ class PrefetchPipelineTests(unittest.TestCase):
 
     def start_pipeline(self):
         self.page.evaluate('''() => {
-          const native=window.fetch;window.aheadCalls=[];window.aheadReleases={};
+          const native=window.fetch, render=renderResults;
+          window.aheadCalls=[];window.aheadReleases={};window.aheadPrepaint=[];
+          let firstFrame=false;
+          renderResults=(...args)=>{
+            const result=render(...args);
+            if (STATE.query==='paging-pipeline') requestAnimationFrame(()=>{firstFrame=true});
+            return result;
+          };
           window.aheadActive=0;window.aheadPeak=0;window.pagingTotal=801;window.pagingMode='normal';
           window.fetch=(url,options)=>{
             const body=JSON.parse(options?.body||'{}');
-            if(!String(url).includes('/api/search') || body.q!=='paging-pipeline' || body.page===1) return native(url,options);
+            if(!String(url).includes('/api/search') || options?.method!=='POST' || body.q!=='paging-pipeline') return native(url,options);
+            if (!firstFrame) aheadPrepaint.push(body.page);
+            if (body.page===1) return native(url,options);
             aheadCalls.push(body.page);aheadActive++;aheadPeak=Math.max(aheadPeak,aheadActive);
             return new Promise(resolve=>aheadReleases[body.page]=()=>{
               aheadActive--;resolve(new Response(JSON.stringify({page:body.page,page_size:body.page_size,total:801,
@@ -44,6 +53,7 @@ class PrefetchPipelineTests(unittest.TestCase):
     def test_three_page_lookahead_joins_foreground_and_retains_later_pages(self):
         self.start_pipeline()
         self.assertEqual(self.page.evaluate('aheadCalls'), [2,3])
+        self.assertEqual(self.page.evaluate('aheadPrepaint'), [1,2])
         self.page.evaluate('aheadReleases[3]()')
         self.page.wait_for_function('aheadCalls.includes(4)')
         self.page.evaluate('aheadReleases[4]()')
@@ -197,15 +207,21 @@ class PrefetchPipelineTests(unittest.TestCase):
           fetchSearchPage=async(...args)=>{networkPages.push(args[2].page);return {...cached[args[2].page-2],generation:'stable'}};
           try {
             prefetchSearchPages('/api/search',template);
-            while(controllerActive()) await new Promise(resolve=>setTimeout(resolve,0));
+            await waitForLookahead();
             const reused=Object.keys(STATE._pageCache).map(Number);
             const calls=networkPages.slice();
             cancelSearchPrefetch();STATE._pageCache={};searchResponseStore.cache.clear();
             cached.forEach(entry=>positionPersistence.recentPages.set(JSON.stringify(entry.id), {...entry,generation:'old'}));
             prefetchSearchPages('/api/search',template);
-            while(controllerActive()) await new Promise(resolve=>setTimeout(resolve,0));
+            await waitForLookahead();
             return {reused,calls,revalidated:networkPages};
           } finally {fetchSearchPage=native}
-          function controllerActive(){return searchPrefetchAbortController?.active.size}
+          async function waitForLookahead(){
+            const end=performance.now()+2000;
+            while(!STATE._pageCache[4] || searchPrefetchAbortController?.active.size) {
+              if (performance.now()>=end) throw new Error('lookahead did not finish');
+              await new Promise(resolve=>setTimeout(resolve,10));
+            }
+          }
         }''')
         self.assertEqual(result, {'reused':[2,3,4], 'calls':[], 'revalidated':[2,3,4]})

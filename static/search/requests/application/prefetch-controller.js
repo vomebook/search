@@ -3,6 +3,8 @@
 (function () {
   /** @param {VoiceOfMLSearchPrefetchDependencies} deps */
   function create(deps) {
+    /** @type {WeakMap<VoiceOfMLSearchPrefetchGroup, "waiting" | "ready">} */
+    const firstPaint = new WeakMap();
     /** @param {string} base @param {VoiceOfMLSearchRequestBody} template */
     function prefetch(base, template) {
       const key = deps.readView().key, groupKey = base + "|" + deps.stringify(template);
@@ -24,6 +26,18 @@
         for (const page of controller.attempted) if (page <= view.loadedPage) controller.attempted.delete(page);
         for (let page = view.loadedPage + 1; page <= last && controller.active.size < 2; page++) {
           if (deps.hasPage(page) || controller.attempted.has(page)) continue;
+          // Keep page 2 in the first turn. Open the extra slot after the
+          // foreground frame, or immediately if foreground has reached page 2.
+          if (view.loadedPage === 1 && page > 2 && firstPaint.get(controller) !== "ready") {
+            if (!firstPaint.has(controller)) {
+              firstPaint.set(controller, "waiting");
+              requestAnimationFrame(() => setTimeout(() => {
+                firstPaint.set(controller, "ready");
+                pump();
+              }, 0));
+            }
+            break;
+          }
           controller.attempted.add(page);
           const body = Object.assign({}, template, {page});
           const cacheKey = base + "|" + deps.stringify(body);

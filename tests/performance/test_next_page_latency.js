@@ -198,20 +198,58 @@ for (const {name:project,root} of searchTestProjects()) {
     c.maybeLoadNextPage();
     assert.deepStrictEqual(f.appended,[2]);
   });
-  test(project + " next-page disk wait is bounded without delaying farther cache reuse",async()=>{
-    const f=fixture(source); f.start(); await f.advance(24); assert.strictEqual(f.calls.length,0);
+  test(project + " first paint reserves the synchronous POST for page 2 and then restores two-slot lookahead",async()=>{
+    const f=fixture(source), c=f.context;
+    c.searchPageMetadata.delete(c.STATE.results[0]);
+    f.start(); f.start();
+    assert.deepStrictEqual(f.calls.map(call=>call.page),[2]);
+    assert.strictEqual(f.frames.length,1);
+    f.frames[0]();
+    assert.deepStrictEqual(f.calls.map(call=>call.page),[2]);
+    await f.advance(0);
+    assert.deepStrictEqual(f.calls.map(call=>call.page),[2,3]);
+    f.calls[1].resolve({...f.data(3),generation:undefined}); await f.flush();
+    assert.deepStrictEqual(f.calls.map(call=>call.page),[2,3,4]);
+    assert.deepStrictEqual([...c.searchPrefetchAbortController.active.keys()],[2,4]);
+  });
+  test(project + " first-paint gate does not hold page 3 after page 2 is displayed",async()=>{
+    const f=fixture(source), c=f.context;
+    c.searchPageMetadata.delete(c.STATE.results[0]);
+    f.start(); f.calls[0].resolve(f.data(2)); await f.advance(0);
+    assert.deepStrictEqual(f.calls.map(call=>call.page),[2]);
+    assert(f.context.STATE._pageCache[2]);
+    f.setScroll(400); c.maybeLoadNextPage(); f.start();
+    assert.deepStrictEqual(f.appended,[2]);
+    assert.deepStrictEqual(f.calls.map(call=>call.page),[2,3,4]);
+    f.frames[0](); await f.advance(0);
+    assert.deepStrictEqual(f.calls.map(call=>call.page),[2,3,4]);
+  });
+  test(project + " cancelled first-paint lookahead cannot start later pages",async()=>{
+    const f=fixture(source), c=f.context;
+    c.searchPageMetadata.delete(c.STATE.results[0]);
+    f.start(); f.frames[0](); c.cancelSearchPrefetch();
+    await f.advance(0);
+    assert.deepStrictEqual(f.calls.map(call=>call.page),[2]);
+    assert.strictEqual(f.calls[0].signal.aborted,true);
+  });
+  test(project + " next-page disk wait stays bounded and farther pages keep their cache budget after paint",async()=>{
+    const f=fixture(source); f.start(); await f.advance(16); f.frames[0]();
+    await f.advance(24); assert.strictEqual(f.calls.length,0);
     await f.advance(25); assert.deepStrictEqual(f.calls.map(c=>[c.page,c.at]),[[2,25]]);
-    await f.advance(150); assert.deepStrictEqual(f.calls.map(c=>[c.page,c.at]),[[2,25],[3,150]]);
+    await f.advance(165); assert.strictEqual(f.calls.length,1);
+    await f.advance(166); assert.deepStrictEqual(f.calls.map(c=>[c.page,c.at]),[[2,25],[3,166]]);
   });
   test(project + " memory-cached pages avoid transport",async()=>{
     const f=fixture(source);
     for (let page=2;page<=4;page++) f.context.recentSearchPages.set(JSON.stringify(["query",page]),{
       ...f.data(page),key:"query",...(project === "github-Search" ? {resultBackend:"api"} : {}),savedAt:Date.now()});
-    f.start(); await f.flush(); assert.strictEqual(f.calls.length,0);
+    f.start(); await f.flush();
+    assert.deepStrictEqual(Object.keys(f.context.STATE._pageCache),["2"]);
+    f.frames[0](); await f.advance(0); assert.strictEqual(f.calls.length,0);
     assert.deepStrictEqual(Object.keys(f.context.STATE._pageCache),["2","3","4"]);
   });
   test(project + " later page promotion ends disk wait and late disk data cannot replace transport",async()=>{
-    const f=fixture(source); f.start(); await f.advance(25);
+    const f=fixture(source); f.start(); f.frames[0](); await f.advance(25);
     f.context.STATE._loadedPage=2;
     f.context.prefetchSearchPages("/api/search",{q:"query",page:1,page_size:100});
     await f.flush();
@@ -280,7 +318,7 @@ for (const {name:project,root} of searchTestProjects()) {
     }
   });
   test(project + " ready next page honors 5 percent without draining the buffer",async()=>{
-    const f=fixture(source); f.context.positionStorage.close(); f.start(); await f.flush();
+    const f=fixture(source); f.context.positionStorage.close(); f.start(); f.frames[0](); await f.advance(0);
     f.setScroll(299); f.calls[0].resolve(f.data(2)); await f.advance(0);
     assert.deepStrictEqual(f.appended,[]);
     f.setScroll(400); f.context.scheduleBottomLoad(0,2); await f.advance(0);
@@ -296,7 +334,7 @@ for (const {name:project,root} of searchTestProjects()) {
     await f.advance(0); assert.deepStrictEqual(f.appended,[2]);
   });
   test(project + " cancelled query ignores late disk and transport bodies",async()=>{
-    const f=fixture(source); f.start(); await f.advance(150);
+    const f=fixture(source); f.start(); f.frames[0](); await f.advance(150);
     f.context.searchPrefetchAbortController.abort(); f.context.queryKey="new-query";
     f.calls.forEach(c=>c.resolve(f.data(c.page)));
     f.reads.forEach((request,i)=>{request.result={...f.data(i+2),key:"query",savedAt:Date.now()};request.onsuccess();});

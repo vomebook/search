@@ -181,22 +181,27 @@ test('prefetch abort reentry cannot clear the replacement group', () => {
   assert.equal(c.searchPrefetchAbortController, newer);
 });
 
-test('online first page prefetch starts pages two and three and path-only reuses the group', () => {
-  const requests = [];
+test('online first page prefetch starts page two immediately and path-only reuses the scheduled lookahead', () => {
+  const requests = [], frames = [], tasks = [];
   const c = fixture(['getSearchPageMetadata', 'prefetchSearchPages'], {searchPrefetchAbortController:null,
     STATE:{_loadedPage:1,total:301,pageSize:100,_pageCache:{},results:[{}]},
     document:{hidden:false},navigator:{onLine:true},searchPageMetadata:new WeakMap(),
     getSearchViewKey:() => 'same-view',stableSearchStringify:JSON.stringify,
-    getCachedSearchResponse:() => null,
+    getCachedSearchResponse:() => null, requestAnimationFrame(fn) { frames.push(fn); }, setTimeout(fn) { tasks.push(fn); },
     fetchSearchPage(key, base, body, signal) { requests.push({page:body.page,signal}); return new Promise(() => {}); },
     APPEND_REQUEST_TIMEOUT:10000});
   c.prefetchSearchPages('/api/search',{q:'paging',page:1,page_size:100});
-  assert.deepEqual(requests.map(r => r.page), [2,3]);
+  assert.deepEqual(requests.map(r => r.page), [2]);
   const group = c.searchPrefetchAbortController;
   c.STATE.browserPath = 'path-only';
   c.prefetchSearchPages('/api/search',{q:'paging',page:1,page_size:100});
   assert.equal(c.searchPrefetchAbortController, group);
-  assert.equal(requests.length, 2);
+  assert.equal(frames.length, 1);
+  frames[0]();
+  assert.deepEqual(requests.map(r => r.page), [2]);
+  assert.equal(tasks.length, 1);
+  tasks[0]();
+  assert.deepEqual(requests.map(r => r.page), [2,3]);
   assert.equal(group.signal.aborted, false);
 });
 
