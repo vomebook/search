@@ -1441,7 +1441,11 @@ test('gzip and replace-corpus keep the per-worker generation fallback without fi
   const data = compact(records);
   for (const opts of [{crypto:undefined}, {crypto:{}}, {TextEncoder:undefined}]) {
     const worker = gzipWorker(opts);
-    worker.context.fetch = async () => new Response(gzipSync('\ufeff' + JSON.stringify(data)));
+    // The extra JSON field is ignored by the compact decoder. Native JSON.parse
+    // accepts it, but JSON.stringify would recurse beyond the serializer stack.
+    const nested = '['.repeat(10000) + '0' + ']'.repeat(10000);
+    const source = '\ufeff' + JSON.stringify(data).slice(0, -1) + ',"ignored":' + nested + '}';
+    worker.context.fetch = async () => new Response(gzipSync(source));
     await worker.request('load-corpus', {url:'/corpus'});
     const first = await worker.request('local-search', {q:''});
     assert.match(first.snapshot_generation, /^worker:[^:]+:1$/);

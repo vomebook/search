@@ -96,7 +96,7 @@ for (const { name: project, root } of searchTestProjects()) {
   test(project + " restore accounting ignores stale result budgets and preserves native JSON fallback", () => {
     const {c,encoded} = fixture(source, root);
     const store = c.resultSnapshots;
-    const snapshot = vm.runInContext(`({key: 'restore', results: [, {File: 'old'}, ,]})`, c);
+    const snapshot = vm.runInContext(`Object.hasOwn = undefined; ({key: 'restore', results: [, {File: 'old'}, ,]})`, c);
     const expected = value => new TextEncoder().encode(JSON.stringify(value)).length + 256;
     const prior = store.budget.measure(snapshot.results, true);
     snapshot.results[1] = {File: 'changed 📚'};

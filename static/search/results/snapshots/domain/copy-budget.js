@@ -26,7 +26,7 @@
     for (const key of array ? Object.getOwnPropertyNames(value) : Object.keys(value)) {
       if (array && !isIndex(key, value.length)) continue;
       const property = Object.getOwnPropertyDescriptor(value, key);
-      if (!property || !Object.hasOwn(property, "value") || !plainData(property.value, depth + 1)) return false;
+      if (!property || !Object.prototype.hasOwnProperty.call(property, "value") || !plainData(property.value, depth + 1)) return false;
     }
     return true;
   }
@@ -44,7 +44,7 @@
     let results;
     for (const key of Object.keys(snapshot)) {
       const property = Object.getOwnPropertyDescriptor(snapshot, key);
-      if (!property || !Object.hasOwn(property, "value")) return;
+      if (!property || !Object.prototype.hasOwnProperty.call(property, "value")) return;
       if (key === "results") {
         results = property.value;
         envelope.results = [];
@@ -65,7 +65,7 @@
     for (const key of Object.getOwnPropertyNames(results)) {
       if (!isIndex(key, results.length)) continue;
       const property = Object.getOwnPropertyDescriptor(results, key);
-      if (!property || !Object.hasOwn(property, "value") || !plainData(property.value)) return;
+      if (!property || !Object.prototype.hasOwnProperty.call(property, "value") || !plainData(property.value)) return;
       slots++;
       batch.push(property.value);
       if (batch.length === 100) flush();

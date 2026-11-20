@@ -449,7 +449,7 @@ async function corpusFingerprint(source) {
 
 /** @param {unknown} data @param {string | null} [fingerprint] @param {boolean} [fromJSON] */
 async function installCorpus(data, fingerprint, fromJSON = false) {
-  if (fingerprint == null) fingerprint = await corpusFingerprint(JSON.stringify(data));
+  if (fingerprint === undefined) fingerprint = canFingerprintCorpus() ? await corpusFingerprint(JSON.stringify(data)) : null;
   const nextRecords = decodeSearchPayload(data);
   data = null;
   const result = replaceCorpus(nextRecords, fromJSON);
