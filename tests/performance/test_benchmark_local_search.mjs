@@ -22,7 +22,7 @@ const canonical = value => Array.isArray(value) ? `[${value.map(canonical).join(
     ? `{${Object.keys(value).sort().map(key => `${JSON.stringify(key)}:${canonical(value[key])}`).join(",")}}`
     : JSON.stringify(value);
 
-function fixture({bypassCache = false} = {}) {
+function fixture({bypassCache = false, data: fixtureData} = {}) {
   const dir = mkdtempSync(path.join(os.tmpdir(), "pages-benchmark-test-"));
   const scriptDir = path.join(dir, "scripts/benchmarks"), workerDir = path.join(dir, "static/search");
   const dataDir = path.join(dir, "data");
@@ -57,7 +57,7 @@ function fixture({bypassCache = false} = {}) {
     assert.equal(benchmark.split(probe).length, 2, "probe must be unique");
     writeFileSync(scriptPath, benchmark.replace(probe, disabled));
   }
-  const data = {v: 2, rp: ["Repo/A"], fd: [[]],
+  const data = fixtureData ?? {v: 2, rp: ["Repo/A"], fd: [[]],
     rc: Array.from({length: 625}, (_, i) => [0, "手机", "pdf", 0, i % 10, 0])};
   const raw = Buffer.from(JSON.stringify(data));
   const compressed = gzipSync(raw);
@@ -78,8 +78,8 @@ function fixture({bypassCache = false} = {}) {
     writeFileSync(manifestPath, JSON.stringify(manifest));
   }
   save();
-  function run(extra = [], generation = manifest.generation, {sourceDir = dataDir, timeout = 30000} = {}) {
-    return spawnSync(process.execPath, [scriptPath, "--data-dir", sourceDir, "--generation", generation,
+  function run(extra = [], generation = manifest.generation, {sourceDir = dataDir, timeout = 30000, nodeArgs = []} = {}) {
+    return spawnSync(process.execPath, [...nodeArgs, scriptPath, "--data-dir", sourceDir, "--generation", generation,
       ...(extra.includes("--iterations") ? [] : ["--iterations", "1"]),
       ...(extra.includes("--warmup") ? [] : ["--warmup", "0"]), ...extra], {encoding: "utf8", timeout});
   }
@@ -248,6 +248,36 @@ snapshotTest("full stable ID order, pagination, sort ties, and source identity",
   assert.equal(output.queries.find(q => q.params.q === "不存在").total, 0);
 }));
 
+snapshotTest("fuzzy workload reports eligible checks, build cost and full ID parity on a synthetic fixture", () => withFixture(f => {
+  failed(f.run(["--workload", "fuzzy"]), /requires node --expose-gc/);
+  const result = f.run(["--workload", "fuzzy"], undefined, {nodeArgs: ["--expose-gc"]});
+  assert.equal(result.status, 0, result.stderr);
+  const output = JSON.parse(result.stdout);
+  assert.equal(output.workload, "fuzzy");
+  assert.ok(output.corpus_utf8_json_parse_ms >= 0);
+  assert.ok(output.index.build_ms >= 0);
+  for (const memory of [output.index.memory_before, output.index.memory_after]) {
+    assert.ok(Number.isSafeInteger(memory.heap_bytes) && memory.heap_bytes > 0);
+    assert.ok(Number.isSafeInteger(memory.array_buffer_bytes) && memory.array_buffer_bytes >= 0);
+  }
+  assert.deepEqual(output.index.length_histograms, {all: {2: 1, 7: 1, 18: 1}, files_only: {2: 1, 7: 1}});
+  const expected = Array.from({length: 625}, (_, i) => `Repo/A\u001flengthdistribution/marxism/pdf\u001f${i}`);
+  const hits = output.queries.filter(query => query.params.q === "marxim");
+  assert.equal(hits.length, 2);
+  for (const query of hits) {
+    assert.equal(query.first.index_before, true);
+    assert.equal(query.measured_index_before, true);
+    assert.equal(query.fuzzy_checks, 1);
+    assert.equal(query.total, 625);
+    assert.equal(query.uncached.ordered_ids_sha256, hash(Buffer.from(JSON.stringify(expected))));
+    assert.equal(query.cached.ordered_ids_sha256, query.uncached.ordered_ids_sha256);
+  }
+  // No Chinese unigram posting exists for this query on the fixture.
+  assert.equal(output.queries.find(query => query.params.q === "中机").fuzzy_checks, 0);
+  assert.equal(output.queries.find(query => query.params.exact).fuzzy_checks, 0);
+}, {data: {v: 2, rp: ["Repo/A"], fd: [["lengthdistribution"], []],
+  rc: [...Array.from({length: 625}, () => [0, "marxism", "pdf", 0, 0, 0]), [0, "ab", "pdf", 1, 0, 0]]}}));
+
 nodeTest("CLI requires an explicit directory and generation; validates all counts and options", () => withFixture(f => {
   for (const args of [[], ["--data-dir", f.dataDir], ["--generation", f.manifest.generation]]) {
     const result = spawnSync(process.execPath, [f.scriptPath, ...args], {encoding: "utf8"});
@@ -258,7 +288,7 @@ nodeTest("CLI requires an explicit directory and generation; validates all count
       "--iterations", value], {encoding: "utf8"});
     failed(result, /--iterations must be an integer/);
   }
-  for (const args of [["--warmup", "11"], ["--warmup", "-1"], ["--unknown", "1"], ["--data-dir", f.dataDir]]) {
+  for (const args of [["--warmup", "11"], ["--warmup", "-1"], ["--unknown", "1"], ["--data-dir", f.dataDir], ["--workload", "unknown"]]) {
     failed(f.run(args), /usage:|--warmup must be an integer/);
   }
   const help = spawnSync(process.execPath, [f.scriptPath, "--help"], {encoding: "utf8"});

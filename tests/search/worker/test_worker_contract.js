@@ -815,10 +815,6 @@ test("background indexing yields, publishes complete indexes and preserves cold 
     (await cold.worker.request("local-search", {q: "手*机", exact: true})).total);
   while (tasks.size) tick();
   assert.strictEqual(vm.runInContext("wordIndex !== null && fulltextBuild === null", worker.context), true);
-  assert.strictEqual(vm.runInContext(`
-    JSON.stringify(vocabSorted) === JSON.stringify(Object.keys(wordIndex).map(token => [token, wordIndex[token].length]).sort((a, b) => b[1] - a[1])) &&
-    JSON.stringify(vocabSortedFilesOnly) === JSON.stringify(Object.keys(wordIndexFilesOnly).map(token => [token, wordIndexFilesOnly[token].length]).sort((a, b) => b[1] - a[1]))
-  `, worker.context), true);
   for (const params of [{q: "alpha beta"}, {q: "alhpa"}, {q: "手机"}, {q: "alpha", searchFolders: false}]) {
     const warmed = await worker.request("local-search", params);
     const expected = await cold.worker.request("local-search", params);
@@ -826,7 +822,7 @@ test("background indexing yields, publishes complete indexes and preserves cold 
     assert.strictEqual(warmed.total, expected.total);
   }
 });
-test("shared token parts preserve complete postings and vocabulary ties with bounded folder reuse", async () => {
+test("shared token parts preserve complete postings and length buckets with bounded folder reuse", async () => {
   const input = Array.from({length: 600}, (_, i) => ({...records[0],
     File: ["A123文化B", "文化 beta 123", "İ手机", "alpha alpha", "文。化", ""][i % 6],
     Folder: ["目录 alpha " + (i % 80), "手机 Beta 123"]}));
@@ -862,10 +858,35 @@ test("shared token parts preserve complete postings and vocabulary ties with bou
   assert.strictEqual(vm.runInContext('Object.values(wordIndex).every(value => value instanceof Uint32Array)', worker.context), true);
   for (const name of ["all", "files"]) {
     assert.deepStrictEqual(Object.entries(actual[name]), Object.entries(expected[name]));
-    const vocab = Object.keys(expected[name]).map(token => [token, expected[name][token].length]).sort((a, b) => b[1] - a[1]);
-    assert.deepStrictEqual(JSON.parse(vm.runInContext("JSON.stringify(" + (name === "all" ? "vocabSorted" : "vocabSortedFilesOnly") + ")", worker.context)), vocab);
+    const buckets = Object.groupBy(Object.keys(expected[name]), token => token.length);
+    const variable = name === "all" ? "vocabByLength" : "vocabByLengthFilesOnly";
+    const published = JSON.parse(vm.runInContext(`JSON.stringify(Object.fromEntries(${variable}))`, worker.context));
+    assert.deepStrictEqual(published, {...buckets});
   }
   assert.strictEqual(vm.runInContext("fulltextBuild === null", worker.context), true);
+});
+test("length buckets honor deadlines and work caps and never publish across generations", async () => {
+  const input = Array.from({length: 5000}, (_, i) => ({...records[0], File: `unique${i}`}));
+  const worker = makeWorker(source, {Date: {now: () => 0}});
+  await worker.request("replace-corpus", {data:compact(input)});
+  vm.runInContext("advanceFulltext(records.length, 0)", worker.context);
+  assert(vm.runInContext("fulltextBuild.next === 1 && wordIndex === null", worker.context));
+  vm.runInContext("advanceFulltext(records.length, 1)", worker.context);
+  assert(vm.runInContext(`wordIndex === null && wordIndexFilesOnly === null &&
+    vocabByLength.size === 0 && vocabByLengthFilesOnly.size === 0 &&
+    fulltextBuild.allVocab.next === 4096 && fulltextBuild.filesVocab === undefined`, worker.context));
+  vm.runInContext("advanceFulltext(records.length, 0)", worker.context);
+  assert(vm.runInContext("fulltextBuild.allVocab.next === 4096", worker.context));
+  vm.runInContext("advanceFulltext(records.length, 1)", worker.context);
+  assert(vm.runInContext("fulltextBuild.filesVocab.next === 4096 && wordIndex === null", worker.context));
+  await worker.request("replace-corpus", {data:compact([{...records[0], File:"unique", Folder:[]}])});
+  assert(vm.runInContext("fulltextBuild === null && vocabByLength.size === 0 && vocabByLengthFilesOnly.size === 0", worker.context));
+  assert.strictEqual((await worker.request("local-search", {q:"uniqux"})).total, 1);
+  assert(vm.runInContext(`wordIndex !== null && wordIndexFilesOnly !== null && fulltextBuild === null &&
+    vocabByLength.size === 1 && vocabByLengthFilesOnly.size === 1 &&
+    vocabByLength.get(6).join() === "unique" && vocabByLengthFilesOnly.get(6).join() === "unique"`, worker.context));
+  await worker.request("replace-corpus", {data:compact([])});
+  assert(vm.runInContext("wordIndex === null && vocabByLength.size === 0 && vocabByLengthFilesOnly.size === 0", worker.context));
 });
 test("posting compaction yields before atomic publication and resumes after cancellation", async () => {
   const input = Array.from({length: 5000}, (_, i) => ({...records[0], File: `unique${i}`}));
@@ -1225,19 +1246,38 @@ test("only in-scope literal hits and exact postings suppress fuzzy expansion", a
   }
 });
 
-test("fuzzy collection deduplicates postings while preserving first-seen order", async () => {
-  const input = Array.from({length:900},(_, i)=>({...records[0],
-    Repo:i%2?'Repo/A':'Repo/B', File:['za','zb','zc','zd','ze','zf'][i%6]+' '+i, Folder:[]}));
-  const {worker}=await loaded(input);
-  vm.runInContext('buildFulltext();globalThis.originalIntersect=intersectCandidateLists;globalThis.firstProbe=[];intersectCandidateLists=(lists,sorted)=>{if(!sorted)firstProbe=Array.from(lists[0]);return originalIntersect(lists,sorted)}',worker.context);
-  const result=await worker.request('local-search',{q:'zz',pageSize:100});
-  const observed=JSON.parse(vm.runInContext('JSON.stringify(firstProbe)',worker.context));
-  const expected=JSON.parse(vm.runInContext(`JSON.stringify((()=>{const old=[];for(const [word] of vocabSorted)
-    if(couldBeFuzzy('zz',word,1)&&editDistance('zz',word,1)<=1)for(const id of wordIndex[word])old.push(id);
-    return Array.from(new Set(old))})())`,worker.context));
-  assert.deepStrictEqual(observed,expected);
-  assert.strictEqual(new Set(observed).size,observed.length);
-  assert.strictEqual(result.total,900);
+test("fuzzy length buckets deduplicate postings and preserve full ID order despite changed traversal", async () => {
+  const input = Array.from({length:900}, (_, i) => ({...records[0],
+    File:["za zaz", "za", "zaz", "z", "zb", "ZB"][i % 6], Folder:[]}));
+  const {worker} = await loaded(input);
+  vm.runInContext(`buildFulltext();
+    globalThis.originalIntersect = intersectCandidateLists;
+    intersectCandidateLists = (lists, sorted) => {
+      if (!sorted) globalThis.firstProbe = Array.from(lists[0]);
+      return originalIntersect(lists, sorted);
+    };`, worker.context);
+  // The old frequency traversal starts with za/zaz (300 each), not z (150).
+  const legacy = Array.from(vm.runInContext(`Array.from(new Set(Object.keys(wordIndex)
+    .sort((a, b) => wordIndex[b].length - wordIndex[a].length)
+    .filter(word => editDistance("zz", word, 1) <= 1)
+    .flatMap(word => Array.from(wordIndex[word]))))`, worker.context));
+  for (const searchFolders of [true, false]) for (const sort of ["relevance", "name", "size"]) {
+    const params = {searchFolders, sort, pageSize:500};
+    const orderedIds = async q => {
+      const first = await worker.request("local-search", {...params, q});
+      const second = await worker.request("local-search", {...params, q, page:2,
+        anchorId:"Repo/A\0" + "z.txt"});
+      assert.strictEqual(first.total, 900);
+      assert.strictEqual(second.total, 900);
+      return {ids:first.ids.concat(second.ids), anchor:second.anchor_index};
+    };
+    // All matches have zero relevance and equal size, and case variants and
+    // duplicates expose stable name ties and distinguish IDs from filenames.
+    assert.deepStrictEqual(await orderedIds("zz"), await orderedIds(""));
+    const observed = Array.from(worker.context.firstProbe);
+    assert.notDeepStrictEqual(observed, legacy, "fixture must exercise a real traversal change");
+    assert.deepStrictEqual(observed.sort((a, b) => a - b), legacy.slice().sort((a, b) => a - b));
+  }
 });
 test("non-exact results include literal filename and repository hits", async () => {
   const input = [{...records[0], Repo:"Repo/A", File:"Marxist"}];
@@ -1267,8 +1307,8 @@ test("large fuzzy posting does not exceed the engine argument limit", async () =
   vm.runInContext(`records = Array.from({length: 200000}, () => records[0]);
     recordIds = Array.from({length: records.length}, (_,i) => String(i));
     recordIndices = Array.from({length: records.length}, (_,i) => i);
-    wordIndex = {alpha: recordIndices}; vocabSorted = [['alpha', recordIndices.length]];
-    wordIndexFilesOnly = wordIndex; vocabSortedFilesOnly = vocabSorted;`, worker.context);
+    wordIndex = {alpha: recordIndices}; vocabByLength = new Map([[5, ['alpha']]]);
+    wordIndexFilesOnly = wordIndex; vocabByLengthFilesOnly = vocabByLength;`, worker.context);
   const result = await worker.request('local-search', {q:'alphx', pageSize:1});
   assert.strictEqual(result.total, 200000);
   assert.strictEqual(result.records.length, 1);
@@ -1380,32 +1420,39 @@ test("mixed terms keep complete candidates, ranking ties, pages and anchors", as
   }
 });
 
-test("repeated normalized missing tokens scan fuzzy vocabulary only once", async () => {
+test("missing tokens visit only eligible length buckets, once per normalized term", async () => {
   const input = [
-    {...records[0], File:"guide", Folder:[]},
-    {...records[0], File:"other", Folder:["guide"]},
+    {...records[0], File:"guide xyz 1234567 12345678 ab", Folder:[]},
+    {...records[0], File:"other", Folder:["guide defg"]},
+    {...records[0], File:"手册 机", Folder:[]},
+    {...records[0], File:"手 机", Folder:[]},
     ...Array.from({length:64}, (_, i) => ({...records[0], File:`unrelated${i}`, Folder:[]})),
   ];
   const {worker} = await loaded(input);
   vm.runInContext(`buildFulltext();
-    globalThis.fuzzyChecks = 0;
+    globalThis.fuzzyChecks = [];
     globalThis.originalCouldBeFuzzy = couldBeFuzzy;
-    couldBeFuzzy = (...args) => { fuzzyChecks++; return originalCouldBeFuzzy(...args); };`, worker.context);
+    couldBeFuzzy = (...args) => { fuzzyChecks.push(args.slice(0, 2)); return originalCouldBeFuzzy(...args); };`, worker.context);
   for (const searchFolders of [true, false]) {
-    const vocabularySize = vm.runInContext(searchFolders ? 'vocabSorted.length' : 'vocabSortedFilesOnly.length', worker.context);
-    for (const sort of ["relevance", "name", "size"]) {
-      const params = {exact:false, searchFolders, sort};
-      vm.runInContext('searchOrderCache.clear(); fuzzyChecks = 0;', worker.context);
-      const single = await worker.request("local-search", {...params, q:"guied"});
-      assert.strictEqual(single.total, searchFolders ? 2 : 1);
-      assert.strictEqual(vm.runInContext('fuzzyChecks', worker.context), vocabularySize);
-      vm.runInContext('searchOrderCache.clear(); fuzzyChecks = 0;', worker.context);
-      const q = Array.from({length:30}, (_, i) => i % 2 ? "GUIED" : "guied").join("\t ");
-      const repeated = await worker.request("local-search", {...params, q});
-      assert.deepStrictEqual(repeated, single);
-      assert.strictEqual(vm.runInContext('fuzzyChecks', worker.context), vocabularySize,
-        "30 repeated normalized terms must perform one complete vocabulary scan");
-    }
+    const params = {searchFolders};
+    const check = async (q, token, words, expectedRecords, flags = {}) => {
+      vm.runInContext('searchOrderCache.clear(); fuzzyChecks = [];', worker.context);
+      const result = await worker.request("local-search", {...params, q, ...flags});
+      assert.deepStrictEqual(result.records, expectedRecords, q);
+      assert.deepStrictEqual(clone(worker.context.fuzzyChecks).sort(), words.map(word => [token, word]).sort(), q);
+      return result;
+    };
+    const eligible = ["guide", "xyz", "1234567", "other", ...(searchFolders ? ["defg"] : [])];
+    const matches = input.slice(0, searchFolders ? 2 : 1);
+    const single = await check("guied", "guied", eligible, matches);
+    const repeated = Array.from({length:30}, (_, i) => i % 2 ? "GUIED" : "guied").join("\t ");
+    assert.deepStrictEqual(await check(repeated, "guied", eligible, matches), single);
+    await check("手机", "手机", ["ab", "手册"], [input[2]]);
+    await check("囧 囧", "囧", [], []); // Zero edit budget even on the indexed path.
+    await check("guide", "guide", [], matches); // Exact posting.
+    await check("guid", "guid", [], matches); // Single-term literal hit.
+    await check("guied", "guied", [], [], {exact:true});
+    await check("guid*", "guid*", [], matches);
   }
 });
 

@@ -6,6 +6,10 @@
  * node scripts/benchmarks/benchmark_local_search.mjs --data-dir /path/to/data \
  *   --generation <64-hex-generation> [--iterations 7] [--warmup 1]
  *
+ * For fuzzy miss workloads and index build metrics, pass --workload fuzzy
+ * and run Node with --expose-gc (before the script path). Compare reports
+ * on the same pinned corpus, checking every query's total and full ID hash.
+ *
  * O_NONBLOCK and O_NOFOLLOW are required; platforms without them fail closed.
  * Directory path components (including --data-dir) may be symlinks; the two
  * input files themselves must not be. This is not a parent-directory sandbox.
@@ -44,13 +48,19 @@ const queries = [
   {q: "马克思*.pdf", exact: true}, {q: "?*.pdf", exact: true},
   {q: "*.pdf", exact: true}, {q: "不存在", exact: true},
 ];
-const usage = "usage: node scripts/benchmarks/benchmark_local_search.mjs --data-dir DIR --generation SHA256 [--iterations 1..100] [--warmup 0..10]";
+const fuzzyQueries = [
+  {q: "marxim"}, {q: "marxim", searchFolders: false}, {q: "socialsim"},
+  {q: "revolutionarry"}, {q: "xqz"}, {q: "中机"}, {q: "中机", searchFolders: false},
+  {q: "marxim socialsim", repos: ["VoiceOfML/Marxists-Library"]},
+  {q: "手机"}, {q: "手机", exact: true}, {q: "马克思*.pdf", exact: true},
+];
+const usage = "usage: node scripts/benchmarks/benchmark_local_search.mjs --data-dir DIR --generation SHA256 [--iterations 1..100] [--warmup 0..10] [--workload mixed|fuzzy (fuzzy requires node --expose-gc)]";
 const pathPolicy = "Directory components, including --data-dir, may be symlinks; the manifest and corpus files must not be symlinks. O_NONBLOCK and O_NOFOLLOW are required; this is not a parent-directory sandbox.";
 const gzipPolicy = "Benchmark-only gzip subset: exactly one DEFLATE gzip member with FLG=0 (as emitted by gzip.compress), no trailing bytes or padding, valid CRC32 and ISIZE; compressed <= 32 MiB and expanded <= 256 MiB. This conservative subset may reject historical inputs accepted by the production selector; it does not change production. Requires Node zlib inflateRawSync info/bytesWritten and crc32 (Node 22.15+ or 23.6+).";
 
 function parseArgs(args) {
   const options = {};
-  const names = new Set(["--data-dir", "--generation", "--iterations", "--warmup"]);
+  const names = new Set(["--data-dir", "--generation", "--iterations", "--warmup", "--workload"]);
   for (let i = 0; i < args.length; i++) {
     const name = args[i];
     if (!names.has(name) || Object.hasOwn(options, name) || !args[i + 1] || args[i + 1].startsWith("--")) {
@@ -66,7 +76,10 @@ function parseArgs(args) {
     if (!Number.isSafeInteger(value) || value < min || value > max) throw new Error(`${name} must be an integer from ${min} to ${max}`);
     return value;
   }
-  return {dataDir: path.resolve(options["--data-dir"]), generation: options["--generation"],
+  const workload = options["--workload"] ?? "mixed";
+  if (workload !== "mixed" && workload !== "fuzzy") throw new Error(usage);
+  if (workload === "fuzzy" && typeof globalThis.gc !== "function") throw new Error("fuzzy workload requires node --expose-gc");
+  return {dataDir: path.resolve(options["--data-dir"]), generation: options["--generation"], workload,
     iterations: integer("--iterations", 7, 1, 100), warmup: integer("--warmup", 1, 0, 10)};
 }
 
@@ -158,10 +171,12 @@ function loadGeneration(dataDir, generation) {
   const raw = inflateSingleMember(compressed);
   // The generation pins the original source metadata and the Pages gzip
   // separately; JSON serialization can change between those two artifacts.
+  const parseStart = performance.now();
   const data = JSON.parse(new TextDecoder("utf-8", {fatal: true}).decode(raw));
+  const parseMs = performance.now() - parseStart;
   if (!data || data.v !== 2 || !Array.isArray(data.rp) || !Array.isArray(data.fd) || !Array.isArray(data.rc) ||
       data.rc.length !== manifest.record_count) throw new Error("compact-v2 corpus or record count mismatch");
-  return {data, manifestSha256: hash(manifestBytes), gzipSha256: member.sha256, gzipBytes: compressed.length,
+  return {data, parseMs, manifestSha256: hash(manifestBytes), gzipSha256: member.sha256, gzipBytes: compressed.length,
     sourceSha256: manifest.source_payload.sha256, sourceBytes: manifest.source_payload.bytes,
     expandedSha256: hash(raw), expandedBytes: raw.length, count: data.rc.length};
 }
@@ -178,6 +193,29 @@ function distribution(times) {
     min_ms: sorted[0], max_ms: sorted[sorted.length - 1]};
 }
 function digest(ids) { return hash(Buffer.from(JSON.stringify(ids), "utf8")); }
+
+function measureIndex(context) {
+  // Measure on an installed corpus before any query, with no timers. Post-GC
+  // process memory differences approximate retained index cost, not peak usage.
+  function memory() {
+    globalThis.gc();
+    const {heapUsed, arrayBuffers} = process.memoryUsage();
+    return {heap_bytes: heapUsed, array_buffer_bytes: arrayBuffers};
+  }
+  const before = memory();
+  const build = measure(() => context.buildFulltext());
+  const after = memory();
+  const lengths = vm.runInContext(`(() => {
+    if (!wordIndex || !wordIndexFilesOnly || fulltextBuild !== null) throw new Error("index not fully published");
+    const histogram = index => {
+      const counts = {};
+      for (const word of Object.keys(index)) counts[word.length] = (counts[word.length] || 0) + 1;
+      return counts;
+    };
+    return {all: histogram(wordIndex), files_only: histogram(wordIndexFilesOnly)};
+  })()`, context);
+  return {build_ms: build.ms, memory_before: before, memory_after: after, length_histograms: lengths};
+}
 
 function benchmark(options, corpus, source) {
   // Instrument the exact hit return and miss branch. Fail closed if the
@@ -206,16 +244,27 @@ function benchmark(options, corpus, source) {
   const install = measure(() => vm.runInContext("replaceCorpus(decodeSearchPayload(payload))", context));
   if (install.value.count !== corpus.count) throw new Error("installed record count mismatch");
   delete context.payload;
+  const index = options.workload === "fuzzy" ? measureIndex(context) : null;
   // The order cache contains record indices. Capture it immediately after the
   // uncached call, before requesting cached pages, and hash every stable ID.
   const controls = vm.runInContext(`({
     clear: () => searchOrderCache.clear(),
     indexed: () => wordIndex !== null,
     order: params => searchOrderCache.get(searchOrderKey(params)),
-    ids: order => order.map(index => recordIds[index])
+    ids: order => order.map(index => recordIds[index]),
+    countFuzzyChecks: run => {
+      const original = couldBeFuzzy;
+      let checks = 0;
+      couldBeFuzzy = (token, word, budget) => {
+        checks++;
+        return original(token, word, budget);
+      };
+      try { run(); } finally { couldBeFuzzy = original; }
+      return checks;
+    }
   })`, context);
   const results = [];
-  for (const params of queries) {
+  for (const params of index ? fuzzyQueries : queries) {
     let expected = null;
     const uncachedTimes = [], cachedTimes = [];
     const sample = () => {
@@ -280,7 +329,20 @@ function benchmark(options, corpus, source) {
       uncached: {...distribution(uncachedTimes), ordered_ids_sha256: last.uncached_sha256},
       cached: {...distribution(cachedTimes), ordered_ids_sha256: last.cached_sha256}});
   }
-  return {install_ms: install.ms, queries: results};
+  // Probe only after the timed workload so wrapping the hot predicate cannot
+  // perturb the JIT or timings. Reconfirm the miss and full order in that pass.
+  if (index) for (const result of results) {
+    result.fuzzy_checks = controls.countFuzzyChecks(() => {
+      controls.clear();
+      const misses = context.__benchmarkSearchCacheMisses;
+      context.searchLocal(result.params);
+      const order = controls.order(result.params);
+      if (context.__benchmarkSearchCacheMisses !== misses + 1 || !Array.isArray(order) ||
+          digest(Array.from(controls.ids(order))) !== result.uncached.ordered_ids_sha256)
+        throw new Error(`fuzzy check probe did not reproduce uncached order: ${JSON.stringify(result.params)}`);
+    });
+  }
+  return {install_ms: install.ms, ...(index ? {index} : {}), queries: results};
 }
 
 function main() {
@@ -290,7 +352,7 @@ function main() {
   const workerBytes = readFileSync(workerPath);
   const report = benchmark(options, corpus, workerBytes.toString("utf8"));
   console.log(JSON.stringify({
-    scope: "Warm-process offline single Node VM direct searchLocal calls, not real Worker dispatch, browser or end-to-end latency. Worker timers and cooperative preparation are not run; the direct single-character path differs from Worker dispatch. First observations follow fixed query order and may build indexes or fields; measured samples reuse process state. Order cache cleared before each uncached call; cached timing is first-page only. VM-only hit and miss counter increments add overhead to both paths; cache reuse, full-order verification and pagination are checked outside timings. No independent correctness oracle.",
+    scope: "Warm-process offline single Node VM direct searchLocal calls, not real Worker dispatch, browser or end-to-end latency. Worker timers and cooperative preparation are not run; the direct single-character path differs from Worker dispatch. First observations follow fixed query order; the fuzzy workload times a cold index build separately, before any search. First queries may build record search fields; measured samples reuse process state. Order cache cleared before each uncached call; cached timing is first-page only. VM-only hit and miss counter increments add overhead to both paths; cache reuse, full-order verification and pagination are checked outside timings. Index memory is process-wide post-GC, not peak. No independent correctness oracle.",
     ordering_hash: "SHA-256 of UTF-8 JSON.stringify(array of all ordered stable ID strings)",
     validation: "Caller-pinned manifest identity and Pages gzip size and SHA-256, expanded compact-v2 shape and record count; source payload metadata is manifest-declared and source bytes are unavailable. Other generation members, provenance and live production pointer not verified.",
     gzip_compatibility: gzipPolicy,
@@ -300,7 +362,8 @@ function main() {
     corpus_gzip_sha256: corpus.gzipSha256, corpus_gzip_bytes: corpus.gzipBytes,
     manifest_source_payload_sha256: corpus.sourceSha256, manifest_source_payload_bytes: corpus.sourceBytes,
     corpus_expanded_sha256: corpus.expandedSha256, corpus_expanded_bytes: corpus.expandedBytes,
-    records: corpus.count, iterations: options.iterations, warmup: options.warmup, ...report,
+    records: corpus.count, workload: options.workload, corpus_utf8_json_parse_ms: corpus.parseMs,
+    iterations: options.iterations, warmup: options.warmup, ...report,
   }, null, 2));
 }
 

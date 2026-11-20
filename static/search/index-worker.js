@@ -9,8 +9,8 @@ importScripts("./worker/domain/intersection.js");
 /** @typedef {{count: number, repos: CountEntry[], extensions: CountEntry[], extensionsByRepo: Record<string, CountEntry[]>, reader: {available: boolean, count: number, byRepo: Record<string, number>}}} SearchMetadata */
 /** @typedef {number[] | Uint32Array} Posting */
 /** @typedef {Record<string, Posting>} PostingIndex */
-/** @typedef {[string, number]} VocabularyEntry */
-/** @typedef {{index: PostingIndex, keys: string[], next: number, groups: Map<number, VocabularyEntry[]>, counts: number[] | null, group: number, item: number, output: VocabularyEntry[]}} VocabularyBuild */
+/** @typedef {Map<number, string[]>} VocabularyByLength */
+/** @typedef {{keys: string[], next: number, byLength: VocabularyByLength}} VocabularyBuild */
 /** @typedef {{keys: string[], next: number}} PostingCompaction */
 /** @typedef {{next: number, all: PostingIndex, files: PostingIndex, folderTokens: Map<string, {parts: ReturnType<typeof tokenizeParts>, units: number}>, folderUnits: number, allVocab?: VocabularyBuild, filesVocab?: VocabularyBuild, allCompaction?: PostingCompaction, filesCompaction?: PostingCompaction}} FulltextBuild */
 /** @typedef {{name: string, path: string, children: DirectoryNode[], count: number, isRoot?: boolean, hasDirectFiles: boolean, hasChildren?: boolean, showSelfToggle?: boolean}} DirectoryNode */
@@ -39,10 +39,10 @@ const corpusInstance = Date.now().toString(36) + '-' + Math.random().toString(36
 let wordIndex = null;
 /** @type {PostingIndex | null} */
 let wordIndexFilesOnly = null;
-/** @type {VocabularyEntry[]} */
-let vocabSorted = [];
-/** @type {VocabularyEntry[]} */
-let vocabSortedFilesOnly = [];
+/** @type {VocabularyByLength} */
+let vocabByLength = new Map();
+/** @type {VocabularyByLength} */
+let vocabByLengthFilesOnly = new Map();
 /** @type {Map<string, number[]>} */
 const searchOrderCache = new Map();
 const SEARCH_ORDER_CACHE_MAX = 8;
@@ -170,8 +170,7 @@ function editDistance(s1, s2, maxDist) {
 
 /** @param {string} token @param {string} word @param {number} maxDist */
 function couldBeFuzzy(token, word, maxDist) {
-  if (isChineseToken(token) && token.length > 1 && token.length !== word.length) return false;
-  if (Math.abs(token.length - word.length) > maxDist) return false;
+  // The caller already restricted the length (including Chinese bigrams).
   if (token.length < 4) return true;
   /** @type {Record<string, number>} */
   const counts = Object.create(null);
@@ -612,8 +611,8 @@ function replaceCorpus(nextRecords, fromJSON = false) {
   metadata = nextMetadata;
   wordIndex = null;
   wordIndexFilesOnly = null;
-  vocabSorted = [];
-  vocabSortedFilesOnly = [];
+  vocabByLength = new Map();
+  vocabByLengthFilesOnly = new Map();
   sortedByName = [];
   sortedBySize = [];
   repoSortedByName = Object.create(null);
@@ -653,8 +652,7 @@ function advanceFulltext(limit, deadline) {
     if (Date.now() >= deadline) break;
   }
   if (build.next < records.length) return;
-  // Stable frequency buckets preserve the old descending stable sort, including
-  // tie order used by fuzzy candidates, while allowing vocabulary work to yield.
+  // Build vocabulary in bounded slices; reuse its keys for compaction.
   if (!build.allVocab) build.allVocab = createVocabularyBuild(build.all);
   if (!advanceVocabulary(build.allVocab, deadline)) return;
   if (!build.filesVocab) build.filesVocab = createVocabularyBuild(build.files);
@@ -667,15 +665,14 @@ function advanceFulltext(limit, deadline) {
   if (!advancePostingCompaction(build.files, build.filesCompaction, deadline, build.all)) return;
   wordIndex = build.all;
   wordIndexFilesOnly = build.files;
-  vocabSorted = build.allVocab.output;
-  vocabSortedFilesOnly = build.filesVocab.output;
+  vocabByLength = build.allVocab.byLength;
+  vocabByLengthFilesOnly = build.filesVocab.byLength;
   fulltextBuild = null;
 }
 
 /** @param {PostingIndex} index @returns {VocabularyBuild} */
 function createVocabularyBuild(index) {
-  return { index, keys: Object.keys(index), next: 0, groups: new Map(), counts: null,
-    group: 0, item: 0, output: [] };
+  return { keys: Object.keys(index), next: 0, byLength: new Map() };
 }
 
 /** @param {VocabularyBuild} build @param {number} deadline */
@@ -683,22 +680,10 @@ function advanceVocabulary(build, deadline) {
   let remaining = deadline === Infinity ? Infinity : 4096;
   while (build.next < build.keys.length) {
     if (remaining-- <= 0 || Date.now() >= deadline) return false;
-    // keys are captured from this index, and next is bounded above.
     const token = /** @type {string} */ (build.keys[build.next++]);
-    const count = /** @type {Posting} */ (build.index[token]).length;
-    let group = build.groups.get(count);
-    if (!group) { group = []; build.groups.set(count, group); }
-    group.push([token, count]);
-  }
-  if (!build.counts) build.counts = Array.from(build.groups.keys()).sort((a, b) => b - a);
-  while (build.group < build.counts.length) {
-    const group = /** @type {VocabularyEntry[]} */ (build.groups.get(/** @type {number} */ (build.counts[build.group])));
-    while (build.item < group.length) {
-      if (remaining-- <= 0 || Date.now() >= deadline) return false;
-      build.output.push(/** @type {VocabularyEntry} */ (group[build.item++]));
-    }
-    build.group++;
-    build.item = 0;
+    let bucket = build.byLength.get(token.length);
+    if (!bucket) { bucket = []; build.byLength.set(token.length, bucket); }
+    bucket.push(token);
   }
   return true;
 }
@@ -1131,7 +1116,7 @@ function searchLocal(params, preparedExact = null) {
   } else {
     buildFulltext();
     const activeIndex = /** @type {PostingIndex} */ (searchFolders ? wordIndex : wordIndexFilesOnly);
-    const activeVocab = searchFolders ? vocabSorted : vocabSortedFilesOnly;
+    const activeVocab = searchFolders ? vocabByLength : vocabByLengthFilesOnly;
     const scope = exactSearchScope(params.repos);
     const inScope = buildRecordFilter(params);
     const terms = query.toLowerCase().split(/\s+/).filter(Boolean);
@@ -1160,10 +1145,18 @@ function searchLocal(params, preparedExact = null) {
           sortedCandidates = false;
           const fuzzy = new Set();
           const maxDist = fuzzyDistanceBudget(token);
-          for (const entry of maxDist ? activeVocab : []) {
-            const vocab = entry[0];
-            if (couldBeFuzzy(token, vocab, maxDist) && editDistance(token, vocab, maxDist) <= maxDist) {
-              for (const index of activeIndex[vocab] || []) fuzzy.add(index);
+          if (maxDist) {
+            // Match editDistance's UTF-16 lengths. Chinese bigrams only
+            // compare with equal-length words; single units have no budget.
+            const radius = isChineseToken(token) ? 0 : maxDist;
+            for (let length = token.length - radius; length <= token.length + radius; length++) {
+              const words = activeVocab.get(length);
+              if (!words) continue;
+              for (const word of words) {
+                if (couldBeFuzzy(token, word, maxDist) && editDistance(token, word, maxDist) <= maxDist) {
+                  for (const index of activeIndex[word] || []) fuzzy.add(index);
+                }
+              }
             }
           }
           candidates = Array.from(fuzzy);
@@ -1175,6 +1168,8 @@ function searchLocal(params, preparedExact = null) {
         tokenCandidates.push(candidates);
       }
       for (const index of intersectCandidateLists(tokenCandidates, sortedCandidates)) seen.add(index);
+      // Intersection and union above only determine membership. Restore
+      // record order before AND and scoring, so vocabulary order cannot affect ties.
       termCandidates.push(Array.from(seen).sort((a, b) => a - b));
       if (!seen.size) break;
     }
