@@ -150,6 +150,37 @@ class PdfFollowupTests(unittest.TestCase):
         self.assertFalse(self.page.locator('#full-search-toggle').evaluate('n=>n.hidden'))
         self.search('later',1)
 
+    def test_dense_pdf_matches_are_visible_before_later_page_finishes(self):
+        engine = ENGINE.replace(
+            "return {items:[{str:'needle'+version+' page '+number+' 手机 手。机',transform:[12,0,0,12,20,40]}],styles:{}};",
+            """if(number===3&&!window.__denseReleased)
+              await new Promise(resolve=>{window.__releaseDensePage=()=>{window.__denseReleased=true;resolve();};});
+            const text=number===2?'needle '.repeat(50)+'needle final-hit':'unmatched page '+number;
+            return {items:[{str:text,transform:[12,0,0,12,20,40]}],styles:{}};""")
+        self.assertNotEqual(engine, ENGINE)
+        self.page.unroute('**/static/vendor/pdf.min.*.mjs')
+        self.page.route('**/static/vendor/pdf.min.*.mjs', lambda route: route.fulfill(
+            content_type='text/javascript', body=engine))
+        self.open()
+        self.page.locator('#history').click()
+        self.page.locator('#full-search-toggle').click()
+        self.page.locator('#full-search-input').fill('needle')
+        self.page.wait_for_function('()=>!!window.__releaseDensePage')
+        results = self.page.locator('.full-search-result')
+        results.first.wait_for(state='visible')
+        self.assertEqual(results.count(), 50)
+        self.assertFalse(self.page.evaluate('Boolean(window.__denseReleased)'))
+        self.assertIn('第 2 页', results.first.inner_text())
+        self.assertIn('2 / 12 页', self.page.locator('#full-search-status').inner_text())
+        self.page.evaluate('__releaseDensePage()')
+        self.page.wait_for_function("()=>document.querySelector('#full-search-status').textContent==='51 个结果'")
+        self.page.locator('#full-search-page-next').click()
+        result = results.get_by_text('final-hit', exact=False)
+        result.wait_for(state='visible')
+        self.assertEqual(results.count(), 1)
+        result.click()
+        self.page.wait_for_function('()=>Number(document.querySelector("#page-number").value)===2')
+
     def test_retired_ocr_url_does_not_disable_native_pdf_text(self):
         self.page.goto(self.origin+PREFIX+'/static/reader.html?'+urlencode(dict(
             url='https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/persistent.pdf',

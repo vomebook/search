@@ -380,7 +380,8 @@ export function createReaderPdfSearch(readerContext) {
         total += count;
         readerContext.highlightPdfText(readerContext.content.querySelector(`.reader-page[data-page="${page}"]`), query);
       }
-      if (page === 1 || (count && total <= 50) || page % 8 === 0 || page === pdf.numPages) {
+      // Publish the page that fills the first batch even if it crosses 50 hits.
+      if (page === 1 || (count && total - count < 50) || page % 8 === 0 || page === pdf.numPages) {
         if (!readerContext.publishPdfSearchProgress(generation, groups, total, pattern, firstPage, page, pdf.numPages)) return [];
         await readerContext.waitForReader(0, true);
       }
