@@ -63,9 +63,9 @@
     "reader/ui/reader-toc.mjs", "reader/search/reader-search-backends.mjs", "reader/pdf/reader-pdf-scheduler.mjs", "reader/ui/reader-navigation.mjs",
     "reader/ui/reader-progress.mjs", "reader/ui/reader-bookmarks.mjs", "reader/formats/reader-media-format.mjs",
     "reader/core/reader-document-loader.mjs", "reader/pdf/reader-pdf-page-window.mjs", "reader/pdf/reader-pdf-text-runtime.mjs",
-    "reader/formats/reader-html-format.mjs", "reader/pdf/reader-pdf-renderer.mjs", "reader/formats/reader-text-format.mjs",
+    "reader/core/reader-bindings.mjs", "reader/formats/reader-html-format.mjs", "reader/pdf/reader-pdf-renderer.mjs", "reader/formats/reader-text-format.mjs",
     "reader/formats/reader-chapter-format.mjs", "reader/formats/reader-format-controller.mjs",
-    "reader/pdf/reader-pdf-engine.mjs", "reader/pdf/reader-pdf-search.mjs", "reader/core/reader-bindings.mjs",
+    "reader/pdf/reader-pdf-engine.mjs", "reader/pdf/reader-pdf-search.mjs",
     "reader/ui/reader-speech.mjs"
   ]);
   const readerFiles = Object.freeze([
