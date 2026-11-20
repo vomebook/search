@@ -691,10 +691,18 @@ class ReaderRefactorTest(unittest.TestCase):
 
     def test_missing_image_manifest_or_page_recovers_original_without_changing_book_identity(self):
         prefix = 'pages/image/bmp/' + 'a' * 64 + '/'
-        source = 'https://voiceofml-search.hf.space/api/reader-bucket-resource?' + urllib.parse.urlencode({'path':prefix+'page-manifest.json'})
+        manifest_path = prefix + 'page-manifest.json'
+        page_path = prefix + 'pages/page-000001.webp'
+        source = 'https://voiceofml-search.hf.space/api/reader-bucket-resource?' + urllib.parse.urlencode({'path': manifest_path})
         original = 'https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/original.bmp'
         resolved = dict(url=source, download=original, extension='image-pages', original_extension='bmp')
         self.page.route('**/api/reader-resolve?**', lambda route: route.fulfill(json=resolved))
+        self.page.add_init_script("Object.defineProperty(navigator, 'connection', {value:{saveData:false}})")
+        store = support.STORE_SCRIPT.replace(
+            'new Promise((resolve) => setTimeout(() => resolve(null), 300))',
+            '(window.__imageRecoveryLookedUp = true, Promise.resolve(null))')
+        self.page.route('**/static/reader/core/reader-store.js', lambda route: route.fulfill(
+            content_type='text/javascript', body=store))
         originals = []
         self.page.route('**/api/reader-content?**', lambda route: (
             originals.append(route.request.url), route.fulfill(content_type='image/webp', body=support.IMAGE_FIXTURES['webp'][1])))
@@ -711,12 +719,14 @@ class ReaderRefactorTest(unittest.TestCase):
                 requested = []
 
                 def resource(route):
-                    is_manifest = 'page-manifest.json' in route.request.url
-                    requested.append(is_manifest)
-                    if fault != 'manifest' and is_manifest:
-                        route.fulfill(json=manifest)
-                    else:
-                        route.fulfill(status=404, body='missing')
+                    path = urllib.parse.parse_qs(urllib.parse.urlsplit(route.request.url).query)['path'][0]
+                    requested.append(path)
+                    if path == manifest_path:
+                        if fault != 'manifest':
+                            return route.fulfill(json=manifest)
+                        # Keep the 404 pending until the empty history lookup can trigger a preload.
+                        self.page.wait_for_function('() => window.__imageRecoveryLookedUp === true')
+                    return route.fulfill(status=404, body='missing')
 
                 self.page.route('**/api/reader-bucket-resource?**', resource)
                 self.open(self.origin+'/static/reader.html?id=0ym7e7wbcxau0&ext=image-pages')
@@ -727,7 +737,7 @@ class ReaderRefactorTest(unittest.TestCase):
                 self.page.evaluate('window.dispatchEvent(new Event("voice-reader-dispose"))')
                 self.assertEqual(self.page.locator('html').get_attribute('data-reader-phase'), 'disposed')
                 self.page.unroute('**/api/reader-bucket-resource?**')
-                self.assertEqual(False in requested, fault == 'page')
+                self.assertEqual(set(requested), {manifest_path, page_path} if fault == 'page' else {manifest_path})
         self.assertEqual(len(originals), 5)
 
     def test_classic_engine_failure_timeout_and_disposal_release_scripts(self):

@@ -1,3 +1,9 @@
+/** @param {unknown} original */
+function originalImageFallbackExtension(original) {
+  const extension = typeof original === "string" ? original.toLowerCase() : "";
+  return ["jpg", "jpeg", "png", "gif", "bmp", "webp"].includes(extension) ? extension : "";
+}
+
 /** @param {import('../../../typings/reader-controller-strict').ReaderFormatControllerContext} readerContext */
 export function createReaderFormatController(readerContext) {
   /** @param {string} mode */
@@ -56,10 +62,13 @@ export function createReaderFormatController(readerContext) {
     // determines whether any image can be displayed. Don't speculate while a
     // saved position is unknown, or if its lookup failed.
     void readerContext.readerRestorationPromise?.then(entry => {
-      if (entry === null && !readerContext.restorationFailed &&
-          readerContext.isReaderGenerationCurrent("navigation", generation))
-        return readerContext.preloadPdfFirstPage(1, generation);
-      return undefined;
+      if (entry !== null || readerContext.restorationFailed ||
+          !readerContext.isReaderGenerationCurrent("navigation", generation)) return;
+      // If we can recover with the original, only request converted pages
+      // after the manifest validates. Keep the overlap for other sources.
+      if (originalImageFallbackExtension(readerContext.resolvedReaderData?.original_extension) &&
+          readerContext.validSource(readerContext.downloadUrl)) return;
+      return readerContext.preloadPdfFirstPage(1, generation);
     }).catch(() => {});
     return manifest;
   }
@@ -175,12 +184,10 @@ export function createReaderFormatController(readerContext) {
         await renderer.render(prepared);
       } catch (error) {
         readerContext.assertReaderActive();
-        const original = readerContext.resolvedReaderData?.original_extension;
-        const originalExtension = typeof original === "string" ? original.toLowerCase() : "";
+        const originalExtension = originalImageFallbackExtension(readerContext.resolvedReaderData?.original_extension);
         const mode = readerContext.capability.mode;
         if ((mode !== "image-pages" && (mode !== "image" || readerContext.sourceUrl === readerContext.downloadUrl)) ||
-            !readerContext.validSource(readerContext.downloadUrl) ||
-            !["jpg", "jpeg", "png", "gif", "bmp", "webp"].includes(originalExtension)) throw error;
+            !readerContext.validSource(readerContext.downloadUrl) || !originalExtension) throw error;
         for (const cleanup of [...readerContext.readerResources]) {
           if (prepareResources.has(cleanup)) continue;
           cleanup();
