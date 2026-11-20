@@ -63,12 +63,22 @@ export function createReaderPdfScheduler(readerContext) {
   }
 
   function trimPdfManifestPrefetches() {
-    while (readerContext.pdfManifestPrefetches.size > readerContext.PDF_MANIFEST_PREFETCH_LIMIT || readerContext.pdfRetainedPixels() > readerContext.pdfPixelBudget()) {
-      const victim = [...readerContext.pdfManifestPrefetches.values()].find((record) => !readerContext.pdfManifestPrefetchActive.has(record));
-      if (!victim) return;
-      readerContext.pdfManifestPrefetches.delete(victim.url);
-      victim.image.onload = victim.image.onerror = null;
-      victim.image.removeAttribute("src");
+    const records = readerContext.pdfManifestPrefetches;
+    if (!records.size) return;
+    let pixels = null, budget = null;
+    for (const record of records.values()) {
+      if (readerContext.pdfManifestPrefetchActive.has(record)) continue;
+      // The count limit can free slots before any pixel scan. Evicting a
+      // detached image then changes only its own contribution to the total.
+      if (records.size <= readerContext.PDF_MANIFEST_PREFETCH_LIMIT) {
+        pixels ??= readerContext.pdfRetainedPixels();
+        budget ??= readerContext.pdfPixelBudget();
+        if (pixels <= budget) return;
+      }
+      if (pixels !== null) pixels -= readerContext.pdfSurfacePixels(record.image);
+      records.delete(record.url);
+      record.image.onload = record.image.onerror = null;
+      record.image.removeAttribute("src");
     }
   }
 

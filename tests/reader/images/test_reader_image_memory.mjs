@@ -11,6 +11,52 @@ globalThis.window = {devicePixelRatio: 1};
 Object.defineProperty(globalThis, 'navigator', {configurable: true, value: {connection: {saveData: true}}});
 globalThis.matchMedia = () => ({matches: false});
 
+// Batch trims preserve oldest-inactive eviction and do not rescan mounted
+// canvases for each detached image. An active-only pool cannot be trimmed.
+{
+  let scans = 0;
+  const removed = [];
+  const reader = {
+    content: {querySelectorAll() { scans++; return [{tagName:'CANVAS', width:20, height:10}]; }},
+    PDF_MANIFEST_PREFETCH_LIMIT: 5,
+    pdfManifestPrefetches: new Map(), pdfManifestPrefetchActive: new Set(),
+    pdfPixelBudget: () => 450
+  };
+  Object.assign(reader, createReaderPdfScheduler(reader));
+  reader.pdfPixelBudget = () => 450;
+  const add = (url, width, active = false) => {
+    const image = {tagName:'IMG', naturalWidth:width, naturalHeight:1, onload() {}, onerror() {},
+      removeAttribute(name) {
+        assert.equal(name,'src');assert.equal(this.onload,null);assert.equal(this.onerror,null);
+        assert.equal(reader.pdfManifestPrefetches.has(url),false);
+        removed.push(url);
+      }};
+    const record = {url,image};
+    reader.pdfManifestPrefetches.set(url,record);
+    if (active) reader.pdfManifestPrefetchActive.add(record);
+  };
+  reader.trimPdfManifestPrefetches();
+  assert.equal(scans,0,'empty prefetch pool needs no DOM accounting');
+  add('active',240,true);
+  add('count',1);
+  add('zero',0);
+  add('first',35);
+  add('second',60);
+  add('reusable',10);
+  reader.trimPdfManifestPrefetches();
+  assert.deepEqual(removed,['count','zero','first','second']);
+  assert.deepEqual([...reader.pdfManifestPrefetches.keys()],['active','reusable']);
+  assert.equal(scans,1);
+  assert.equal(reader.pdfRetainedPixels(),450);
+  reader.pdfPixelBudget = () => 100;
+  reader.trimPdfManifestPrefetches();
+  assert.equal(removed.at(-1),'reusable');
+  assert.deepEqual([...reader.pdfManifestPrefetches.keys()],['active']);
+  scans = 0;
+  reader.trimPdfManifestPrefetches();
+  assert.equal(scans,0,'active images must not be evicted even above budget');
+}
+
 // An anonymous preview holder cannot be inspected or preempted as a page shell.
 {
   const abort = new AbortController();
