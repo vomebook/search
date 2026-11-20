@@ -61,6 +61,19 @@ class StaticGateTests(unittest.TestCase):
         (self.root / "scripts/check_python_static.py").write_bytes((ROOT / "scripts/check_python_static.py").read_bytes())
         (self.root / "scripts/sample.py").write_text("print('ok')\n")
 
+    def materialize_reader_exact_project(self, project):
+        # Chapter progress imports ChapterLoader, whose declarations reach the
+        # search core's SearchResult through reader-chapter-search-strict.d.ts.
+        # Copy this transitive dependency without changing the config's root files.
+        dependency = "static/reader/search/reader-chapter-search-core.mjs"
+        for name in [*project["files"], dependency]:
+            target = self.root / name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(ROOT / name, target)
+        config = self.root / "jsconfig.reader-exact.json"
+        config.write_text(json.dumps(project))
+        return config
+
     def run_check(self, *command, timeout=30, tap_stdout=False):
         # Replay only stdout: a Node warning on stderr is not TAP input.
         return subprocess.run(command, cwd=self.root, text=True, stdout=subprocess.PIPE,
@@ -3435,13 +3448,7 @@ syncBuiltinESMExports();
         self.assert_check(self.run_check(*check), False, "TS2769")
 
     def test_reader_chapter_exact_gate_checks_original_bounds_invariant(self):
-        config = self.root / "jsconfig.reader-exact.json"
-        original = load_type_config("jsconfig.reader-exact.json")
-        config.write_text(json.dumps(original))
-        for name in original["files"]:
-            target = self.root / name
-            target.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copyfile(ROOT / name, target)
+        config = self.materialize_reader_exact_project(load_type_config("jsconfig.reader-exact.json"))
         check = ["node", ROOT / "node_modules/typescript/bin/tsc", "--project", config]
         self.assert_check(self.run_check(*check), True, "")
         module = self.root / "static/reader/formats/reader-chapter-repository.js"
@@ -3501,13 +3508,7 @@ const request = options.request;
         adapter = self.root / "static/reader/pdf/pdf-first-page-worker-adapter.mjs"
         adapter.parent.mkdir(parents=True, exist_ok=True)
         original = (ROOT / "static/reader/pdf/pdf-first-page-worker-adapter.mjs").read_text()
-        local_config = self.root / "jsconfig.reader-exact.json"
-        project = load_type_config("jsconfig.reader-exact.json")
-        for name in project["files"]:
-            target = self.root / name
-            target.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copyfile(ROOT / name, target)
-        local_config.write_text(json.dumps(project))
+        local_config = self.materialize_reader_exact_project(load_type_config("jsconfig.reader-exact.json"))
         production_check = ["node", ROOT / "node_modules/typescript/bin/tsc", "--project", local_config]
         self.assert_check(self.run_check(*production_check), True, "")
         for annotation in [
@@ -3553,13 +3554,7 @@ const prefetched = await client.prefetch();
             with self.subTest(expression=expression):
                 source.write_text(prefix + expression + '\n')
                 self.assert_check(self.run_check(*check), False, diagnostic)
-        project = load_type_config('jsconfig.reader-exact.json')
-        for name in project['files']:
-            target = self.root / name
-            target.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copyfile(ROOT / name, target)
-        local_config = self.root / 'jsconfig.reader-exact.json'
-        local_config.write_text(json.dumps(project))
+        local_config = self.materialize_reader_exact_project(load_type_config('jsconfig.reader-exact.json'))
         production_check = ['node', ROOT / 'node_modules/typescript/bin/tsc', '--project', local_config]
         self.assert_check(self.run_check(*production_check), True, '')
         local = self.root / 'static/reader/search/reader-pdf-book-search.mjs'
@@ -3616,13 +3611,7 @@ ctx.renderText(true, {response: new Response(), engines: Promise.resolve([])});
             with self.subTest(expression=expression):
                 source.write_text(prefix + expression + '\n')
                 self.assert_check(self.run_check(*check), False, diagnostic)
-        project = load_type_config('jsconfig.reader-exact.json')
-        for name in project['files']:
-            target = self.root / name
-            target.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copyfile(ROOT / name, target)
-        local_config = self.root / 'jsconfig.reader-exact.json'
-        local_config.write_text(json.dumps(project))
+        local_config = self.materialize_reader_exact_project(load_type_config('jsconfig.reader-exact.json'))
         production_check = ['node', ROOT / 'node_modules/typescript/bin/tsc', '--project', local_config]
         self.assert_check(self.run_check(*production_check), True, '')
         local = self.root / 'static/reader/formats/reader-text-format.mjs'
@@ -3671,13 +3660,7 @@ ctx.resolvedReaderData = {original_extension: null}; ctx.resolvedReaderData = {o
             with self.subTest(expression=expression):
                 source.write_text(prefix + expression + '\n')
                 self.assert_check(self.run_check(*check), False, diagnostic)
-        project = load_type_config('jsconfig.reader-exact.json')
-        for name in project['files']:
-            target = self.root / name
-            target.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copyfile(ROOT / name, target)
-        local_config = self.root / 'jsconfig.reader-exact.json'
-        local_config.write_text(json.dumps(project))
+        local_config = self.materialize_reader_exact_project(load_type_config('jsconfig.reader-exact.json'))
         production_check = ['node', ROOT / 'node_modules/typescript/bin/tsc', '--project', local_config]
         self.assert_check(self.run_check(*production_check), True, '')
         local = self.root / 'static/reader/formats/reader-media-format.mjs'
@@ -3719,13 +3702,7 @@ lifecycle.trackReaderResource(() => {}); lifecycle.isReaderGenerationCurrent("se
             with self.subTest(expression=expression):
                 source.write_text(prefix + expression + "\n")
                 self.assert_check(self.run_check(*check), False, diagnostic)
-        local_config = self.root / "jsconfig.reader-exact.json"
-        project = load_type_config("jsconfig.reader-exact.json")
-        for name in project["files"]:
-            target = self.root / name
-            target.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copyfile(ROOT / name, target)
-        local_config.write_text(json.dumps(project))
+        local_config = self.materialize_reader_exact_project(load_type_config("jsconfig.reader-exact.json"))
         production_check = ["node", ROOT / "node_modules/typescript/bin/tsc", "--project", local_config]
         self.assert_check(self.run_check(*production_check), True, "")
         lifecycle = self.root / "static/reader/core/reader-lifecycle.mjs"
@@ -3797,12 +3774,7 @@ lifecycle.trackReaderResource(() => {}); lifecycle.isReaderGenerationCurrent("se
         self.assert_check(self.run_check(*check), False, "TS2375")
         configure({**options, "exactOptionalPropertyTypes": False})
         self.assert_check(self.run_check(*check), True, "")
-        local_config = self.root / "jsconfig.reader-exact.json"
-        local_config.write_text(json.dumps(original))
-        for name in [*original["files"], "typings/reader-security-strict.d.ts", "typings/reader-store-strict.d.ts"]:
-            target = self.root / name
-            target.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copyfile(ROOT / name, target)
+        local_config = self.materialize_reader_exact_project(original)
         production_check = ["node", ROOT / "node_modules/typescript/bin/tsc", "--project", local_config]
         self.assert_check(self.run_check(*production_check), True, "")
         # Block scope keeps the probes independent even in classic scripts.

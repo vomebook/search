@@ -1099,21 +1099,56 @@ process.stdout.write(stripBundledScripts(readFileSync('static/index.html','utf8'
         }''')
         self.assertTrue(result)
 
+    def _watchdog_history_probe(self):
+        # Chromium can cache a stale renderer history.length after opening the
+        # iframe, even after it loads. Check the browser's actual entry IDs,
+        # URLs and position; Firefox uses length plus the real traversals.
+        context = self.fixture.context
+        cdp = context.new_cdp_session(self.page) if self.fixture.browser.browser_type.name == 'chromium' else None
+
+        def snapshot():
+            if cdp is None:
+                return {'length': self.page.evaluate('history.length')}
+            history = cdp.send('Page.getNavigationHistory')
+            return {'length': len(history['entries']), 'index': history['currentIndex'],
+                    'entries': [(entry['id'], entry['url']) for entry in history['entries']]}
+
+        return snapshot
+
+    def _assert_reader_added_one_entry(self, search, reader, reader_url):
+        self.assertEqual(reader['length'], search['length'] + 1)
+        if 'entries' in reader:
+            self.assertEqual(reader['index'], search['index'] + 1)
+            self.assertEqual(reader['entries'][:-1], search['entries'])
+            self.assertEqual(reader['entries'][reader['index']][1], reader_url)
+
+    def _assert_reader_back_history(self, snapshot, search, reader):
+        expected = dict(reader)
+        if 'index' in search:
+            expected['index'] = search['index']
+        self.assertEqual(snapshot(), expected)
+
+    def _assert_reader_frame_identity(self, url):
+        self.assertEqual(self.page.evaluate('[readerHost.overlay.src, readerHost.overlay.contentDocument.URL]'), [url, url])
+
     def test_watchdog_late_back_preserves_reader_forward_and_foreign_state(self):
+        history_snapshot = self._watchdog_history_probe()
         self.page.locator('#search-input').focus()
         before = self.page.evaluate('''() => {
           history.replaceState({...history.state, foreignSearch:{keep:1}}, '', location.href);
           return {url:location.href, state:history.state, rows:STATE.results.map(getResultStableId)};
         }''')
+        search_history = history_snapshot()
         self.page.evaluate('''() => {
           const path=new URL(document.querySelector('script[src*="search/reader-host/application/navigation.js"]').src)
             .pathname.replace('search/reader-host/application/navigation.js','reader.html');
           navigateToReader(path+'?ext=txt&title=Delayed');
           history.replaceState({...history.state, foreignReader:{keep:2}}, '', location.href);
         }''')
-        self.page.frame_locator('.reader-overlay').locator('body').wait_for()
-        # The iframe's initial navigation can itself change the joint history length.
-        opened = self.page.evaluate('({url:location.href,state:history.state,length:history.length})')
+        self.page.frame_locator('.reader-overlay').locator('body', has_text='reader').wait_for()
+        opened = self.page.evaluate('({url:location.href,state:history.state})')
+        reader_history = history_snapshot()
+        self._assert_reader_added_one_entry(search_history, reader_history, opened['url'])
         self.page.evaluate('''() => {
           const back=history.back.bind(history);
           window.__releaseBack=()=>{history.back=back;back();};
@@ -1124,13 +1159,16 @@ process.stdout.write(stripBundledScripts(readFileSync('static/index.html','utf8'
             history[name]=(...args)=>{__historyWrites++;return original(...args);};
           }
           window.__returnSnapshot=readerReturnSnapshot;
+          window.__closingFrame=readerHost.overlay;
           handleReaderMessage({origin:location.origin,source:readerHost.overlay.contentWindow,data:{type:'voice-reader-close'}});
         }''')
         recovery = self.page.get_by_role('link', name='直接打开搜索页')
         recovery.wait_for(state='visible', timeout=3000)
-        self.assertEqual(self.page.evaluate('({url:location.href,state:history.state,length:history.length})'), opened)
+        self.assertEqual(self.page.evaluate('({url:location.href,state:history.state})'), opened)
+        self.assertEqual(history_snapshot(), reader_history)
         self.assertEqual(self.page.evaluate('[__backCalls,__historyWrites]'), [1, 0])
         self.assertTrue(self.page.evaluate('readerClosing && readerReturnSnapshot === __returnSnapshot'))
+        self.assertTrue(self.page.evaluate('readerHost.overlay === __closingFrame && __closingFrame.isConnected'))
         # Release the sole requested traversal only after the watchdog has run.
         self.page.evaluate('__releaseBack()')
         self.page.locator('.reader-overlay').wait_for(state='detached')
@@ -1139,18 +1177,19 @@ process.stdout.write(stripBundledScripts(readFileSync('static/index.html','utf8'
         self.assertEqual(self.page.evaluate('STATE.results.map(getResultStableId)'), before['rows'])
         self.assertEqual(self.page.evaluate('document.activeElement.id'), 'search-input')
         self.assertEqual(self.page.locator('.reader-overlay-opening').count(), 0)
+        self._assert_reader_back_history(history_snapshot, search_history, reader_history)
         writes_before_forward = self.page.evaluate('__historyWrites')
         self.page.evaluate('history.forward()')
-        self.page.frame_locator('.reader-overlay').locator('body').wait_for()
-        # Remounting the iframe can change joint history independently of the host.
-        self.assertEqual(self.page.evaluate('({url:location.href,state:history.state})'),
-                         {key: opened[key] for key in ('url', 'state')})
+        self.page.frame_locator('.reader-overlay').locator('body', has_text='reader').wait_for()
+        self.assertEqual(self.page.evaluate('({url:location.href,state:history.state})'), opened)
+        self.assertEqual(history_snapshot(), reader_history)
         self.assertEqual(self.page.evaluate('__historyWrites'), writes_before_forward)
-        self.assertEqual(self.page.evaluate('readerHost.overlay.src'), opened['state']['readerUrl'])
+        self._assert_reader_frame_identity(opened['state']['readerUrl'])
         self.assertFalse(self.page.evaluate('readerClosing'))
         self.assertEqual(self.page.locator('.reader-overlay-opening a').count(), 0)
 
     def test_pending_watchdog_late_frame_and_back_preserve_history(self):
+        history_snapshot = self._watchdog_history_probe()
         held = []
         self.page.unroute('**/static/reader.html?**')
         self.page.route('**/static/reader.html?**', lambda route: held.append(route))
@@ -1159,6 +1198,7 @@ process.stdout.write(stripBundledScripts(readFileSync('static/index.html','utf8'
           history.replaceState({...history.state, foreignSearch:{keep:1}}, '', location.href);
           return {url:location.href, state:history.state, rows:STATE.results.map(getResultStableId)};
         }''')
+        search_history = history_snapshot()
         with self.page.expect_request('**/static/reader.html?**'):
             self.page.evaluate('''() => {
               const path=new URL(document.querySelector('script[src*="search/reader-host/application/navigation.js"]').src)
@@ -1179,6 +1219,8 @@ process.stdout.write(stripBundledScripts(readFileSync('static/index.html','utf8'
         opening.wait_for(state='visible')
         self.assertEqual(len(held), 1)
         pending = self.page.evaluate('({url:location.href,state:history.state})')
+        reader_history = history_snapshot()
+        self._assert_reader_added_one_entry(search_history, reader_history, pending['url'])
         opening.locator('button').click()
         recovery = self.page.get_by_role('link', name='直接打开搜索页')
         recovery.wait_for(state='visible', timeout=3000)
@@ -1186,11 +1228,12 @@ process.stdout.write(stripBundledScripts(readFileSync('static/index.html','utf8'
         self.assertEqual(self.page.evaluate('[__backCalls,__historyWrites]'), [1, 0])
         self.assertTrue(self.page.evaluate('readerClosing && readerReturnSnapshot === __returnSnapshot'))
         self.assertEqual(self.page.evaluate('({url:location.href,state:history.state})'), pending)
+        self.assertEqual(history_snapshot(), reader_history)
         self._deliver_late_reader_shell(held.pop(), recovery)
         self.assertEqual(self.page.evaluate('[__backCalls,__historyWrites]'), [1, 0])
         self.assertTrue(self.page.evaluate('readerClosing && readerReturnSnapshot === __returnSnapshot'))
-        opened = self.page.evaluate('({url:location.href,state:history.state,length:history.length})')
-        self.assertEqual({k: opened[k] for k in pending}, pending)
+        self.assertEqual(self.page.evaluate('({url:location.href,state:history.state})'), pending)
+        self.assertEqual(history_snapshot(), reader_history)
         self.page.evaluate('__releaseBack()')
         self.page.locator('.reader-overlay').wait_for(state='detached')
         self.assertEqual(self.page.url, before['url'])
@@ -1198,13 +1241,17 @@ process.stdout.write(stripBundledScripts(readFileSync('static/index.html','utf8'
         self.assertEqual(self.page.evaluate('STATE.results.map(getResultStableId)'), before['rows'])
         self.assertEqual(self.page.evaluate('document.activeElement.id'), 'search-input')
         self.assertEqual(self.page.locator('.reader-overlay-opening').count(), 0)
+        self._assert_reader_back_history(history_snapshot, search_history, reader_history)
         self.page.unroute('**/static/reader.html?**')
         self.page.route('**/static/reader.html?**', lambda route: route.fulfill(
             content_type='text/html', body='<body>reader</body>'))
+        writes_before_forward = self.page.evaluate('__historyWrites')
         self.page.evaluate('history.forward()')
-        self.page.frame_locator('.reader-overlay').locator('body').wait_for()
-        self.assertEqual(self.page.evaluate('({url:location.href,state:history.state,length:history.length})'), opened)
-        self.assertEqual(self.page.evaluate('readerHost.overlay.src'), opened['state']['readerUrl'])
+        self.page.frame_locator('.reader-overlay').locator('body', has_text='reader').wait_for()
+        self.assertEqual(self.page.evaluate('({url:location.href,state:history.state})'), pending)
+        self.assertEqual(history_snapshot(), reader_history)
+        self.assertEqual(self.page.evaluate('__historyWrites'), writes_before_forward)
+        self._assert_reader_frame_identity(pending['state']['readerUrl'])
         self.assertFalse(self.page.evaluate('readerClosing'))
         self.assertEqual(self.page.locator('.reader-overlay-opening a').count(), 0)
 
