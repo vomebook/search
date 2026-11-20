@@ -43,12 +43,15 @@ function createSidebarBreadcrumb(path) {
   breadcrumb.className = "sidebar-breadcrumb";
   breadcrumb.setAttribute("aria-label", "当前路径");
   const parts = path ? path.split("/") : [];
-  breadcrumb.innerHTML = '<button type="button" class="crumb-item' + (!path ? ' current' : '') + '" ' + (!path ? 'aria-current="location"' : '') + ' data-path="">根目录</button>';
-  for (let i = 0; i < parts.length; i++) {
-    const partPath = parts.slice(0, i + 1).join("/");
-    breadcrumb.innerHTML += '<span class="crumb-sep" aria-hidden="true">/</span>';
-    breadcrumb.innerHTML += '<button type="button" class="crumb-item' + (i === parts.length - 1 ? ' current' : '') + '" ' + (i === parts.length - 1 ? 'aria-current="location"' : '') + ' data-path="' + deps.escape(partPath) + '">' + deps.escape(parts[i]) + '</button>';
+  let html = '<button type="button" class="crumb-item' + (!path ? ' current' : '') + '" ' + (!path ? 'aria-current="location"' : '') + ' data-path="">根目录</button>';
+  let partPath = "";
+  for (const [index, part] of parts.entries()) {
+    partPath += (index ? "/" : "") + part;
+    const current = index === parts.length - 1;
+    html += '<span class="crumb-sep" aria-hidden="true">/</span>';
+    html += '<button type="button" class="crumb-item' + (current ? ' current' : '') + '" ' + (current ? 'aria-current="location"' : '') + ' data-path="' + deps.escape(partPath) + '">' + deps.escape(part) + '</button>';
   }
+  breadcrumb.innerHTML = html;
   breadcrumb.querySelectorAll(".crumb-item").forEach(function(item) {
     item.addEventListener("click", function() {
       if (!item.classList.contains("current")) deps.navigate(/** @type {HTMLElement} */ (item).dataset.path);

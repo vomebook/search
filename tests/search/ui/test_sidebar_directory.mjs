@@ -79,6 +79,18 @@ test('late directory API response cannot replace a newer repository route', asyn
   assert.equal(f.draws[0].data, data);
 });
 
+test('Pages renders an accepted initial repository root exactly once', async () => {
+  if (space) return; // Space legitimately follows its initial snapshot with API data.
+  const initial = {folders: [{name: 'docs', path: 'docs'}], files: [{name: 'book', ext: 'txt'}]};
+  const f = fixture({initial: async () => initial});
+  await f.controller.browse('', 1);
+  assert.equal(f.requests.length, 0);
+  assert.equal(f.timers.length, 0);
+  assert.equal(f.draws.length, 1);
+  assert.equal(f.draws[0].data, initial);
+  assert.equal(f.assets[0][4](), initial, 'late metadata refresh sees the mounted snapshot');
+});
+
 test('late root initial payload cannot draw over a changed route', async () => {
   let resolveInitial;
   const f = fixture({initial: () => new Promise(resolve => { resolveInitial = resolve; })});

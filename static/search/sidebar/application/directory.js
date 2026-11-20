@@ -115,8 +115,11 @@ async function renderBrowser(path, routeId) {
     return;
   }
   sidebarRetryCounts.delete(deps.readView().repo + "|" + (path || ""));
-  deps.view.items(list, data, currentRepo, path);
-  displayedData = data;
+  // The accepted initial root listing was already mounted above.
+  if (data !== displayedData) {
+    deps.view.items(list, data, currentRepo, path);
+    displayedData = data;
+  }
 }
     return { render: renderSidebar, repos: renderRepoList, browse: renderBrowser, resetRetries: () => sidebarRetryCounts.clear() };
   }

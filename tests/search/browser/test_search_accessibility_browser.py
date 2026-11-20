@@ -560,6 +560,63 @@ class SearchAccessibilityTests(unittest.TestCase):
         self.assertEqual(len(self.page.evaluate('downloads')), 1)
         self.assertEqual(self.page.locator('.crumb-item.current').get_attribute('aria-current'), 'location')
 
+    def test_nested_sidebar_breadcrumb_preserves_paths_and_parses_markup_once(self):
+        sidebar = self.page.evaluate('''()=>{
+          const write=Object.getOwnPropertyDescriptor(Element.prototype,'innerHTML');
+          let writes=0;
+          Object.defineProperty(Element.prototype,'innerHTML',{...write,set(value){
+            if(this.className==='sidebar-breadcrumb') writes++;
+            write.set.call(this,value);
+          }});
+          try {
+            STATE.leftSidebarOpen=true;updateSidebarVisibility();
+            STATE.repo='Test';window.__nestedCrumbRoutes=[];
+            ROUTER.navigate=(...args)=>__nestedCrumbRoutes.push(args);
+            const crumb=createSidebarBreadcrumb('甲 & "乙"//<丙>/末');
+            DOM.sidebarContent.replaceChildren(crumb);
+            return {writes,buttons:[...crumb.querySelectorAll('button')].map(b=>[b.textContent,b.dataset.path,b.getAttribute('aria-current')]),
+              separators:[...crumb.querySelectorAll('.crumb-sep')].map(n=>n.getAttribute('aria-hidden'))};
+          } finally {Object.defineProperty(Element.prototype,'innerHTML',write);}
+        }''')
+        self.assertEqual(sidebar, {'writes': 1, 'separators': ['true'] * 4, 'buttons': [
+            ['根目录', '', None], ['甲 & "乙"', '甲 & "乙"', None], ['', '甲 & "乙"/', None],
+            ['<丙>', '甲 & "乙"//<丙>', None], ['末', '甲 & "乙"//<丙>/末', 'location'],
+        ]})
+        crumb = self.page.locator('.sidebar-breadcrumb')
+        crumb.get_by_role('button', name='<丙>', exact=True).press('Enter')
+        crumb.get_by_role('button', name='末', exact=True).press('Enter')
+        self.assertEqual(self.page.evaluate('__nestedCrumbRoutes'), [['repo', 'Test', '甲 & "乙"//<丙>']])
+
+    def test_initial_root_sidebar_keeps_one_listing_and_restores_scroll(self):
+        result = self.page.evaluate('''async()=>{
+          const layout=DOM.sidebarContent, directory=getSidebarDirectoryView(),
+            scroll=getSidebarScroll(), initial=loadSidebarInitial, root=STATE.repoFull;
+          const items=directory.items, originalScroll=scroll.restore;
+          const local=STATE.useLocalMode, activeRepo=STATE.repo, activeMode=STATE.mode;
+          const draws=[], restored=[];
+          const files=Array.from({length:120},(_,i)=>({name:`book-${i}`,ext:'txt',size:1}));
+          const data={folders:[{name:'nested',path:'nested',count:1}],files};
+          try {
+            routeRenderId++;
+            STATE.mode='repo';STATE.repo='Test';STATE.repoFull='VoiceOfML/Test';STATE.useLocalMode=false;
+            STATE.leftSidebarOpen=true;updateSidebarVisibility();
+            const key=scroll.keyFor(STATE.repoFull,'');scroll.positions.set(key,120);
+            loadSidebarInitial=async repo=>repo==='Test'?data:null;
+            directory.items=(...args)=>{items(...args);draws.push(args[0].firstElementChild);};
+            scroll.restore=()=>{originalScroll();restored.push(layout.scrollTop);};
+            await renderBrowser('',routeRenderId);
+            const folder=layout.querySelector('.browser-item[data-type="folder"]');
+            return {count:layout.querySelectorAll('.browser-item').length,
+              draws:draws.length,restored,first:draws[0]===folder,label:folder?.getAttribute('aria-label'),
+              current:layout.querySelector('.crumb-item.current')?.getAttribute('aria-current')};
+          } finally {
+            directory.items=items;scroll.restore=originalScroll;loadSidebarInitial=initial;
+            STATE.useLocalMode=local;STATE.repo=activeRepo;STATE.repoFull=root;STATE.mode=activeMode;
+          }
+        }''')
+        self.assertEqual(result, {'count': 121, 'draws': 1, 'restored': [120], 'first': True,
+                                  'label': '打开文件夹：nested', 'current': 'location'})
+
     def test_sidebar_delegated_folder_and_reader_actions(self):
         self.page.evaluate('''()=>{
           routeRenderId++;
