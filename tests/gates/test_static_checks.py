@@ -1267,7 +1267,7 @@ keepValue(1, 2);
     def test_search_view_key_coverage_gate_fails_closed(self):
         paths = ["static/search/positions/domain/view-key.js", "scripts/search/check_search_view_key_coverage.mjs",
                  "tests/search/baselines/test_search_view_key_baseline.mjs", "tests/search/baselines/test_search_view_key_module.mjs",
-                 "static/app.js", "scripts/check_tap_contracts.mjs"]
+                 "static/app.js", "scripts/check_tap_contracts.mjs", "static/search/shared/domain/stable-stringify.js"]
         for path in paths:
             target = self.root / path
             target.parent.mkdir(parents=True, exist_ok=True)
