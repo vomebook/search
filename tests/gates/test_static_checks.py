@@ -2921,7 +2921,7 @@ keepValue(1, 2);
                  'tests/reader/copy_reader_vendor.test.mjs',
                  'tests/reader/media/test_ruffle_closure.mjs', 'tests/service_worker/test_ruffle_retention.js',
                  'scripts/build/copy_reader_vendor.mjs',
-                 'scripts/build/check_reader_release.mjs', 'static/reader-resources.js', 'static/sw.js',
+                 'scripts/build/check_reader_release.mjs', 'static/reader-resources.js', 'static/sw.js', 'static/reader.html',
                  'static/reader/core/reader-source.mjs', 'static/reader/core/reader-document-loader.mjs']
         for path in paths:
             target = self.root / path
