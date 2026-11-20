@@ -150,6 +150,33 @@ class TocNavigationTests(unittest.TestCase):
                 'link=>Number(link.parentElement.dataset.tocIndex)'), index)
         self.assertFalse(self.page.evaluate('()=>__toc.nav().tocEntries[2].activate()'))
 
+    def test_pdf_outline_lookups_do_not_block_page_rendering_or_reorder_the_toc(self):
+        self.expose()
+        engine = support.ENGINE.replace('getOutline:async()=>null', '''getOutline:async()=>[
+          {title:'Slow first',dest:'slow',items:[{title:'Nested',dest:'nested'}]},
+          {title:'Third',dest:[{num:2}]}, {title:'Broken',dest:'broken'},
+          {title:'Last',dest:[3]},
+        ],getDestination:async name=>{
+          if(name==='slow') await new Promise(resolve=>{window.__releaseOutline=resolve;});
+          if(name==='broken') throw new Error('Missing PDF destination');
+          return [name==='nested'?1:0];
+        },getPageIndex:async ref=>{window.__outlineRefRead=true;return ref.num;}''')
+        self.page.unroute('**/static/vendor/pdf.min.*.mjs')
+        self.page.route('**/static/vendor/pdf.min.*.mjs', lambda route: route.fulfill(
+            content_type='text/javascript', body=engine))
+        support.PdfFollowupTests.open(self)
+        self.page.wait_for_function('()=>window.__releaseOutline && window.__outlineRefRead')
+        self.page.locator('.reader-page[data-page="1"] canvas').first.wait_for(state='visible')
+        self.assertEqual(self.page.evaluate('__toc.nav().tocEntries.length'), 0)
+        self.page.evaluate('__releaseOutline()')
+        self.page.wait_for_function('()=>__toc.nav().tocEntries.length===5')
+        entries = self.page.evaluate('__toc.nav().tocEntries.map(e=>[e.label,e.depth,e.page])')
+        self.assertEqual(entries, [['Slow first · 第 1 页', 0, 1], ['Nested · 第 2 页', 1, 2],
+                                   ['Third · 第 3 页', 0, 3], ['Broken', 0, None], ['Last · 第 4 页', 0, 4]])
+        self.page.locator('#toc-list [data-toc-index="2"] [role="link"]').dispatch_event('click')
+        self.page.wait_for_function('()=>Number(document.querySelector("#page-number").value)===3')
+        self.assertFalse(self.page.evaluate('()=>__toc.nav().tocEntries[3].activate()'))
+
     def test_large_pdf_toc_page_lookup_preserves_unsorted_labels_and_resets(self):
         self.expose()
         self.page.route('**/api/reader-content**',lambda route:route.fulfill(content_type='text/plain',body='text'))

@@ -51,49 +51,72 @@ export function createReaderPdfPageWindow(readerContext) {
   // Geometry state is shared by direct PDF and ordinary image-page formats.
   let pdfPagesBook = { seedRatio: 0 };
 
-  /** @param {import('../../../typings/reader-page-window-strict').PdfOutlineDocument | import('../../../typings/reader-page-window-strict').DjvuOutlineDocument} pdf */
+  /** @typedef {import('../../../typings/reader-page-window-strict').PdfOutlineItem} OutlineItem */
+  /** @typedef {import('../../../typings/reader-page-window-strict').PdfOutlineDocument} PdfOutlineDocument */
+  /** @typedef {import('../../../typings/reader-page-window-strict').DjvuOutlineDocument} DjvuOutlineDocument */
+
+  /** @param {OutlineItem} item @param {PdfOutlineDocument | DjvuOutlineDocument} pdf @param {boolean} isDjvu */
+  async function resolveOutlinePage(item, pdf, isDjvu) {
+    try {
+      const destination = typeof item.dest === "string" ? await pdf.getDestination?.(item.dest) : item.dest;
+      readerContext.assertReaderActive();
+      const ref = destination?.[0];
+      let index = -1;
+      if (typeof ref === "number" && Number.isInteger(ref)) {
+        // PDF.js numeric destinations are zero-based. DjVu normalizes through its adapter.
+        index = isDjvu ? await /** @type {DjvuOutlineDocument} */ (pdf).getPageIndex(ref) : ref;
+      } else if (!isDjvu && ref && typeof ref === "object") {
+        index = await /** @type {PdfOutlineDocument} */ (pdf).getPageIndex(ref);
+      }
+      if (Number.isSafeInteger(index) && index >= 0 && index < pdf.numPages) return index + 1;
+    } catch (_) { /* A broken destination does not discard the remaining outline. */ }
+    return null;
+  }
+
+  /** @param {OutlineItem[] | null} outline
+   * @returns {Generator<{item: OutlineItem, depth: number}, undefined, unknown>} */
+  function* outlineItems(outline) {
+    const stack = [(outline || []).values()];
+    while (stack.length) {
+      const row = stack.at(-1)?.next();
+      if (!row || row.done) { stack.pop(); continue; }
+      const item = row.value;
+      yield { item, depth: stack.length - 1 };
+      if (item.items?.length) stack.push(item.items.values());
+    }
+    return undefined;
+  }
+
+  /** @param {PdfOutlineDocument | DjvuOutlineDocument} pdf */
   async function loadPdfOutline(pdf, isDjvu = false) {
     if (typeof pdf?.getOutline !== "function") return undefined;
     try {
       const outline = await readerContext.awaitReader(pdf.getOutline());
+      if (!outline?.length) return [];
       /** @type {import('../../../typings/reader-page-window-strict').PdfOutlineEntry[]} */
       const entries = [];
-      /** @param {string} value */
-      const cleanLabel = (value) =>
-        String(value || "未命名章节")
-          .replace(/[\u2610-\u2612\u25a1]\s*[xX×]?\s*$/u, "")
-          .trim() || "未命名章节";
-      /** @param {import('../../../typings/reader-page-window-strict').PdfOutlineItem[] | null | undefined} items @param {number} depth */
-      const append = async (items, depth = 0) => {
-        for (const item of items || []) {
+      const items = outlineItems(outline);
+      let nextIndex = 0;
+      // Lookups can wait for independent PDF ranges. Bound the queue and assign
+      // each entry's original slot before any await; leave DjVu serial.
+      await readerContext.awaitReader(Promise.all(Array.from({ length: isDjvu ? 1 : 4 }, async () => {
+        while (true) {
           readerContext.assertReaderActive();
-          /** @type {number | null} */
-          let page = null;
-          try {
-            const destination = typeof item.dest === "string" ? await pdf.getDestination?.(item.dest) : item.dest;
-            const ref = destination?.[0];
-            let index = -1;
-            if (typeof ref === "number" && Number.isInteger(ref)) {
-              // PDF.js numeric destinations are already zero-based indices.
-              // DjVu uses one-based page numbers and normalizes via its adapter.
-              index = isDjvu
-                ? await /** @type {import('../../../typings/reader-page-window-strict').DjvuOutlineDocument} */ (pdf).getPageIndex(ref)
-                : ref;
-            } else if (!isDjvu && ref && typeof ref === "object") {
-              index = await /** @type {import('../../../typings/reader-page-window-strict').PdfOutlineDocument} */ (pdf).getPageIndex(ref);
-            }
-            if (Number.isSafeInteger(index) && index >= 0 && index < pdf.numPages) page = index + 1;
-          } catch (_) { /* A broken destination does not discard the remaining outline. */ }
-          entries.push({
-            label: page === null ? cleanLabel(item.title) : `${cleanLabel(item.title)} · 第 ${page} 页`,
+          const next = items.next().value;
+          if (next === undefined) return;
+          const { item, depth } = next;
+          const slot = nextIndex++;
+          const page = await resolveOutlinePage(item, pdf, isDjvu);
+          readerContext.assertReaderActive();
+          const label = String(item.title || "未命名章节").replace(/[\u2610-\u2612\u25a1]\s*[xX×]?\s*$/u, "").trim() || "未命名章节";
+          entries[slot] = {
+            label: page === null ? label : `${label} · 第 ${page} 页`,
             depth,
             page,
             activate: (generation) => page === null ? false : readerContext.goToPage(page, generation)
-          });
-          await append(item.items, depth + 1);
+          };
         }
-      };
-      await append(outline);
+      })));
       readerContext.assertReaderActive();
       return entries;
     } catch (error) {
