@@ -99,10 +99,10 @@ const FULLTEXT_FOLDER_CACHE_UNITS = 65536;
 const directoryIndexes = new Map();
 const DIRECTORY_INDEX_MAX = 4;
 const FOLDER_SEARCH_MAX = 4096;
-// Native file extensions understood by the Reader. Converted-only formats
-// are supplied separately by the asset sidecar, not by this pool.
+// Only formats readable from the original file belong in this pool. Ebooks
+// requiring a chapter manifest are supplied separately by the asset sidecar.
 const NATIVE_READER_EXTENSIONS = new Set([
-  "pdf", "djvu", "epub", "mobi", "azw", "azw3", "fb2", "fbz", "html", "htm",
+  "pdf", "djvu", "html", "htm",
   "txt", "md", "markdown", "vcf", "ini", "jpg", "jpeg", "png", "gif", "bmp",
   "webp", "mp3", "mp4", "wav", "m4a", "flac", "mov", "mpga",
   "wma", "ape", "amr", "swf"

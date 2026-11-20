@@ -159,11 +159,6 @@ def zip_bytes(files, stored_first=None):
     return output.getvalue()
 
 
-def zip_bomb_metadata():
-    # A complete, decompressible archive that exceeds the per-entry ratio limit.
-    return zip_bytes({"bomb.txt": b"x" * (1024 * 1024)})
-
-
 def minimal_epub():
     return zip_bytes({
         "META-INF/container.xml": '<?xml version="1.0"?><container xmlns="urn:oasis:names:tc:opendocument:xmlns:container" version="1.0"><rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>',
@@ -1284,18 +1279,6 @@ class ReaderPerformanceTest(unittest.TestCase):
         self.assertIn("All book", page.locator("#bookmarks-list .panel-item-main").text_content())
         context.close()
 
-    def test_truncated_epub_reports_source_damage(self):
-        context = self.browser.new_context(viewport={"width": 390, "height": 844})
-        page = context.new_page()
-        page.route("**/static/reader/core/reader-store.js", lambda route: route.fulfill(status=200, content_type="text/javascript", body=STORE_SCRIPT))
-        page.route("https://voiceofml-search.hf.space/api/reader-content**", lambda route: route.fulfill(status=200, content_type="application/epub+zip", body=b"PK\x03\x04truncated"))
-        source = "https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/damaged.epub"
-        page.goto(f"{self.origin}/search/static/reader.html?url={urllib.parse.quote(source, safe='')}&ext=epub&title=Damaged", wait_until="domcontentloaded")
-        page.locator(".reader-error").wait_for(timeout=10000)
-        self.assertTrue(page.locator(".reader-error").text_content().strip())
-        self.assertEqual(page.locator("#content").get_attribute("data-error-code"), "READER_CORRUPT")
-        context.close()
-
     def test_malicious_html_css_and_svg_are_inert_and_keep_safe_text(self):
         document = b'''<style>@import url("https://evil.test/style.css"); body{background:url(https://evil.test/bg)}</style>
           <p id="safe">Safe reader text</p><script>parent.__unsafe=true</script>
@@ -1341,23 +1324,6 @@ class ReaderPerformanceTest(unittest.TestCase):
                 expected_limit = limit if name == "manifest" else 8 * 1024 * 1024
                 self.assertEqual(page.evaluate("limit => { try { VoiceOfMLReaderSecurity.assertResponseSize({headers:{get:()=>String(limit + 1)}}, limit); return null; } catch (error) { return error.message; } }", expected_limit), "READER_RESOURCE_LIMIT")
                 context.close()
-
-    def test_zip_bomb_metadata_is_rejected_before_foliate_parser(self):
-        payload = zip_bomb_metadata()
-        with zipfile.ZipFile(io.BytesIO(payload)) as archive:
-            self.assertIsNone(archive.testzip())
-            entry = archive.getinfo("bomb.txt")
-            self.assertGreater(entry.file_size / entry.compress_size, 200)
-        context = self.browser.new_context(viewport={"width": 390, "height": 844}); page = context.new_page()
-        page.route("**/static/reader/core/reader-store.js", lambda route: route.fulfill(status=200, content_type="text/javascript", body=STORE_SCRIPT))
-        page.route("**/static/foliate-reader/view.js*", lambda route: route.fulfill(status=200, content_type="text/javascript", body="customElements.define('foliate-view', class extends HTMLElement { open() { window.__archiveParserStarted=true; throw new Error('parser must not start'); } });"))
-        page.route("https://voiceofml-search.hf.space/api/reader-content**", lambda route: route.fulfill(status=200, content_type="application/octet-stream", body=payload))
-        source = "https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/bomb.epub"
-        page.goto(f"{self.origin}/search/static/reader.html?url={urllib.parse.quote(source, safe='')}&ext=epub&title=Bomb", wait_until="domcontentloaded")
-        page.locator(".reader-error").wait_for(timeout=10000)
-        self.assertIn("READER_ARCHIVE_LIMIT", page.locator(".reader-error").text_content())
-        self.assertEqual(page.locator("#content").get_attribute("data-error-code"), "READER_CORRUPT")
-        self.assertFalse(page.evaluate("window.__archiveParserStarted === true")); context.close()
 
     def test_actual_store_broadcasts_progress_and_bookmark_updates_between_readers(self):
         self.page.unroute("**/static/reader/core/reader-store.js")

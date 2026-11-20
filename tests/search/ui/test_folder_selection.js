@@ -59,3 +59,6 @@ for (const target of nodes) {
   assert.deepStrictEqual(selectedFiles(subtrees, selfs), paths.filter(file => !filesIn(target).includes(file)));
 }
 console.log('folder selection: 2048 combinations and branch removal preserve file membership');
+
+// Run the memo regressions through the existing Reader CI entry point.
+require('./test_folder_tree_memo.mjs');

@@ -766,6 +766,10 @@
       "kind": "direct",
       "source": ".github/workflows/reader-refactor.yml"
     },
+    "tests/search/ui/test_folder_tree_memo.mjs": {
+      "kind": "helper",
+      "source": "tests/search/ui/test_folder_selection.js"
+    },
     "tests/search/ui/test_search_interaction_state.js": {
       "kind": "direct",
       "source": ".github/workflows/reader-refactor.yml"

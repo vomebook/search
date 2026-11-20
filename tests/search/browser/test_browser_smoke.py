@@ -893,26 +893,42 @@ class BrowserBehaviorTest(unittest.TestCase):
     def test_late_reader_assets_update_directory_without_replacing_rows(self):
         self.load("#/VOMEBOOK")
         self.page.wait_for_function("() => STATE.dataLoaded && STATE.mode === 'repo'", timeout=30000)
-        self.page.evaluate("""() => {
-            readerAssetController.state.assets = null;
-            loadReaderAssets = () => new Promise(resolve => {
-                window.finishDirectoryAssets = () => { readerAssetController.state.assets = {}; resolve(readerAssetController.state.assets); };
+        manifest_path = f"chapters/ebook/epub/{'a' * 64}/0123456789abcdef/chapter-manifest.json"
+        self.page.evaluate("""async manifest => {
+            await loadReaderAssets();
+            const state = readerAssetController.state;
+            state.assets = state.converted = state.byRepo = null;
+            const key = STATE.repoFull + '\\0late-assets/book.epub';
+            const bucket = 'vomebook/reader-assets-v2';
+            const pendingAssets = new Promise(resolve => {
+                window.finishDirectoryAssets = () => {
+                    state.assets = {[key]: {s: 2, m: 'e', b: bucket, p: manifest, cb: bucket, c: manifest}};
+                    resolve(state.assets);
+                };
             });
-            applyReaderAsset = record => readerAssetController.state.assets
-                ? {...record, ReaderLink: 'https://voiceofml-search.hf.space/test.epub', ReaderExtension: 'epub'}
-                : record;
+            loadReaderAssets = () => pendingAssets;
             getFolderContents = () => Promise.resolve({
-                folders: [], files: [{name: 'book.caj', ext: 'caj', size: 1}]
+                folders: [], files: [{name: 'book', ext: 'epub', size: 1}]
             });
             ROUTER.navigate('repo', STATE.repo, 'late-assets');
-        }""")
-        self.page.locator('.browser-list .browser-item[data-link]').wait_for()
-        self.page.evaluate("window.directoryFileRow = document.querySelector('.browser-list .browser-item[data-link]')")
-        before = self.page.evaluate("window.directoryFileRow.dataset.readerUrl || ''")
+        }""", manifest_path)
+        row = self.page.locator('.browser-list .browser-item[data-filename="book.epub"]')
+        self.assertEqual(row.evaluate("""el => {
+            window.directoryFileRow = el;
+            return el.dataset.readerUrl || '';
+        }"""), '')
         self.page.evaluate("window.finishDirectoryAssets()")
-        self.page.wait_for_function("() => !!window.directoryFileRow.dataset.readerUrl && !!readerAssetController.state.assets")
-        self.assertNotEqual(self.page.evaluate("window.directoryFileRow.dataset.readerUrl"), before)
-        self.assertTrue(self.page.evaluate("window.directoryFileRow.isConnected"))
+        self.page.wait_for_function("() => !!window.directoryFileRow.dataset.readerUrl")
+        self.assertTrue(row.evaluate("el => el === window.directoryFileRow"))
+        params = parse_qs(urlsplit(row.get_attribute('data-reader-url')).query)
+        self.assertEqual(params['ext'], ['epub-chapters'])
+        self.assertEqual(row.locator('.browser-name').get_attribute('aria-label'), '打开阅读器：book.epub')
+        converted = self.page.evaluate("getConvertedReaderRecords(STATE.repoFull)")
+        self.assertEqual(len(converted), 1)
+        self.assertEqual(converted[0]['ReaderExtension'], 'epub-chapters')
+        manifest_url = urlsplit(converted[0]['ReaderChapterManifest'])
+        self.assertEqual(manifest_url.path, '/api/reader-bucket-resource')
+        self.assertEqual(parse_qs(manifest_url.query), {'path': [manifest_path]})
         self.assertEqual(self.page_errors, [])
 
     def test_late_reader_assets_keep_mixed_directory_and_file_action_in_sync(self):

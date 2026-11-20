@@ -80,9 +80,17 @@ test('the real Reader contract retains native and converted format eligibility',
   const reader = context.self.VoiceOfMLReader;
   assert.equal(typeof reader.capability, 'function');
   const {readable, original} = fixture(reader.capability);
-  for (const extension of ['pdf', 'djvu', 'epub', 'txt', 'html', 'jpg', 'mp3', 'mp4', 'swf']) {
+  for (const extension of ['pdf', 'djvu', 'txt', 'html', 'jpg', 'mp3', 'mp4', 'swf']) {
     assert.equal(readable({Extension: extension.toUpperCase()}), true, extension);
     assert.equal(original({Extension: extension}), true, extension);
+  }
+  for (const extension of ['epub', 'mobi', 'azw', 'azw3', 'fb2', 'fbz']) {
+    const record = {Extension: extension};
+    assert.equal(readable(record), false, extension);
+    assert.equal(original(record), false, extension);
+    const chapters = {...record, ReaderExtension: 'epub-chapters', ReaderLink: '/chapter-manifest.json'};
+    assert.equal(readable(chapters), true, extension);
+    assert.equal(original(chapters), false, extension);
   }
   for (const extension of ['docx', 'caj', 'kdh', 'ps', 'zip', '']) {
     assert.equal(readable({Extension: extension}), false, extension);

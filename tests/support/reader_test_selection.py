@@ -88,20 +88,11 @@ CATEGORY_METHODS = {
 }
 
 
-# These cases still exist in the performance module but exercise raw EPUB
-# loading through the removed Foliate engine. ZIP limits remain covered by
-# tests/reader/security/test_reader_security.js.
-RETIRED_FOLIATE_METHODS = {
-    "test_truncated_epub_reports_source_damage",
-    "test_zip_bomb_metadata_is_rejected_before_foliate_parser",
-}
-
-
 def validate_partition():
     source = {
         name for name, value in ReaderPerformanceTest.__dict__.items()
         if name.startswith("test_") and callable(value)
-    } - RETIRED_FOLIATE_METHODS
+    }
     assigned = [name for methods in CATEGORY_METHODS.values() for name in methods]
     counts = collections.Counter(assigned)
     missing = sorted(source - counts.keys())

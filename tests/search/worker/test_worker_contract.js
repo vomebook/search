@@ -474,22 +474,29 @@ test("wildcard search returns complete IDs for repeated-star patterns", async ()
   assert.strictEqual((await worker.request("local-search", {q:"*a".repeat(10)+"b", exact:true})).total, 0);
 });
 
-test("native Foliate books are eligible for repository-scoped random reading", async () => {
-  for (const extension of ["mobi", "azw", "azw3", "fb2", "fbz"]) {
-    const { worker, metadata } = await loaded([{ ...records[0], Extension: extension }]);
-    assert.strictEqual(metadata.reader.count, 1);
-    const record = await worker.request("random-record", { repo: "Repo/A", readerOnly: true });
-    assert.strictEqual(record.record.Extension, extension);
+const chapterOnlyBooks = ["epub", "mobi", "azw", "azw3", "fb2", "fbz"];
+
+test("bare ebooks are downloadable but not counted or sampled for random reading", async () => {
+  const input = chapterOnlyBooks.map(Extension => ({ ...records[0], Extension }));
+  const { worker, metadata } = await loaded(input);
+  assert.deepStrictEqual(metadata.reader, { available: false, count: 0, byRepo: {} });
+  for (const repo of ["", "Repo/A"]) {
+    const result = await worker.request("random-record", { repo, readerOnly: true, randomValue: 0 });
+    assert.strictEqual(result.record, null);
+    assert.strictEqual(result.id, null);
   }
+  const download = await worker.request("random-record", { repo: "Repo/A", randomValue: 0 });
+  assert.strictEqual(download.record.Extension, "epub");
 });
-test("local random reading includes all native formats, but no conversion-only files", async () => {
-  const native = ["pdf", "djvu", "epub", "mobi", "azw", "azw3", "fb2", "fbz", "html", "htm",
-    "txt", "md", "markdown", "vcf", "ini", "jpg", "jpeg", "png", "gif", "bmp",
-    "webp", "mp3", "mp4", "wav", "m4a", "flac", "mov", "mpga", "wma", "ape", "amr", "swf"];
-  const input = native.concat(["caj", "kdh", "ps", "docx", "tif", "tiff"]).map((extension, i) => ({
-    ...records[0], File: "book" + i, Extension: extension.toUpperCase(),
+test("local random reader counts match the native sampling range globally and by repository", async () => {
+  const native = ["pdf", "djvu", "html", "htm", "txt", "md", "markdown", "vcf", "ini",
+    "jpg", "jpeg", "png", "gif", "bmp", "webp", "mp3", "mp4", "wav", "m4a", "flac",
+    "mov", "mpga", "wma", "ape", "amr", "swf"];
+  const input = native.concat(chapterOnlyBooks, ["caj", "kdh", "ps", "docx", "tif", "tiff"]).map((extension, i) => ({
+    ...records[0], Repo: i % 2 ? "Repo/B" : "Repo/A", File: "book" + i, Extension: extension.toUpperCase(),
   }));
   const {worker, metadata} = await loaded(input);
+  assert.strictEqual(metadata.reader.available, true);
   assert.strictEqual(metadata.reader.count, native.length);
   // Keep file-format support aligned with the Reader's own public contract.
   const readerContext = {self:{}};
@@ -497,10 +504,17 @@ test("local random reading includes all native formats, but no conversion-only f
   vm.runInContext(fs.readFileSync('static/reader/core/reader-contract.js', 'utf8'), readerContext);
   const reader = readerContext.self.VoiceOfMLReader;
   for (const extension of native) assert.strictEqual(reader.capability(extension).article, true, extension);
-  for (const extension of ["caj", "kdh", "ps", "docx"]) assert.strictEqual(reader.capability(extension).article, false, extension);
-  for (let i = 0; i < native.length; i++) {
-    const found = await worker.request("random-record", {repo:"Repo/A", readerOnly:true, randomValue:(i + .1) / native.length});
-    assert.strictEqual(found.record.Extension.toLowerCase(), native[i]);
+  for (const extension of chapterOnlyBooks.concat(["caj", "kdh", "ps", "docx"])) {
+    assert.strictEqual(reader.capability(extension).article, false, extension);
+  }
+  for (const repo of ["", "Repo/A", "Repo/B"]) {
+    const expected = input.slice(0, native.length).filter(record => !repo || record.Repo === repo);
+    const count = repo ? metadata.reader.byRepo[repo] : metadata.reader.count;
+    assert.strictEqual(count, expected.length, repo);
+    for (let i = 0; i < count; i++) {
+      const found = await worker.request("random-record", { repo, readerOnly: true, randomValue: (i + .5) / count });
+      assert.deepStrictEqual(found.record, expected[i]);
+    }
   }
 });
 function scheduledWorker(options = {}) {

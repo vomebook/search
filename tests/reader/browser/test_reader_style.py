@@ -4,17 +4,10 @@ import io
 import os
 import unittest
 import urllib.parse
-import zipfile
 from PIL import Image
 
 from tests.support.browser_support import local_server
-from tests.performance.test_reader_performance import (
-    STORE_SCRIPT,
-    PlaywrightError,
-    epub_with_navigation,
-    sync_playwright,
-    zip_bytes,
-)
+from tests.performance.test_reader_performance import STORE_SCRIPT, PlaywrightError, sync_playwright
 from tests.performance import test_reader_performance as support
 from tests.support.reader_native_fixture import install as install_native_djvu
 
@@ -349,47 +342,46 @@ class ReaderStyleTests(unittest.TestCase):
         self.assertEqual(button.get_attribute('aria-pressed'), 'false')
         self.assertEqual(self.page.locator('canvas.ready').first.evaluate('e => getComputedStyle(e).filter'), 'none')
 
-    def open_theme_fixture(self, data):
-        self.page.route("**/api/reader-content**", lambda route: route.fulfill(body=data))
-        source = urllib.parse.quote("https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/theme.epub", safe="")
-        self.page.goto(f"{self.origin}/search/static/reader.html?url={source}&ext=epub&title=Theme")
+    def test_converted_xhtml_chapter_theme_preserves_svg_and_layout(self):
+        source = ("https://voiceofml-search.hf.space/api/reader-bucket-resource?path=chapters/ebook/epub/"
+                  + "a" * 64 + "/1234567890abcdef/chapter-manifest.json")
+        xhtml = """<html xmlns="http://www.w3.org/1999/xhtml"><head><title>Theme</title></head>
+          <body><p id="chapter-text" style="color:black; background-color:white">Chapter text</p>
+          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16">
+            <rect width="16" height="16" style="color:red" fill="currentColor"/>
+          </svg></body></html>"""
+        manifest = {"version": 1, "kind": "epub-chapters", "chapters": [
+            {"index": 1, "path": "chapters/chapter-0001.xhtml", "bytes": len(xhtml.encode("utf-8"))}
+        ]}
+        self.page.route("**/api/reader-bucket-resource**", lambda route: route.fulfill(json=manifest)
+                        if "chapter-manifest.json" in route.request.url else route.fulfill(
+                            content_type="application/xhtml+xml", body=xhtml,
+                            headers={"Access-Control-Allow-Origin": "*"}))
+        params = urllib.parse.urlencode(dict(url=source, ext="epub-chapters", title="Theme"))
+        self.page.goto(f"{self.origin}/search/static/reader.html?{params}")
         self.page.wait_for_function("() => document.documentElement.dataset.readerPhase === 'ready'")
 
-    def dismiss_toc_hint(self):
-        # One/two-entry directories deliberately do not auto-open a hint.
-        # Normalize either state; hint policy has separate behavior tests.
-        self.page.locator("#history").evaluate("e=>{if(e.getAttribute('aria-expanded')==='true')e.click()}")
-        self.page.wait_for_function("() => document.querySelector('#history-panel').hidden")
-
-    def check_document_theme_round_trip(self, selector):
-        self.dismiss_toc_hint()
-        target = self.page.locator(selector).first
-        initial = target.bounding_box()
-        for theme in ("dark", "light", "dark"):
-            if self.page.locator("html").get_attribute("data-theme") != theme:
-                support.open_reader_panel(self.page)
-                self.page.locator("#theme-toggle").click()
-                self.page.locator("#history").click()
-                self.page.wait_for_function("() => document.querySelector('#history-panel').hidden")
+        chapter = self.page.locator('#content[data-mode="epub-chapters"] .reader-epub-chapter')
+        text = chapter.locator("#chapter-text")
+        svg = chapter.locator("svg")
+        for node in (chapter, text, svg):
+            node.wait_for()
+        initial = [node.bounding_box() for node in (chapter, text, svg)]
+        for step, theme in enumerate(("dark", "light", "dark")):
+            with self.subTest(step=step, theme=theme):
+                if step:
+                    self.page.locator("#history").click()
+                    self.page.locator("#theme-toggle").click()
+                    self.page.locator("#history-close").click()
+                    self.page.locator("#history-panel").wait_for(state="hidden")
                 self.settle()
-            colors = target.evaluate("e=>[getComputedStyle(e).color,getComputedStyle(e).backgroundColor]")
-            self.assertEqual(colors, ["rgb(231, 233, 235)", "rgba(0, 0, 0, 0)"] if theme == "dark"
-                             else ["rgb(0, 0, 0)", "rgb(255, 255, 255)"])
-            self.assertEqual(target.bounding_box(), initial)
-
-    def test_epub_legacy_font_colors_and_shading_follow_shadow_theme(self):
-        with zipfile.ZipFile(io.BytesIO(epub_with_navigation())) as archive:
-            files = {name: archive.read(name) for name in archive.namelist()}
-        files["OEBPS/nav.xhtml"] = files["OEBPS/nav.xhtml"].decode().replace(
-            "</body>", '<p style="background-color:white"><font color="black" id="night-text" '
-            'style="background-color:white">Night text</font></p>'
-            '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16">'
-            '<rect id="night-art" width="16" height="16" fill="red"/></svg></body>'
-        )
-        self.open_theme_fixture(zip_bytes(files))
-        self.check_document_theme_round_trip("#night-text")
-        self.assertEqual(self.page.locator("#night-art").evaluate("e=>getComputedStyle(e).fill"), "rgb(255, 0, 0)")
-        self.assertEqual(self.page.locator("#night-art").evaluate("e=>getComputedStyle(e.ownerSVGElement).filter"), "none")
+                self.assertEqual(self.page.locator("html").get_attribute("data-theme"), theme)
+                colors = text.evaluate("e => [getComputedStyle(e).color, getComputedStyle(e).backgroundColor]")
+                self.assertEqual(colors, ["rgb(236, 239, 241)", "rgba(0, 0, 0, 0)"] if theme == "dark"
+                                 else ["rgb(0, 0, 0)", "rgb(255, 255, 255)"])
+                self.assertEqual(svg.locator("rect").evaluate("e => getComputedStyle(e).fill"), "rgb(255, 0, 0)")
+                self.assertEqual(svg.evaluate("e => getComputedStyle(e).filter"), "none")
+                self.assertEqual([node.bounding_box() for node in (chapter, text, svg)], initial)
 
     def test_numeric_controls_have_visible_keyboard_focus_in_both_themes(self):
         self.page.locator(".page-controls").evaluate("element => element.hidden = false")
