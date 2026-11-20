@@ -6,6 +6,7 @@ const CACHE_NAME = CACHE_PREFIX + CACHE_VERSION;
 const READER_SHELL_INTEGRITY = "development"; // Stamped from the rewritten Reader HTML.
 /** @type {string[]} */
 const CURRENT_HASHED_ASSETS = []; // Filled by the static build.
+const currentAssetPaths = new Set(CURRENT_HASHED_ASSETS);
 /** @type {Promise<void> | null} */
 let cachePruning = null;
 let cachePruningDirty = false;
@@ -55,10 +56,10 @@ function isRemovedReaderAsset(pathname) {
 }
 /** @param {string} pathname @returns {boolean} */
 function isRetiredAsset(pathname) {
-  if (CURRENT_HASHED_ASSETS.length && (isDjvuDecoderAsset(pathname) || isRuffleAsset(pathname))) return !CURRENT_HASHED_ASSETS.includes(pathname);
-  return CURRENT_HASHED_ASSETS.length > 0 &&
+  if (currentAssetPaths.size && (isDjvuDecoderAsset(pathname) || isRuffleAsset(pathname))) return !currentAssetPaths.has(pathname);
+  return currentAssetPaths.size > 0 &&
     (/\.[0-9a-f]{12}\.(js|mjs|css)$/.test(pathname) || /^\/search\/static\/(?:(?:reader|search)\/[^?]+|[^/]+)\.(js|mjs|css)$/.test(pathname)) &&
-    !CURRENT_HASHED_ASSETS.includes(pathname);
+    !currentAssetPaths.has(pathname);
 }
 // Retain a bounded history of serving generations for older open clients.
 // Install never changes this pointer.

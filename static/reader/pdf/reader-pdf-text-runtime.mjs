@@ -164,9 +164,16 @@ export function createReaderPdfTextRuntime(readerContext) {
 
   /** @param {number} page @param {import('../../../typings/reader-pdf-text-runtime-strict').TextContent} content */
   function cachePdfTextContent(page, content) {
+    const previous = readerContext.pdfTextContentCache.get(page);
+    // Render may re-touch the same read-only extraction result. Keep its LRU
+    // refresh, but only reuse the accounting if that exact result is resident.
+    if (previous && previous.content === content) {
+      readerContext.pdfTextContentCache.delete(page);
+      readerContext.pdfTextContentCache.set(page, previous);
+      return;
+    }
     const bytes = readerContext.estimatePdfTextContentBytes(content);
     if (bytes > readerContext.PDF_TEXT_CONTENT_CACHE_BYTES) return;
-    const previous = readerContext.pdfTextContentCache.get(page);
     if (previous) readerContext.pdfTextContentCacheBytes -= previous.bytes;
     readerContext.pdfTextContentCache.delete(page);
     readerContext.pdfTextContentCache.set(page, { content, bytes });
