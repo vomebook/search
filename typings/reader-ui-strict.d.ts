@@ -1,6 +1,5 @@
 export interface NavigationContext {
   cancelReaderDestinationHold?: () => void;
-  epubSeekFrame: number;
   chapterScrollAnchors: { invalidate(): void; remember(): void };
   nextReaderGeneration(kind: string): number;
   returnHistoryKey: string | null;

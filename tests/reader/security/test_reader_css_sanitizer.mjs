@@ -20,7 +20,7 @@ const cases = [
   ["@\\69mport 'https://x.test/a.css';p{}", "p{}"],
   ["@import url(data:text/css,p{});p{}", "p{}"],
   ["@import \"blob:https://site/abc\";p{}", "p{}"],
-  ["@import \"blob:https://site/abc\";p{}", "@import \"blob:https://site/abc\";p{}", { keepBlobImports: true }],
+  ["@import url(blob:https://site/abc) screen;p{color:green}", "p{color:green}"],
   ["@import \"local.css\";p{}", "@import \"local.css\";p{}"],
   // Safe references and non-reference strings stay byte-for-byte.
   ["p{background:url(blob:https://site/1)}", null],

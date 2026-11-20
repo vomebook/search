@@ -67,9 +67,6 @@ export interface ByteBudget {
   readonly used: number;
   readonly remaining: number;
 }
-export interface ArchiveLimits {
-  archiveCompressedBytes: number; archiveExpandedBytes: number; archiveEntries: number; archiveRatio: number;
-}
 export interface SecurityApi {
   validateChapterManifest(input: unknown): ValidatedChapterManifest;
   validatePdfPageManifest(input: unknown): ValidatedPdfPageManifest;

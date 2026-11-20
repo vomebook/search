@@ -137,10 +137,7 @@ const readerContext = {
   get downloadUrl() { return downloadUrl; }, set downloadUrl(value) { downloadUrl = value; },
   get drainPdfTextWaiters() { return drainPdfTextWaiters; }, set drainPdfTextWaiters(value) { drainPdfTextWaiters = value; },
   get emptyPanel() { return emptyPanel; }, set emptyPanel(value) { emptyPanel = value; },
-  get epubContentBody() { return epubContentBody; }, set epubContentBody(value) { epubContentBody = value; },
-  get epubSeekFrame() { return epubSeekFrame; }, set epubSeekFrame(value) { epubSeekFrame = value; },
   get epubSeekPromise() { return epubSeekPromise; }, set epubSeekPromise(value) { epubSeekPromise = value; },
-  get epubSeekTarget() { return epubSeekTarget; }, set epubSeekTarget(value) { epubSeekTarget = value; },
   get extension() { return extension; }, set extension(value) { extension = value; },
   get fail() { return fail; }, set fail(value) { fail = value; },
   get fetchReaderResponse() { return fetchReaderResponse; }, set fetchReaderResponse(value) { fetchReaderResponse = value; },
@@ -612,7 +609,7 @@ let {
 
 let {
   normalizeEpubDocument, sanitizeReaderDocument, sanitizeEpubDocument, parseChapterDocument,
-  epubContentBody, renderText, sanitizeOfflineHtml, buildDiscourseDocument,
+  renderText, sanitizeOfflineHtml, buildDiscourseDocument,
   prepareHtmlDocument, buildHtmlFrameSource, waitForSpreadsheetImages, renderHtml,
   detectHtmlEncoding, repairHtmlContrast
 } = createReaderHtmlFormat(readerContext);
@@ -1098,11 +1095,7 @@ const progressRange = /** @type {HTMLInputElement} */ (progressTools.querySelect
   chapterNext = /** @type {HTMLButtonElement} */ (progressTools.querySelector(".reader-chapter-next"));
 /** @type {import('../typings/reader-progress-strict').ProgressState | null} */
 let previousProgressState = null;
-let
-  progressSeeking = false,
-  epubSeekFrame = 0;
-/** @type {{percent: number, generation: number} | null} */
-let epubSeekTarget = null;
+let progressSeeking = false;
 let epubSeekPromise = Promise.resolve();
 
 readerBindings.bindProgressActions();

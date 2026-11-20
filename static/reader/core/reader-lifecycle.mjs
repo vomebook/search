@@ -16,7 +16,6 @@
  * @property {number} themeAnimationTimer
  * @property {number} panelAnimationTimer
  * @property {number} markerFrame
- * @property {number} epubSeekFrame
  * @property {{mode: string | null} | null | undefined} capability
  * @property {HTMLElement} loadingIndicator
  * @property {HTMLElement} loadingStatus
@@ -154,13 +153,11 @@ export function createReaderLifecycle(readerContext) {
     clearTimeout(readerContext.saveTimer);
     clearTimeout(readerContext.themeAnimationTimer);
     clearTimeout(readerContext.panelAnimationTimer);
-    for (const frame of [readerContext.markerFrame, readerContext.epubSeekFrame])
-      if (frame) cancelAnimationFrame(frame);
+    if (readerContext.markerFrame) cancelAnimationFrame(readerContext.markerFrame);
     readerContext.saveTimer =
       readerContext.themeAnimationTimer =
       readerContext.panelAnimationTimer =
       readerContext.markerFrame =
-      readerContext.epubSeekFrame =
         0;
     VoiceOfMLReaderStore.dispose?.();
   }

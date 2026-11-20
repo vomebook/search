@@ -479,7 +479,7 @@ function warmReaderIntent(rawUrl, urgent = false) {
     readerId = readerUrl.searchParams.get("id") || "";
   } catch (_) { return; }
   var shellAssets = VoiceOfMLReaderResources.shellAssets("/search/static/");
-  var engineAssets = VoiceOfMLReaderResources.engineAssets(extension, "/search/static/", "?reader-v1");
+  var engineAssets = VoiceOfMLReaderResources.engineAssets(extension, "/search/static/");
   var controlled = !!(navigator.serviceWorker && navigator.serviceWorker.controller);
   /** @param {string} href */
   var preload = function(href) {

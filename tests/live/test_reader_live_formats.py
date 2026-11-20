@@ -216,10 +216,6 @@ class ReaderLiveFormatTests(unittest.TestCase):
         elif mode == "pdf-pages":
             page.locator(".reader-page[data-page='1'] img.ready").wait_for(timeout=120000)
             self.assertTrue(page.locator(".reader-page[data-page='1'] img").evaluate("image => image.complete && image.naturalWidth > 0"), name)
-        elif mode == "foliate":
-            article = page.locator(".foliate-continuous article").first
-            article.wait_for(state="attached", timeout=120000)
-            self.assertGreater(article.evaluate("node => (node.shadowRoot || node).textContent.trim().length"), 0, name)
         elif mode == "epub-chapters":
             chapter = page.locator(".reader-epub-chapter").filter(has_text=re.compile(r"\S")).first
             chapter.wait_for(state="attached", timeout=120000)

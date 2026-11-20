@@ -33,7 +33,7 @@ assert.doesNotMatch(imageLoader, /readerRuntime|readerContentUrl|pdfPageManifest
 const css = fs.readFileSync(path.join(root, 'static/reader.css'), 'utf8')
 assert.doesNotMatch(reader, /\b(?:renderFoliate|foliateSectionLoader)\b/)
 assert.doesNotMatch(reader, /foliate-reader/)
-assertCode(reader, 'for (const frame of [markerFrame, epubSeekFrame])')
+assertCode(reader, 'if (markerFrame) cancelAnimationFrame(markerFrame)')
 assert.strictEqual(reader.includes('document.querySelector("#toc-list").addEventListener'), false)
 assert.strictEqual(reader.includes('setInterval(() => { const tab = document.querySelector("#toc-tab")'), false)
 assert.strictEqual(reader.includes('setInterval('), false)

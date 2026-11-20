@@ -6,9 +6,8 @@
   const script = /** @type {HTMLScriptElement} */ (document.currentScript);
   const base = new URL("../../", script.src).href;
   const extension = pdf ? "pdf" : (params.get("ext") || "").toLowerCase();
-  const suffix = new URL(base).pathname.startsWith("/search/") ? "?reader-v1" : "";
   const workerWrapper = new URL("./pdf-worker-wrapper.mjs", script.src).href;
-  const assets = VoiceOfMLReaderResources.engineAssets(pdf ? "pdf" : extension, base, suffix, workerWrapper);
+  const assets = VoiceOfMLReaderResources.engineAssets(extension, base, workerWrapper);
   // PDF.js loads its small ICC color engine synchronously in the Worker. Warm
   // only those pinned bytes; actual color conversion and Worker creation remain
   // document-owned, with exactly the same engine/quality and no book prefetch.

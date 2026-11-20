@@ -17,10 +17,10 @@ const rewrite = (text, filename) => {
     if (!pinned.startsWith(".")) pinned = "./" + pinned;
     return quote + pinned + quote;
   });
-  text = text.replace(/VoiceOfMLReaderResources\.engineAssets\(([\w$]+),\s*"(\/search\/static\/)",\s*"(\?reader-v1)"\)/g,
+  text = text.replace(/VoiceOfMLReaderResources\.engineAssets\(([\w$]+),\s*"(\/search\/static\/)"\)/g,
     // DjVu selection belongs to the browser, never the build host. Its vendor
     // URLs are release-pinned; the other formats still need graph hash rewrites.
-    (_, extension, base, suffix) => `(["djvu","djv"].includes(${extension})?VoiceOfMLReaderResources.djvuSelectedAssets(${JSON.stringify(base)}):` + JSON.stringify(Object.fromEntries(["pdf", "epub", "mobi", "azw", "azw3", "fb2", "fbz", "md", "markdown", "html", "htm"].map(ext => [ext, resources.engineAssets(ext, base, suffix)]))) + `[${extension}]||[])`);
+    (_, extension, base) => `(["djvu","djv"].includes(${extension})?VoiceOfMLReaderResources.djvuSelectedAssets(${JSON.stringify(base)}):` + JSON.stringify(Object.fromEntries(["pdf", "md", "markdown", "html", "htm"].map(ext => [ext, resources.engineAssets(ext, base)]))) + `[${extension}]||[])`);
   text = text.replace(/VoiceOfMLReaderResources\.(shellAssets|runtimePaths)\("(\/search\/static\/)"\)/g,
     (_, method, base) => JSON.stringify(resources[method](base)));
   for (const [original, versioned] of replacements) text = text.split(original).join(versioned);

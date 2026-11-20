@@ -37,8 +37,8 @@ class ReaderEnginePreloadTests(unittest.TestCase):
                           Object.defineProperty(navigator,'connection',{configurable:true,value:{saveData}});
                           window.__warmRequests=[];window.__bodyReads=0;
                           window.VoiceOfMLReaderResources={
-                            engineAssets:(ext,base,suffix,worker)=>{
-                              window.__engineArgs={ext,base,suffix,worker};
+                            engineAssets:(ext,base,worker)=>{
+                              window.__engineArgs={ext,base,worker};
                               return [worker,base+'engine.mjs',base+'classic.js'];
                             },
                             pdfSupportAssets:base=>[base+'support.bin']
@@ -60,7 +60,6 @@ class ReaderEnginePreloadTests(unittest.TestCase):
                         worker = base + "reader/pdf/pdf-worker-wrapper.mjs"
                         self.assertEqual(result["args"]["base"], base)
                         self.assertEqual(result["args"]["worker"], worker)
-                        self.assertEqual(result["args"]["suffix"], "?reader-v1" if prefix else "")
                         expected_requests = [worker] if is_pdf else []
                         if is_pdf and mode != "save-data":
                             expected_requests.append(base + "support.bin")

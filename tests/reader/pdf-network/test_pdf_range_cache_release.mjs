@@ -65,7 +65,10 @@ test('PDF range dependencies are built before the network consumer and pinned fo
       const base=project==='github'?'/search/static/':'/static/';
       const app=built('app.js').text;
       const expression=app.match(/(?:var|const) engineAssets = ([^;]+);/)[1];
+      assert.doesNotMatch(expression,/\.engineAssets\(|\?reader-v1/,'build must inline the suffix-free warming call');
       assert.ok(expression.includes('djvuSelectedAssets'),'build must preserve runtime architecture choice');
+      const sw=readFileSync(join(output,'sw.js'),'utf8');
+      assert.doesNotMatch(sw,/\/vendor\/(?:zip|LICENSE_zipjs)\./,'obsolete zip.js must not enter the release cache inventory');
       const inventory=built('reader-resources.js');
       const worker=built('reader/pdf/reader-djvu-engine-worker.mjs');
       assert.ok(worker.text.includes('../../'+inventory.path),'worker imports hashed shared selection');
@@ -94,7 +97,7 @@ test('PDF range dependencies are built before the network consumer and pinned fo
         const updated=rewritten.replaceAll('./'+name,'./'+hashed);
         assert.notEqual(updated,rewritten);
         rewritten=updated;
-        assert.match(readFileSync(join(output,'sw.js'),'utf8'),new RegExp(hashed.replaceAll('.','\\.')));
+        assert.match(sw,new RegExp(hashed.replaceAll('.','\\.')));
         assert.equal(files.filter(file=>file===dependency).length,1);
       }
       const networkName=`reader-pdf-network.${digest(rewritten)}.mjs`;

@@ -1,4 +1,4 @@
-export interface CssOptions { strict?: boolean; keepBlobImports?: boolean; blobImports?: {url: string; media: string}[] | null; nonce?: string }
+export interface CssOptions { strict?: boolean }
 export interface HtmlDocumentData { html: string; discourse: boolean; spreadsheet: boolean }
 export interface HeadingTocEntry { label: string; depth: number; target: Element; activate(): void }
 export interface PreparedText { response: Response | Promise<Response>; engines?: Promise<unknown> }
@@ -10,7 +10,7 @@ export interface HtmlFormatContext {
   downloadUrl: string; sourceUrl: string; content: HTMLElement; status: HTMLElement;
   documentState: {title: string; zoom: number}; htmlFrame: HTMLIFrameElement | null;
   normalizeEpubDocument(doc: Document): Document;
-  sanitizeReaderDocument(doc: Document, options?: {preserveEpubStyles?: boolean; keepBlobImports?: boolean}): Document;
+  sanitizeReaderDocument(doc: Document, options?: {preserveEpubStyles?: boolean}): Document;
   sanitizeEpubDocument(doc: Document): Document;
   buildDiscourseDocument(text: string): string | null; sanitizeOfflineHtml(text: string): string;
   prepareHtmlDocument(text: string): HtmlDocumentData; buildHtmlFrameSource(data: HtmlDocumentData): string;

@@ -150,7 +150,7 @@ test("static header logo stays inside the Pages search prefix before startup", (
 
 test("reader intent prefetches the shell and format engines", () => {
   assertCode(app, 'VoiceOfMLReaderResources.shellAssets("/search/static/")');
-  assertCode(app, 'VoiceOfMLReaderResources.engineAssets(extension, "/search/static/", "?reader-v1")');
+  assertCode(app, 'VoiceOfMLReaderResources.engineAssets(extension, "/search/static/")');
   assertCode(sw, 'VoiceOfMLReaderResources.runtimePaths("/search/static/")');
   assert.ok(workflow.includes('.buildFiles("github")'));
   assertCode(app, 'var warmedReaderSources = new Map()');
@@ -680,8 +680,7 @@ test("reader uses original files and lazy PDF canvas rendering", () => {
   assert.match(vendorScript, /bb95d4c15f1289f78486eaacebf3bb18688475ed58a040ef762ed49337090542/);
   assert.match(vendorScript, /dompurify@3\.4\.18/);
   assert.match(vendorScript, /8053ee2a6a09f9d50f7fcd6fb7f07072f52c7f3fa9aa12147cab4feaf65ee970/);
-  assert.match(vendorScript, /@zip\.js\/zip\.js@2\.25\.0\/index\.min\.js/);
-  assert.match(vendorScript, /715a4067bb71d750d4af8e60390e48894072f65501e0442e53f252cbfc45cfbc/);
+  assert.doesNotMatch(vendorScript, /@zip\.js\/zip\.js|LICENSE_zipjs\.txt/);
   assert.doesNotMatch(vendorScript, /writeFileSync\(join\(output, target\)\)/);
   for (const path of ["pdf.min.mjs", "pdf.worker.min.mjs", "marked.min.js", "purify.min.js"]) assert.ok(!sw.includes("static/vendor/" + path));
   assert.match(sw, /url\.pathname === "\/search\/static\/reader\.html"/);

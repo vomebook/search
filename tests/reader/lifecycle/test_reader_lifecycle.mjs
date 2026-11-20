@@ -147,16 +147,22 @@ test('dispose is idempotent, releases observer and clears all timer handles', ()
   globalThis.cancelAnimationFrame=handle=>events.push(['cancel',handle]);
   context.updateDocumentState=value=>events.push(value);
   context.contentSanitizerObserver={disconnect(){events.push('observer');}};
-  const handles=['saveTimer','themeAnimationTimer','panelAnimationTimer','markerFrame',
-    'epubSeekFrame'];
+  const handles=['saveTimer','themeAnimationTimer','panelAnimationTimer','markerFrame'];
   handles.forEach((key,index)=>context[key]=index+1);
   try {
     context.disposeReader();context.disposeReader();
     assert.deepEqual(events,[{restorationReady:false},'observer',['clear',1],['clear',2],['clear',3],
-      ['cancel',4],['cancel',5],'store']);
+      ['cancel',4],'store']);
     assert.equal(context.readerLifecycle.disposed,true);
     assert.equal(context.contentSanitizerObserver,null);
-    assert.deepEqual(handles.map(key=>context[key]),[0,0,0,0,0]);
+    assert.deepEqual(handles.map(key=>context[key]),[0,0,0,0]);
+
+    const idle=fixture().context;
+    idle.updateDocumentState=context.updateDocumentState;
+    handles.forEach(key=>idle[key]=0);
+    events.length=0;
+    idle.disposeReader();
+    assert.deepEqual(events,[{restorationReady:false},['clear',0],['clear',0],['clear',0],'store']);
   } finally {globalThis.VoiceOfMLReaderStore=store;globalThis.clearTimeout=oldClear;globalThis.cancelAnimationFrame=oldCancel;}
 });
 

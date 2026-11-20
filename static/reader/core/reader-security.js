@@ -7,9 +7,6 @@ function (root) {
     // preferred for large files to avoid downloading the entire body at once.
     pdfDocumentBytes: 2 * 1024 * 1024 * 1024,
     archiveCompressedBytes: 512 * 1024 * 1024,
-    archiveExpandedBytes: 1536 * 1024 * 1024,
-    archiveEntries: 20000,
-    archiveRatio: 200,
     manifestBytes: 8 * 1024 * 1024,
     pdfPages: 100000,
     chapters: 10000,
@@ -110,101 +107,6 @@ function (root) {
     }
   }
 
-  /** @param {Uint8Array | ArrayBuffer} bytes @param {import('../../../typings/reader-security-strict').ArchiveLimits} [limits] */
-  function inspectZip(bytes, limits = LIMITS) {
-    bytes = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
-    if (bytes.byteLength > limits.archiveCompressedBytes) throw error("READER_ARCHIVE_LIMIT");
-    const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-    let end = -1;
-    // EOCD must end at EOF, including its optional comment. File contents are
-    // never searched for central-directory entries.
-    for (
-      let offset = bytes.byteLength - 22;
-      offset >= Math.max(0, bytes.byteLength - 22 - 65535);
-      offset--
-    ) {
-      if (
-        view.getUint32(offset, true) === 0x06054b50 &&
-        offset + 22 + view.getUint16(offset + 20, true) === bytes.byteLength
-      ) {
-        end = offset;
-        break;
-      }
-    }
-    if (end < 0) throw error("READER_ARCHIVE_INVALID");
-    const disk = view.getUint16(end + 4, true),
-      directoryDisk = view.getUint16(end + 6, true);
-    const diskEntries = view.getUint16(end + 8, true),
-      entries = view.getUint16(end + 10, true);
-    const directorySize = view.getUint32(end + 12, true),
-      directoryOffset = view.getUint32(end + 16, true);
-    if (
-      disk === 0xffff ||
-      directoryDisk === 0xffff ||
-      diskEntries === 0xffff ||
-      entries === 0xffff ||
-      directorySize === 0xffffffff ||
-      directoryOffset === 0xffffffff ||
-      (end >= 20 && view.getUint32(end - 20, true) === 0x07064b50)
-    ) {
-      throw error("READER_ARCHIVE_ZIP64_UNSUPPORTED");
-    }
-    if (disk || directoryDisk || diskEntries !== entries)
-      throw error("READER_ARCHIVE_MULTIDISK_UNSUPPORTED");
-    if (!entries || directoryOffset + directorySize !== end) throw error("READER_ARCHIVE_INVALID");
-    if (entries > limits.archiveEntries) throw error("READER_ARCHIVE_LIMIT");
-    let offset = directoryOffset,
-      compressed = 0,
-      expanded = 0;
-    for (let index = 0; index < entries; index++) {
-      if (offset + 46 > end || view.getUint32(offset, true) !== 0x02014b50)
-        throw error("READER_ARCHIVE_INVALID");
-      const packed = view.getUint32(offset + 20, true),
-        unpacked = view.getUint32(offset + 24, true);
-      const nameLength = view.getUint16(offset + 28, true),
-        extraLength = view.getUint16(offset + 30, true),
-        commentLength = view.getUint16(offset + 32, true);
-      const startDisk = view.getUint16(offset + 34, true),
-        localOffset = view.getUint32(offset + 42, true);
-      if (
-        packed === 0xffffffff ||
-        unpacked === 0xffffffff ||
-        localOffset === 0xffffffff ||
-        startDisk === 0xffff
-      ) {
-        throw error("READER_ARCHIVE_ZIP64_UNSUPPORTED");
-      }
-      if (startDisk) throw error("READER_ARCHIVE_MULTIDISK_UNSUPPORTED");
-      const next = offset + 46 + nameLength + extraLength + commentLength;
-      if (!nameLength || next > end) throw error("READER_ARCHIVE_INVALID");
-      const extraEnd = offset + 46 + nameLength + extraLength;
-      for (let extra = offset + 46 + nameLength; extra < extraEnd; ) {
-        if (extra + 4 > extraEnd) throw error("READER_ARCHIVE_INVALID");
-        if (view.getUint16(extra, true) === 1) throw error("READER_ARCHIVE_ZIP64_UNSUPPORTED");
-        extra += 4 + view.getUint16(extra + 2, true);
-        if (extra > extraEnd) throw error("READER_ARCHIVE_INVALID");
-      }
-      if (localOffset + 30 > directoryOffset || view.getUint32(localOffset, true) !== 0x04034b50)
-        throw error("READER_ARCHIVE_INVALID");
-      const dataOffset =
-        localOffset +
-        30 +
-        view.getUint16(localOffset + 26, true) +
-        view.getUint16(localOffset + 28, true);
-      if (dataOffset + packed > directoryOffset) throw error("READER_ARCHIVE_INVALID");
-      compressed += packed;
-      expanded += unpacked;
-      if (
-        expanded > limits.archiveExpandedBytes ||
-        (packed === 0 ? unpacked > 0 : unpacked / packed > limits.archiveRatio)
-      ) {
-        throw error("READER_ARCHIVE_LIMIT");
-      }
-      offset = next;
-    }
-    if (offset !== end) throw error("READER_ARCHIVE_INVALID");
-    return Object.freeze({ entries, compressed, expanded });
-  }
   /** @param {unknown} input @returns {import('../../../typings/reader-security-strict').ValidatedChapterManifest} */
   function validateChapterManifest(input) {
     // The candidate is untrusted: the checks below determine what is accepted.
@@ -376,24 +278,15 @@ function (root) {
     }
     return /** @type {import('../../../typings/reader-security-strict').ValidatedPdfOcrPage} */ (/** @type {unknown} */ (payload));
   }
-  /** @param {unknown} extension @param {Uint8Array | null} [bytes] */
-  function isZipContainer(extension, bytes) {
-    return (
-      ["epub", "fbz"].includes(String(extension || "").toLowerCase()) ||
-      !!(bytes && bytes[0] === 0x50 && bytes[1] === 0x4b && bytes[2] === 0x03 && bytes[3] === 0x04)
-    );
-  }
   root.VoiceOfMLReaderSecurity = Object.freeze({
     LIMITS,
     assertResponseSize,
     createByteBudget,
     readBytes,
     readText,
-    inspectZip,
     validateChapterManifest,
     validatePdfPageManifest,
     validatePdfOcrManifest,
-    validatePdfOcrPage,
-    isZipContainer
+    validatePdfOcrPage
   });
 })(/** @type {import('../../../typings/reader-security-strict').SecurityRoot} */ (typeof self !== "undefined" ? self : globalThis));

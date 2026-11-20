@@ -2313,19 +2313,6 @@ class ReaderRefactorTest(unittest.TestCase):
             "node => document.querySelector('#viewport').getBoundingClientRect().top + 8 - node.getBoundingClientRect().top")
         self.assertAlmostEqual(offset, 345, delta=3)
 
-    def test_chapter_manifest_does_not_translate_foliate_positions(self):
-        _, base = self.serve_chapter_search()
-        source = "https://voiceofml-search.hf.space/api/reader-bucket-resource?path=" + base + "chapter-manifest.json"
-        self.page.evaluate("""async source => {
-          window.dispatchEvent(new PageTransitionEvent('pagehide', {persisted:false}));
-          await new Promise(resolve => setTimeout(resolve, 0));
-          await VoiceOfMLReaderStore.put({url:source, title:'Old EPUB position',
-            foliateSection:10, foliateOffset:275, lastReadAt:Date.now()+1});
-        }""", source)
-        self.page.reload()
-        self.page.wait_for_function("() => document.documentElement.dataset.readerPhase === 'ready'")
-        self.wait_for_store("async source => (await VoiceOfMLReaderStore.get(source))?.chapterIndex === 1", source)
-
     def test_parent_abort_saves_last_position_before_disposal(self):
         self.serve("reading\n" * 3000)
         self.open(self.reader_url())

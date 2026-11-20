@@ -230,7 +230,6 @@ declare class BoundedResponseCache<T = unknown> extends Map<string, T> {
 interface ReaderSecurityApi {
   readonly LIMITS: Readonly<{
     documentBytes: number; pdfDocumentBytes: number; archiveCompressedBytes: number;
-    archiveExpandedBytes: number; archiveEntries: number; archiveRatio: number;
     manifestBytes: number; pdfPages: number; chapters: number; chapterBytes: number;
     chapterTotalBytes: number;
   }>;
@@ -238,12 +237,10 @@ interface ReaderSecurityApi {
   createByteBudget(limit?: number): { reserve(bytes: number): void; release(bytes: number): void; readonly used: number; readonly remaining: number };
   readBytes(response: Response, limit?: number, budget?: ReturnType<ReaderSecurityApi["createByteBudget"]>): Promise<Uint8Array<ArrayBuffer>>;
   readText(response: Response, limit?: number, encoding?: string, budget?: ReturnType<ReaderSecurityApi["createByteBudget"]>): Promise<string>;
-  inspectZip(bytes: ArrayBuffer | Uint8Array, limits?: ReaderSecurityApi["LIMITS"]): {entries: number; compressed: number; expanded: number};
   validateChapterManifest(manifest: unknown): import("./reader-security-strict").ValidatedChapterManifest;
   validatePdfPageManifest(manifest: unknown): import("./reader-security-strict").ValidatedPdfPageManifest;
   validatePdfOcrManifest(manifest: unknown): import("./reader-security-strict").ValidatedPdfOcrManifest;
   validatePdfOcrPage(payload: unknown, pageNumber: number): import("./reader-security-strict").ValidatedPdfOcrPage;
-  isZipContainer(extension: string, bytes?: Uint8Array): boolean;
 }
 
 interface ReaderResourcesApi {
@@ -258,7 +255,7 @@ interface ReaderResourcesApi {
   djvuSelectedAssets(base: string): string[];
   djvuSupportsSIMD(): boolean;
   ruffleAssets(base: string): string[];
-  engineAssets(extension: string, base: string, unusedSuffix?: string, workerWrapper?: string): string[];
+  engineAssets(extension: string, base: string, workerWrapper?: string): string[];
 }
 
 interface ReaderContractApi {

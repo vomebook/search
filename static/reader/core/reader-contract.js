@@ -277,7 +277,7 @@
   /** @type {Readonly<Record<string, string>>} */
   const assetModes = Object.freeze({
     p: "pdf",
-    e: "epub",
+    e: "epub-chapters",
     h: "html",
     t: "txt",
     k: "md",
@@ -392,18 +392,16 @@
        (asset?.cb && !chapterBucket)
     )
       return null;
-    const nativeExtension =
-      /(?:^|\/)document\.(epub|mobi|azw|azw3|fb2)$/i.exec(path)?.[1]?.toLowerCase() || "epub";
+    if (asset.m === "e" && !chapterBucket)
+      return ocrUrl ? { ReaderOcrManifest: ocrUrl, ReaderOcrMode: String(asset.om || "") } : null;
     const extension =
-      asset.m === "e"
-        ? nativeExtension
-        : asset.m === "p" && /\/(?:page|reading)-manifest\.json$/.test(path)
-          ? "pdf-pages"
-          : asset.m === "i" && path.endsWith("document.webp")
-            ? "image"
-            : asset.m === "i" && path.endsWith("page-manifest.json")
-              ? "image-pages"
-              : assetModes[/** @type {string} */ (asset.m)];
+      asset.m === "p" && /\/(?:page|reading)-manifest\.json$/.test(path)
+        ? "pdf-pages"
+        : asset.m === "i" && path.endsWith("document.webp")
+          ? "image"
+          : asset.m === "i" && path.endsWith("page-manifest.json")
+            ? "image-pages"
+            : assetModes[/** @type {string} */ (asset.m)];
     if (!extension && !asset.c) return {};
     return {
       ReaderLink: `${bucketBase}?path=${encodeURIComponent(/** @type {string} */ (chapterBucket ? asset.c : path))}`,

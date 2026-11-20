@@ -28,16 +28,6 @@
       file: "purify.min.js",
       sha256: "8053ee2a6a09f9d50f7fcd6fb7f07072f52c7f3fa9aa12147cab4feaf65ee970"
     },
-    zip: {
-      url: "https://cdn.jsdelivr.net/npm/@zip.js/zip.js@2.25.0/index.min.js",
-      file: "zip.js",
-      sha256: "715a4067bb71d750d4af8e60390e48894072f65501e0442e53f252cbfc45cfbc"
-    },
-    zipLicense: {
-      url: "https://cdn.jsdelivr.net/npm/@zip.js/zip.js@2.25.0/LICENSE",
-      file: "LICENSE_zipjs.txt",
-      sha256: "1b7ebc8d7889ed25491484ab2b102370742ca6c0b26650a0c62cc2269b579b84"
-    },
     ruffle: {
       url: "https://unpkg.com/@ruffle-rs/ruffle@0.7.1/ruffle.js",
       file: "ruffle.js",
@@ -203,8 +193,8 @@
   const djvuDecoderAssets = (base) => ["scalar/djvu_rs.js", "scalar/djvu_rs_bg.wasm",
     "simd128/djvu_rs.js", "simd128/djvu_rs_bg.wasm"].map(file =>
       base + "vendor/djvu-rs-reader/release-06c82c74447d-03087b1edf0c/" + file);
-  /** @param {string} extension @param {string} base @param {string} [_unusedSuffix] @param {string} [workerWrapper] @returns {string[]} */
-  function engineAssets(extension, base, _unusedSuffix = "", workerWrapper = base + "reader/pdf/pdf-worker-wrapper.mjs") {
+  /** @param {string} extension @param {string} base @param {string} [workerWrapper] @returns {string[]} */
+  function engineAssets(extension, base, workerWrapper = base + "reader/pdf/pdf-worker-wrapper.mjs") {
     if (extension === "pdf")
       return [
         vendorUrl("pdf", base),

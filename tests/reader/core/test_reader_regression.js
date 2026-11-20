@@ -244,8 +244,10 @@ for (const directory of ['', 'converter-v1/', 'b'.repeat(16) + '/', 'b'.repeat(1
 }
 for (const extension of ['epub', 'mobi', 'azw3', 'fb2', 'chm']) {
   const path = 'chapters/ebook/' + extension + '/' + 'c'.repeat(64) + '/' + 'b'.repeat(16) + '/chapter-manifest.json'
-  const fields = assets.assetFields({s: 2, m: 'e', p: path, b: 'vomebook/reader-assets-v2',
-    c: path, cb: 'vomebook/reader-assets-v2'}, '/api/reader-bucket-resource')
+  const book = {s: 2, m: 'e', p: path, b: 'vomebook/reader-assets-v2'}
+  assert.strictEqual(assets.assetFields(book, '/api/reader-bucket-resource'), null)
+  assert.strictEqual(assets.assetFields({...book, c: path}, '/api/reader-bucket-resource'), null)
+  const fields = assets.assetFields({...book, c: path, cb: 'vomebook/reader-assets-v2'}, '/api/reader-bucket-resource')
   assert.strictEqual(fields.ReaderExtension, 'epub-chapters')
   assert.strictEqual(fields.ReaderLink, '/api/reader-bucket-resource?path=' + encodeURIComponent(path))
 }

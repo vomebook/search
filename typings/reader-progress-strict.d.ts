@@ -7,9 +7,6 @@ export interface ProgressState {
   mediaTime?: number;
   htmlScrollTop?: number;
   scrollTop?: number;
-  foliateSection?: number;
-  foliateOffset?: number;
-  foliateTocIndex?: number;
   chapterIndex?: number;
   chapterManifest?: string;
   chapterOffset?: number;
@@ -53,7 +50,6 @@ export interface ProgressContext {
   chapterPrev: HTMLButtonElement; chapterNext: HTMLButtonElement; progressUndo: HTMLElement;
   previousProgressState: ProgressState | null; updateReadingProgressSummary(): void; placeReadingProgress(): void;
   trackReaderResource(cleanup: () => void): () => void; readerAbortError(): Error;
-  epubSeekFrame: number; epubSeekTarget: { percent: number; generation: number } | null;
   epubSeekPromise: Promise<boolean | void>;
   captureProgressState(): ProgressState | null;
   chapterManifestLoader: import('./reader-chapter-format-strict').ChapterLoader | null;

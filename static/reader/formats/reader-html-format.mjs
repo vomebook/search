@@ -37,8 +37,8 @@ export function createReaderHtmlFormat(readerContext) {
     return doc;
   }
 
-  /** @param {Document} doc @param {{preserveEpubStyles?: boolean, keepBlobImports?: boolean}} [options] */
-  function sanitizeReaderDocument(doc, { preserveEpubStyles = false, keepBlobImports = false } = {}) {
+  /** @param {Document} doc @param {{preserveEpubStyles?: boolean}} [options] */
+  function sanitizeReaderDocument(doc, { preserveEpubStyles = false } = {}) {
     const blocked = preserveEpubStyles
       ? "script,iframe,object,embed,base,form"
       : "script,iframe,object,embed,base,form,link,style";
@@ -57,7 +57,7 @@ export function createReaderHtmlFormat(readerContext) {
           link.remove();
       }
       for (const style of doc.querySelectorAll("style"))
-        style.textContent = sanitizeCssReferences(style.textContent || "", { keepBlobImports });
+        style.textContent = sanitizeCssReferences(style.textContent || "");
     }
     for (const element of doc.querySelectorAll("*"))
       for (const attribute of [...element.attributes]) {
@@ -115,7 +115,6 @@ export function createReaderHtmlFormat(readerContext) {
   const CSS_REFERENCE_FUNCTIONS = new Set([
     "url", "src", "image", "image-set", "-webkit-image-set", "cross-fade", "-webkit-cross-fade"
   ]);
-  const CSS_IMPORT_MAX_PER_SHEET = 32;
 
   /** @param {number} code */
   function cssNameChar(code) {
@@ -148,14 +147,14 @@ export function createReaderHtmlFormat(readerContext) {
   // custom-property URL strings become "", and unsafe
   // @import rules are removed. Everything else is copied byte-for-byte.
   /** @param {string | null} source @param {import('../../../typings/reader-html-format-strict').CssOptions} [options] */
-  function scanCss(source, { strict = false, keepBlobImports = false, blobImports = null, nonce = "" } = {}) {
+  function scanCss(source, { strict = false } = {}) {
     const css = String(source || "");
     const length = css.length;
     /** @type {[number, number, string][]} */
     const edits = [];
     /** @type {{start: number, name: string, reference: boolean, unsafe: boolean}[]} */
     const stack = [];
-    let i = 0, customValueDepth = -1, imports = 0;
+    let i = 0, customValueDepth = -1;
     // Offline HTML historically deletes references; EPUB styles keep a valid
     // `none` so shorthand declarations stay parseable.
     const removed = strict ? "" : "none";
@@ -273,22 +272,12 @@ export function createReaderHtmlFormat(readerContext) {
           } else target = readUrlToken();
         } else i = cursor;
       }
-      const conditionStart = i;
       skipAtRule();
-      const end = i;
-      const condition = css.slice(conditionStart, end).replace(/;\s*$/, "").trim();
       const value = target === null ? "" : target.replace(/[\u0000-\u0020\u007f-\u009f]/g, "");
-      const blob = /^blob:/i.test(value);
-      // Same-origin relative sheets are allowed; data: CSS is never imported.
-      const relative = !!value && !blob && !/^data:/i.test(value) && !value.startsWith("#") &&
+      // Only same-origin relative sheets may be imported in non-strict mode.
+      const relative = !!value && !/^(?:blob|data):/i.test(value) && !value.startsWith("#") &&
         safeCssReference(value);
-      if (!strict && blob && blobImports && imports < CSS_IMPORT_MAX_PER_SHEET &&
-          /^[\w\s(),:.\-]*$/.test(condition) && !/^(?:layer|supports)\b/i.test(condition)) {
-        blobImports.push({ url: value, media: condition });
-        edits.push([start, end, `/*${nonce}:${blobImports.length - 1}*/`]);
-        imports++;
-      } else if (strict || target === null || !(relative || (blob && keepBlobImports && !blobImports)))
-        edits.push([start, end, ""]);
+      if (strict || !relative) edits.push([start, i, ""]);
     };
 
     while (i < length) {
@@ -376,9 +365,9 @@ export function createReaderHtmlFormat(readerContext) {
     return scanCss(css, options);
   }
 
-  /** @param {Document} doc @param {{keepBlobImports?: boolean}} [options] */
-  function sanitizeEpubDocument(doc, options = {}) {
-    return readerContext.sanitizeReaderDocument(readerContext.normalizeEpubDocument(doc), { ...options, preserveEpubStyles: true });
+  /** @param {Document} doc */
+  function sanitizeEpubDocument(doc) {
+    return readerContext.sanitizeReaderDocument(readerContext.normalizeEpubDocument(doc), { preserveEpubStyles: true });
   }
 
   /** @param {string} text */
@@ -389,12 +378,6 @@ export function createReaderHtmlFormat(readerContext) {
     if (!xml.querySelector("parsererror"))
       text = new XMLSerializer().serializeToString(readerContext.normalizeEpubDocument(xml));
     return readerContext.sanitizeEpubDocument(new DOMParser().parseFromString(text, "text/html"));
-  }
-
-  /** @param {Document} doc */
-  function epubContentBody(doc) {
-    const nestedBody = [...doc.querySelectorAll("body")].find((body) => body !== doc.body);
-    return nestedBody || doc.body || doc.documentElement;
   }
 
   /** @param {string | null} raw @param {string} source */
@@ -747,7 +730,6 @@ export function createReaderHtmlFormat(readerContext) {
     sanitizeEpubDocument,
     sanitizeCssReferences,
     parseChapterDocument,
-    epubContentBody,
     renderText,
     sanitizeOfflineHtml,
     buildDiscourseDocument,
