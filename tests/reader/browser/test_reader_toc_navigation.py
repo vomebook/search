@@ -43,7 +43,7 @@ class TocNavigationTests(unittest.TestCase):
             route.fulfill(response=response, body=response.text() + '''
               window.__replaceTocForSearch=setToc;
               window.__toc={nav:()=>navigationState, jump:i=>navigateTocEntry(i),
-                set:setToc, filter:()=>filterPanel(document.querySelector('#toc-panel')),
+                set:setToc, sync:()=>syncHeadingLocation(), filter:()=>filterPanel(document.querySelector('#toc-panel')),
                 setPageCount:count=>updateDocumentState({pageCount:count}),
                 setPage:page=>{updateDocumentState({page});updateTocCurrentMark()},
                 setCurrent:index=>{updateNavigationState({currentChapterIndex:index});updateTocCurrentMark()},
@@ -526,6 +526,82 @@ class TocNavigationTests(unittest.TestCase):
             self.assertIsNotNone(offset)
             self.assertLess(abs(offset),2,f'{target} did not land')
         self.assertFalse(self.errors)
+
+    def test_chapter_scroll_geometry_census_with_shared_toc_targets(self):
+        self.expose()
+
+        def expose_window(route):
+            response = route.fetch()
+            script = response.text()
+            needle = '    function scheduleChapterWindow() {'
+            self.assertIn(needle, script)
+            route.fulfill(response=response, body=script.replace(needle,
+                '    window.__refreshChapterWindow = refreshChapterWindow;\n' + needle, 1))
+
+        self.page.route('**/static/reader/formats/reader-chapter-format.mjs*', expose_window)
+        prose = '<p>A line in the converted chapter.</p>' * 120
+        body = ('<p id="lead" style="height:120px"><a href="#chm-page-1">First page</a> '
+                '<a href="#chm-page-2">Second page</a></p>'
+                f'<section id="chm-page-1"><h1>One</h1>{prose}</section>'
+                f'<section id="chm-page-2"><h1>Two</h1>{prose}</section>')
+        # A merged CHM can have many entries with no recoverable fragment. Each
+        # still participates in tie-breaking even though they share the article.
+        entries = [(f'Unresolved entry {i}', '') for i in range(120)] + [
+            ('First page', ''), ('Second page', ''), ('Second page alias', 'chm-page-2'), ('Missing', 'missing')]
+        manifest = {'version': 1, 'kind': 'epub-chapters', 'chapters': [
+            {'index': 1, 'path': 'chapters/chapter-0001.xhtml', 'source_path': 'chm-fallback.html', 'bytes': len(body)}
+        ], 'toc': [{'title': label, 'chapter': 1, 'fragment': fragment, 'depth': 0} for label, fragment in entries]}
+        self.page.route('**/api/reader-bucket-resource**', lambda route: route.fulfill(json=manifest)
+                        if 'chapter-manifest' in route.request.url else route.fulfill(content_type='text/html', body=body))
+        source = ('https://voiceofml-search.hf.space/api/reader-bucket-resource?path=chapters/ebook/chm/'
+                  + 'a' * 64 + '/1234567890abcdef/chapter-manifest.json')
+        self.page.goto(self.origin + support.PREFIX + '/static/reader.html?' +
+                       urlencode(dict(url=source, ext='epub-chapters')), wait_until='domcontentloaded')
+        self.page.wait_for_function("()=>document.documentElement.dataset.readerPhase==='ready'")
+        result = self.page.evaluate('''() => {
+          const viewport = document.querySelector('#viewport');
+          const article = viewport.querySelector('.reader-epub-chapter');
+          const second = article.querySelector('#chm-page-2');
+          const placeholder = document.createElement('button');
+          placeholder.className = 'reader-chapter-sentinel reader-chapter-placeholder';
+          placeholder.dataset.chapter = '0';
+          placeholder.style.height = '120px';
+          article.before(placeholder);
+          viewport.scrollTop += second.getBoundingClientRect().top - viewport.getBoundingClientRect().top - 4;
+          const entries = __toc.nav().tocEntries;
+          const connected = entries.map(entry => entry.target).filter(target => target?.isConnected);
+          const rect = Element.prototype.getBoundingClientRect;
+          const census = run => {
+            const nodes = new Set();
+            let calls = 0;
+            Element.prototype.getBoundingClientRect = function () {
+              nodes.add(this);
+              calls++;
+              return rect.call(this);
+            };
+            try { run(); } finally { Element.prototype.getBoundingClientRect = rect; }
+            return [nodes.size, calls];
+          };
+          const current = () => [__toc.nav().currentChapterIndex,
+            Number(document.querySelector('#toc-list .is-current')?.dataset.tocIndex)];
+          // Sample the real synchronous scroll listener and the two independently
+          // scheduled passes in isolation, before any queued frame can run.
+          const remember = census(() => viewport.dispatchEvent(new Event('scroll')));
+          const windowRows = census(__refreshChapterWindow);
+          const toc = census(__toc.sync);
+          const before = current();
+          const scroll = viewport.scrollTop;
+          article.querySelector('#lead').style.height = '240px';
+          viewport.scrollTop = scroll;
+          const lateToc = census(__toc.sync);
+          return {entries: [entries.length, connected.length, new Set(connected).size],
+            remember, windowRows, toc, lateToc, before, after: current()};
+        }''')
+        # Counts are [unique measured nodes, rectangle reads]. The unmodified
+        # reader reported [4, 124] for each TOC pass in both builds. Remember
+        # (244 candidates + viewport) and window rows are unchanged.
+        self.assertEqual(result, dict(entries=[124, 123, 3], remember=[245, 245], windowRows=[3, 3],
+                                      toc=[4, 4], lateToc=[4, 4], before=[122, 122], after=[120, 120]))
 
     def test_chapter_target_updates_only_visit_the_owned_toc_once(self):
         self.expose()

@@ -124,9 +124,18 @@ export function createReaderToc(readerContext) {
       currentPosition = -Infinity,
       first = -1,
       firstPosition = Infinity;
+    // CHM fallbacks and fragment aliases can share a target. Reuse its top
+    // only in this read pass: layout and scroll can move it before the next.
+    /** @type {Map<Element, number>} */
+    const targetTops = new Map();
     for (const [index, entry] of tocEntries().entries()) {
-      if (!entry.target?.isConnected) continue;
-      const position = entry.target.getBoundingClientRect().top;
+      const target = entry.target;
+      if (!target?.isConnected) continue;
+      let position = targetTops.get(target);
+      if (position === undefined) {
+        position = target.getBoundingClientRect().top;
+        targetTops.set(target, position);
+      }
       if (position <= marker && (position > currentPosition || (position === currentPosition && index > current))) {
         current = index;
         currentPosition = position;
