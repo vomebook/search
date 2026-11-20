@@ -300,8 +300,22 @@ class ReaderHostHistoryRaceTests(unittest.TestCase):
         source = response.text()
         startup = 'finishInitialSearchInput(initialDraftCurrent);'
         self.assertEqual(source.count(startup), 1)
-        route.fulfill(response=response, body=source.replace(
-            startup, startup + ' window.__testSearchInputReady = true;'))
+        source = source.replace(startup, startup + ' window.__testSearchInputReady = true;')
+        fallback = bare and mode in ('edit', 'completed')
+        if fallback:
+            # Exercise the fallback even when packaged initial/local data exists.
+            source += '\nloadData = () => Promise.resolve(false);'
+            self.page.route('**/data/initial/global.json', lambda request: request.fulfill(status=404))
+            # Keep the adopted draft's debounce paused until the old search starts.
+            self.page.clock.install()
+            self.page.clock.pause_at(self.page.evaluate('Date.now() + 100'))
+            with self.page.expect_request(lambda request: request.url.endswith('/api/search')
+                                          and request.method == 'POST' and not request.post_data_json.get('q'),
+                                          timeout=5000):
+                route.fulfill(response=response, body=source)
+            self.page.unroute('**/data/initial/global.json')
+        else:
+            route.fulfill(response=response, body=source)
         self.page.unroute(pattern, hold_app)
         self.page.wait_for_function('window.__testSearchInputReady === true')
         self.assertFalse(field.evaluate('input => "_earlySearchInput" in input'))
@@ -332,7 +346,12 @@ class ReaderHostHistoryRaceTests(unittest.TestCase):
             self.page.wait_for_timeout(180)
             self.assertEqual(self.page.evaluate('STATE.query'), current_query)
         elif mode != 'untouched':
-            self.page.wait_for_function('query => STATE.query === query && !STATE.isLoading', arg=draft)
+            if fallback:
+                self.page.clock.resume()
+                self.page.wait_for_function('''query => STATE.query === query && !STATE.isLoading
+                    && STATE._loadedPage === 1 && STATE.results[0]?.File === 'paging-0' ''', arg=draft, timeout=5000)
+            else:
+                self.page.wait_for_function('query => STATE.query === query && !STATE.isLoading', arg=draft)
         # Normal input after adoption must work, without mutating the disposed state.
         early = self.page.evaluate('JSON.stringify(earlyHandoff)')
         field.fill('paging-after-bind')

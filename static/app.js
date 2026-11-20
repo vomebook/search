@@ -1728,8 +1728,9 @@ function updateSearchPositionControls() {
   if (DOM.cancelPositionBtn) DOM.cancelPositionBtn.hidden = true;
 }
 
-function cancelPendingSearchControls() {
-  searchInputController?.cancelTimer();
+/** @param {boolean} [preserveQuery] */
+function cancelPendingSearchControls(preserveQuery = false) {
+  if (!preserveQuery) searchInputController?.cancelTimer();
   if (filterSearchTimer !== null) clearTimeout(filterSearchTimer);
   if (sizeFilterTimer !== null) clearTimeout(sizeFilterTimer);
   filterSearchTimer = null;
@@ -1738,7 +1739,9 @@ function cancelPendingSearchControls() {
 
 /** @param {{fromStart: boolean, restorePosition: boolean}} options */
 function prepareSearchPositionNavigation({ fromStart, restorePosition }) {
-  cancelPendingSearchControls();
+  // First-page fallback and retries belong to the current view, not to the
+  // newer input draft. Explicit query/filter commits cancel their own debounce.
+  cancelPendingSearchControls(!fromStart);
   // The URL is the handoff contract for Reader navigation and session restore.
   // Publish the current controls before any async result work starts.
   syncStateToURL();
