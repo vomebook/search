@@ -575,7 +575,7 @@ class SearchAccessibilityTests(unittest.TestCase):
             STATE.leftSidebarOpen=true;updateSidebarVisibility();
             STATE.repo='Test';window.__nestedCrumbRoutes=[];
             ROUTER.navigate=(...args)=>__nestedCrumbRoutes.push(args);
-            const crumb=createSidebarBreadcrumb('甲 & "乙"//<丙>/末');
+            const crumb=getSidebarDirectoryView().breadcrumb('甲 & "乙"//<丙>/末');
             DOM.sidebarContent.replaceChildren(crumb);
             return {writes,buttons:[...crumb.querySelectorAll('button')].map(b=>[b.textContent,b.dataset.path,b.getAttribute('aria-current')]),
               separators:[...crumb.querySelectorAll('.crumb-sep')].map(n=>n.getAttribute('aria-hidden'))};
