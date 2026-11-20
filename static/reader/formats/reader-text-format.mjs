@@ -38,8 +38,9 @@ export function createReaderTextFormat(readerContext) {
         }
         let end = Math.min(text.length, offset + 32768 - blockLength);
         if (end < text.length) {
-          const newline = text.lastIndexOf("\n", end - 1);
-          if (newline >= offset) end = newline + 1;
+          // An unbroken chunk must not rescan the already appended prefix.
+          const newline = text.slice(offset, end).lastIndexOf("\n");
+          if (newline >= 0) end = offset + newline + 1;
           const previous = text.charCodeAt(end - 1), next = text.charCodeAt(end);
           if ((previous >= 0xd800 && previous <= 0xdbff && next >= 0xdc00 && next <= 0xdfff) ||
               (previous === 13 && next === 10)) end--;

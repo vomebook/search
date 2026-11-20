@@ -187,6 +187,25 @@ test('block boundaries preserve surrogate pairs and CRLF without creating oversi
   } finally {f.restore();}
 });
 
+test('long unbroken chunks never search preceding blocks for newlines',async()=>{
+  const f=fixture(), original=String.prototype.lastIndexOf;
+  const sizes=[];
+  const size=32768, prefix='lead\n', value=prefix+'x'.repeat(size*5)+'末尾';
+  const bytes=new TextEncoder().encode(value);
+  try {
+    String.prototype.lastIndexOf=function(search,...rest){
+      if(search==='\n') sizes.push(this.length);
+      return original.call(this,search,...rest);
+    };
+    await f.context.renderPlainText({headers:new Headers(),body:null,arrayBuffer:async()=>bytes.buffer});
+  } finally { String.prototype.lastIndexOf=original;f.restore(); }
+  const blocks=f.context.content.children[0].children.map(block=>block.textContent);
+  assert.equal(f.context.content.textContent,value);
+  assert.deepEqual(blocks,[prefix,...Array(5).fill('x'.repeat(size)),'末尾']);
+  assert.ok(sizes.length>=5);
+  assert.ok(sizes.every(length=>length<=size),`newline search lengths: ${sizes}`);
+});
+
 test('resource cleanup cancels an outstanding stream and always releases ownership',async()=>{
   const f=fixture();let cancelled=0;
   try {
