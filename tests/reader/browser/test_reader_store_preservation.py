@@ -206,8 +206,14 @@ class ReaderStorePreservationTests(unittest.TestCase):
         self.assertEqual(self.page.evaluate('''async () =>
           (await VoiceOfMLReaderStore.listAllBookmarks()).map(entry => entry.id)'''), ['saved-mark'])
         self.assertEqual(host.evaluate('''async () => {
-          await VoiceOfMLReaderStore.put({url:'book', lastReadAt:201, page:8});
-          return (await VoiceOfMLReaderStore.get('book')).page;
+          const clock = Date.now;
+          Date.now = () => 200;
+          try {
+            // An ordinary put is ordered by its transaction, even in the
+            // same millisecond as the deletion of an earlier snapshot.
+            await VoiceOfMLReaderStore.put({url:'book', page:8});
+            return (await VoiceOfMLReaderStore.get('book')).page;
+          } finally { Date.now = clock; }
         }'''), 8)
 
     def test_cross_tab_clear_wins_over_delayed_host_close(self):

@@ -225,6 +225,7 @@
   async function put(supplied) {
     const entry = normalizeHistoryEntry(supplied);
     if (!entry) throw new TypeError("Invalid reader history entry");
+    const hasCaptureTime = supplied.lastReadAt != null && Number.isFinite(Number(supplied.lastReadAt));
     const database = await openDatabase();
     await /** @type {Promise<void>} */ (new Promise((resolve, reject) => {
       /** @type {Error | null} */
@@ -235,10 +236,10 @@
       const cleared = order.get(historyOrderKey()), removed = order.get(historyOrderKey(entry.url));
       const existing = store.get(entry.url);
       existing.onsuccess = () => {
-        // Compare capture time, not arrival time: the host can first load
-        // this script after the deletion. Deletion wins same-ms ties.
-        if (entry.lastReadAt <= (cleared.result?.deletedAt ?? -Infinity) ||
-            entry.lastReadAt <= (removed.result?.deletedAt ?? -Infinity)) return;
+        // Delayed snapshots carry an explicit capture time and lose ties to
+        // deletion. An undated put is fresh and follows transaction order.
+        if (hasCaptureTime && (entry.lastReadAt <= (cleared.result?.deletedAt ?? -Infinity) ||
+            entry.lastReadAt <= (removed.result?.deletedAt ?? -Infinity))) return;
         if (existing.result) {
           if (existing.result.schemaVersion != null && existing.result.schemaVersion !== SCHEMA_VERSION) {
             tx.abort();
