@@ -155,26 +155,27 @@ class ConvertedReaderResponsivenessTests(unittest.TestCase):
             byRepo:readerAssetController.state.byRepo, pending:readerAssetController.state.convertedPending,
             repo:STATE.repoFull, loaded:STATE.dataLoaded, metadata:readerMetadata,
             getLocal:getRandomLocal, open:openReaderRecord, id:randomReaderRequestId};
-          let oldReject, localCalls=0, opened=0;
+          let oldReject, firstStarted, localCalls=0, opened=0;
+          const firstDraw = new Promise(resolve => { firstStarted = resolve; });
+          const original=showToast;
           try {
             readerAssetController.state.assets={}; readerAssetController.state.converted=[]; readerAssetController.state.byRepo={};
             readerAssetController.state.convertedPending=null; STATE.repoFull='VoiceOfML/Test'; STATE.dataLoaded=true;
             readerMetadata={count:0,byRepo:{'VoiceOfML/Test':0}};
-            getRandomLocal=async()=>{localCalls++; if(localCalls===1) return new Promise((_,reject)=>oldReject=reject);
+            getRandomLocal=async()=>{localCalls++; if(localCalls===1) return new Promise((_,reject)=>{oldReject=reject; firstStarted();});
               return {Repo:'VoiceOfML/Test',File:'new',Extension:'txt',Folder:[],HasTxt:false,
                 Link:'https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/new.txt'};};
             openReaderRecord=()=>{opened++;return true;};
-            const messages=[];const original=showToast;showToast=message=>messages.push(message);
-            const old=randomTxt(); await Promise.resolve();
-            const newer=randomTxt(); await Promise.resolve(); await newer;
+            const messages=[];showToast=message=>messages.push(message);
+            const old=randomTxt(); await firstDraw;
+            await randomTxt();
             oldReject(new TypeError('obsolete local source failed')); await old;
-            showToast=original;
             return {messages,localCalls,opened};
           } finally {
             readerAssetController.state.assets=saved.assets;readerAssetController.state.converted=saved.converted;
             readerAssetController.state.byRepo=saved.byRepo;readerAssetController.state.convertedPending=saved.pending;
             STATE.repoFull=saved.repo;STATE.dataLoaded=saved.loaded;readerMetadata=saved.metadata;
-            getRandomLocal=saved.getLocal;openReaderRecord=saved.open;randomReaderRequestId=saved.id;
+            getRandomLocal=saved.getLocal;openReaderRecord=saved.open;randomReaderRequestId=saved.id;showToast=original;
           }
         }''')
         self.assertEqual(value['localCalls'], 2)
