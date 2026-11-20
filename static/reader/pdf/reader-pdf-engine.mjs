@@ -93,7 +93,7 @@ export function createReaderPdfEngine(readerContext) {
     if (!readerContext.pdfEnginePreload) {
       pdfWorkerPreloadOwner = new AbortController();
       const signal = pdfWorkerPreloadOwner.signal;
-      pdfModulePreload = readerContext.loadPdfEngine();
+      pdfModulePreload = readerContext.measurePdf(readerContext.loadPdfEngine(), "engine-module");
       readerContext.pdfEnginePreload = pdfModulePreload.then(pdfjs => readerContext.preparePdfWorker(pdfjs, false, signal));
     }
     return readerContext.pdfEnginePreload;
@@ -106,7 +106,8 @@ export function createReaderPdfEngine(readerContext) {
       if (signal?.aborted) throw readerContext.readerAbortError();
       if (attempt && !firstPage) await readerContext.awaitReader(readerContext.waitForReader(attempt * 500), signal);
       try {
-        return await readerContext.preparePdfWorkerAttempt(pdfjs, attempt, firstPage, signal);
+        return await readerContext.measurePdf(readerContext.preparePdfWorkerAttempt(pdfjs, attempt, firstPage, signal),
+          firstPage && attempt === 0 ? "engine-worker-staged" : "engine-worker");
       } catch (error) {
         readerContext.assertReaderActive();
         if (signal?.aborted) throw readerContext.readerAbortError();
@@ -249,15 +250,19 @@ export function createReaderPdfEngine(readerContext) {
     }).catch(() => {});
     // This is the first demand, not extra speculation or a larger/full download.
     // Keep it owned while engine preparation is pending and consume it only once.
+    const prepareInitial = () => {
+      const pending = readerContext.measurePdf(readerContext.preparePdfInitialRange({url:proxyUrl, rangeChunkSize:262144}, {
+        signal:AbortSignal.any([owner.signal, readerContext.readerAbortController.signal]),
+        readBytes:VoiceOfMLReaderSecurity.readBytes, limit:VoiceOfMLReaderSecurity.LIMITS.pdfDocumentBytes,
+        rangeLimit:VoiceOfMLReaderSecurity.LIMITS.pdfDocumentBytes,
+        canPrefetchFirstPage: () => pageOneKnown && !owner.signal.aborted &&
+          navigation === readerContext.readerRuntime?.currentGeneration("navigation")
+      }), "initial-range");
+      pending.catch(() => {});
+      return pending;
+    };
     /** @type {Initial} */
-    let initial = readerContext.preparePdfInitialRange({url:proxyUrl, rangeChunkSize:262144}, {
-      signal:AbortSignal.any([owner.signal, readerContext.readerAbortController.signal]),
-      readBytes:VoiceOfMLReaderSecurity.readBytes, limit:VoiceOfMLReaderSecurity.LIMITS.pdfDocumentBytes,
-      rangeLimit:VoiceOfMLReaderSecurity.LIMITS.pdfDocumentBytes,
-      canPrefetchFirstPage: () => pageOneKnown && !owner.signal.aborted &&
-        navigation === readerContext.readerRuntime?.currentGeneration("navigation")
-    });
-    initial.catch(() => {});
+    let initial = prepareInitial();
     let initialHandedOff = false, rangeTransportAvailable = false;
     /** @param {string} url @returns {Initial} */
     const takeInitial = url => {
@@ -308,14 +313,7 @@ export function createReaderPdfEngine(readerContext) {
               await readerContext.waitForReader(350 * (attempt + 1));
               readerContext.assertReaderActive();
               if (initial !== pending) return null;
-              initial = readerContext.preparePdfInitialRange({url:proxyUrl, rangeChunkSize:262144}, {
-                signal:AbortSignal.any([owner.signal, readerContext.readerAbortController.signal]),
-                readBytes:VoiceOfMLReaderSecurity.readBytes, limit:VoiceOfMLReaderSecurity.LIMITS.pdfDocumentBytes,
-                rangeLimit:VoiceOfMLReaderSecurity.LIMITS.pdfDocumentBytes,
-                canPrefetchFirstPage: () => pageOneKnown && !owner.signal.aborted &&
-                  navigation === readerContext.readerRuntime?.currentGeneration("navigation")
-              });
-              initial.catch(() => {});
+              initial = prepareInitial();
             }
           }
           return null;

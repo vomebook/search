@@ -453,6 +453,63 @@ class PdfLoadingTests(unittest.TestCase):
         self.assertIn('Page 130 final', self.page.locator('.reader-page[data-page="130"] .reader-pdf-text').text_content())
         self.assertEqual(self.errors, [])
 
+    def test_two_chunk_pdf_overlaps_tail_before_prefix_body_and_paints_with_stock_worker(self):
+        from tests.reader.browser.test_reader_pdf_first_page import sparse_pdf
+
+        payload = sparse_pdf(count=8, stride=48000)
+        chunk = 262144
+        self.assertLess(chunk, len(payload))
+        self.assertLessEqual(len(payload), 2 * chunk)
+        self.page.add_init_script('''Object.defineProperty(navigator, 'connection', {
+          configurable: true, value: {saveData:false, effectiveType:'4g'}
+        });''')
+        # Expose the first 206 headers to the real transport but hold its body.
+        # Playwright's route.fulfill delivers both together, so use a fetch shim.
+        self.page.add_init_script('''(() => {
+          const nativeFetch = fetch;
+          window.fetch = async (url, options) => {
+            const response = await nativeFetch(url, options);
+            if (!String(url).includes('/api/reader-content?') ||
+                new Headers(options?.headers).get('Range') !== 'bytes=0-262143') return response;
+            const bytes = await response.arrayBuffer();
+            return new Response(new ReadableStream({start(controller) {
+              window.__releasePdfPrefix = () => {
+                controller.enqueue(new Uint8Array(bytes)); controller.close();
+              };
+            }}), {status:response.status, headers:response.headers});
+          };
+        })();''')
+        ranges = []
+
+        def serve(route):
+            match = re.fullmatch(r'bytes=(\d+)-(\d+)', route.request.headers.get('range', ''))
+            self.assertIsNotNone(match)
+            start, end = int(match[1]), min(int(match[2]), len(payload) - 1)
+            ranges.append((start, end))
+            route.fulfill(status=206, content_type='application/pdf', body=payload[start:end + 1],
+                          headers={'Content-Range': f'bytes {start}-{end}/{len(payload)}', 'ETag': '"two-chunk"',
+                                   'Access-Control-Allow-Origin': '*',
+                                   'Access-Control-Expose-Headers': 'Content-Range,ETag,Content-Length'})
+
+        self.page.route('**/api/reader-content**', serve)
+        self.page.route('**/static/reader/core/reader-store.js*', lambda route: route.fulfill(
+            content_type='text/javascript', body='''window.VoiceOfMLReaderStore={get:async()=>null,
+              put:async()=>{},list:async()=>[],listBookmarks:async()=>[],listAllBookmarks:async()=>[]};'''))
+        suffix = f'bytes={chunk}-{len(payload) - 1}'
+        with self.page.expect_response(lambda response: response.request.headers.get('range') == suffix):
+            self.open()
+        self.page.wait_for_function('() => !!window.__releasePdfPrefix')
+        self.assertEqual(self.page.locator('canvas.ready').count(), 0)
+        self.page.evaluate('() => window.__releasePdfPrefix()')
+        self.page.locator('.reader-page[data-page="1"] canvas.ready').wait_for(state='attached')
+        self.assertEqual(self.page.locator('#page-number').get_attribute('max'), '8')
+        self.assertEqual(ranges, [(0, chunk - 1), (chunk, len(payload) - 1)])
+        self.assertEqual(len(self.page.workers), 1)
+        self.assertNotIn('reader-first-page', self.page.workers[0].url)
+        stages = self.page.evaluate('VoiceOfMLReaderPdfDiagnostics.snapshot().pages.map(row => row.stage)')
+        self.assertTrue({'resolve', 'engine-module', 'engine-worker', 'initial-range', 'draw'}.issubset(stages))
+        self.assertEqual(self.errors, [])
+
     def test_first_range_overlaps_held_engine_and_is_consumed_once(self):
         held = []
         self.page.route(MODULE, lambda route: held.append(route))

@@ -52,6 +52,63 @@ try {
     assert.equal(cancelled,true,contentRange);
   }
 
+  // For a two-chunk PDF, overlap the only missing chunk with the prefix body.
+  for (const scenario of ['fresh','deep','save-data','slow','weak','changed','close']) {
+    const chunk=262144, total=492192, data=new Uint8Array(total).fill(42), requests=[];
+    const prefix=Promise.withResolvers(), tail=Promise.withResolvers(), started=Promise.withResolvers();
+    const nav=Object.getOwnPropertyDescriptor(globalThis,'navigator');
+    Object.defineProperty(globalThis,'navigator',{configurable:true,value:{connection:{
+      saveData:scenario==='save-data',effectiveType:scenario==='slow'?'2g':'4g'}}});
+    const owner=new AbortController(), cache=createPdfRangeCache(), errors=[];
+    const opts={...options,rangeChunkSize:chunk};
+    const hooks={signal:owner.signal,readBytes,limit:total,rangeCache:cache,
+      canPrefetchFirstPage:()=>scenario!=='deep',onError:error=>errors.push(error)};
+    globalThis.fetch=async (_url,init)=>{
+      const range=new Headers(init.headers).get('Range');requests.push(range);
+      if (range===`bytes=0-${chunk-1}`) return new Response(new ReadableStream({
+        async pull(control){await prefix.promise;control.enqueue(data.slice(0,chunk));control.close();}
+      }),{status:206,headers:{'Content-Range':`bytes 0-${chunk-1}/${total}`,ETag:scenario==='weak'?'W/"A"':'"A"'}});
+      assert.equal(range,`bytes=${chunk}-${total-1}`);
+      started.resolve();
+      if (scenario==='close') await new Promise((_,reject)=>{
+        init.signal.addEventListener('abort',()=>{tail.resolve();reject(init.signal.reason);},{once:true});
+      });
+      return rangeResponse(data,chunk,total,scenario==='changed'?'"B"':'"A"');
+    };
+    try {
+      const pending=preparePdfInitialRange(opts,hooks);
+      await turn();
+      const early=['fresh','changed','close'].includes(scenario);
+      assert.deepEqual(requests,[`bytes=0-${chunk-1}`,...(early?[`bytes=${chunk}-${total-1}`]:[])],scenario);
+      prefix.resolve();
+      const first=await pending;
+      assert.equal(Boolean(first?.tail),early,scenario);
+      if (early) await started.promise;
+      if (scenario==='close') {
+        first.cancelInitial();await tail.promise;
+        assert.equal(await first.tail.promise,null);
+        assert.equal(cache.get(opts.url,chunk,total,{etag:'"A"',total}),null);
+      } else if (scenario==='fresh' || scenario==='changed') {
+        const opened=await openPdfRangeTask(pdfjs,opts,{...hooks,initial:Promise.resolve(first)});
+        const transport=(await opened.promise).range;
+        transport.requestDataRange(chunk,total);await turn();await turn();
+        if (scenario==='fresh') {
+          assert.equal(requests.length,2,'the pending tail must supply the exact worker demand');
+          assert.deepEqual(transport.received,[{begin:chunk,bytes:[...data.subarray(chunk)]}]);
+          assert.deepEqual(errors,[]);
+        } else {
+          assert.equal(transport.received.length,0);
+          assert.match(errors[0]?.message,/PDF_SOURCE_CHANGED/);
+          assert.equal(cache.get(opts.url,chunk,total,{etag:'"A"',total}),null);
+        }
+        await opened.destroy();
+      } else first?.cancelInitial();
+    } finally {
+      prefix.resolve();owner.abort();
+      Object.defineProperty(globalThis,'navigator',nav);
+    }
+  }
+
   // A final startxref may point to the single aligned chunk before the
   // standard tail. Trust the trailer only as a bounded scheduling hint.
   for (const scenario of ['hint','demand-first','close','source-changed','malformed','deep','weak-net','save-data','older-offset','covered','linearized','suppressed-after-start']) {

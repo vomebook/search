@@ -203,13 +203,20 @@ export async function preparePdfInitialRange(options, hooks) {
   const hints = {tail:null};
   /** @type {RangeHint | null} */
   let extendedTail = null;
+  const connection = /** @type {(Navigator & {connection?: {saveData?: boolean, effectiveType?: string}}) | undefined} */ (globalThis.navigator)?.connection;
+  const allowLookahead = !connection?.saveData && connection?.effectiveType !== "slow-2g" && connection?.effectiveType !== "2g";
   try {
     /** @param {RangeVersion} metadata */
     const onHeaders = metadata => {
-      if (metadata.total <= options.rangeChunkSize * 4) return;
-      // Start the existing two-chunk tail on validated headers, not after the
-      // first body finishes. This changes scheduling, not the fetched range.
-      const begin = Math.floor((metadata.total - 1) / options.rangeChunkSize) * options.rangeChunkSize - options.rangeChunkSize;
+      const {rangeChunkSize: chunk} = options;
+      // A two-chunk PDF has only one possible miss after the bootstrap.
+      // Overlap that exact suffix with the first body on a known page-one
+      // open, rather than paying a serial request for a small PDF's xref.
+      const smallTail = chunk === PDF_DEFAULT_CHUNK_BYTES && metadata.total > chunk && metadata.total <= chunk * 2 &&
+        allowLookahead && hooks.canPrefetchFirstPage?.();
+      if (!smallTail && metadata.total <= chunk * 4) return;
+      // Keep the existing aligned two-chunk tail for larger documents.
+      const begin = smallTail ? chunk : Math.floor((metadata.total - 1) / chunk) * chunk - chunk;
       hints.tail = preparePdfRangeHint(options, begin, metadata.total, {...hooks, signal}, metadata);
     };
     /** @type {RangeResult | null} */
@@ -243,8 +250,6 @@ export async function preparePdfInitialRange(options, hooks) {
       return {...first, tail:currentTail, extendedTail, xrefTail:null, openingRanges, rangeChunkSize:options.rangeChunkSize, cancelInitial};
     const metadata = {total:first.total, etag:first.etag};
     const pageOne = !first.complete && hooks.canPrefetchFirstPage?.();
-    const connection = /** @type {(Navigator & {connection?: {saveData?: boolean, effectiveType?: string}}) | undefined} */ (globalThis.navigator)?.connection;
-    const allowLookahead = !connection?.saveData && connection?.effectiveType !== "slow-2g" && connection?.effectiveType !== "2g";
     const extraLookahead = pageOne && allowLookahead;
     const rangeChunkSize = first.complete ? options.rangeChunkSize :
       choosePdfRangeChunkSize(first.bytes, metadata.total, options.rangeChunkSize);
@@ -260,7 +265,8 @@ export async function preparePdfInitialRange(options, hooks) {
     // before the normal trailer hint. Read at most that adjacent chunk, and
     // only after the whole trailer range has passed its byte/ETag checks.
     /** @type {AdjacentTail | null} */
-    const xrefTail = extraLookahead && currentTail && !extendedTail && rangeChunkSize === PDF_DEFAULT_CHUNK_BYTES &&
+    const xrefTail = extraLookahead && currentTail && currentTail.begin >= rangeChunkSize * 2 &&
+      !extendedTail && rangeChunkSize === PDF_DEFAULT_CHUNK_BYTES &&
       !/\/Linearized\b/.test(new TextDecoder("latin1").decode(first.bytes.subarray(0, 1024)))
       ? {begin:currentTail.begin - rangeChunkSize, end:currentTail.begin, hint:null, demanded:false} : null;
     if (xrefTail && currentTail) void currentTail.promise.then(result => {
