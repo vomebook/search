@@ -1,15 +1,11 @@
-import { createPdfRangeCache, sharedPdfRangeCache } from "./reader-pdf-range-cache.mjs";
+import { sharedPdfRangeCache } from "./reader-pdf-range-cache.mjs";
 import { PDF_ADAPTIVE_CHUNK_BYTES, PDF_LARGE_FLAT_CHUNK_BYTES, PDF_DEFAULT_CHUNK_BYTES, firstPageSectionEnd,
-  firstPageTailHintStart, firstImageSectionEnd, choosePdfRangeChunkSize, isFirstPageCandidate, adjacentXrefChunkStart }
+  firstPageTailHintStart, firstImageSectionEnd, choosePdfRangeChunkSize, adjacentXrefChunkStart }
   from "./reader-pdf-range-hints.mjs";
-export { choosePdfRangeChunkSize, isFirstPageCandidate };
 
 export const PDF_METADATA_RANGE_CONCURRENCY = 24;
 const PDF_LARGE_FLAT_BATCH_DELAY_MS = 12;
 const PDF_LARGE_FLAT_GAP_BUDGET = PDF_LARGE_FLAT_CHUNK_BYTES * 3;
-
-// Preserve the existing public import path while cache ownership is isolated.
-export { createPdfRangeCache };
 
 /**
  * @template T
@@ -29,7 +25,7 @@ function abortable(promise, signal) {
 /**
  * @typedef {{url: string, rangeChunkSize: number}} RangeOptions
  * @typedef {{total: number, etag: string | null}} RangeVersion
- * @typedef {ReturnType<typeof createPdfRangeCache>} RangeCache
+ * @typedef {ReturnType<typeof import('./reader-pdf-range-cache.mjs').createPdfRangeCache>} RangeCache
  * @typedef {{signal: AbortSignal, readBytes: (response: Response, limit: number) => Promise<Uint8Array>, limit: number, rangeLimit?: number, rangeCache?: RangeCache | null, canPrefetchFirstPage?: () => boolean}} RangeHooks
  * @typedef {({bytes: Uint8Array} & ((RangeVersion & {complete?: boolean}) | {total?: never, etag?: never, complete: true}))} RangeResult
  * @typedef {{begin: number, end: number}} Bounds

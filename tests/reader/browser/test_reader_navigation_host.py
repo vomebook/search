@@ -556,7 +556,7 @@ process.stdout.write(stripBundledScripts(readFileSync('static/index.html','utf8'
             handleReaderMessage({origin:location.origin,source:frame.contentWindow,data:{type:'voice-reader-close'}});
             handleReaderMessage({origin:location.origin,source:frame.contentWindow,
               data:{type:'voice-reader-ui-state',state:'panel'}});
-            return readerUiState;
+            return readerHost.uiState;
           } finally { history.back=back; }
         }''')
         self.assertEqual(state, 'base')
@@ -566,13 +566,13 @@ process.stdout.write(stripBundledScripts(readFileSync('static/index.html','utf8'
         state = self.page.evaluate('''()=>{
           handleReaderMessage({origin:location.origin,source:readerHost.overlay.contentWindow,
             data:{type:'voice-reader-ui-state',state:'panel'}});
-          return readerUiState;
+          return readerHost.uiState;
         }''')
         self.assertEqual(state, 'panel', 'a new Reader must still publish its real panel state')
 
     def test_back_with_panel_open_exits_even_without_overlay_history_entry(self):
         # Formerly the close waited on history.back(); a non-overlay current entry
-        # left the Reader open and readerClosing then ignored every later tap.
+        # left the Reader open and the closing state then blocked every later tap.
         before = self.page.evaluate('() => new URL(location.href).pathname')
         self.page.evaluate('navigateToReader("/search/static/reader.html?ext=txt")')
         self.page.frame_locator('.reader-overlay').locator('body').wait_for()
@@ -584,7 +584,7 @@ process.stdout.write(stripBundledScripts(readFileSync('static/index.html','utf8'
             data:{type:'voice-reader-close'}});
         }""")
         self.page.locator('.reader-overlay').wait_for(state='detached', timeout=3000)
-        self.assertFalse(self.page.evaluate('readerClosing'))
+        self.assertFalse(self.page.evaluate('readerHost.closing'))
         self.assertEqual(self.page.evaluate('() => new URL(location.href).pathname'), before)
         self.assertEqual(self.page.evaluate('history.state'), {'foreign': {'nested': {'items': ['keep', 7]}}})
 
@@ -604,13 +604,13 @@ process.stdout.write(stripBundledScripts(readFileSync('static/index.html','utf8'
         self.assertEqual(recovery.get_attribute('href'), target)
         self.assertFalse(recovery.evaluate('link => !!link.closest("[inert]")'))
         self.assertEqual(self.page.evaluate('__backCalls'), 1)
-        self.assertTrue(self.page.evaluate('readerClosing && history.state.voiceReaderOverlay'))
+        self.assertTrue(self.page.evaluate('readerHost.closing && history.state.voiceReaderOverlay'))
         with self.page.expect_navigation(wait_until='domcontentloaded'):
             recovery.click()
         self.assertEqual(self.page.url, target)
         self.page.wait_for_function('STATE.results.length > 0 && !STATE.isLoading')
         self.assertEqual(self.page.locator('.reader-overlay').count(), 0)
-        self.assertFalse(self.page.evaluate('readerClosing'))
+        self.assertFalse(self.page.evaluate('readerHost.closing'))
         self.assertFalse(self.page.evaluate('!!history.state?.voiceReaderOverlay'))
         self.page.evaluate('navigateToReader("/search/static/reader.html?ext=txt")')
         self.page.frame_locator('.reader-overlay').locator('body').wait_for()
@@ -632,7 +632,7 @@ process.stdout.write(stripBundledScripts(readFileSync('static/index.html','utf8'
         self.assertEqual(traversed, 0)
         self.assertEqual(self.page.evaluate('history.state'), {'foreign': {'nested': {'items': ['keep', 7]}}})
         self.assertEqual(self.page.evaluate('() => new URL(location.href).pathname'), '/search/')
-        self.assertFalse(self.page.evaluate('readerClosing'))
+        self.assertFalse(self.page.evaluate('readerHost.closing'))
 
     def test_close_disposes_child_synchronously_before_detachment(self):
         self.page.evaluate('navigateToReader("/search/static/reader.html?ext=txt")')
@@ -721,7 +721,7 @@ process.stdout.write(stripBundledScripts(readFileSync('static/index.html','utf8'
         self.page.wait_for_function('STATE.results.length > 0 && !STATE.isLoading')
         self.assertEqual(self.page.locator('.reader-overlay-opening').count(), 0)
         self.assertEqual(self.page.locator('.reader-overlay').count(), 0)
-        self.assertFalse(self.page.evaluate('readerClosing'))
+        self.assertFalse(self.page.evaluate('readerHost.closing'))
 
     def test_closing_a_speech_reader_does_not_leave_the_reopened_frame_hidden(self):
         self.page.evaluate('navigateToReader("/search/static/reader.html?id=speech-resume&ext=txt")')
@@ -1189,7 +1189,7 @@ process.stdout.write(stripBundledScripts(readFileSync('static/index.html','utf8'
             const original=history[name].bind(history);
             history[name]=(...args)=>{__historyWrites++;return original(...args);};
           }
-          window.__returnSnapshot=readerReturnSnapshot;
+          window.__returnSnapshot=readerHost.returnSnapshot;
           window.__closingFrame=readerHost.overlay;
           handleReaderMessage({origin:location.origin,source:readerHost.overlay.contentWindow,data:{type:'voice-reader-close'}});
         }''')
@@ -1198,7 +1198,7 @@ process.stdout.write(stripBundledScripts(readFileSync('static/index.html','utf8'
         self.assertEqual(self.page.evaluate('({url:location.href,state:history.state})'), opened)
         self.assertEqual(history_snapshot(), reader_history)
         self.assertEqual(self.page.evaluate('[__backCalls,__historyWrites]'), [1, 0])
-        self.assertTrue(self.page.evaluate('readerClosing && readerReturnSnapshot === __returnSnapshot'))
+        self.assertTrue(self.page.evaluate('readerHost.closing && readerHost.returnSnapshot === __returnSnapshot'))
         self.assertTrue(self.page.evaluate('readerHost.overlay === __closingFrame && __closingFrame.isConnected'))
         # Release the sole requested traversal only after the watchdog has run.
         self.page.evaluate('__releaseBack()')
@@ -1216,7 +1216,7 @@ process.stdout.write(stripBundledScripts(readFileSync('static/index.html','utf8'
         self.assertEqual(history_snapshot(), reader_history)
         self.assertEqual(self.page.evaluate('__historyWrites'), writes_before_forward)
         self._assert_reader_frame_identity(opened['state']['readerUrl'])
-        self.assertFalse(self.page.evaluate('readerClosing'))
+        self.assertFalse(self.page.evaluate('readerHost.closing'))
         self.assertEqual(self.page.locator('.reader-overlay-opening a').count(), 0)
 
     def test_pending_watchdog_late_frame_and_back_preserve_history(self):
@@ -1244,7 +1244,7 @@ process.stdout.write(stripBundledScripts(readFileSync('static/index.html','utf8'
                 const original=history[name].bind(history);
                 history[name]=(...args)=>{__historyWrites++;return original(...args);};
               }
-              window.__returnSnapshot=readerReturnSnapshot;
+              window.__returnSnapshot=readerHost.returnSnapshot;
             }''')
         opening = self.page.locator('.reader-overlay-opening')
         opening.wait_for(state='visible')
@@ -1257,12 +1257,12 @@ process.stdout.write(stripBundledScripts(readFileSync('static/index.html','utf8'
         recovery.wait_for(state='visible', timeout=3000)
         self.assertFalse(recovery.evaluate('link => !!link.closest("[inert]")'))
         self.assertEqual(self.page.evaluate('[__backCalls,__historyWrites]'), [1, 0])
-        self.assertTrue(self.page.evaluate('readerClosing && readerReturnSnapshot === __returnSnapshot'))
+        self.assertTrue(self.page.evaluate('readerHost.closing && readerHost.returnSnapshot === __returnSnapshot'))
         self.assertEqual(self.page.evaluate('({url:location.href,state:history.state})'), pending)
         self.assertEqual(history_snapshot(), reader_history)
         self._deliver_late_reader_shell(held.pop(), recovery)
         self.assertEqual(self.page.evaluate('[__backCalls,__historyWrites]'), [1, 0])
-        self.assertTrue(self.page.evaluate('readerClosing && readerReturnSnapshot === __returnSnapshot'))
+        self.assertTrue(self.page.evaluate('readerHost.closing && readerHost.returnSnapshot === __returnSnapshot'))
         self.assertEqual(self.page.evaluate('({url:location.href,state:history.state})'), pending)
         self.assertEqual(history_snapshot(), reader_history)
         self.page.evaluate('__releaseBack()')
@@ -1283,7 +1283,7 @@ process.stdout.write(stripBundledScripts(readFileSync('static/index.html','utf8'
         self.assertEqual(history_snapshot(), reader_history)
         self.assertEqual(self.page.evaluate('__historyWrites'), writes_before_forward)
         self._assert_reader_frame_identity(pending['state']['readerUrl'])
-        self.assertFalse(self.page.evaluate('readerClosing'))
+        self.assertFalse(self.page.evaluate('readerHost.closing'))
         self.assertEqual(self.page.locator('.reader-overlay-opening a').count(), 0)
 
     def test_watchdog_recovery_rejects_foreign_and_non_search_targets(self):

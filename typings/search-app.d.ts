@@ -32,7 +32,7 @@ interface PagesSearchParams extends SearchExecutionParams {}
 interface PagesSearchState extends Omit<VoiceOfMLRouteState, 'wide'> {
   repoFull: string | null; page: number; pageSize: number; total: number;
   results: (PagesSearchRecord | null | undefined)[];
-  filterFolders: string[]; isMobile: boolean; isDark: boolean; isLoading: boolean; hasMore: boolean;
+  isMobile: boolean; isDark: boolean; isLoading: boolean; hasMore: boolean;
   extensionList: string[]; extensionOtherCollapsed: boolean; folderTree: VoiceOfMLFilterFolder[] | null;
   folderTreeCollapsed: Record<string, boolean>; sessionRestored: boolean; dataLoaded: boolean;
   resultsSkeletonActive: boolean; _pendingPage: number; _loadedPage: number;

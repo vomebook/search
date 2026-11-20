@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
-import {choosePdfRangeChunkSize, isFirstPageCandidate, openPdfRangeTask, preparePdfInitialRange, PDF_METADATA_RANGE_CONCURRENCY}
+import {openPdfRangeTask, preparePdfInitialRange, PDF_METADATA_RANGE_CONCURRENCY}
   from '../../../static/reader/pdf/reader-pdf-network.mjs';
+import {choosePdfRangeChunkSize, isFirstPageCandidate} from '../../../static/reader/pdf/reader-pdf-range-hints.mjs';
 import '../../../static/reader/core/reader-security.js';
 
 globalThis.location = {href: 'https://reader.test/'};

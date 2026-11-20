@@ -90,12 +90,13 @@ class SearchAccessibilityTests(unittest.TestCase):
             isRoot:!path,hasChildren:!!children.length,hasDirectFiles:true,showSelfToggle:!!children.length});
           STATE.mode='repo';STATE.folderTree=[node('',[node('alpha',[node('alpha/deep',[node('alpha/deep/hit')])]),node('beta')])];
           STATE.folderTreeCollapsed={};STATE.filterFolderSubtrees=['alpha/deep/hit'];STATE.filterFolderSelfs=['beta'];
-          STATE.filterFolders=['alpha/deep/hit','beta'];DOM.filterFolderSection.style.display='';
+          DOM.filterFolderSection.style.display='';
           getSidebarFilters(); sidebarFolderTree.render();
         }''')
         self.page.wait_for_function('!sidebarFolderTree.pending()')
         before = self.page.evaluate('''()=>({selfs:STATE.filterFolderSelfs.slice(),subtrees:STATE.filterFolderSubtrees.slice(),
-          filters:STATE.filterFolders.slice(),total:STATE.total,ids:STATE.results.map(r=>r.ID),url:location.href,request:searchRequestId})''')
+          filters:buildCurrentSearchBody(1).folders,total:STATE.total,ids:STATE.results.map(r=>r.ID),url:location.href,request:searchRequestId})''')
+        self.assertEqual(before['filters'], ['beta', 'alpha/deep/hit'])
         toggle = self.page.locator('#folder-toggle-all')
         self.assertEqual(toggle.count(), 1)
         self.assertEqual(self.page.locator('#folder-collapse-all, #folder-expand-all').count(), 0)
@@ -124,7 +125,7 @@ class SearchAccessibilityTests(unittest.TestCase):
         self.assertTrue(self.page.locator('[data-path="alpha/deep/hit"] input').is_checked())
         self.assertTrue(self.page.evaluate('Object.values(STATE.folderTreeCollapsed).every(v=>!v)'))
         after = self.page.evaluate('''()=>({selfs:STATE.filterFolderSelfs.slice(),subtrees:STATE.filterFolderSubtrees.slice(),
-          filters:STATE.filterFolders.slice(),total:STATE.total,ids:STATE.results.map(r=>r.ID),url:location.href,request:searchRequestId})''')
+          filters:buildCurrentSearchBody(1).folders,total:STATE.total,ids:STATE.results.map(r=>r.ID),url:location.href,request:searchRequestId})''')
         self.assertEqual(after, before)
         self.assertTrue(toggle.evaluate('n=>document.activeElement===n'))
         self.page.locator('#filter-folder-tree .tree-toggle').first.click()

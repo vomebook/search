@@ -27,7 +27,7 @@ export interface ProgressContext {
   captureChapterPosition(): ChapterPosition | null; extension: string;
   showDownloadFeedback(message: string, duration: number): void;
   lastSavedProgress: string; progressSaveChain: Promise<void>;
-  loadingStatus: HTMLElement; navigationState: { tocEntries: unknown[]; currentChapterIndex: number };
+  readerContentReady: boolean; navigationState: { tocEntries: unknown[]; currentChapterIndex: number };
   progressTools: HTMLElement; capability: { mode?: string | null | undefined }; chapterManifestUrl: string | null;
   params: URLSearchParams; restorationFailed: boolean;
   readerRestorationPromise: Promise<ProgressState | null> | null; readerRestorationLoaded: boolean;

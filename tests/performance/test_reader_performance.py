@@ -284,76 +284,58 @@ class ReaderPerformanceTest(unittest.TestCase):
         self.assertEqual(self.page.locator("html").get_attribute("data-reader-phase"), "ready")
         self.assertEqual(errors, [])
 
-    def test_fetch_file_aborts_when_pagehide_disposes_reader(self):
-        self.page.add_init_script(r"""
-          (() => {
-            const nativeFetch = window.fetch.bind(window);
-            const probe = window.__fetchFileProbe = { started: false, aborted: false, result: "" };
-            window.fetch = (input, init = {}) => {
-              if (!String(input).includes("fetch-file-probe")) return nativeFetch(input, init);
-              probe.started = true;
-              return new Promise((resolve, reject) => {
-                const signal = init && init.signal;
-                const abort = () => {
-                  probe.aborted = true;
-                  probe.result = "aborted";
-                  reject(new DOMException("Reader disposed", "AbortError"));
-                };
-                if (signal && signal.aborted) return abort();
-                if (signal) signal.addEventListener("abort", abort, { once: true });
-                probe.resolve = () => {
-                  probe.result = "fulfilled";
-                  resolve(new Response("probe", { status: 200, headers: { "content-type": "text/plain" } }));
-                };
-              });
-            };
-          })();
+    def test_document_request_aborts_when_pagehide_disposes_reader(self):
+        self.page.add_init_script("""
+          const nativeFetch = window.fetch.bind(window);
+          window.fetch = (input, init = {}) => {
+            const url = new URL(input, location.href);
+            if (url.pathname !== "/api/reader-content" || !url.searchParams.get("url")?.endsWith("/pagehide.txt"))
+              return nativeFetch(input, init);
+            window.__documentRequestSignal = init.signal;
+            return new Promise((_, reject) => {
+              init.signal.addEventListener("abort", () => reject(init.signal.reason), { once: true });
+            });
+          };
         """)
-        self.page.unroute("https://voiceofml-search.hf.space/api/reader-content**")
-        self.page.route("https://voiceofml-search.hf.space/api/reader-content**", lambda route: route.fulfill(status=200, content_type="text/plain", body=b"Reader"))
-        source = json.dumps("https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/fetch-file.txt")[1:-1]
-        self.page.goto(f"{self.origin}/search/static/reader.html?url={source}&ext=txt&title=FetchFile", wait_until="domcontentloaded")
-        self.page.locator(".reader-text").wait_for(state="visible")
-        self.page.evaluate("""() => {
-          window.__fetchFilePromise = window.fetchFile("https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/fetch-file-probe.txt")
-            .then(() => { window.__fetchFileProbe.result = "fulfilled"; })
-            .catch((error) => { window.__fetchFileProbe.error = error.name; });
+        source = urllib.parse.quote("https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/pagehide.txt", safe="")
+        self.page.goto(f"{self.origin}/search/static/reader.html?url={source}&ext=txt", wait_until="domcontentloaded")
+        self.page.wait_for_function("() => !!window.__documentRequestSignal")
+        self.page.evaluate("""async () => {
+          window.dispatchEvent(new PageTransitionEvent("pagehide", { persisted: true }));
+          await new Promise(requestAnimationFrame);
         }""")
-        self.page.wait_for_function("() => window.__fetchFileProbe.started === true")
-        self.page.evaluate("""() => {
-          const event = new Event("pagehide");
-          Object.defineProperty(event, "persisted", { value: true });
-          window.dispatchEvent(event);
-        }""")
-        self.page.wait_for_timeout(100)
-        self.assertFalse(self.page.evaluate("() => window.__fetchFileProbe.aborted"))
-        self.page.evaluate("window.dispatchEvent(new Event('pagehide'))")
-        self.page.wait_for_function("() => window.__fetchFileProbe.result === 'aborted'", timeout=2000)
-        self.assertEqual(self.page.evaluate("() => window.__fetchFileProbe.error"), "AbortError")
+        self.assertFalse(self.page.evaluate("() => window.__documentRequestSignal.aborted"))
+        self.assertEqual(self.page.locator("html").get_attribute("data-reader-phase"), "prepare")
+        self.page.evaluate('window.dispatchEvent(new PageTransitionEvent("pagehide", { persisted: false }))')
+        self.page.wait_for_function("() => window.__documentRequestSignal.aborted", timeout=2000)
+        self.assertEqual(self.page.evaluate("() => window.__documentRequestSignal.reason.name"), "AbortError")
         self.assertEqual(self.page.locator("html").get_attribute("data-reader-phase"), "disposed")
 
-    def test_concurrent_fetch_file_callers_receive_complete_bodies(self):
-        self.page.add_init_script(r"""
-          (() => {
-            const nativeFetch = window.fetch.bind(window);
-            window.__concurrentFetchCalls = 0;
-            window.fetch = (input, init = {}) => {
-              if (!String(input).includes("concurrent-fetch-file")) return nativeFetch(input, init);
-              window.__concurrentFetchCalls += 1;
-              return Promise.resolve(new Response("complete shared body", { status: 200, headers: { "content-type": "text/plain" } }));
-            };
-          })();
-        """)
-        source = urllib.parse.quote("https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/fetch-file.txt", safe="")
-        self.page.goto(f"{self.origin}/search/static/reader.html?url={source}&ext=txt&title=FetchFile", wait_until="domcontentloaded")
+    def test_concurrent_document_requests_receive_complete_bodies(self):
+        source = urllib.parse.quote("https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/concurrent.txt", safe="")
+        proxy = f"https://voiceofml-search.hf.space/api/reader-content?url={source}"
+        requests = []
+
+        def serve_document(route):
+            requests.append(route.request.url)
+            route.fulfill(status=200, content_type="text/plain", body="complete shared body")
+
+        self.page.route(proxy, serve_document)
+        self.page.goto(f"{self.origin}/search/static/reader.html?url={source}&ext=txt", wait_until="domcontentloaded")
         self.page.locator(".reader-text").wait_for(state="visible")
-        bodies = self.page.evaluate("""async () => {
-          const url = "https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/concurrent-fetch-file.txt";
-          const files = await Promise.all([window.fetchFile(url), window.fetchFile(url)]);
-          return Promise.all(files.map((file) => file.text()));
-        }""")
+        self.assertEqual(requests, [proxy])
+        requests.clear()
+        bodies = self.page.evaluate("""async url => {
+          const manager = VoiceOfMLReaderRequests.createReaderRequestManager();
+          try {
+            const responses = await Promise.all([manager.request(url, 2000), manager.request(url, 2000)]);
+            return await Promise.all(responses.map(response => response.text()));
+          } finally {
+            manager.dispose();
+          }
+        }""", proxy)
         self.assertEqual(bodies, ["complete shared body", "complete shared body"])
-        self.assertEqual(self.page.evaluate("window.__concurrentFetchCalls"), 1)
+        self.assertEqual(requests, [proxy])
 
     def test_id_only_resolver_is_lifecycle_managed(self):
         errors = []

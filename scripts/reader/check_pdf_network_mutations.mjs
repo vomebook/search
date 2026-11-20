@@ -40,13 +40,13 @@ for (const probe of probes) {
     writeFileSync(module, probe.cache || probe.hints ? source : pieces.join(probe.after));
     writeFileSync(join(directory, "reader-pdf-range-cache.mjs"), probe.cache ? pieces.join(probe.after) : cacheSource);
     writeFileSync(join(directory, "reader-pdf-range-hints.mjs"), probe.hints ? pieces.join(probe.after) : hintsSource);
-    const imported = "../../../static/reader/pdf/reader-pdf-network.mjs";
-    if (probe.test.split(imported).length !== 2) throw new Error("expected exactly one PDF network import");
-    let test = probe.test.replace(imported, "./reader-pdf-network.mjs");
-    if (probe.hints) {
-      const dependency = "../../../static/reader/pdf/reader-pdf-range-hints.mjs";
-      if (test.split(dependency).length !== 2) throw new Error("expected exactly one PDF hints import");
-      test = test.replace(dependency, "./reader-pdf-range-hints.mjs");
+    const imports = probe.hints ? ["range-hints"] : probe.test === contracts ? ["network", "range-cache"] : ["network"];
+    let test = probe.test;
+    for (const name of imports) {
+      const file = `reader-pdf-${name}.mjs`;
+      const imported = `../../../static/reader/pdf/${file}`;
+      if (test.split(imported).length !== 2) throw new Error(`expected exactly one ${file} import`);
+      test = test.replace(imported, `./${file}`);
     }
     writeFileSync(runner, test);
     const result = spawnSync(process.execPath, [runner], {encoding:"utf8", timeout:15000});

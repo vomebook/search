@@ -10,7 +10,7 @@
     /** @type {VoiceOfMLRouteParams} */
     const params = {};
     new URLSearchParams(queryString).forEach((value, key) => {
-      if (["repo", "folder_self", "folder_subtree", "folder"].includes(key)) {
+      if (["repo", "folder_self", "folder_subtree"].includes(key)) {
         if (!params[key]) params[key] = [];
         /** @type {string[]} */ (params[key]).push(value);
       } else params[key] = value;

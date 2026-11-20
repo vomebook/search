@@ -79,11 +79,11 @@ class ReaderHostHistoryRaceTests(unittest.TestCase):
           navigateToReader(historyReaderUrl());
           window.oldSearchId = searchRequestId;
         }''')
-        self.page.wait_for_function("readerOverlay && readerOverlay.contentDocument?.body?.textContent === 'reader'")
+        self.page.wait_for_function("readerHost.overlay?.contentDocument?.body?.textContent === 'reader'")
         self.page.evaluate('''() => {
-          readerOverlay.contentWindow.addEventListener('voice-reader-dispose', () => {
+          readerHost.overlay.contentWindow.addEventListener('voice-reader-dispose', () => {
             window.atDispose = {query:STATE.query,sort:DOM.sortSelect.value,
-              retired:searchRequestId > oldSearchId,overlayReleased:readerOverlay === null};
+              retired:searchRequestId > oldSearchId,overlayReleased:readerHost.overlay === null};
             // Reentrant close must be harmless.
             closeReaderOverlay();
             window.releaseStalePage();
@@ -115,15 +115,15 @@ class ReaderHostHistoryRaceTests(unittest.TestCase):
             result = self.page.evaluate('''action => {
               const path = new URL(historyReaderUrl(), location.origin).pathname;
               navigateToReader(path + '?ext=txt&id=A');
-              const first = readerOverlay;
+              const first = readerHost.overlay;
               first.contentWindow.addEventListener('voice-reader-dispose', () => {
                 navigateToReader(path + '?ext=txt&id=C');
               });
               if (action === 'replace') handleReaderMessage({origin:location.origin,source:first.contentWindow,
                 data:{type:'voice-reader-open',url:path+'?ext=txt&id=B'}});
               else restoreReaderOverlay({voiceReaderOverlay:true,readerUrl:path+'?ext=txt&id=B'});
-              const result = {id:new URL(readerOverlay.src).searchParams.get('id'),
-                connected:readerOverlay.isConnected,count:document.querySelectorAll('iframe.reader-overlay').length};
+              const result = {id:new URL(readerHost.overlay.src).searchParams.get('id'),
+                connected:readerHost.overlay.isConnected,count:document.querySelectorAll('iframe.reader-overlay').length};
               closeReaderOverlay(false,false);
               history.replaceState(null,'',historySearchUrl('paging'));
               return result;
@@ -160,7 +160,7 @@ class ReaderHostHistoryRaceTests(unittest.TestCase):
           navigateToReader(historyReaderUrl());
           history.back();
         }''')
-        self.page.wait_for_function('!readerOverlay')
+        self.page.wait_for_function('!readerHost.overlay')
         self.assertTrue(self.page.evaluate('searchRequestId === beforeReader.request && searchAbortController === beforeReader.controller'))
         self.assertTrue(self.page.evaluate('STATE.isLoading && STATE._pendingPage === 2 && !searchAbortController.signal.aborted'))
         self.assertEqual(self.page.evaluate('pagingRequests.filter(page => page === 2).length'), 1)

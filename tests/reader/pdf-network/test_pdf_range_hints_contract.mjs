@@ -2,13 +2,9 @@ import assert from 'node:assert/strict';
 import {PDF_ADAPTIVE_CHUNK_BYTES, PDF_LARGE_FLAT_CHUNK_BYTES, PDF_DEFAULT_CHUNK_BYTES, choosePdfRangeChunkSize,
   firstImageSectionEnd, firstPageSectionEnd, firstPageTailHintStart, isFirstPageCandidate}
   from '../../../static/reader/pdf/reader-pdf-range-hints.mjs';
-import {choosePdfRangeChunkSize as legacyChunkSize, isFirstPageCandidate as legacyFirstPage}
-  from '../../../static/reader/pdf/reader-pdf-network.mjs';
 
 // These are scheduling hints only. None of these fixtures supplies PDF.js
 // with a page identity or bypasses its normal page-tree validation.
-assert.equal(legacyChunkSize,choosePdfRangeChunkSize,'legacy network export remains the same function');
-assert.equal(legacyFirstPage,isFirstPageCandidate,'legacy network export remains the same function');
 const encode = text => new TextEncoder().encode(text);
 const chunk = PDF_DEFAULT_CHUNK_BYTES, large = 64 * 1024 * 1024;
 const sparse = Array.from({length:160},(_,index)=>4+index*6);
@@ -19,6 +15,8 @@ assert.equal(choosePdfRangeChunkSize(encode(tree(sparse)),large),PDF_ADAPTIVE_CH
 assert.equal(choosePdfRangeChunkSize(encode(tree(clustered)),large),chunk);
 assert.equal(choosePdfRangeChunkSize(encode(tree(sparse)),8*1024*1024-1),chunk,
   'small files must retain fallback');
+assert.equal(choosePdfRangeChunkSize(encode(tree(sparse)),Number.MAX_SAFE_INTEGER+1),chunk,
+  'unsafe document lengths must retain fallback');
 assert.equal(choosePdfRangeChunkSize(encode(tree(sparse)),large,4096),4096);
 assert.equal(choosePdfRangeChunkSize(null,large),chunk);
 assert.equal(choosePdfRangeChunkSize(encode(tree(sparse.slice(0,127))),large),chunk);
@@ -33,6 +31,8 @@ assert.equal(choosePdfRangeChunkSize(encode('%PDF-1.7\n1 0 obj\n<</Linearized 1>
 assert.equal(choosePdfRangeChunkSize(encode(tree(sparse).replace('endobj','')),large),chunk);
 assert.equal(isFirstPageCandidate(null,large,chunk),false);
 assert.equal(isFirstPageCandidate(encode(tree(sparse)),large,PDF_ADAPTIVE_CHUNK_BYTES),true);
+assert.equal(isFirstPageCandidate(encode(tree(sparse)),8*1024*1024-1,PDF_ADAPTIVE_CHUNK_BYTES),false,
+  'adaptive chunks must not make small files eligible for staged page one');
 assert.equal(isFirstPageCandidate(encode(tree(sparse)),large,chunk),false);
 const twoChildren = encode('%PDF-1.7\n2 0 obj\n<</Type/Pages/Count 500/Kids[3 0 R 11 0 R]>>\nendobj');
 assert.equal(isFirstPageCandidate(twoChildren,large,chunk),true);
@@ -140,4 +140,4 @@ assert.equal(choosePdfRangeChunkSize(encode('%PDF-1.7\n1 0 obj<</Value ('+fake+'
 assert.equal(choosePdfRangeChunkSize(encode('%PDF-1.7\n1 0 obj<</Value <'+Buffer.from(fake).toString('hex')+'>>>\nendobj\n'),large),chunk,
   'syntax inside a hex string must remain inert');
 
-console.log('PDF range hints: bounded scheduling, malformed inputs and compatibility exports passed');
+console.log('PDF range hints: bounded scheduling and malformed inputs passed');

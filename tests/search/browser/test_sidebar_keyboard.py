@@ -250,7 +250,7 @@ class SidebarKeyboardTests(unittest.TestCase):
           };
           STATE.mode='repo';STATE.repo='Test';STATE.repoFull='VoiceOfML/Test';
           STATE.folderTree=[{path:'docs',name:'docs',count:1,children:[],hasDirectFiles:true}];
-          STATE.filterFolderSelfs=[];STATE.filterFolderSubtrees=[];STATE.filterFolders=[];
+          STATE.filterFolderSelfs=[];STATE.filterFolderSubtrees=[];
           DOM.filterFolderSection.style.display='';getSidebarFilters();sidebarFolderTree.render();
         }''')
         self.page.locator('#filter-min-size').fill('3')
@@ -321,7 +321,7 @@ class SidebarKeyboardTests(unittest.TestCase):
           apiAvailable=false;STATE.useLocalMode=true;STATE.query='';STATE.filterExtensions=[];
           STATE.filterMinSize=null;STATE.filterMaxSize=null;STATE.filterRepos=[];
           STATE.mode='global';STATE.repo=null;STATE.repoFull=null;STATE.browserPath='';
-          STATE.filterFolderSelfs=[];STATE.filterFolderSubtrees=[];STATE.filterFolders=[];
+          STATE.filterFolderSelfs=[];STATE.filterFolderSubtrees=[];
           window.__breadcrumbClick=(folder)=>{
             const row=document.createElement('div');row.innerHTML=getResultRows().buildHTML({Repo:'VoiceOfML/Test',
               File:'deep',Extension:'txt',Folder:['docs','子'],Size:1},0);
@@ -394,7 +394,7 @@ class SidebarKeyboardTests(unittest.TestCase):
           STATE.folderTree=[{name:'root',path:'root',count:1000,selfCount:0,children:
             Array.from({length:1000},(_,i)=>({name:'child'+i,path:'root/'+i,count:1,selfCount:1,children:[]}))}];
           STATE.folderTreeCollapsed={root:true};
-          STATE.filterFolderSubtrees=[]; STATE.filterFolderSelfs=[]; STATE.filterFolders=[];
+          STATE.filterFolderSubtrees=[]; STATE.filterFolderSelfs=[];
           getSidebarFilters(); sidebarFolderTree.render();
           const initial=DOM.filterFolderTree.querySelectorAll('.filter-folder-item').length;
           const root=DOM.filterFolderTree.querySelector('.filter-folder-item');
@@ -420,7 +420,7 @@ class SidebarKeyboardTests(unittest.TestCase):
           STATE.folderTree=[{name:'a',path:'a',count:3,selfCount:1,showSelfToggle:true,children:[
             {name:'b',path:'a/b',count:2,selfCount:1,children:[{name:'c',path:'a/b/c',count:1,selfCount:1,children:[]}]}]}];
           STATE.folderTreeCollapsed={'a':false,'a/b':true};
-          STATE.filterFolderSubtrees=[];STATE.filterFolderSelfs=[];STATE.filterFolders=[];
+          STATE.filterFolderSubtrees=[];STATE.filterFolderSelfs=[];
           // Force the first batch beyond its time budget, as can happen on a
           // busy runner, to exercise the asynchronous continuation explicitly.
           const append=Element.prototype.appendChild;let deferred;

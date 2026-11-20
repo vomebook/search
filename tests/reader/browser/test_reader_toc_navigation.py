@@ -129,29 +129,41 @@ class TocNavigationTests(unittest.TestCase):
         self.page.goto(self.origin+support.PREFIX+'/static/reader.html?'+urlencode(dict(
             url='https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/large-toc.txt',ext='txt')))
         self.page.wait_for_function("()=>document.documentElement.dataset.readerPhase==='ready'")
-        result=self.page.evaluate('''() => {
-          const entries=Array.from({length:3000},(_,index)=>({label:index%19===0?'分组 '+index:
-            '条目 '+index+' · 第 '+(index===19?'9'.repeat(400):index===29?'8'.repeat(400):((index*97)%1800))+' 页',
-            group:index%31===0,activate:()=>true}));
-          entries.push({label:'第 1 页在标题内 · 第 1000 页',page:1000,activate:()=>true},
+        result = self.page.evaluate('''() => {
+          const entries = Array.from({length:3000}, (_, index) => ({
+            label: `条目 ${index} · 第 ${(index * 31) % 1800 + 1} 页`,
+            page: index % 31 === 0 ? null : (index * 97) % 1800 + 1,
+            group: index % 31 === 0,
+            activate: () => true
+          }));
+          // A later directory entry wins even if its page is lower, and on ties.
+          entries.push({label:'第 1 页在标题内',page:1000,activate:()=>true},
+            {label:'第 999 页 · 甲',page:20,activate:()=>true},
+            {label:'第 999 页 · 乙',page:20,activate:()=>true},
             {label:'第 1 页无链接',page:null,activate:()=>false});
-          __toc.set(entries);__toc.setPageCount(5000);
-          const actual=__toc.nav().tocEntries;
-          function reference(page){let result=-1;for(const [index,entry] of actual.entries()){
-            const match=entry.label.match(/第\s*(\d+)\s*页/u);
-            const target=entry.page!==undefined?entry.page:match?Number(match[1]):null;
-            if(target!==null&&target<=page)result=index;
-          }return result}
-          const pages=[1,2,10,99,500,999,1500,1799,1800,4999,Infinity],cases=[];
-          for(const page of pages){const expected=reference(page);__toc.setPage(page);cases.push({page,expected,actual:__toc.nav().currentChapterIndex})}
-          __toc.set([{label:'第一章 · 第 10 页',activate:()=>true},{label:'先出现 · 第 3 页',activate:()=>true},
-            {label:'最后一项 · 第 20 页',activate:()=>true}]);
-          __toc.setPage(12);const reset=__toc.nav().currentChapterIndex;
-          return {cases,reset};
+          const action = {label:'第 1 页 · 加载目录',activate:()=>true};
+          const pages = [1,2,10,19,20,99,500,999,1000,1500,1800,4999];
+          __toc.setPageCount(5000);
+          function check(entries, pages) {
+            __toc.set(entries);
+            return pages.map(page => {
+              const expected = entries.findLastIndex(entry => typeof entry.page === 'number' && entry.page <= page);
+              __toc.setPage(page);
+              return {page,expected,actual:__toc.nav().currentChapterIndex};
+            });
+          }
+          return {
+            explicit: check(entries, pages),
+            withAction: check([...entries, action], pages),
+            reset: check([{label:'第一章 · 第 1 页',page:10,activate:()=>true},
+              {label:'第二章 · 第 999 页',page:3,activate:()=>true},
+              {label:'第 1 页无链接',page:null,activate:()=>false}, action], [3,12])
+          };
         }''')
-        for case in result['cases']:
-            self.assertEqual(case['actual'],case['expected'],case)
-        self.assertEqual(result['reset'],1)
+        for scenario, cases in result.items():
+            for case in cases:
+                with self.subTest(scenario=scenario, page=case['page']):
+                    self.assertEqual(case['actual'], case['expected'])
 
     def click_entry(self, index):
         """Click the sidebar row for a directory index, as a reader does."""

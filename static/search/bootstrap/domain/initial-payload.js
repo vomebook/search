@@ -4,7 +4,7 @@
   function eligible(view) {
     return (view.page || 1) === 1 && !view.query && view.sort === "relevance"
       && view.searchFolders && view.exact
-      && view.repoFilters === 0 && view.extensionFilters === 0 && view.folderFilters === 0
+      && view.repoFilters === 0 && view.extensionFilters === 0
       && view.folderSelfFilters === 0 && view.folderSubtreeFilters === 0
       && view.minSize === null && view.maxSize === null;
   }

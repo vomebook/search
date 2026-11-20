@@ -130,7 +130,7 @@ test(label + ' extension empty inventory, copy and concurrent behavior remain si
   cached.push({name:'mutated-cache-read'});
   assert.equal((await f.extensions('owner/repo')).length, space ? 2 : 0);
 });
-test(label + ' sidebar bootstrap/static fallback coalesces and preserves compact values', async () => {
+test(label + ' sidebar bootstrap/static fallback coalesces and projects file metadata', async () => {
   const f = fixture(baseline); f.settleBootstrap();
   const a = f.invoke('loadSidebarInitial', 'owner/repo'), b = f.invoke('loadSidebarInitial', 'owner/repo');
   await turn(); assert.equal(f.calls.length, 1);
@@ -139,7 +139,8 @@ test(label + ' sidebar bootstrap/static fallback coalesces and preserves compact
   f.reply(0, raw); const result = await a;
   assert.equal(await b, result); assert.equal(await f.invoke('loadSidebarInitial', 'owner/repo'), result);
   assert.deepEqual(plain(result), {repo:'owner/repo',path:'root',folders:[{name:'child',path:'child',count:2}],files:[
-    {name:'a',ext:'txt',hasTxt:true,size:0,link:''},{name:'',ext:'',hasTxt:false,size:'',link:''}]});
+    {name:'a',ext:'txt',...(baseline ? {hasTxt:true} : {}),size:0,link:''},
+    {name:'',ext:'',...(baseline ? {hasTxt:false} : {}),size:'',link:''}]});
   const global = {repos:[]}; f.settleBootstrap({sidebar:global});
   const pending = f.invoke('loadSidebarInitial', null); await turn();
   if (!space) f.reply(1, global);

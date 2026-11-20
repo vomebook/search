@@ -17,7 +17,7 @@
  * @property {number} markerFrame
  * @property {{mode: string | null} | null | undefined} capability
  * @property {HTMLElement} loadingIndicator
- * @property {HTMLElement} loadingStatus
+ * @property {boolean} readerContentReady
  * @property {{preserve<T>(change: () => T): T}} chapterScrollAnchors
  * @property {(open: boolean) => unknown} setReaderPanelOpen
  * @property {() => unknown} stopReaderWork
@@ -122,7 +122,7 @@ export function createReaderLifecycle(readerContext) {
     if (readerContext.capability?.mode === "epub-chapters" && readerContext.loadingIndicator.isConnected)
       readerContext.chapterScrollAnchors.preserve(() => readerContext.loadingIndicator.remove());
     else readerContext.loadingIndicator.remove();
-    readerContext.loadingStatus.hidden = true;
+    readerContext.readerContentReady = true;
   }
 
   /** @param {string} name */
@@ -170,7 +170,7 @@ export function createReaderLifecycle(readerContext) {
     readerContext.formatAdapters.dispose();
     window.__VOICE_PDF_PRELOAD__?.dispose();
     readerContext.content.dataset.errorCode = code;
-    readerContext.loadingStatus.hidden = true;
+    // The error surface also ends loading, without marking restoration ready.
     readerContext.markReaderContentReady();
     const visibleMessage = `${message} [${readerContext.readerLifecycle.stage}]`;
     readerContext.content.innerHTML = `<div class="reader-error" role="alert"></div>`;

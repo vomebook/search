@@ -7,6 +7,9 @@ import { checkRuffleAssets } from '../../../scripts/build/check_reader_release.m
 
 const resources = createRequire(import.meta.url)('../../../static/reader-resources.js');
 const files = resources.ruffleArchive.files;
+assert.ok(!Object.values(resources.vendors).some(vendor => vendor.file === files[0]),
+  'the Ruffle loader must be shipped only inside the archive');
+assert.doesNotMatch(fs.readFileSync(new URL('../../../static/reader.html', import.meta.url), 'utf8'), /https:\/\/unpkg\.com\b/);
 for (const base of ['/static/', '/search/static/', './']) {
   const assets = resources.ruffleAssets(base);
   assert.deepEqual(assets, files.slice(0, 5).map(file => `${base}${resources.ruffleArchive.directory}/${file}`));

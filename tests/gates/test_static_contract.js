@@ -489,8 +489,9 @@ test("reader uses original files and lazy PDF canvas rendering", () => {
   assert.doesNotMatch(reader, /validOcr/);
   assert.match(reader, /api\/download\?file=/);
   assert.match(reader, /api\/reader-content\?url=/);
-  assert.match(reader, /const requestUrl = String\(url\) === sourceUrl \? contentUrl : url/);
-  assert.match(reader, /new URL\(url, location\.href\)\.pathname\.split\("\/"\)\.pop\(\)/);
+  assertCode(reader, 'const proxyUrl = readerContentUrl(rawUrl)');
+  assertCode(reader, 'fetchWithReaderTimeout(proxyUrl, READER_PROXY_TIMEOUT_MS, requestInit)');
+  assert.doesNotMatch(reader, /window\.fetchFile\s*=/);
   assert.match(reader, /document\.createDocumentFragment\(\)/);
   assertCode(reader, 'limit = VoiceOfMLReaderSecurity.LIMITS.documentBytes');
   assertCode(reader, 'VoiceOfMLReaderSecurity.readBytes(response, limit)');

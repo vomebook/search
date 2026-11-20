@@ -1285,7 +1285,7 @@ function folderContents(params) {
   const node = directory.nodes[path];
   const files = (directory.files[path] || []).map(index => {
     const record = /** @type {SearchRecord} */ (records[index]);
-    return { name: record.File || "", ext: record.Extension || "", hasTxt: !!record.HasTxt, size: record.Size || "" };
+    return { name: record.File || "", ext: record.Extension || "", size: record.Size || "" };
   });
   return {
     folders: (node ? node.children.slice() : []).sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0)

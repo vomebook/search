@@ -33,7 +33,7 @@ for(const {name:project,root} of searchTestProjects()) {
   function keysFixture() {
     const c={STATE:{mode:'global',repoFull:'',query:'book',filterMinSize:null,filterMaxSize:null,
       sort:'relevance',searchFolders:true,exact:true,useLocalMode:true,pageSize:100,
-      filterRepos:[],filterExtensions:[],filterFolderSelfs:[],filterFolderSubtrees:[],filterFolders:[]},
+      filterRepos:[],filterExtensions:[],filterFolderSelfs:[],filterFolderSubtrees:[]},
       DOM:{sortSelect:{value:'relevance'}},searchViewKeyMemo:null,encodes:0};
     c.stableSearchStringify=data=>{c.encodes++;return JSON.stringify(data)};
     vm.createContext(c);
@@ -60,10 +60,6 @@ for(const {name:project,root} of searchTestProjects()) {
     const old=c.getSearchViewKey();c.STATE.sort='name';c.DOM.sortSelect.value='name';
     assert.notStrictEqual(c.getSearchViewKey(),old);
     if(project==='github-Search') {const old=c.getSearchViewKey();c.STATE.useLocalMode=false;assert.notStrictEqual(c.getSearchViewKey(),old);}
-    c.STATE.filterFolderSelfs=['a'];const mixed=c.getSearchViewKey();c.STATE.filterFolders=['ignored'];
-    assert.strictEqual(c.getSearchViewKey(),mixed);
-    c.STATE.filterFolderSelfs=[];const plain=c.getSearchViewKey();c.STATE.filterFolders[0]='other';
-    assert.notStrictEqual(c.getSearchViewKey(),plain);
     const current=c.getSearchViewKey();c.STATE.isDark=true;c.STATE.leftSidebarOpen=false;c.STATE.page=2;
     assert.strictEqual(c.getSearchViewKey(),current);
   });
@@ -97,19 +93,23 @@ for(const {name:project,root} of searchTestProjects()) {
   });
   test(project+' persisted folder projection retains root files and normalized membership',()=>{
     let searches=0,toasts=0;
-    const c=vm.createContext({Set,Map,STATE:{folderTree:[]},
+    const c=vm.createContext({Set,Map,STATE:{folderTree:[],filterRepos:[],filterExtensions:[]},
       updateFilterCancelButtons:()=>{},syncStateToURL:()=>{},scheduleFilterSearch:()=>{searches++},
       showToast:()=>{toasts++}});
-    install(source,c,['mergeFolderFilters','folderPathCovered','createFolderSelectionLookup',
-      'normalizeFolderSelection','persistFolderSelection']);
+    install(source,c,['persistFolderSelection']);
     c.persistFolderSelection(new Set(['a','a/b','ab','']),new Set(['','a','x']));
     assert.deepStrictEqual(Array.from(c.STATE.filterFolderSubtrees),['a','ab','']);
     assert.deepStrictEqual(Array.from(c.STATE.filterFolderSelfs),['','x']);
-    assert.deepStrictEqual(Array.from(c.STATE.filterFolders),['','x','a','ab']);
+    const builder=project==='github-Search'?'buildLocalSearchParams':'buildCurrentSearchBody';
+    install(source,c,['mergeFolderFilters',builder,...(project==='github-Search'?[]:['buildSearchApiBody'])]);
+    c.DOM={sortSelect:{value:'relevance'}};c.normalizeSearchSort=sort=>sort;
+    assert.deepStrictEqual(Array.from(c[builder](1).folders),['','x','a','ab']);
     assert.strictEqual(searches,1);
-    const existing=c.STATE.filterFolders;
+    const {filterFolderSelfs, filterFolderSubtrees}=c.STATE;
     c.persistFolderSelection(new Set(Array.from({length:10001},(_,i)=>'p'+i)),new Set());
-    assert.strictEqual(c.STATE.filterFolders,existing);assert.strictEqual(searches,1);assert.strictEqual(toasts,1);
+    assert.strictEqual(c.STATE.filterFolderSelfs,filterFolderSelfs);
+    assert.strictEqual(c.STATE.filterFolderSubtrees,filterFolderSubtrees);
+    assert.strictEqual(searches,1);assert.strictEqual(toasts,1);
   });
 }
 run('search/interaction-state');

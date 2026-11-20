@@ -18,7 +18,7 @@ const extract = name => {
 function fixture() {
   const state = {mode:'global', repoFull:'', query:'q', filterMinSize:null, filterMaxSize:null,
     sort:'relevance', searchFolders:true, exact:true, useLocalMode:true, pageSize:100,
-    filterRepos:[], filterExtensions:[], filterFolderSelfs:[], filterFolderSubtrees:[], filterFolders:[]};
+    filterRepos:[], filterExtensions:[], filterFolderSelfs:[], filterFolderSubtrees:[]};
   const c = vm.createContext({STATE:state, DOM:{sortSelect:{value:'relevance'}}, searchViewKeyMemo:null,
     encodes:0});
   c.stableSearchStringify = value => {c.encodes++; return JSON.stringify(value);};
@@ -32,7 +32,7 @@ test('site key projection preserves native sorting and site-specific fields', ()
   const c = fixture();
   Object.assign(c.STATE, {mode:'repo', repoFull:'VoiceOfML/A', query:'文化', filterRepos:['z','a'],
     filterExtensions:['txt','pdf'], filterFolderSelfs:['self'], filterFolderSubtrees:['sub'],
-    filterFolders:['ignored'], filterMinSize:1, filterMaxSize:500, sort:'size', useLocalMode:false});
+    filterMinSize:1, filterMaxSize:500, sort:'size', useLocalMode:false});
   c.DOM.sortSelect.value = 'date';
   const key = JSON.parse(c.getSearchViewKey());
   assert.deepEqual(key.repos, ['a','z']);
@@ -62,18 +62,21 @@ test('memo stays identical for unchanged inputs and invalidates aliased edits', 
   assert.equal(memo.filters[0][0], 'first');
 });
 
-test('explicit folders hide legacy folders without overwriting their state', () => {
+test('canonical snapshot keys keep their exact bytes for empty and mixed folder selections', () => {
   const c = fixture();
-  c.STATE.filterFolders = ['one'];
-  const plain = c.getSearchViewKey();
-  assert.deepEqual(JSON.parse(plain).plainFolders, ['one']);
-  c.STATE.filterFolderSelfs = ['self'];
-  const mixed = c.getSearchViewKey(), memo = c.searchViewKeyMemo;
-  c.STATE.filterFolders[0] = 'two';
-  assert.equal(c.getSearchViewKey(), mixed);
-  assert.equal(c.searchViewKeyMemo, memo);
+  vm.runInContext(fs.readFileSync(path.join(root, 'static/search/shared/domain/stable-stringify.js'), 'utf8'), c);
+  vm.runInContext(extract('stableSearchStringify'), c);
+  const expected = folders => '{"exact":true,"extensions":[],"folders":' + folders +
+    ',"maxSize":null,"minSize":null,"mode":"global","pageSize":100,"plainFolders":[],"query":"q",' +
+    '"repo":"","repos":[],"searchFolders":true,"sort":"relevance"' + (space ? '}' : ',"useLocalMode":true}');
+  const unfiltered = expected('{"self":[],"subtree":[]}');
+  assert.equal(c.getSearchViewKey(), unfiltered);
+  c.STATE.filterFolderSelfs = ['direct', ''];
+  c.STATE.filterFolderSubtrees = ['tree'];
+  assert.equal(c.getSearchViewKey(), expected('{"self":["","direct"],"subtree":["tree"]}'));
   c.STATE.filterFolderSelfs = [];
-  assert.deepEqual(JSON.parse(c.getSearchViewKey()).plainFolders, ['two']);
+  c.STATE.filterFolderSubtrees = [];
+  assert.equal(c.getSearchViewKey(), unfiltered);
 });
 
 test('site-specific sort defaults and missing sort control retain original bytes', () => {
@@ -126,7 +129,7 @@ test('filter and scalar getters are observed in their original order', () => {
   const c = fixture(), reads = [];
   for (const key of ['mode','repoFull','query','filterMinSize','filterMaxSize','sort',
     'searchFolders','exact','useLocalMode','pageSize','filterRepos','filterExtensions',
-    'filterFolderSelfs','filterFolderSubtrees','filterFolders']) {
+    'filterFolderSelfs','filterFolderSubtrees']) {
     let value = c.STATE[key];
     Object.defineProperty(c.STATE, key, {get(){reads.push(key);return value;},set(next){value=next;}});
   }
@@ -135,5 +138,6 @@ test('filter and scalar getters are observed in their original order', () => {
     ? ['mode','repoFull','query','filterMinSize','filterMaxSize','searchFolders','exact','pageSize']
     : ['mode','repoFull','query','filterMinSize','filterMaxSize','sort','searchFolders','exact','useLocalMode','pageSize'];
   assert.deepEqual(reads.slice(0, expected.length), expected);
-  assert.equal(reads.includes('filterFolders'), true);
+  assert.deepEqual(reads.slice(expected.length, expected.length + 4),
+    ['filterRepos','filterExtensions','filterFolderSelfs','filterFolderSubtrees']);
 });

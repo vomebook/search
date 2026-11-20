@@ -69,8 +69,8 @@ CATEGORY_METHODS = {
         "test_epub_chapters_load_first_lazy_next_and_toc_destination",
     ),
     "lifecycle": (
-        "test_fetch_file_aborts_when_pagehide_disposes_reader",
-        "test_concurrent_fetch_file_callers_receive_complete_bodies",
+        "test_document_request_aborts_when_pagehide_disposes_reader",
+        "test_concurrent_document_requests_receive_complete_bodies",
         "test_id_only_resolver_is_lifecycle_managed",
         "test_id_only_resolver_failure_uses_reader_error_ui",
         "test_id_only_reader_source_uses_authoritative_resolve",

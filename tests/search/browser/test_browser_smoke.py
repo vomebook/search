@@ -187,7 +187,7 @@ class BrowserBehaviorTest(unittest.TestCase):
                 reader.locator("#full-search-toggle").click()
                 reader.locator("#full-search-input").fill("find-me")
                 reader.locator(".full-search-result").wait_for()
-            self.page.wait_for_function("view => readerUiState === view", arg=view)
+            self.page.wait_for_function("view => readerHost.uiState === view", arg=view)
             self.page.evaluate("""() => { window.__pushes = 0; const push = history.pushState.bind(history);
               history.pushState = (...args) => { window.__pushes++; return push(...args); }; }""")
             self.page.evaluate("history.back()")
@@ -766,7 +766,6 @@ class BrowserBehaviorTest(unittest.TestCase):
             STATE.folderTree = treeResult.tree;
             STATE.filterFolderSelfs = [];
             STATE.filterFolderSubtrees = [];
-            STATE.filterFolders = [];
             STATE.query = "";
             STATE.results = [];
             STATE.total = 0;
@@ -783,7 +782,7 @@ class BrowserBehaviorTest(unittest.TestCase):
             const selected = {
               self: STATE.filterFolderSelfs.slice(),
               subtrees: STATE.filterFolderSubtrees.slice(),
-              folders: STATE.filterFolders.slice(),
+              folders: buildLocalSearchParams(1).folders,
               rootChecked: rootCheckbox.checked,
               rootPartial: rootCheckbox.indeterminate,
             };
@@ -800,7 +799,7 @@ class BrowserBehaviorTest(unittest.TestCase):
         self.assertEqual(result["total"], 3)
         self.assertIn("", result["self"])
         self.assertEqual(result["subtrees"], ["child"])
-        self.assertIn("child", result["folders"])
+        self.assertEqual(result["folders"], ["", "child"])
         self.assertTrue(result["rootChecked"])
         self.assertFalse(result["rootPartial"])
         self.assertEqual(result["clearedSelf"], [])
@@ -826,7 +825,6 @@ class BrowserBehaviorTest(unittest.TestCase):
             STATE.folderTree = treeResult.tree;
             STATE.filterFolderSelfs = [];
             STATE.filterFolderSubtrees = [];
-            STATE.filterFolders = [];
             STATE.query = "";
             STATE.results = [];
             STATE.total = 0;

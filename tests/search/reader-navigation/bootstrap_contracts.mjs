@@ -12,7 +12,7 @@ const plain = value => JSON.parse(JSON.stringify(value));
 function fixture() {
   const events = [], flights = [];
   const state = {page:1,query:'',sort:'relevance',searchFolders:true,exact:true,
-    filterRepos:[],filterExtensions:[],filterFolders:[],filterFolderSelfs:[],filterFolderSubtrees:[],
+    filterRepos:[],filterExtensions:[],filterFolderSelfs:[],filterFolderSubtrees:[],
     filterMinSize:null,filterMaxSize:null,mode:'repo',repo:'A /中',repoFull:'VoiceOfML/A /中',pageSize:50,results:[]};
   const location = {hash:'#/A'};
   let text = null;
@@ -61,7 +61,7 @@ test('bootstrap registration covers source, composed and offline entry points an
 
 test('bootstrap eligibility uses actual page, every initial filter and site sort source',()=>{
   const changes={page:2,query:'x',searchFolders:false,exact:false,filterRepos:['r'],filterExtensions:['txt'],
-    filterFolders:['a'],filterFolderSelfs:[''],filterFolderSubtrees:['a'],filterMinSize:0,filterMaxSize:0};
+    filterFolderSelfs:[''],filterFolderSubtrees:['a'],filterMinSize:0,filterMaxSize:0};
   for(const [key,value] of Object.entries(changes)) {const f=fixture();assert.equal(f.c.canUseInitialSearchPayload(),true);f.state[key]=value;assert.equal(f.c.canUseInitialSearchPayload(),false,key);}
   const f=fixture();f.state.page=0;assert.equal(f.c.canUseInitialSearchPayload(),true);
   f.state.browserPath='unrelated';assert.equal(f.c.canUseInitialSearchPayload(),true);

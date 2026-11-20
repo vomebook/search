@@ -11,7 +11,7 @@ function fixture() {
       setStage:stage => {events.push(['stage',stage]); return true;},
       nextGeneration:name => {const next=(values.get(name)||0)+1;values.set(name,next);return next;},
       isCurrent:(name,value)=>values.get(name)===value, dispose(){lifecycle.disposed=true;}, fail(code){events.push(['fail',code]);}},
-    drainPdfTextWaiters(){events.push('drain');}
+    readerContentReady:false, drainPdfTextWaiters(){events.push('drain');}
   };
   Object.assign(context,createReaderLifecycle(context));
   return {context,events};
@@ -119,10 +119,10 @@ test('waitForReader rejects on cancellation and resolves on its timer', async ()
 test('reader readiness preserves chapter anchor only when loading node is connected', () => {
   const {context,events}=fixture();
   context.loadingIndicator={isConnected:true,remove(){events.push('remove');}};
-  context.loadingStatus={hidden:false};
   context.chapterScrollAnchors={preserve(callback){events.push('preserve');return callback();}};
+  assert.equal(context.readerContentReady,false);
   context.capability={mode:'epub-chapters'};context.markReaderContentReady();
-  assert.deepEqual(events,['preserve','remove']);assert.equal(context.loadingStatus.hidden,true);
+  assert.deepEqual(events,['preserve','remove']);assert.equal(context.readerContentReady,true);
   events.length=0;context.capability={mode:'pdf'};context.markReaderContentReady();
   assert.deepEqual(events,['remove']);
   events.length=0;context.capability=null;context.markReaderContentReady();assert.deepEqual(events,['remove']);
@@ -176,12 +176,13 @@ test('failure cleanup preserves message, lifecycle stage and retry control seman
   context.readerRequestManager={dispose:()=>events.push('requests')};
   context.formatAdapters={dispose:()=>events.push('adapters')};
   context.content={dataset:{},innerHTML:'',querySelector:()=>errorNode};
-  context.loadingStatus={hidden:false};context.markReaderContentReady=()=>events.push('ready');
+  context.loadingIndicator={remove(){events.push('remove');}};
   context.status={textContent:''};
   try {
     context.fail('test','READER_MEDIA');
     assert.deepEqual(events,[{restorationReady:false},['fail','READER_MEDIA'],['panel',false],
-      'work','requests','adapters','preload','ready']);
+      'work','requests','adapters','preload','remove']);
+    assert.equal(context.readerContentReady,true);
     assert.equal(context.content.dataset.errorCode,'READER_MEDIA');
     assert.equal(errorNode.textContent,'test [prepare]');
     assert.equal(errorNode.children.length,2);assert.equal(errorNode.children[1].event.type,'click');
@@ -200,7 +201,7 @@ test('retry click waits for progress and reloads only while reader remains live'
   let releaseProgress;
   Object.assign(context,{updateDocumentState(){},setReaderPanelOpen(){},stopReaderWork(){},
     readerRequestManager:{dispose(){}},formatAdapters:{dispose(){}},
-    content:{dataset:{},querySelector:()=>errorNode},loadingStatus:{},status:{},markReaderContentReady(){},
+    content:{dataset:{},querySelector:()=>errorNode},status:{},loadingIndicator:{remove(){}},
     progressSaveChain:new Promise(resolve=>{releaseProgress=resolve;})});
   try {
     context.fail('message','READER_MEDIA');

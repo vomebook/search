@@ -1556,7 +1556,7 @@ test("Chinese multi-character queries require adjacent Chinese pairs", async () 
 });
 
 test("main-thread root select-all represents and persists direct root files with the empty self path", () => {
-  const context = vm.createContext({ Set, STATE:{folderTree:[]},
+  const context = vm.createContext({ Set, STATE:{folderTree:[], filterRepos:[], filterExtensions:[]},
     updateFilterCancelButtons(){}, scheduleFilterSearch(){}, showToast(){throw Error("unexpected limit");} });
   vm.runInContext(fs.readFileSync("static/search/sidebar/domain/folder-selection.js", "utf8"), context);
   const treeSource = fs.readFileSync("static/search/sidebar/presentation/folder-tree.js", "utf8");
@@ -1566,7 +1566,7 @@ test("main-thread root select-all represents and persists direct root files with
   assert.strictEqual(context.folderSelectionState(root, new Set(["child"]), new Set()).full, false);
   assert.strictEqual(context.folderSelectionState(root, new Set(["child"]), new Set([""])).full, true);
   assert.match(treeSource, /if \(node\.hasDirectFiles\) selfSet\.add\(node\.path\)/);
-  for (const name of ["mergeFolderFilters"]) {
+  for (const name of ["mergeFolderFilters", "buildLocalSearchParams"]) {
     const fn = app.match(new RegExp("^function " + name + "\\([^]*?^}", "m"));
     assert(fn, name); vm.runInContext(fn[0], context);
   }
@@ -1576,7 +1576,9 @@ test("main-thread root select-all represents and persists direct root files with
   context.persistFolderSelection(subtrees, selfs);
   assert.deepStrictEqual(Array.from(context.STATE.filterFolderSelfs), [""]);
   assert.deepStrictEqual(Array.from(context.STATE.filterFolderSubtrees), ["child"]);
-  assert.deepStrictEqual(Array.from(context.STATE.filterFolders), ["", "child"]);
+  const params = context.buildLocalSearchParams(1);
+  assert.strictEqual(params.folderMatchMode, "mixed");
+  assert.deepStrictEqual(Array.from(params.folders), ["", "child"]);
   assert.match(treeSource, /function getFolderSelfSet\(\) \{\s*return new Set\(deps\.readView\(\)\.selfs \|\| \[\]\);/);
   assert.match(treeSource, /if \(node\.hasDirectFiles\) selfPaths\.push\(node\.path\)/);
 });
@@ -2252,6 +2254,8 @@ test("folder contents request returns only one directory", async () => {
     { name: "root", path: "docs/root", count: 1 },
   ]);
   assert.deepStrictEqual(data.files, []);
+  const direct = await worker.request("folder-contents", { repo: "Repo/A", path: "docs/root" });
+  assert.deepStrictEqual(direct.files, [{ name: "alpha guide", ext: "txt", size: 100 }]);
 });
 test("folder tree request preserves direct-file and child metadata", async () => {
   const { worker } = await loaded();

@@ -1964,7 +1964,7 @@ keepValue(1, 2);
         report = live.stdout
         message = "passing named tests"
         contracts = [("tests/reader/pdf-network/test_pdf_range_hints_contract.mjs",
-                      "PDF range hints: bounded scheduling, malformed inputs and compatibility exports passed"),
+                      "PDF range hints: bounded scheduling and malformed inputs passed"),
                      ("tests/reader/pdf-network/test_reader_pdf_backpressure.mjs",
                       "429 feedback, shared spacing, bounded retry, version consistency and cancellation passed"),
                      ("tests/reader/pdf-network/test_reader_pdf_network_contract.mjs",

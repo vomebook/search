@@ -15,7 +15,7 @@
       }),
       files: (data.files || []).map(function(item) {
         return {
-          name: item.n || "", ext: item.e || "", hasTxt: !!item.t,
+          name: item.n || "", ext: item.e || "",
           size: item.s === undefined ? "" : item.s, link: "",
         };
       }),

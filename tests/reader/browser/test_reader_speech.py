@@ -197,7 +197,7 @@ class ReaderSpeechTest(unittest.TestCase):
             wait(page, """() => {
                 const text = document.querySelector('.reader-text');
                 return text?.textContent.includes('第0段') && text.getBoundingClientRect().top < innerHeight &&
-                    document.querySelector('#loading-status')?.hidden;
+                    !document.querySelector('.reader-loading-indicator');
             }""", 5000)
             # The document is usable while the player's only request is still held.
             self.assertEqual(page.locator('[data-speech-toggle]').count(), 0)

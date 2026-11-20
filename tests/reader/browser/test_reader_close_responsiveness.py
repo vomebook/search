@@ -183,7 +183,7 @@ class ReaderCloseResponsivenessTests(unittest.TestCase):
           window.__nativeBack=history.back;history.back=()=>{};
           window.__hiddenOnMessage=false;
           addEventListener('message', event=>{if(event.data?.type==='voice-reader-close')
-            window.__hiddenOnMessage=getComputedStyle(readerOverlay).opacity==='0';});
+            window.__hiddenOnMessage=getComputedStyle(readerHost.overlay).opacity==='0';});
         }''')
         frame.locator('#back').click()
         self.page.wait_for_function('() => window.__hiddenOnMessage', timeout=1000)
@@ -191,7 +191,7 @@ class ReaderCloseResponsivenessTests(unittest.TestCase):
         recovery = self.page.get_by_role('link', name='直接打开搜索页')
         recovery.wait_for(state='visible', timeout=3000)
         self.assertEqual(self.page.url, reader_url)
-        self.assertTrue(self.page.evaluate('history.state.voiceReaderOverlay && readerClosing'))
+        self.assertTrue(self.page.evaluate('history.state.voiceReaderOverlay && readerHost.closing'))
         self.assertFalse(recovery.evaluate('link => !!link.closest("[inert]")'))
         target = recovery.get_attribute('href')
         self.page.evaluate('() => { history.back=window.__nativeBack; }')
@@ -200,7 +200,7 @@ class ReaderCloseResponsivenessTests(unittest.TestCase):
         self.assertEqual(self.page.url, target)
         self.page.locator('#search-input').wait_for(state='visible')
         self.assertEqual(self.page.locator('iframe.reader-overlay').count(), 0)
-        self.assertFalse(self.page.evaluate('readerClosing'))
+        self.assertFalse(self.page.evaluate('readerHost.closing'))
 
     def test_host_updates_store_when_a_new_reader_version_closes(self):
         first = 'https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/version-a.txt'
@@ -225,7 +225,7 @@ class ReaderCloseResponsivenessTests(unittest.TestCase):
               const hostVersion=version[0];
               window.VoiceOfMLReaderStore={STORE_VERSION:version,
                 put:async entry => {(window.__versionedSaves ||= []).push([hostVersion,entry.url]);}};
-              const frame=readerOverlay;
+              const frame=readerHost.overlay;
               frame.contentDocument.querySelector('script').setAttribute('src',
                 '/search/static/reader/core/reader-store.'+version+'.js');
               handleReaderMessage({origin:location.origin, source:frame.contentWindow,

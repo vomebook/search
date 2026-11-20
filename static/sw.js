@@ -49,6 +49,10 @@ function writeMutable(state, sequence, cache, key, response) {
   return state.writes;
 }
 /** @param {string} pathname @returns {boolean} */
+function isRemovedReaderAsset(pathname) {
+  return /^\/search\/static\/(?:foliate-reader\/|vendor\/(?:(?:zip|ruffle)\.[0-9a-f]{12}\.js|LICENSE_zipjs\.[0-9a-f]{12}\.txt)$)/.test(pathname);
+}
+/** @param {string} pathname @returns {boolean} */
 function isRetiredAsset(pathname) {
   if (CURRENT_HASHED_ASSETS.length && (isDjvuDecoderAsset(pathname) || isRuffleAsset(pathname))) return !CURRENT_HASHED_ASSETS.includes(pathname);
   return CURRENT_HASHED_ASSETS.length > 0 &&
@@ -81,6 +85,7 @@ async function activeGeneration() {
 /** @param {URL} url @returns {boolean} */
 function isImmutableURL(url) {
   return url.origin === self.location.origin && !url.searchParams.has("sw-retained-generation") && url.pathname.startsWith("/search/static/") &&
+    !isRemovedReaderAsset(url.pathname) &&
     (/\.[0-9a-f]{12}\.(?:js|mjs|css)$/.test(url.pathname) || isDjvuDecoderAsset(url.href) || isRuffleAsset(url.href));
 }
 /** @param {URL} url @returns {Promise<Response | undefined>} */
@@ -98,13 +103,11 @@ async function previousAsset(url) {
     return undefined;
   } catch (_) { return undefined; }
 }
-/** @param {string} name @returns {Promise<void>} */
-async function prunePreviousGeneration(name) {
+/** @param {string} name @param {(url: URL) => boolean} shouldDelete @returns {Promise<void>} */
+async function pruneGeneration(name, shouldDelete) {
   const cache = await caches.open(name);
   for (const request of await cache.keys()) {
-    // Shells, data, aliases and the former snapshot-marker entries are never
-    // fallback candidates. Late mutable writes are harmless: reads check again.
-    if (!isImmutableURL(new URL(request.url))) await cache.delete(request);
+    if (shouldDelete(new URL(request.url))) await cache.delete(request);
   }
 }
 /** @param {Cache} cache @returns {Promise<void>} */
@@ -118,8 +121,7 @@ function pruneHashedAssets(cache) {
           cachePruningDirty = false;
           for (const request of await cache.keys()) {
             const url = new URL(request.url);
-            if (!isRetiredAsset(url.pathname)) continue;
-            await cache.delete(request);
+            if (isRemovedReaderAsset(url.pathname) || isRetiredAsset(url.pathname)) await cache.delete(request);
           }
         }
       } finally {
@@ -259,7 +261,10 @@ readerWorkerScope.addEventListener("activate", (event) => {
           .slice(-RETAINED_GENERATIONS).reverse();
     await (await caches.open(METADATA_CACHE)).put(ACTIVE_KEY,
       new Response(JSON.stringify({ active: CACHE_NAME, previous: history[0] || null, history })));
-    if (state) for (const name of history) await prunePreviousGeneration(name).catch(() => {});
+    if (names.includes(CACHE_NAME)) await pruneGeneration(CACHE_NAME, url => isRemovedReaderAsset(url.pathname)).catch(() => {});
+    // Only immutable, eligible assets may remain as fallbacks. Do not prune
+    // unknown serving generations during metadata recovery.
+    if (state) for (const name of history) await pruneGeneration(name, url => !isImmutableURL(url)).catch(() => {});
     if (state) {
       const oldNames = names.filter(name => isGenerationName(name) && name !== CACHE_NAME && !history.includes(name));
       await Promise.all(oldNames.map(name => caches.delete(name).catch(() => false)));
@@ -272,8 +277,12 @@ readerWorkerScope.addEventListener("fetch", (event) => {
   if (url.origin !== self.location.origin || (event.request.method || "GET") !== "GET") {
     return;
   }
-  // Retired URLs always reach the server first and are never repopulated; only a
-  // missing/failed response falls back to the one retained previous generation.
+  // Removed Reader assets never use Cache Storage or the browser HTTP cache.
+  if (isRemovedReaderAsset(url.pathname)) {
+    event.respondWith(fetch(event.request, { cache: "no-store" }));
+    return;
+  }
+  // Other retired URLs try the network first and fall back to retained generations.
   if (isRetiredAsset(url.pathname)) {
     const retained = () => previousAsset(url);
     event.respondWith(fetch(event.request).then(response =>

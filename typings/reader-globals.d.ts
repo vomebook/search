@@ -124,14 +124,14 @@ declare var VoiceOfMLSearchSidebarRender: {
 interface VoiceOfMLSearchViewState {
   mode: string; repoFull: string | null; query: string; filterMinSize: number | null; filterMaxSize: number | null;
   searchFolders: boolean; exact: boolean; useLocalMode?: boolean; pageSize: number;
-  filterRepos: string[]; filterExtensions: string[]; filterFolderSelfs: string[]; filterFolderSubtrees: string[]; filterFolders: string[];
+  filterRepos: string[]; filterExtensions: string[]; filterFolderSelfs: string[]; filterFolderSubtrees: string[];
 }
 interface VoiceOfMLSearchViewMemo {
   key: string; scalars: (string | number | boolean | null | undefined)[]; filters: string[][];
 }
 interface VoiceOfMLSearchViewProjection {
   mode: string; repo: string; query: string; repos: string[]; extensions: string[];
-  folders: {self: string[]; subtree: string[]}; plainFolders: string[]; minSize: number | null; maxSize: number | null;
+  folders: {self: string[]; subtree: string[]}; plainFolders: []; minSize: number | null; maxSize: number | null;
   sort: string; searchFolders: boolean; exact: boolean; pageSize: number; useLocalMode?: boolean | undefined;
 }
 declare var VoiceOfMLSearchViewKey: {
@@ -229,7 +229,7 @@ declare class BoundedResponseCache<T = unknown> extends Map<string, T> {
 
 interface ReaderSecurityApi {
   readonly LIMITS: Readonly<{
-    documentBytes: number; pdfDocumentBytes: number; archiveCompressedBytes: number;
+    documentBytes: number; pdfDocumentBytes: number;
     manifestBytes: number; pdfPages: number; chapters: number; chapterBytes: number;
     chapterTotalBytes: number;
   }>;
@@ -555,7 +555,6 @@ interface Window {
   __VOICE_READER_RESOLVE__?: any;
   __VOICE_READER_EARLY_BACK__?: () => boolean;
   VoiceOfMLReaderPdfDiagnostics?: any;
-  fetchFile?: any;
   RufflePlayer?: any;
   CCRDSpeech: any;
 }

@@ -126,23 +126,6 @@ export function createReaderBindings(readerContext) {
     );
 
     readerContext.setReaderPhase("startup");
-    /** @param {string} url */
-    window.fetchFile = async (url) => {
-      const requestUrl = String(url) === readerContext.sourceUrl ? readerContext.contentUrl : url;
-      const response = await readerContext.readerRequestManager.request(requestUrl, readerContext.READER_PROXY_TIMEOUT_MS);
-      if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
-      const fileName = new URL(url, location.href).pathname.split("/").pop() || "book";
-      return new File(
-        [
-          await VoiceOfMLReaderSecurity.readBytes(
-            response,
-            VoiceOfMLReaderSecurity.LIMITS.archiveCompressedBytes
-          )
-        ],
-        fileName,
-        { type: response.headers.get("content-type") || "application/octet-stream" }
-      );
-    };
   }
 
   function initializePanelAccessibility() {
@@ -168,7 +151,6 @@ export function createReaderBindings(readerContext) {
 
   function bindDownloadAction() {
     readerContext.downloadButton.addEventListener("click", readerContext.startReaderDownload);
-    readerContext.loadingStatus.textContent = "";
   }
 
   function initializeDocumentTitle() {

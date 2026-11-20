@@ -27,11 +27,6 @@
       url: "https://cdn.jsdelivr.net/npm/dompurify@3.4.18/dist/purify.min.js",
       file: "purify.min.js",
       sha256: "8053ee2a6a09f9d50f7fcd6fb7f07072f52c7f3fa9aa12147cab4feaf65ee970"
-    },
-    ruffle: {
-      url: "https://unpkg.com/@ruffle-rs/ruffle@0.7.1/ruffle.js",
-      file: "ruffle.js",
-      sha256: "26036a94567088dfb3de88a759e8ed10a4cea07b29500af36f345eef42420098"
     }
   };
   for (const vendor of Object.values(vendors)) {

@@ -6,7 +6,6 @@ function (root) {
     // PDF is distinct from DjVu and other document formats. Range reads remain
     // preferred for large files to avoid downloading the entire body at once.
     pdfDocumentBytes: 2 * 1024 * 1024 * 1024,
-    archiveCompressedBytes: 512 * 1024 * 1024,
     manifestBytes: 8 * 1024 * 1024,
     pdfPages: 100000,
     chapters: 10000,

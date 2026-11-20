@@ -1,6 +1,6 @@
 /** @param {import('../../../typings/reader-toc-strict').TocContext} readerContext */
 export function createReaderToc(readerContext) {
-  // setToc owns normalized entries. Cache parsed page numbers only for those
+  // setToc owns normalized entries. Index explicit page numbers only for those
   // entries; externally replaced arrays retain the original scan path.
   /** @type {import('../../../typings/reader-toc-strict').TocEntry[] | null} */
   let ownedTocEntries = null;
@@ -380,11 +380,7 @@ export function createReaderToc(readerContext) {
 
   /** @param {import('../../../typings/reader-toc-strict').TocEntry} entry */
   function tocPage(entry) {
-    // Explicit null means there is no destination. Only legacy producers
-    // without page metadata use the label for page lookup.
-    if (entry.page !== undefined) return entry.page;
-    const match = entry.label.match(/第\s*(\d+)\s*页/u);
-    return match ? Number(match[1]) : null;
+    return entry.page ?? null;
   }
 
   // The legacy scan selects the *last directory entry* whose page is at or

@@ -265,13 +265,6 @@ const readerHost = VoiceOfMLReaderHost.create({
   closeOverlay: (focus, scroll) => closeReaderOverlay(focus, scroll), reconcile: () => reconcileSearchDestination()
 });
 const readerNavigation = readerHost.navigation;
-// Read-only compatibility projections for existing browser diagnostics.
-Object.defineProperties(window, {
-  readerOverlay: { get: () => readerHost.overlay },
-  readerClosing: { get: () => readerHost.closing },
-  readerUiState: { get: () => readerHost.uiState },
-  readerReturnSnapshot: { get: () => readerHost.returnSnapshot }
-});
 /** @param {string} rawUrl */
 function syncReaderFolderFilter(rawUrl) {
   return readerHost.syncReaderFolderFilter(rawUrl);
@@ -1176,7 +1169,6 @@ const STATE = {
   results: [],
   filterRepos: [],
   filterExtensions: [],
-  filterFolders: [],
   filterFolderSubtrees: [],
   filterFolderSelfs: [],
   filterMinSize: null,
@@ -1400,7 +1392,6 @@ const ROUTER = {
       if (STATE.results.length === 0) STATE.total = 0;
       prepareRouteTransitionResults();
       STATE.browserPath = "";
-      STATE.filterFolders = [];
       STATE.filterFolderSubtrees = [];
       STATE.filterFolderSelfs = [];
       // Clear old rows and their selection targets before the deferred render.
@@ -1418,8 +1409,6 @@ const ROUTER = {
     STATE.browserPath = projected.browserPath;
     STATE.filterFolderSelfs = projected.filterFolderSelfs;
     STATE.filterFolderSubtrees = projected.filterFolderSubtrees;
-    STATE.filterFolders = STATE.filterFolderSelfs.length || STATE.filterFolderSubtrees.length
-      ? mergeFolderFilters(STATE.filterFolderSelfs, STATE.filterFolderSubtrees) : [];
     STATE.sort = projected.sort;
     DOM.sortSelect.value = STATE.sort;
     var ms = route.params.min_size;
@@ -2327,7 +2316,7 @@ async function fetchPositionPage(query, page, signal, anchorId) {
   const mixed = query.folders.self.length || query.folders.subtree.length;
   const params = { q: query.query, repos: query.mode === "repo" ? [query.repo] : query.repos,
     extensions: query.extensions,
-    folders: mixed ? mergeFolderFilters(query.folders.self, query.folders.subtree) : query.plainFolders,
+    folders: mergeFolderFilters(query.folders.self, query.folders.subtree),
     folderMatchMode: mixed ? "mixed" : "prefix",
     folderSelfs: query.folders.self, folderSubtrees: query.folders.subtree,
     minSize: query.minSize, maxSize: query.maxSize, sort: query.sort,
@@ -2559,8 +2548,8 @@ function buildSearchApiBody(params, repoScoped = !!STATE.repoFull) {
   if (params.q) body.q = params.q;
   if (!repoScoped && params.repos?.length) body.repos = params.repos;
   if (params.extensions?.length) body.extensions = params.extensions;
-  if (params.folders?.length) body.folders = params.folders;
   if (params.folderMatchMode === "mixed") {
+    if (params.folders?.length) body.folders = params.folders;
     body.folder_match_mode = "mixed";
     body.folder_selfs = params.folderSelfs;
     body.folder_subtrees = params.folderSubtrees;
@@ -2580,7 +2569,7 @@ function readInitialSearchView() {
     page: STATE.page, query: STATE.query, sort: STATE.sort || "relevance",
     searchFolders: STATE.searchFolders, exact: STATE.exact,
     repoFilters: STATE.filterRepos.length, extensionFilters: STATE.filterExtensions.length,
-    folderFilters: STATE.filterFolders.length, folderSelfFilters: STATE.filterFolderSelfs.length,
+    folderSelfFilters: STATE.filterFolderSelfs.length,
     folderSubtreeFilters: STATE.filterFolderSubtrees.length,
     minSize: STATE.filterMinSize, maxSize: STATE.filterMaxSize,
     mode: STATE.mode, repo: STATE.repo, repoFull: STATE.repoFull,
@@ -2951,12 +2940,11 @@ function clearResultsSkeleton() {
 /** @param {number} page @returns {PagesSearchParams} */
 function buildLocalSearchParams(page) {
   const mixed = STATE.filterFolderSelfs.length || STATE.filterFolderSubtrees.length;
-  const activeFolderFilters = mixed ? mergeFolderFilters(STATE.filterFolderSelfs, STATE.filterFolderSubtrees) : STATE.filterFolders;
   return {
     q: STATE.query,
     repos: STATE.mode === "repo" ? [STATE.repoFull] : (STATE.filterRepos.length > 0 ? STATE.filterRepos : null),
     extensions: STATE.filterExtensions.length > 0 ? STATE.filterExtensions : null,
-    folders: activeFolderFilters.length > 0 ? activeFolderFilters : null,
+    folders: mixed ? mergeFolderFilters(STATE.filterFolderSelfs, STATE.filterFolderSubtrees) : null,
     folderMatchMode: mixed ? "mixed" : null,
     folderSelfs: STATE.filterFolderSelfs,
     folderSubtrees: STATE.filterFolderSubtrees,
@@ -3568,7 +3556,6 @@ function getSidebarFilters() {
     commitSelection: (subtrees, selfs) => {
       STATE.filterFolderSubtrees = subtrees;
       STATE.filterFolderSelfs = selfs;
-      STATE.filterFolders = mergeFolderFilters(selfs, subtrees.filter(Boolean));
       updateFilterCancelButtons();
       scheduleFilterSearch();
     },
@@ -4091,7 +4078,6 @@ function setupKeyboard() {
 function clearAllFilters() {
   STATE.filterRepos = [];
   STATE.filterExtensions = [];
-  STATE.filterFolders = [];
   STATE.filterFolderSubtrees = [];
   STATE.filterFolderSelfs = [];
   saveStoredExtensionFilters();

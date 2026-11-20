@@ -83,7 +83,7 @@ class EbookFlowTests(unittest.TestCase):
                     self.page.locator('#zoom').fill(str(zoom))
                     self.page.locator('#zoom').dispatch_event('change')
                     result = self.page.locator('#line').evaluate('''line=>{
-                      const root=line.getRootNode(), box=line.closest('.reader-epub-chapter,.reader-section-body');
+                      const root=line.getRootNode(), box=line.closest('.reader-epub-chapter');
                       const bounds=box.getBoundingClientRect(), viewport=document.querySelector('#viewport');
                       const range=document.createRange();range.selectNodeContents(line);
                       const textInside=[...range.getClientRects()].every(r=>r.left>=bounds.left-1 && r.right<=bounds.right+1);

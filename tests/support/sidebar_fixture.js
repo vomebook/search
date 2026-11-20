@@ -18,7 +18,6 @@ function installSidebarTree(root, context) {
     commitSelection(subtrees, selfs) {
       context.STATE.filterFolderSubtrees = subtrees;
       context.STATE.filterFolderSelfs = selfs;
-      context.STATE.filterFolders = context.mergeFolderFilters(selfs, subtrees.filter(Boolean));
       context.updateFilterCancelButtons();
       if (context.syncStateToURL) context.syncStateToURL(true);
       context.scheduleFilterSearch();

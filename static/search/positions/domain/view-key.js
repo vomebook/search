@@ -5,10 +5,10 @@
    * @typedef {{mode: string, repoFull: string | null, query: string, filterMinSize: number | null,
    *   filterMaxSize: number | null, searchFolders: boolean, exact: boolean,
    *   useLocalMode?: boolean, pageSize: number, filterRepos: string[], filterExtensions: string[],
-   *   filterFolderSelfs: string[], filterFolderSubtrees: string[], filterFolders: string[]}} SearchViewState
+   *   filterFolderSelfs: string[], filterFolderSubtrees: string[]}} SearchViewState
    * @typedef {{key: string, scalars: (string | number | boolean | null | undefined)[], filters: string[][]}} SearchViewMemo
    * @typedef {{mode: string, repo: string, query: string, repos: string[], extensions: string[],
-   *   folders: {self: string[], subtree: string[]}, plainFolders: string[], minSize: number | null,
+   *   folders: {self: string[], subtree: string[]}, plainFolders: [], minSize: number | null,
    *   maxSize: number | null, sort: string, searchFolders: boolean, exact: boolean, pageSize: number,
    *   useLocalMode?: boolean | undefined}} SearchViewProjection
    * @typedef {{readonly state: SearchViewState, readonly surface: 'pages' | 'space', readonly getSort: () => string}} SearchViewSource
@@ -27,8 +27,7 @@
 
   /** @param {SearchViewState} state */
   function filtersOf(state) {
-    return [state.filterRepos, state.filterExtensions, state.filterFolderSelfs, state.filterFolderSubtrees,
-      state.filterFolderSelfs.length || state.filterFolderSubtrees.length ? [] : state.filterFolders];
+    return [state.filterRepos, state.filterExtensions, state.filterFolderSelfs, state.filterFolderSubtrees];
   }
 
   /** @param {string[]} values @param {'pages' | 'space'} surface */
@@ -36,8 +35,9 @@
     return (surface === "pages" ? values.slice() : [...values]).sort();
   }
 
-  /** @param {SearchViewState} state @param {'pages' | 'space'} surface @param {() => string} getSort @param {string[][]} filters */
-  function projectionOf(state, surface, getSort, filters) {
+  /** @param {SearchViewState} state @param {'pages' | 'space'} surface @param {() => string} getSort */
+  function projectionOf(state, surface, getSort) {
+    /** @type {Omit<SearchViewProjection, 'pageSize'>} */
     const common = {
       mode: state.mode,
       repo: state.repoFull || "",
@@ -45,7 +45,8 @@
       repos: sortedValues(state.filterRepos, surface),
       extensions: sortedValues(state.filterExtensions, surface),
       folders: {self: sortedValues(state.filterFolderSelfs, surface), subtree: sortedValues(state.filterFolderSubtrees, surface)},
-      plainFolders: /** @type {string[]} */ (filters[4]).slice().sort(),
+      // Keep the serialized key compatible with saved search positions.
+      plainFolders: [],
       minSize: state.filterMinSize,
       maxSize: state.filterMaxSize,
       sort: getSort(),
@@ -73,7 +74,7 @@
     const previous = getPrevious();
     if (previous && getCompare()(scalars, previous.scalars)
         && filters.every((values, index) => getCompare()(values, /** @type {SearchViewMemo} */ (getPrevious()).filters[index]))) return /** @type {SearchViewMemo} */ (getPrevious());
-    const key = getEncoder()(projectionOf(state, surface, getSort, filters));
+    const key = getEncoder()(projectionOf(state, surface, getSort));
     return {key, scalars, filters: filters.map(values => values.slice())};
   }
 

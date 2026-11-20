@@ -14,7 +14,7 @@ const resolve = (state, surface, getSort, previous, same, encode) =>
 function state(extra = {}) {
   return {mode:'global', repoFull:'', query:'', filterMinSize:null, filterMaxSize:null,
     sort:'relevance', searchFolders:true, exact:true, pageSize:100,
-    filterRepos:[], filterExtensions:[], filterFolderSelfs:[], filterFolderSubtrees:[], filterFolders:[],
+    filterRepos:[], filterExtensions:[], filterFolderSelfs:[], filterFolderSubtrees:[],
     ...extra};
 }
 function same(current, saved) {
@@ -26,7 +26,7 @@ const encode = value => JSON.stringify(value);
 
 test('both site projections use exact field order, defaults and filtering', () => {
   const s = state({repoFull:'VoiceOfML/X', query:'query', filterRepos:['z','a'],
-    filterExtensions:['txt','pdf'], filterFolderSubtrees:['z','a'], filterFolders:['legacy'], useLocalMode:false});
+    filterExtensions:['txt','pdf'], filterFolderSubtrees:['z','a'], useLocalMode:false});
   const pages = resolve(s, 'pages', () => 'name', null, same, encode);
   const space = resolve(s, 'space', () => '', null, same, encode);
   assert.deepEqual(Object.keys(JSON.parse(pages.key)), ['mode','repo','query','repos','extensions','folders','plainFolders',
@@ -59,13 +59,16 @@ test('cache hits retain identity and invalidations never reuse stale snapshots',
   s.filterRepos.push('c');assert.notEqual(resolve(s,'pages',()=> 'relevance',third,same,serialize),third);
 });
 
-test('both explicit-folder paths hide legacy values and preserve identity', () => {
-  for (const property of ['filterFolderSelfs','filterFolderSubtrees']) {
-    const s=state({filterFolders:['legacy']});s[property]=['new'];
-    const first=resolve(s,'space',()=> 'relevance',null,same,encode);
-    assert.deepEqual(JSON.parse(first.key).plainFolders,[]);
-    s.filterFolders[0]='updated';assert.equal(resolve(s,'space',()=> 'relevance',first,same,encode),first);
-    s[property]=[];assert.deepEqual(JSON.parse(resolve(s,'space',()=> 'relevance',first,same,encode).key).plainFolders,['updated']);
+test('both explicit-folder paths preserve identity and invalidate on in-place changes', () => {
+  for (const [property, field] of [['filterFolderSelfs','self'], ['filterFolderSubtrees','subtree']]) {
+    const s=state(), key=previous=>resolve(s,'space',()=> 'relevance',previous,same,encode);
+    const empty=key(null);
+    s[property]=['new'];const first=key(empty);
+    assert.deepEqual(JSON.parse(first.key).folders[field],['new']);
+    assert.equal(key(first),first);
+    s[property][0]='updated';const updated=key(first);
+    assert.deepEqual(JSON.parse(updated.key).folders[field],['updated']);
+    s[property]=[];assert.equal(key(updated).key,empty.key);
   }
 });
 

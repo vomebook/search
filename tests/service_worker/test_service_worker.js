@@ -99,7 +99,7 @@ function harness(options) {
     URL, Request: settings.Request,
     Response: function(body, options) { return response(body, options); },
     caches,
-    fetch(request) { operations.fetch.push(keyOf(request)); return fetchImpl(request); },
+    fetch(request, init) { operations.fetch.push(keyOf(request)); return fetchImpl(request, init); },
     console: {
       log: console.log,
       error: console.error,
@@ -863,6 +863,65 @@ for (const [site, workerSource, prefix] of [
     }
   });
   }
+  test(`${site} removed Reader assets bypass both caches and remain network-only after upgrade`, async () => {
+    const url = path => 'https://example.test' + prefix + path + '?reader-v1';
+    const removed = [url('foliate-reader/reader.html'), url('foliate-reader/vendor/module.111111111111.js'),
+      url('vendor/zip.715a4067bb71.js'), url('vendor/LICENSE_zipjs.1b7ebc8d7889.txt'),
+      url('vendor/ruffle.26036a945670.js')];
+    const historical = url('reader/older.222222222222.mjs');
+    const current = ['vendor/ruffle/release-dc9e7407549a/ruffle.js',
+      'vendor/ruffle/release-dc9e7407549a/172de42e6619eac8f371.wasm',
+      'vendor/djvu-rs-reader/release-a03526f445b4-a99c0e299e95/simd128/djvu_rs_bg.wasm'].map(url);
+    const entries = urls => new Map(urls.map(href => [href, response('cached:' + href)]));
+    const previousSource = workerSource.replace('"development"', '"reader-old"');
+    const previous = harness({source: previousSource});
+    await lifecycle(previous.listeners.install);
+    await lifecycle(previous.listeners.activate);
+    const retained = previous.stores.get(cacheName(previousSource));
+    for (const [href, value] of entries([...removed, historical, ...current])) retained.set(href, value);
+    previous.stores.set('unmanaged', entries(removed));
+
+    const configured = workerSource.replace('const CURRENT_HASHED_ASSETS = []',
+      'const CURRENT_HASHED_ASSETS = ' + JSON.stringify(current.map(href => new URL(href).pathname)));
+    let networkStatus = 404;
+    const upgraded = harness({source: configured, stores: previous.stores, cacheEntries: entries(removed),
+      fetch(request, init) {
+        if (removed.includes(keyOf(request))) assert.strictEqual(init?.cache, 'no-store');
+        if (!networkStatus) return Promise.reject(new Error('offline'));
+        return Promise.resolve(response('network', {ok: networkStatus === 200, status: networkStatus}));
+      },
+    });
+    const active = upgraded.stores.get(cacheName(configured));
+    await lifecycle(upgraded.listeners.install);
+    assert.ok(removed.every(href => retained.has(href)), 'install leaves the serving cache intact');
+    await lifecycle(upgraded.listeners.activate);
+    assert.ok(removed.every(href => !retained.has(href) && !active.has(href)), 'activation prunes removed paths');
+    assert.strictEqual(upgraded.stores.get('unmanaged').size, removed.length);
+
+    // Simulate a late old-worker write or a cache entry that could not be pruned.
+    for (const [href, value] of entries(removed)) {
+      active.set(href, value);
+      retained.set(href, value);
+      assert.strictEqual((await dispatchFetch(upgraded, href)).status, 404, href);
+    }
+    assert.strictEqual((await dispatchFetch(upgraded, historical)).body, 'cached:' + historical);
+    networkStatus = 0;
+    for (const href of removed) await assert.rejects(dispatchFetch(upgraded, href), /offline/, href);
+    assert.strictEqual((await dispatchFetch(upgraded, historical)).body, 'cached:' + historical);
+    const fetched = upgraded.operations.fetch.length;
+    for (const href of current) assert.strictEqual((await dispatchFetch(upgraded, href)).body, 'cached:' + href);
+    await Promise.all(upgraded.operations.lifetimes);
+    assert.strictEqual(upgraded.operations.fetch.length, fetched, 'current Ruffle and DjVu use retained bytes');
+    for (const href of current) assert.strictEqual(active.get(href).body, 'cached:' + href);
+
+    assert.ok(removed.every(href => !active.has(href)), 'runtime pruning retries current-cache cleanup');
+    networkStatus = 200;
+    for (const href of removed) assert.strictEqual((await dispatchFetch(upgraded, href)).body, 'network', href);
+    await Promise.all(upgraded.operations.lifetimes);
+    assert.ok(removed.every(href => !active.has(href) && !upgraded.operations.put.includes(href)), 'network bytes were never cached');
+    assert.strictEqual((await dispatchFetch(upgraded, historical)).body, 'network', 'other historical hashes still prefer the network');
+    assert.ok(!active.has(historical));
+  });
   test(`${site} previous Ruffle cache retains retired assets and promotes current assets for one release`, async () => {
     const files = ['ruffle.js', 'core.ruffle.0123456789abcdefabcd.js', '0123456789abcdefabcd.wasm'];
     const paths = release => files.map(file => prefix + 'vendor/ruffle/release-' + release + '/' + file);

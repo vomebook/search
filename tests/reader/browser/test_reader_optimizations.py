@@ -228,7 +228,7 @@ class ReaderOptimizationTests(unittest.TestCase):
             const shell=document.createElement('section');shell.className='reader-page';shell.dataset.page=page;
             shell.dataset.renderState='rendered';shell.style.cssText='height:900px;min-height:0';c.content.append(shell);
           }
-          c.setToc([{label:'First · 第 1 页',activate:()=>true},{label:'Third · 第 3 页',activate:()=>true}]);
+          c.setToc([{label:'First · 第 1 页',page:1,activate:()=>true},{label:'Third · 第 3 页',page:3,activate:()=>true}]);
           const shell=c.content.children[1];c.viewport.scrollTop=c.readerPageScrollTop(shell)+100;
           c.viewport.dispatchEvent(new Event('scroll'));
         }''')

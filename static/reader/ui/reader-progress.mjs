@@ -86,7 +86,7 @@ export function createReaderProgress(readerContext) {
     const panel = /** @type {HTMLElement} */ (document.querySelector("#history-panel")),
       tocPanel = /** @type {HTMLElement} */ (document.querySelector("#toc-panel")),
       tocList = tocPanel.querySelector(".panel-list"),
-      noToc = readerContext.loadingStatus.hidden && !readerContext.navigationState.tocEntries.length && !readerContext.mediaElement;
+      noToc = readerContext.readerContentReady && !readerContext.navigationState.tocEntries.length && !readerContext.mediaElement;
     if (readerContext.progressTools.classList.contains("reader-no-toc") !== noToc)
       readerContext.progressTools.classList.toggle("reader-no-toc", noToc);
     const title = /** @type {HTMLElement} */ (tocPanel.querySelector(".panel-view-header strong")),

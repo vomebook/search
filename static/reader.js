@@ -11,7 +11,8 @@ import "/search/static/reader/formats/reader-section-virtualizer.js";
 import "/search/static/reader/core/reader-runtime.js";
 import "/search/static/reader/formats/reader-format-adapters.js";
 import "/search/static/reader/core/reader-security.js";
-import { createPdfFetchPolicy, openPdfRangeTask, preparePdfInitialRange, isFirstPageCandidate } from "./reader/pdf/reader-pdf-network.mjs";
+import { createPdfFetchPolicy, openPdfRangeTask, preparePdfInitialRange } from "./reader/pdf/reader-pdf-network.mjs";
+import { isFirstPageCandidate } from "./reader/pdf/reader-pdf-range-hints.mjs";
 import { createV3Repository, validateResource, validateReadingManifest, validatePageMap, datasetPrimaryUrl } from "./reader/pdf/reader-v3.mjs";
 import { populateIndependentTextLayer, independentTextCaret } from "./reader/pdf/reader-pdf-text.js";
 /** @type {ReturnType<typeof createPdfFetchPolicy> | null} */
@@ -189,7 +190,6 @@ const readerContext = {
   get loadSwfDocument() { return loadSwfDocument; }, set loadSwfDocument(value) { loadSwfDocument = value; },
   get loadTextDocument() { return loadTextDocument; }, set loadTextDocument(value) { loadTextDocument = value; },
   get loadingIndicator() { return loadingIndicator; },
-  get loadingStatus() { return loadingStatus; },
   get localReaderData() { return localReaderData; }, set localReaderData(value) { localReaderData = value; },
   get markReaderContentReady() { return markReaderContentReady; }, set markReaderContentReady(value) { markReaderContentReady = value; },
   get markerFrame() { return markerFrame; }, set markerFrame(value) { markerFrame = value; },
@@ -291,6 +291,7 @@ const readerContext = {
   get readPreparedBytes() { return readPreparedBytes; }, set readPreparedBytes(value) { readPreparedBytes = value; },
   get readerAbortController() { return readerAbortController; },
   get readerAbortError() { return readerAbortError; }, set readerAbortError(value) { readerAbortError = value; },
+  get readerContentReady() { return readerContentReady; }, set readerContentReady(value) { readerContentReady = value; },
   get readerContentUrl() { return readerContentUrl; }, set readerContentUrl(value) { readerContentUrl = value; },
   get readerDownloadApiUrl() { return readerDownloadApiUrl; }, set readerDownloadApiUrl(value) { readerDownloadApiUrl = value; },
   get readerDownloadUrl() { return readerDownloadUrl; }, set readerDownloadUrl(value) { readerDownloadUrl = value; },
@@ -714,10 +715,11 @@ const readerLifecycle = readerRuntime.state.lifecycle;
 readerBindings.publishSourceAndSubscribeToStore();
 const content = /** @type {HTMLDivElement} */ (document.querySelector("#content"));
 readerBindings.initializePanelAccessibility();
+// First content can be ready before a stream ends or restoration completes.
+let readerContentReady = false;
 const loadingIndicator = document.createElement("div");
 readerBindings.mountInitialLoadingFeedback();
 const status = /** @type {HTMLSpanElement} */ (document.querySelector("#status"));
-const loadingStatus = /** @type {HTMLDivElement} */ (document.querySelector("#loading-status"));
 
 const downloadButton = /** @type {HTMLAnchorElement} */ (document.querySelector("#download"));
 const downloadFeedback = /** @type {HTMLElement} */ (document.querySelector("#download-feedback"));

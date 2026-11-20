@@ -100,15 +100,26 @@ class ReaderFormatPipelineTests(unittest.TestCase):
         self.page.add_init_script(r'''(()=>{
           const native=fetch;window.fetch=(input,init)=>String(input).includes('/api/reader-content?')
             ?Promise.resolve(new Response(new ReadableStream({start(c){
-              c.enqueue(new TextEncoder().encode('Readable text\n'));
+              window.__startText=()=>c.enqueue(new TextEncoder().encode('Readable text\n'));
               window.__finishText=()=>{c.enqueue(new TextEncoder().encode('Tail text'));c.close();};
             }}),{headers:{'Content-Type':'text/plain'}})):native(input,init);
         })();''')
         self.page.goto(self.origin+support.PREFIX+'/static/reader.html?'+urlencode(dict(
             url='https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/stream.txt',ext='txt')),wait_until='domcontentloaded')
+        spinner = self.page.locator('.reader-loading-indicator')
+        spinner.wait_for(state='visible')
+        self.assertEqual(spinner.get_attribute('role'),'status')
+        self.page.wait_for_function('()=>!!window.__startText')
+        heading = self.page.locator('#toc-panel .panel-view-header strong')
+        self.assertEqual(heading.text_content(),'目录')
+        self.assertEqual(self.page.locator('#history-panel > .reader-progress-tools:not(.reader-no-toc)').count(),1)
+        self.page.evaluate('window.__startText()')
         self.page.wait_for_function("()=>document.querySelector('.reader-text')?.textContent==='Readable text\\n'")
-        self.assertEqual(self.page.locator('.reader-loading-indicator').count(),0)
+        self.assertEqual(spinner.count(),0)
         self.assertNotEqual(self.page.locator('html').get_attribute('data-reader-phase'),'ready')
+        self.page.locator('#history').click()
+        self.assertEqual(heading.inner_text(),'阅读状态')
+        self.assertTrue(self.page.locator('#toc-panel > .reader-progress-tools.reader-no-toc').is_visible())
         self.page.evaluate('window.__finishText()')
         self.page.wait_for_function("()=>document.documentElement.dataset.readerPhase==='ready'")
         self.assertEqual(self.page.locator('.reader-text').text_content(),'Readable text\nTail text')

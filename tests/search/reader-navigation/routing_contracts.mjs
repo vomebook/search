@@ -14,7 +14,7 @@ function fixture(route = '', overrides = {}) {
   const events = [];
   const location = new URL('https://example.test' + (pages ? '/search/#/' : '/') + route);
   const state = {mode:'repo',repo:'Test',repoFull:'VoiceOfML/Test',browserPath:'old',query:'hello +中',sort:'name',
-    filterRepos:['VoiceOfML/A','VoiceOfML/B'],filterExtensions:['txt','epub'],filterFolderSelfs:['','a+b','a+b'],filterFolderSubtrees:['树/叶'],filterFolders:[],
+    filterRepos:['VoiceOfML/A','VoiceOfML/B'],filterExtensions:['txt','epub'],filterFolderSelfs:['','a+b','a+b'],filterFolderSubtrees:['树/叶'],
     filterMinSize:1024,filterMaxSize:0,searchFolders:false,exact:false,useLocalMode:false,recordHistory:false,useMirrorLinks:false,
     leftSidebarOpen:false,rightSidebarOpen:true,isMobile:false,page:4,results:[{}],total:9,...overrides};
   const classes = new Set(['expanded-wide']);
@@ -26,7 +26,7 @@ function fixture(route = '', overrides = {}) {
     routeInitialized:false,appliedRouteHash:location.hash,appliedSearchPath:location.pathname,appliedSearchRoute:location.pathname+location.search,routeNavigation:undefined,
     searchComposing:false,initialSearchDraft:false,routeRenderId:2,searchId:10,folderContentsCache:{clear(){}},sidebarFolderTree:undefined,API:{},
     fmtSizeUrl:value=>value===1024?'1KB':String(value),parseSizeStr:value=>value==='1KB'?1024:Number(value),bytesToDisplay:value=>({value:String(value),unit:'B'}),
-    mergeFolderFilters:(a,b)=>[...new Set([...a,...b])],showToast:text=>events.push(['toast',text]),
+    showToast:text=>events.push(['toast',text]),
     setSearchInputValue:value=>events.push(['input',value]),loadStoredExtensionFilters:()=>{events.push(['loadExt']);return ['pdf'];},
     saveStoredExtensionFilters:()=>events.push(['saveExt',plain(state)]),setExactSearchSectionVisible(){},
     updateSidebarVisibility(){},updateSidebarHeader(){},updateRandomTxtVisibility(){},
@@ -97,10 +97,10 @@ test('navigate preserves raw repo segments and undefined versus empty folder sem
 });
 
 test('parse and projection retain duplicate, empty, legacy and first/last parameter rules',()=>{
-  const query='?q=first&q=last+%2B&repo=A&repo=Org%2FB&repo=&ext=pdf&ext=&sort=size&sort=unknown&folder=legacy&folder_self=&folder_self=x&folder_subtree=&folder_subtree=y&exact=0&exact=&local=0&history=0&mirror=0&search_folders=false&sidebar=0&filters=1&wide=1';
+  const query='?q=first&q=last+%2B&repo=A&repo=Org%2FB&repo=&ext=pdf&ext=&sort=size&sort=unknown&folder=old&folder=legacy&folder_self=&folder_self=x&folder_subtree=&folder_subtree=y&exact=0&exact=&local=0&history=0&mirror=0&search_folders=false&sidebar=0&filters=1&wide=1';
   const f=fixture('Test'+query,{mode:'repo',repo:'Test'});
   const parsed=plain(f.c.router.parse());assert.equal(parsed.repo,'Test');
-  if(pages) assert.deepEqual(parsed.params.folder,['legacy']);
+  if(pages) assert.equal(parsed.params.folder,'legacy');
   f.c.router.apply();
   assert.equal(f.state.query,pages?'last +':'first');
   assert.deepEqual(plain(f.state.filterRepos),pages?['VoiceOfML/A','Org/B','VoiceOfML/']:['VoiceOfML/A','VoiceOfML/Org/B','VoiceOfML/']);

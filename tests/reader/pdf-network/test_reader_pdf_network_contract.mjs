@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
-import {createPdfFetchPolicy, createPdfRangeCache, openPdfRangeTask, preparePdfInitialRange}
+import {createPdfFetchPolicy, openPdfRangeTask, preparePdfInitialRange}
   from '../../../static/reader/pdf/reader-pdf-network.mjs';
+import {createPdfRangeCache} from '../../../static/reader/pdf/reader-pdf-range-cache.mjs';
 
 globalThis.location = {href:'https://reader.test/'};
 const originalFetch = globalThis.fetch;

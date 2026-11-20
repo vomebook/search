@@ -43,7 +43,7 @@ const todo = lines.filter(line => /^# todo(?:\s|$)/.test(line));
 const required = [
   ["tests/reader/pdf-network/test_reader_pdf_backpressure.mjs", "429 feedback, shared spacing, bounded retry, version consistency and cancellation passed"],
   ["tests/reader/pdf-network/test_reader_pdf_network_contract.mjs", "PDF network contracts: cache identity, safe revalidation and live cancellation passed"],
-  ["tests/reader/pdf-network/test_pdf_range_hints_contract.mjs", "PDF range hints: bounded scheduling, malformed inputs and compatibility exports passed"],
+  ["tests/reader/pdf-network/test_pdf_range_hints_contract.mjs", "PDF range hints: bounded scheduling and malformed inputs passed"],
   ["tests/reader/pdf-network/test_reader_pdf_sparse_ranges.mjs", "Sparse PDF detection, exact demand ranges, bounded concurrency and disposal passed"]
 ];
 if (result.status !== 0 || aggregateRows.length !== 1 || aggregateRows[0].some((value,index)=>value < aggregateMinimum[index]) ||

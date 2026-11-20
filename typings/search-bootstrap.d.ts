@@ -1,6 +1,6 @@
 interface SearchBootstrapView {
   page: number; pageSize: number; query: string; sort: string; searchFolders: boolean; exact: boolean;
-  repoFilters: number; extensionFilters: number; folderFilters: number;
+  repoFilters: number; extensionFilters: number;
   folderSelfFilters: number; folderSubtreeFilters: number;
   minSize: number | null; maxSize: number | null;
   mode: string; repo: string | null; repoFull: string | null;
