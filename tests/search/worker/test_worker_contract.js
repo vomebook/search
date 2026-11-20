@@ -211,6 +211,83 @@ test("warm exact Chinese postings preserve full-scan results, ties, filters and 
   vm.runInContext('indexedExactCandidates = indexedCandidates;',worker.context);
 });
 
+test("later exact CJK seeds preserve every term, full IDs, ties and cached anchor pages", async () => {
+  const input = Array.from({length:600}, (_, i) => ({...records[0], File:`book notes ${i}`, Folder:[]}));
+  for (const [i, file, folder, repo, extension] of [
+    [0,"book 手机记",["one"]], [1,"book 手机记",["two"]],
+    [2,"手机记",[]], [3,"book 手机",[]], [4,"book 机记",[]],
+    [5,"book file",[],"Repo/手机记"], [6,"book file",["手机记"]],
+    [7,"book 手机记",["other"],"Repo/A","pdf"],
+  ]) Object.assign(input[i], {File:file,Folder:folder,Repo:repo || "Repo/A",Extension:extension || "txt"});
+  const {worker} = await loaded(input);
+  const orders = [];
+  for (const sort of ["relevance","name","size"]) for (const searchFolders of [true,false]) {
+    for (const repos of [null,["Repo/A"],["Repo/手机记","Repo/A","Repo/手机记"]]) {
+      const params = {q:"book 手机记",exact:true,sort,searchFolders,repos,extensions:["txt"],
+        pageSize:20,anchorId:"Repo/A\0two/book 手机记.txt"};
+      const cold = await worker.request("local-search", params);
+      const metadataHits = repos?.length === 1 ? [] : [input[5]];
+      if (searchFolders) metadataHits.unshift(input[6]);
+      if (metadataHits.length === 2 && sort !== "relevance") metadataHits.reverse();
+      const fileHits = [input[0],input[1]];
+      const expected = sort === "relevance" ? [...fileHits,...metadataHits] : [...metadataHits,...fileHits];
+      assert.deepStrictEqual(cold.records,expected);
+      assert.strictEqual(cold.total, expected.length);
+      assert.strictEqual(cold.anchor_index, expected.indexOf(input[1]));
+      orders.push({params,cold});
+    }
+  }
+  assert(vm.runInContext('wordIndex === null && fulltextBuild === null',worker.context));
+  vm.runInContext('buildFulltext(); buildNameOrders(); buildSizeOrders(); searchOrderCache.clear();',worker.context);
+  for (const {params,cold} of orders) {
+    for (const q of [params.q,"手机记 book"]) {
+      assert.deepStrictEqual(await worker.request("local-search", {...params,q}),cold);
+    }
+    vm.runInContext(`globalThis.savedFields = getRecordSearchFields;
+      getRecordSearchFields = () => {throw Error('cached exact page rescanned')};`,worker.context);
+    const page = await worker.request("local-search", {...params,page:2,pageSize:1});
+    assert.deepStrictEqual(page.ids,cold.ids.slice(1,2));
+    assert.strictEqual(page.total,cold.total);
+    assert.strictEqual(page.anchor_index,cold.anchor_index);
+    vm.runInContext('getRecordSearchFields = savedFields;',worker.context);
+  }
+});
+
+test("exact AND lookahead bounds probes and keeps no-benefit dispatch paths unchanged", async () => {
+  const count = 10000;
+  const input = Array.from({length:count}, (_, i) => ({...records[0], Folder:[],
+    File:i === 0 ? "book 宽广 手机" : i < 4300 ? "book 宽广" : "book"}));
+  const {worker} = await loaded(input);
+  vm.runInContext(`buildFulltext();
+    const originalCandidates = indexedExactCandidates, originalFields = getRecordSearchFields;
+    let probes = [], scans = 0;
+    indexedExactCandidates = (term, ...args) => {probes.push(term); return originalCandidates(term, ...args)};
+    getRecordSearchFields = record => {scans++; return originalFields(record)};`,worker.context);
+  for (const [q, exact, total, terms, scans] of [
+    ["book 手机",true,1,["book","手机"],2],
+    ["book 手机.txt",false,1,["book","手机.txt"],2],
+    ["book 宽广 手机",true,1,["book","宽广","手机"],3],
+    ["book 宽广 宽广 手机",true,1,["book","宽广","手机"],4],
+    ["手机 book",true,1,["手机"],2],
+    ["宽广 手机",true,1,["宽广"],8600],
+    ["book 手机 资料",true,0,["book","手机"],3],
+    ["book 资料",true,0,["book","资料"],0],
+    ["book 宽广",true,4300,["book","宽广"],count * 2],
+    ["absent notes",true,0,["absent"],count],
+    ["absent " + "宽广 ".repeat(80) + "手机",true,0,["absent"],count],
+    ["absent " + "资料".repeat(124),true,0,["absent"],count],
+    ["资料".repeat(124) + " book",true,0,["资料".repeat(124)],0],
+    ["book 手机*",true,1,["book"],count * 2],
+    ["book 手机*" + "*".repeat(32),true,1,[],count],
+    ["手",false,1,[],count],
+  ]) {
+    vm.runInContext('searchOrderCache.clear(); probes = []; scans = 0;',worker.context);
+    assert.strictEqual((await worker.request("local-search",{q,exact,sort:"name"})).total,total,q);
+    assert.deepStrictEqual(JSON.parse(vm.runInContext('JSON.stringify(probes)',worker.context)),terms,q);
+    assert.strictEqual(vm.runInContext('scans',worker.context),scans,q);
+  }
+});
+
 test("fuzzy search keeps literal fallback and complete fuzzy postings with indexed scope", async () => {
   const input = Array.from({length:500}, (_, i) => ({...records[0],
     Repo:i % 91 === 0 ? "Repo/手机" : i % 2 ? "Repo/A" : "Repo/B",
@@ -290,14 +367,18 @@ test("warm exact preselection bounds work and falls back for uncovered extension
   assert.strictEqual((await asFolder.worker.request("local-search",{q:"手机",exact:true,searchFolders:false})).total,0);
   const extension = await loaded(input.map((record,i)=>({...record,File:`other ${i}`,Extension:i===0?"手机":"txt"})));
   vm.runInContext('buildFulltext()',extension.worker.context);
-  assert.strictEqual((await extension.worker.request("local-search",{q:"手机",exact:true})).total,1);
+  for (const q of ["手机","other 手机","手机 other"]) {
+    const result = await extension.worker.request("local-search",{q,exact:true,searchFolders:false});
+    assert.deepStrictEqual(result.ids,["Repo/A\u001fother 0/手机\u001f0"]);
+  }
   assert.strictEqual(vm.runInContext('indexedExactCandidates("手机",{},records.length)',extension.worker.context),null);
   // Unusual extension values retain the full-scan coercion/error path rather
   // than relying on an index built for ordinary string metadata.
   const unusual = makeWorker();
-  await unusual.request("replace-corpus", {data:{v:2,rp:["R"],fd:[[]],rc:[[0,"a","txt",0,1,0],[0,"手",["机"],0,1,0]]}});
+  await unusual.request("replace-corpus", {data:{v:2,rp:["R"],fd:[[]],rc:[[0,"book plain","txt",0,1,0],[0,"book",["手机"],0,1,0]]}});
   vm.runInContext('buildFulltext()',unusual.context);
   assert.strictEqual(vm.runInContext('indexedExactCandidates("手机",{},records.length)',unusual.context),null);
+  assert.deepStrictEqual((await unusual.request("local-search",{q:"book 手机",exact:true})).ids,["R\u001fbook/手机\u001f0"]);
 });
 
 test("inherited object names remain ordinary tokens and repository keys", async () => {

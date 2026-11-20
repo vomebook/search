@@ -49,6 +49,9 @@ const SEARCH_ORDER_CACHE_MAX = 8;
 // Bound temporary membership allocation for dense-order reuse.
 const SORT_REUSE_MAX_INDICES = 65536;
 const EXACT_INDEX_MAX_INDICES = 65536;
+const EXACT_INDEX_LOOKAHEAD_MAX_TERMS = 4;
+const EXACT_INDEX_LOOKAHEAD_MAX_TERM_UNITS = 16;
+const EXACT_INDEX_LOOKAHEAD_MAX_INDICES = 4096;
 /** @type {WeakMap<number[], object>} */
 let searchAnchorOwners = new WeakMap();
 /** @type {Map<object, Map<string, number>>} */
@@ -915,15 +918,15 @@ function exactSearchScope(input) {
   return indices.sort((a, b) => a - b);
 }
 
-/** @param {string} term @param {SearchParams} params @param {number} scopeSize */
-function indexedExactCandidates(term, params, scopeSize) {
+/** @param {string} term @param {SearchParams} params @param {number} scopeSize @param {number} [maxIndices] */
+function indexedExactCandidates(term, params, scopeSize, maxIndices = EXACT_INDEX_MAX_INDICES) {
   if (!wordIndex || !repoWildcardProofSafe || !extensionSearchProofSafe || !scopeSize) return null;
   const repos = /** @type {unknown[] | null | undefined} */ (params.repos);
   if (repos?.length && (!Array.isArray(repos) || repos.some(repo => typeof repo !== "string"))) return null;
   const selected = repos?.length ? new Set(repos) : null;
   const index = /** @type {PostingIndex} */ (params.searchFolders === false ? wordIndexFilesOnly : wordIndex);
   let best = null;
-  let bestSize = Math.min(EXACT_INDEX_MAX_INDICES, Math.floor(scopeSize / 2));
+  let bestSize = Math.min(maxIndices, Math.floor(scopeSize / 2));
   const runs = term.match(/[\u3400-\u4dbf\u4e00-\u9fff]{2,}/g) || [];
   for (const run of runs) for (let offset = 0; offset < run.length - 1; offset++) {
     const gram = run.slice(offset, offset + 2);
@@ -1092,6 +1095,19 @@ function searchLocal(params, preparedExact = null) {
       if (termIndex === 0) {
         const indexed = indexedExactCandidates(term, params, matched.length);
         if (indexed !== null) matched = indexed;
+        else if (wordIndex && matched.length && terms.length > 1
+            && terms.length <= EXACT_INDEX_LOOKAHEAD_MAX_TERMS && !/[*?]/.test(query)) {
+          // A first term without a seed may still reject quickly, so cap the
+          // extra probes and candidate work. Use the first proven superset
+          // (even empty) in source order, then check every term as before.
+          for (let i = 1; i < terms.length; i++) {
+            const later = /** @type {string} */ (terms[i]);
+            if (later.length > EXACT_INDEX_LOOKAHEAD_MAX_TERM_UNITS || terms.indexOf(later) !== i
+                || !/[\u3400-\u4dbf\u4e00-\u9fff]{2}/.test(later)) continue;
+            const seed = indexedExactCandidates(later, params, matched.length, EXACT_INDEX_LOOKAHEAD_MAX_INDICES);
+            if (seed !== null) { matched = seed; break; }
+          }
+        }
       }
       // The previous scan breaks here for an empty scope; avoid proving
       // universal terms against all repos repeatedly when nothing can match.
