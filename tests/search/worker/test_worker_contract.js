@@ -885,7 +885,9 @@ test("speculative sort preparation defers while demand indexing is active", asyn
   await worker.request("cancel-search",{requestId:"demand"},{id:"cancel"});
   tick(); await pending;
   while(tasks.size) tick();
-  assert(vm.runInContext("nameOrderReady && sizeOrderReady",worker.context));
+  assert(vm.runInContext("nameOrderReady && !sizeOrderReady",worker.context));
+  await worker.request("local-search", {sort:"size"});
+  assert(vm.runInContext("sizeOrderReady",worker.context));
 });
 test("background indexing yields, publishes complete indexes and preserves cold search results", async () => {
   const input = Array.from({length: 400}, (_, i) => Object.assign({}, records[i % records.length]));

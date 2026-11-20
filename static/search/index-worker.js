@@ -528,8 +528,9 @@ function scheduleSortOrders(expectedGeneration) {
     sortBuildTimer = null;
     if (generation === expectedGeneration) {
       if (searchJobs.size) { scheduleSortOrders(expectedGeneration); return; }
+      // Keep the useful name warmup, but never make incoming queries wait for
+      // an unrelated second full-corpus sort. Size browse builds on demand.
       buildNameOrders();
-      buildSizeOrders();
     }
   }, SORT_PRECOMPUTE_DELAY_MS);
 }
