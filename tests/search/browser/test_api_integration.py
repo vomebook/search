@@ -353,6 +353,84 @@ class ApiIntegrationTest(unittest.TestCase):
           };
         })()''')
 
+    def trace_startup_worker_messages(self):
+        self.page.add_init_script('''(() => {
+          window.__corpusMessages = [];
+          const post = Worker.prototype.postMessage;
+          Worker.prototype.postMessage = function(message, ...rest) {
+            if (message?.protocol === 1) window.__corpusMessages.push(message.type);
+            return post.call(this, message, ...rest);
+          };
+        })()''')
+
+    def test_local_startup_reuses_worker_without_loading_corpus_before_positions(self):
+        self.hold_startup_positions()
+        self.trace_startup_worker_messages()
+        self.load('#/?q=手机&local=1')
+        self.page.wait_for_function('typeof window.__releasePositionOpen === "function"')
+        self.page.wait_for_function('''() => {
+          const state = getCorpusClient().inspect();
+          return state.worker && !state.starting;
+        }''')
+        self.assertEqual(self.page.evaluate('window.__corpusMessages'), ['handshake'])
+        self.assertEqual(self.server_state.count('/search/data/search_data.json.gz'), 0)
+        self.assertFalse(self.page.evaluate('routeInitialized'))
+        self.assertEqual(self.page.locator('#results-list .result-item').count(), 0)
+        self.page.evaluate('window.__startupCorpusWorker = getCorpusClient().inspect().worker; window.__releasePositionOpen()')
+        self.page.locator('#results-list .result-item').first.wait_for()
+        self.assertEqual(self.page.evaluate('STATE._resultBackend'), 'local')
+        self.assertTrue(self.page.evaluate('window.__startupCorpusWorker === getCorpusClient().inspect().worker'))
+        messages = self.page.evaluate('window.__corpusMessages')
+        self.assertEqual(messages[:3], ['handshake', 'load-corpus', 'local-search'])
+        self.assertEqual(messages.count('handshake'), 1)
+        self.assertEqual(messages.count('load-corpus'), 1)
+        self.assertEqual(self.search_requests, [])
+
+    def test_local_startup_waits_to_start_worker_with_save_data(self):
+        self.hold_startup_positions()
+        self.trace_startup_worker_messages()
+        self.page.add_init_script("Object.defineProperty(navigator, 'connection', {value:{saveData:true}})")
+        self.load('#/?q=手机')
+        self.page.wait_for_function('typeof window.__releasePositionOpen === "function"')
+        self.assertEqual(self.page.evaluate('window.__corpusMessages'), [])
+        self.page.evaluate('window.__releasePositionOpen()')
+        self.page.locator('#results-list .result-item').first.wait_for()
+        self.assertEqual(self.page.evaluate('STATE._resultBackend'), 'local')
+
+    def test_local_startup_worker_failure_retains_normal_loading_path(self):
+        self.hold_startup_positions()
+        self.page.add_init_script('''(() => {
+          const NativeWorker = window.Worker;
+          window.__corpusWorkerAttempts = 0;
+          window.Worker = class extends NativeWorker {
+            constructor(url, options) {
+              if (String(url).endsWith('/index-worker.js') && ++window.__corpusWorkerAttempts === 1)
+                throw new Error('Transient Worker construction failure');
+              super(url, options);
+            }
+          };
+        })()''')
+        self.load('#/?q=手机')
+        self.page.wait_for_function('typeof window.__releasePositionOpen === "function" && window.__corpusWorkerAttempts === 1')
+        self.assertFalse(self.page.evaluate('!!getCorpusClient().inspect().worker'))
+        self.page.evaluate('window.__releasePositionOpen()')
+        self.page.locator('#results-list .result-item').first.wait_for()
+        self.assertEqual(self.page.evaluate('window.__corpusWorkerAttempts'), 2)
+        self.assertEqual(self.page.evaluate('STATE._resultBackend'), 'local')
+
+    def test_local_startup_worker_does_not_own_new_url(self):
+        self.hold_startup_positions()
+        self.trace_startup_worker_messages()
+        self.load('#/?q=old')
+        self.page.wait_for_function('typeof window.__releasePositionOpen === "function" && window.__corpusMessages.includes("handshake")')
+        self.page.evaluate('''() => {
+          location.hash = '#/?q=new-api&local=0';
+          addEventListener('hashchange', () => window.__releasePositionOpen(), {once:true});
+        }''')
+        self.page.locator('#results-list').get_by_text('new-api result').wait_for()
+        self.assertEqual([body.get('q') for body in self.search_requests], ['new-api'])
+        self.assertNotIn('local-search', self.page.evaluate('window.__corpusMessages'))
+
     def test_explicit_search_acquires_page_one_before_positions_without_rendering_early(self):
         self.hold_startup_positions()
         self.page.add_init_script("sessionStorage.setItem('voml_ext_filter:global', JSON.stringify({values:['pdf']}))")

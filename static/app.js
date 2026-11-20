@@ -2649,21 +2649,34 @@ function cancelStartupSearchPage() {
   entry?.controller.abort();
 }
 
-function startStartupSearchPage() {
+function startStartupSearchWork() {
   const connection = navigator.connection;
   if (location.pathname !== "/search/" || document.hidden || !navigator.onLine ||
       connection?.saveData || connection?.effectiveType === "2g" || connection?.effectiveType === "slow-2g" ||
-      history.state?.voiceReaderOverlay || !apiAvailable) return;
+      history.state?.voiceReaderOverlay) return;
   const route = ROUTER.parse();
-  if (route.mode !== "global" || route.params.local !== "0") return;
+  if (route.mode !== "global") return;
   const view = VoiceOfMLRoute.project(route.params, route.mode, false);
   if (!view.query.trim()) return;
+  if (view.useLocalMode) warmStartupSearchWorker();
+  else if (apiAvailable) startStartupSearchPage(route.params, view);
+}
+
+function warmStartupSearchWorker() {
+  if (!window.Worker) return;
+  // Reuse the client's normal handshake. Only the restored route may load the
+  // corpus or query it; a failed warmup leaves the normal retry path intact.
+  getCorpusClient().ensure().catch(() => {});
+}
+
+/** @param {VoiceOfMLRouteParams} params @param {ReturnType<typeof VoiceOfMLRoute.project>} view */
+function startStartupSearchPage(params, view) {
   const base = getSearchApiBase();
   const body = buildSearchApiBody({
     q: view.query, page: 1, pageSize: STATE.pageSize, repos: view.filterRepos,
     extensions: view.filterExtensions ?? loadStoredExtensionFilters(), folders: null,
-    minSize: route.params.min_size ? parseSizeStr(route.params.min_size) : null,
-    maxSize: route.params.max_size ? parseSizeStr(route.params.max_size) : null,
+    minSize: params.min_size ? parseSizeStr(params.min_size) : null,
+    maxSize: params.max_size ? parseSizeStr(params.max_size) : null,
     sort: view.sort, exact: view.exact, searchFolders: view.searchFolders,
   });
   const key = base + "|" + stableSearchStringify(body);
@@ -4192,7 +4205,7 @@ async function init() {
   // serializing their I/O. Route handling still waits for both to settle.
   const positionsReady = initSearchPositions();
   const restoredSession = restoreSearchSession();
-  startStartupSearchPage();
+  startStartupSearchWork();
   await positionsReady;
   setupSearchPositionControls();
   setupSearchPositionSaving();
