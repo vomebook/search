@@ -601,8 +601,8 @@ test("reader uses original files and lazy PDF canvas rendering", () => {
   assert.match(randomDiscovery, /await deps\.getConvertedReaderRecords\(deps\.readView\(\)\.repoFull \|\| ""\)\)\.length/);
   assert.match(randomDiscovery, /useConverted \? converted\[Math\.floor\(Math\.random\(\) \* converted\.length\)\] : await deps\.getRandomLocal\(true\)/);
   const randomReaderBlock = randomDiscovery.slice(randomDiscovery.indexOf("async function randomTxt"));
-  assert.match(randomReaderBlock, /if \(!originalCount && !deps\.assetsLoaded\(\)\) await deps\.loadReaderAssets\(\);\s*else deps\.loadReaderAssets\(\);/);
-  assert.doesNotMatch(randomReaderBlock, /try \{\s*await deps\.loadReaderAssets\(\)/);
+  assert.match(randomDiscovery, /async function waitForReaderAssets\(originalCount\)[\s\S]*?deps\.loadReaderAssets\(\)/);
+  assert.match(randomReaderBlock, /await waitForReaderAssets\(originalCount\)[\s\S]*?await deps\.getConvertedReaderRecords\(/);
   assert.match(app, /const scheduleReaderAssetsLoad = function\(\) \{[\s\S]*?pointerdown/);
   assert.match(app, /setTimeout\(load, 6000\)/);
   assert.match(readerHtml, /id="page-number"/);

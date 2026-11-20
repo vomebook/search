@@ -1,6 +1,7 @@
 import './test_sidebar_filters.js';
 import './catalog_contracts.mjs';
 import './result_interactions_contracts.mjs';
+import './test_shift_selection_range.mjs';
 import './random_discovery_contracts.mjs';
 import './history_quotation_contracts.mjs';
 import './shell_contracts.mjs';

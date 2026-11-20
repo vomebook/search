@@ -26,7 +26,11 @@
         if (e.shiftKey && selection.lastIndex >= 0) {
           const lo = Math.min(selection.lastIndex, idx);
           const hi = Math.max(selection.lastIndex, idx);
-          for (let si = lo; si <= hi; si++) if (deps.hasRecord(si)) selection.indices[si] = true;
+          for (let si = lo; si <= hi; si++) {
+            if (!deps.hasRecord(si)) continue;
+            if (cb.checked) selection.indices[si] = true;
+            else delete selection.indices[si];
+          }
         } else if (cb.checked) {
           selection.indices[idx] = true;
         } else {

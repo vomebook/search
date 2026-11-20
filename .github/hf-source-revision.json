@@ -1,5 +1,5 @@
 {
   "repository": "VoiceOfML/Search",
-  "revision": "4ebe4d779a475a87b2010efb1ebd8b39c38528c4",
+  "revision": "42b81d61911e60556f1df40d51c130f666eb9211",
   "update_policy": "This pin admits the reviewed committed HF search lifecycle, download, Reader history and bucket migration integration. A dirty HF candidate is not approved. For every update, review the complete committed diff and dependencies, explicitly update this full SHA and rerun CI. Keep the independent quality baseline hashes unchanged."
 }

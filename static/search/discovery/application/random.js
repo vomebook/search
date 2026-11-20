@@ -110,6 +110,17 @@
       return deps.navigateToReader(url, returnUrl);
     }
 
+    /** @param {number} originalCount */
+    async function waitForReaderAssets(originalCount) {
+      let timer;
+      try {
+        const loading = deps.loadReaderAssets();
+        if (!originalCount) await loading;
+        else await Promise.race([loading, new Promise(resolve => { timer = setTimeout(() => resolve(undefined), 1000); })]);
+      } catch (e) { /* Native books remain available. */ }
+      finally { if (timer !== undefined) clearTimeout(timer); }
+    }
+
     async function randomTxt() {
       const requestId = ++deps.requests.id;
       const returnUrl = location.href;
@@ -117,8 +128,8 @@
       if (deps.readView().dataLoaded) {
         try {
           const originalCount = deps.nativeCount();
-          if (!originalCount && !deps.assetsLoaded()) await deps.loadReaderAssets();
-          else deps.loadReaderAssets();
+          await waitForReaderAssets(originalCount);
+          if (!current(requestId, returnUrl)) return;
           const converted = await deps.getConvertedReaderRecords(deps.readView().repoFull || "");
           if (!current(requestId, returnUrl)) return;
           const useConverted = converted.length > 0 && Math.random() * (originalCount + converted.length) >= originalCount;
@@ -141,8 +152,8 @@
         async function fallback() {
           if (!current(requestId, returnUrl)) return;
           const originalCount = deps.nativeCount();
-          if (!originalCount && !deps.assetsLoaded()) await deps.loadReaderAssets();
-          else deps.loadReaderAssets();
+          await waitForReaderAssets(originalCount);
+          if (!current(requestId, returnUrl)) return;
           const converted = await deps.getConvertedReaderRecords(deps.readView().repoFull || "");
           if (!current(requestId, returnUrl)) return;
           const useConverted = converted.length > 0 && Math.random() * (originalCount + converted.length) >= originalCount;

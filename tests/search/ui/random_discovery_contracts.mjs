@@ -152,6 +152,80 @@ test('invalid Reader records preserve site-specific errors and Pages fallback', 
 });
 
 if (!space) {
+  for (const remoteFailure of [false, true]) {
+    test(`Pages ${remoteFailure ? 'remote failure fallback' : 'local selection'} waits for assets and survives asset failure`, async () => {
+      for (const failAssets of [false, true]) {
+        const f = fixture(), assets = deferred();
+        f.c.STATE.dataLoaded = !remoteFailure;
+        f.c.readerAssetController.state.assets = null;
+        if (remoteFailure) f.c.fetch = async () => { throw new SyntaxError('broken API'); };
+        f.c.loadReaderAssets = () => assets.promise;
+        const converted = {...record, File: 'converted', Link: 'converted'};
+        let poolCalls = 0;
+        f.c.getConvertedReaderRecords = async repo => {
+          poolCalls++;
+          assert.equal(repo, 'VoiceOfML/A & B');
+          return f.c.readerAssetController.state.assets ? [converted] : [];
+        };
+        f.c.getReaderLink = rec => rec.Link;
+        f.c.Math.random = () => 0.99;
+        const selection = f.c.randomTxt();
+        await turn();
+        assert.equal(poolCalls, 0);
+        assert.equal(f.opened.length, 0);
+        if (failAssets) assets.reject(new Error('sidecar unavailable'));
+        else { f.c.readerAssetController.state.assets = {}; assets.resolve(); }
+        await selection; await turn();
+        assert.equal(poolCalls, 1);
+        assert.equal(f.opened[0][0], failAssets ? record.Link : 'converted');
+        assert.equal(f.localCalls.length, failAssets ? 1 : 0);
+        assert.equal(f.timers.size, 0);
+      }
+    });
+
+    test(`Pages ${remoteFailure ? 'remote fallback' : 'local selection'} bounds slow assets when native books exist`, async () => {
+      for (const stale of [false, true]) {
+        const f = fixture(), assets = deferred();
+        f.c.STATE.dataLoaded = !remoteFailure;
+        if (remoteFailure) f.c.fetch = async () => { throw new SyntaxError('broken API'); };
+        f.c.loadReaderAssets = () => assets.promise;
+        f.c.getReaderLink = rec => rec.Link;
+        const selection = f.c.randomTxt();
+        await turn();
+        const timer = [...f.timers][0];
+        assert.equal(timer.delay, 1000);
+        assert.equal(f.opened.length, 0);
+        if (stale) f.c.location.href = 'https://site.test/other';
+        timer.fn();
+        await selection; await turn();
+        assert.equal(f.timers.size, 0);
+        assert.equal(f.opened.length, stale ? 0 : 1);
+        assert.equal(f.localCalls.length, stale ? 0 : 1);
+        if (!stale) assert.equal(f.opened[0][0], record.Link);
+        assets.reject(new Error('late sidecar failure'));
+        await turn();
+      }
+    });
+
+    test(`Pages ${remoteFailure ? 'remote fallback' : 'local selection'} waits without native books`, async () => {
+      const f = fixture(), assets = deferred();
+      f.c.STATE.dataLoaded = !remoteFailure;
+      f.c.readerMetadata = {count: 0, byRepo: {}};
+      if (remoteFailure) f.c.fetch = async () => { throw new SyntaxError('broken API'); };
+      f.c.loadReaderAssets = () => assets.promise;
+      f.c.getConvertedReaderRecords = async () => [{...record, Link: 'converted'}];
+      f.c.getReaderLink = rec => rec.Link;
+      const selection = f.c.randomTxt();
+      await turn();
+      assert.equal(f.timers.size, 0);
+      assert.equal(f.opened.length, 0);
+      assets.resolve();
+      await selection; await turn();
+      assert.equal(f.opened[0][0], 'converted');
+      assert.equal(f.localCalls.length, 0);
+    });
+  }
+
   test('Pages samples converted/native weights and preserves Worker scope and local load flags', async () => {
     for (const random of [0, 0.9]) {
       const f = fixture(); f.c.STATE.dataLoaded = true;
