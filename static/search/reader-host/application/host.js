@@ -57,8 +57,8 @@
       overlay = null;
       const returnFocus = navigation.unmount();
       if (overlay) return true;
+      const saved = position.scroll;
       if (restoreScroll) {
-        const saved = position.scroll;
         if (saved && snapshot && deps.snapshotChanged(snapshot, saved.viewKey)) {
           position.setScroll(null);
           deps.restoreSnapshot(saved.viewKey);
@@ -67,7 +67,10 @@
         deps.restoreScroll();
         snapshot = null;
       }
-      if (restoreFocus && returnFocus && returnFocus.isConnected) returnFocus.focus();
+      if (restoreFocus) {
+        if (saved?.resultFocus) position.restoreFocus(saved);
+        else if (returnFocus?.isConnected) returnFocus.focus({ preventScroll: true });
+      }
       return true;
     }
     /** @param {URL} url @param {boolean} [addHistory] */

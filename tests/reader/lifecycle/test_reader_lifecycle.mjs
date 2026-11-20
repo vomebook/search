@@ -66,6 +66,16 @@ test('error classification preserves dynamic getter access and uncoerced matchin
   const broken={get code(){throw Error('getter');}};
   assert.throws(()=>context.classifyReaderError(broken),/getter/);
   assert.equal(context.classifyReaderError({name:'HTTP 503',message:'corrupt'}),'READER_NETWORK');
+  assert.equal(context.classifyReaderError({message:'DJVU_RANGE_HTTP_404'}),'READER_NETWORK');
+  const interrupted={name:'TimeoutError',code:'READER_BODY_INTERRUPTED'};
+  for (const mode of ['text','markdown','html']) {
+    context.capability={mode};
+    assert.equal(context.classifyReaderError(interrupted),'READER_DOCUMENT_INTERRUPTED');
+  }
+  for (const capability of [null,{mode:'pdf'}]) {
+    context.capability=capability;
+    assert.equal(context.classifyReaderError(interrupted),'READER_NETWORK');
+  }
 });
 
 test('navigation warnings require a current generation and ignore aborts', () => {
@@ -204,10 +214,22 @@ test('retry click waits for progress and reloads only while reader remains live'
     content:{dataset:{},querySelector:()=>errorNode},status:{},loadingIndicator:{remove(){}},
     progressSaveChain:new Promise(resolve=>{releaseProgress=resolve;})});
   try {
-    context.fail('message','READER_MEDIA');
+    context.fail('message','READER_DOCUMENT_INTERRUPTED');
+    assert.equal(context.content.dataset.errorCode,'READER_DOCUMENT_INTERRUPTED');
+    assert.equal(errorNode.textContent,'正文下载中断，原阅读进度已保留。请重试加载完整文件。 [prepare]');
     const retry=errorNode.retry.callback();await new Promise(resolve=>setImmediate(resolve));assert.equal(reloads,0);
     releaseProgress();await retry;assert.equal(reloads,1);
+    context.progressSaveChain=Promise.reject(new Error('progress save failed'));
+    await errorNode.retry.callback();assert.equal(reloads,2,'a rejected save must not block manual retry');
     context.readerLifecycle.disposed=true;
-    await errorNode.retry.callback();assert.equal(reloads,1);
+    await errorNode.retry.callback();assert.equal(reloads,2);
+
+    context.readerLifecycle.disposed=false;
+    context.progressSaveChain=new Promise(()=>{});
+    context.fail('engine','READER_ENGINE_NETWORK');
+    await errorNode.retry.callback();assert.equal(reloads,3,'engine retry does not wait for progress');
+    delete errorNode.retry;
+    context.fail('parse error');
+    assert.equal(errorNode.retry,undefined);
   } finally {globalThis.document=oldDocument;globalThis.window=oldWindow;globalThis.location=oldLocation;}
 });

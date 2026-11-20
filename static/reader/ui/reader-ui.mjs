@@ -251,6 +251,12 @@ export function createReaderUi(readerContext) {
     if (readerContext.progressTools) readerContext.progressTools.hidden = !["toc", "media"].includes(name);
     for (const button of /** @type {NodeListOf<HTMLButtonElement>} */ (document.querySelectorAll(".reader-panel-tabs button"))) {
       const selected = button.dataset.panel === name;
+      // With no TOC this view still contains reading progress. Give the
+      // visible tablist a real selected tab rather than a hidden tab stop.
+      if (selected && name === "toc" && button.hidden) {
+        button.textContent = "阅读";
+        button.hidden = false;
+      }
       button.setAttribute("aria-selected", String(selected));
       button.tabIndex = selected ? 0 : -1;
     }

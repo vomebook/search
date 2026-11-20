@@ -36,6 +36,7 @@ function fixture() {
     navigator: {clipboard: {writeText(value) { copied.push(value); return Promise.resolve(); }}, onLine: true},
     showToast: value => toasts.push(value), getCopyableLink: link => 'copy:' + link,
     getRecordLink: rec => 'link:' + rec.File, getReaderLink: rec => 'reader:' + rec.File + ':' + rec.asset,
+    getResultStableId: rec => `${rec.Repo || ''}\0${rec.File}.${rec.Extension}`,
     applyReaderAsset: rec => ({...rec, asset: c.asset}), buildRecordRelativePath: rec => rec.File,
     isReadableRecord: () => true, isDefaultReadableRecord: () => true,
     VoiceOfMLReader: {capability: () => ({mode: 'text'})}, asset: 'old',
@@ -87,6 +88,7 @@ test('row clone identity, live hooks, escaping, cache LRU and placeholders retai
   const first = rows.createRow(rec, 1), second = rows.createRow(rec, 1);
   assert.notEqual(first, second); assert.equal(c.resultRowRecords.get(second), rec);
   assert.equal(second.dataset.index, '1'); assert.equal(second.dataset.contentVersion, '7');
+  assert.equal(second.dataset.readerReturnKey, 'VoiceOfML/R&\0a<&".txt');
   assert.equal(second.role, 'listitem'); assert.equal(second.tabIndex, -1);
   assert.match(second.innerHTML, /a&lt;&amp;&quot;/); assert.match(second.innerHTML, /data-folder="x&quot;\/y&amp;"/);
   assert.match(second.innerHTML, /data-link="copy:link:a&lt;&amp;&quot;"/);
@@ -123,9 +125,11 @@ test('result actions retain current Reader asset, clipboard failures and shared 
   const f = fixture(), {c, DOM, click} = f;
   const row = node(), record = {File: 'fresh'}; c.resultRowRecords.set(row, record);
   const button = node({action: 'read', readerUrl: 'stale'}, {'.result-item': row});
+  button.focus = options => { assert.equal(options.preventScroll, true); button.focused = true; };
   button.closest = selector => selector === '[data-action]' ? button : selector === '.result-item' ? row : null;
   c.asset = 'new'; await click(DOM.resultsList, button);
   assert.equal(button.dataset.readerUrl, 'reader:fresh:new'); assert.equal(f.navigated.at(-1), 'reader:fresh:new');
+  assert.equal(button.focused, true);
   button.dataset = {action: 'download', filename: 'name', link: 'url'}; await click(DOM.resultsList, button);
   assert.equal(f.downloads[0][2].button, button);
   button.dataset = {action: 'copy', link: 'copy-me'}; await click(DOM.resultsList, button);

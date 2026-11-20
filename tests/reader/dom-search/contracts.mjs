@@ -217,8 +217,11 @@ async function delayedInitialSearch(mode) {
     ensure(controller.state.page.offset === 100 && state.results.length === 35, 'direct page jump reaches final 35 matches');
     const restart = controller.run();
     await waitForPartial();
+    await controller.activate(0, false);
+    ensure(f.root.querySelector('mark'), 'partial activation paints a highlight');
     cancel.click();
-    ensure(state.results.length === 0 && status.textContent === '搜索已取消' && !retry.hidden, 'cancel clears partial page');
+    ensure(state.results.length === 0 && status.textContent === '搜索已取消' && !retry.hidden && !f.root.querySelector('mark'),
+      'cancel clears partial page and highlights immediately');
     const obsolete = release;
     release = null;
     retry.click();
@@ -226,9 +229,11 @@ async function delayedInitialSearch(mode) {
     obsolete();
     await restart;
     ensure(!cancel.hidden && pageNext.disabled && state.results.length === 50, 'obsolete run cannot unlock retry');
+    await controller.activate(0, false);
     controller.close();
     await settle();
-    ensure(view.hidden && state.results.length === 0 && !controller.state.complete, 'explicit close cancels partial search');
+    ensure(view.hidden && state.results.length === 0 && !controller.state.complete && !f.root.querySelector('mark'),
+      'explicit close cancels partial search and clears highlights');
     button.click();
     await waitForPartial();
     await settle();
@@ -257,6 +262,51 @@ async function delayedInitialSearch(mode) {
     f.cancel();
     release?.();
     f.finish();
+    panel.remove();
+  }
+}
+
+export async function chapterProgressPreservesSelection() {
+  const panel = document.createElement('aside');
+  panel.id = 'history-panel';
+  panel.innerHTML = '<button id="full-search-toggle"></button><div class="reader-panel-tabs"></div>';
+  document.body.append(panel);
+  let search = 0, nav = 0, activate, panelState, closes = 0;
+  const state = {query: '', results: [], index: -1};
+  const controller = createReaderSearchController({document, signal: new AbortController().signal,
+    runtime: {state: {search: state}, currentGeneration: () => search,
+      events: {on: (_, callback) => { panelState = callback; return () => {}; }}},
+    nextGeneration: () => ++search, isCurrent: generation => generation === search,
+    updateSearch: patch => Object.assign(state, patch),
+    backend: {mode: () => 'epub-chapters', clearMarks: () => {}, chapterClient: () => null, pdfClient: () => null,
+      chapterResult: hit => ({...hit}), activate: () => activate.promise},
+    navigation: {begin: () => ++nav, current: generation => generation === nav, reportError: error => { throw error; }},
+    panel: {serial: () => 0, close: () => { closes++; panelState({panel: {open: false, selected: 'full-search'}}); }}});
+  const publish = (starts, offset = 0) => {
+    controller.applyChapterPage({total: starts.length + offset, offset, pageSize: 50,
+      results: starts.map(start => ({chapterIndex: 1, start, length: 6, location: 'Chapter 1',
+        snippet: fullSearchSnippet('needle', 0, 6)}))});
+    controller.render();
+  };
+  try {
+    panelState({panel: {open: true, selected: 'full-search'}});
+    controller.elements.view.hidden = false;
+    publish([0]);
+    const row = controller.elements.results.firstElementChild, result = state.results[0];
+    row.focus();
+    activate = Promise.withResolvers();
+    const pending = controller.activate(0);
+    publish([0, 12]);
+    publish([0, 12, 24]);
+    ensure(row === controller.elements.results.firstElementChild && document.activeElement === row &&
+      state.results[0] === result && state.index === 0 && row.getAttribute('aria-current') === 'true', 'EPUB progress preserves focused result');
+    activate.resolve(true);
+    await pending;
+    ensure(closes === 1 && state.index === 0, 'EPUB in-flight activation survives result progress');
+    publish([36], 50);
+    ensure(state.index === -1 && state.results[0] !== result, 'new results page resets selection');
+  } finally {
+    controller.dispose();
     panel.remove();
   }
 }

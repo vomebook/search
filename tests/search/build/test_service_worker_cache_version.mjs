@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
@@ -19,6 +20,8 @@ const worker = `const CACHE_PREFIX = '${prefix}';
 const CACHE_VERSION = 'development';
 const CACHE_NAME = CACHE_PREFIX + CACHE_VERSION;
 const CURRENT_HASHED_ASSETS = [];
+const READER_SHELL_INTEGRITY = "development";
+const READER_SHELL_ASSETS = readerPrecacheResources.shellAssets("${base}static/");
 const PRECACHE_URLS = [
   "${base}static/${bundledHost}",
   '${base}static/${readerContract}',
@@ -65,6 +68,7 @@ function build(overrides = {}, { extras = true, reverse = false, minify = false,
   try {
     put("static/reader-resources.js", `module.exports = {
       vendors: {}, buildFiles: () => ['dep.js', 'app.js', 'graph-only.js', '${bundledHost}', '${readerContract}'],
+      shellAssets: base => [base + 'reader.html', base + '${readerContract}'],
       djvuDecoderAssets: () => [], ruffleAssets: () => []
     };`);
     let files = Object.entries({
@@ -97,6 +101,11 @@ function build(overrides = {}, { extras = true, reverse = false, minify = false,
       assert.ok(readFileSync(join(output, "sw.js"), "utf8").includes(version), "HF minification must preserve the version");
     }
     assert.doesNotMatch(stamped, /CURRENT_HASHED_ASSETS\s*=\s*\[\]/);
+    const shellDigest = createHash("sha256").update(readFileSync(join(output, reader))).digest("base64");
+    assert.ok(stamped.includes(`READER_SHELL_INTEGRITY="sha256-${shellDigest}"`));
+    const shell = JSON.parse(stamped.match(/\bREADER_SHELL_ASSETS\s*=\s*(\[[^\]]*\])/)[1]);
+    assert.deepEqual(shell, [base + "static/reader.html", base + "static/" + readerContract.replace(".js", "." +
+      createHash("sha256").update("self.reader = 1;").digest("hex").slice(0, 12) + ".js")]);
     const precache = stamped.match(/\bPRECACHE_URLS\s*=\s*\[([^\]]*)\]/)?.[1];
     assert.ok(precache);
     assert.doesNotMatch(precache, /record-path/);

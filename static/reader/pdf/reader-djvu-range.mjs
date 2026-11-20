@@ -56,8 +56,9 @@ export async function openDjvuRange({url, signal, fetchResponse = fetch,
           void response.body?.cancel().catch(() => {});
           throw Object.assign(new Error('DJVU_RANGE_UNSUPPORTED'), {code:'DJVU_RANGE_UNSUPPORTED'});
         }
-        if ([408,429,500,502,503,504].includes(response.status))
-          throw Object.assign(new Error(`DJVU_RANGE_HTTP_${response.status}`), {retryable:true});
+        if (!response.ok) throw Object.assign(new Error(`DJVU_RANGE_HTTP_${response.status}`), {
+          status:response.status, retryable:[408,429,500,502,503,504].includes(response.status)
+        });
         if (!first && response.status === 200) throw new Error('DJVU_SOURCE_CHANGED');
         const match = /^bytes (\d+)-(\d+)\/(\d+)$/.exec(response.headers.get('Content-Range') || '');
         if (response.status !== 206 || !match) throw invalid();

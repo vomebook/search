@@ -123,6 +123,44 @@ class TocNavigationTests(unittest.TestCase):
             if index == 3:
                 self.assertTrue(following.is_disabled(), 'an invalid trailing destination is not a chapter')
 
+    def test_body_click_does_not_discard_pending_history(self):
+        self.page.route('**/api/reader-content**', lambda route: route.fulfill(
+            content_type='text/plain', body='可点击正文\n' * 2000))
+        self.page.route('**/static/reader/core/reader-store.js*', lambda route: route.fulfill(
+            content_type='text/javascript', body='''window.VoiceOfMLReaderStore={
+              get:()=>new Promise(resolve=>{window.__releaseHistory=()=>resolve({scrollTop:1200});}),
+              put:async(entry)=>{window.__writtenScroll=entry.scrollTop;},list:async()=>[]};'''))
+        self.page.goto(self.origin+support.PREFIX+'/static/reader.html?'+urlencode(dict(
+            url='https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/click-history.txt', ext='txt')))
+        self.page.wait_for_function('()=>!!window.__releaseHistory')
+        self.page.locator('.reader-text-block').first.click(position={'x': 30, 'y': 20})
+        self.assertIsNone(self.page.evaluate('window.__writtenScroll'))
+        self.page.evaluate('window.__releaseHistory()')
+        self.page.wait_for_function("()=>document.documentElement.dataset.readerPhase==='ready' && window.__writtenScroll!==undefined")
+        self.assertEqual(self.page.evaluate('window.__writtenScroll'), 1200)
+        self.assertEqual(self.page.locator('#viewport').evaluate('node=>node.scrollTop'), 1200)
+
+    def test_page_input_blur_refreshes_untouched_value_but_commits_an_edit(self):
+        support.PdfFollowupTests.open(self)
+        field = self.page.locator('#page-number')
+        self.page.locator('#page-next').click()
+        self.page.wait_for_function("()=>document.querySelector('#page-number').value==='2'")
+        field.focus()
+        self.page.wait_for_timeout(550)  # Let the explicit navigation marker lock expire.
+        self.page.locator('#viewport').evaluate("""node=>{
+          node.scrollTop += node.querySelector('.reader-page[data-page="4"]').getBoundingClientRect().top
+            - node.getBoundingClientRect().top;
+        }""")
+        self.page.wait_for_function("()=>document.querySelector('.reader-progress-percent').textContent !== '0.0%'")
+        self.page.evaluate('()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))')
+        self.assertEqual(field.input_value(), '2')
+        field.blur()
+        self.assertEqual(field.input_value(), '4')
+        field.fill('5')
+        field.press('Enter')
+        self.page.wait_for_function("()=>document.activeElement?.id !== 'page-number' && document.querySelector('#page-number').value==='5'")
+        self.page.locator('.reader-page[data-page="5"] canvas.ready').wait_for()
+
     def test_large_pdf_toc_page_lookup_preserves_unsorted_labels_and_resets(self):
         self.expose()
         self.page.route('**/api/reader-content**',lambda route:route.fulfill(content_type='text/plain',body='text'))
@@ -268,13 +306,19 @@ class TocNavigationTests(unittest.TestCase):
 
     def test_html_chapter_buttons_keep_directory_and_ordinary_toc_click_closes(self):
         self.expose()
-        html=''.join(f'<h1 id="chapter-{i}">第{i}章</h1><p style="height:1400px">正文</p>' for i in range(1,5))
+        html='<p style="height:1400px">前言</p>'+''.join(
+            f'<h1 id="chapter-{i}">第{i}章</h1><p style="height:1400px">正文</p>' for i in range(1,5))
         self.page.route('**/api/reader-content**',lambda route:route.fulfill(content_type='text/html',body=html))
         self.page.goto(self.origin+support.PREFIX+'/static/reader.html?'+urlencode(dict(
             url='https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/chapters.html',ext='html')))
         self.page.wait_for_function("()=>document.documentElement.dataset.readerPhase==='ready' && __toc.nav().tocEntries.length===4")
         if not self.panel_open(): self.page.locator('#history').click()
         self.page.locator('#toc-tab').click()
+        self.assertEqual(self.page.evaluate('__toc.nav().currentChapterIndex'), -1)
+        self.assertTrue(self.page.locator('.reader-chapter-prev').is_disabled())
+        self.page.locator('.reader-chapter-next').click()
+        self.page.wait_for_function('()=>__toc.nav().currentChapterIndex===0')
+        self.assertEqual(self.page.locator('#toc-list [aria-current="location"]').get_attribute('title'),'第1章')
         self.page.locator('.reader-chapter-next').click()
         self.page.wait_for_function('()=>__toc.nav().currentChapterIndex===1')
         self.assertTrue(self.panel_open())

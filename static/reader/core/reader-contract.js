@@ -333,8 +333,12 @@
           if (!isBucketPath(relativePath, true, bucketName) ||
               !relativePath.startsWith(rootPath.split("/").slice(0, 3).join("/") + "/"))
             throw new Error("PDF_ASSET_INVALID");
-          const target = new URL(url.href);
-          if (bucket) target.searchParams.set("path", relativePath);
+          // Page images are assigned directly to Image.src (both preload and
+          // rendering). Derive their proxy URL here, not a raw Bucket URL.
+          const imagePages = bucketName === "vomebook/reader-assets-v2" && filename === "page-manifest.json";
+          const target = directBucket && imagePages
+            ? new URL("/api/reader-bucket-resource", bucketOrigin) : new URL(url.href);
+          if (bucket || imagePages) target.searchParams.set("path", relativePath);
           else target.pathname = `${bucketPrefix}${relativePath}`;
           return target.href;
         }

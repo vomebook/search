@@ -62,10 +62,17 @@
         return response;
       }
       const reader = sourceReader || response.body.getReader();
+      let publishedBytes = false;
+      /** @param {unknown} cause */
+      const interrupted = (cause) => Object.assign(new Error("Reader response interrupted", {cause}), {
+        code: "READER_BODY_INTERRUPTED",
+        name: /** @type {{name?: string} | null | undefined} */ (cause)?.name || "Error"
+      });
       const stream = new ReadableStreamImpl({
         start(controller) {
           record.abortBody = (reason) => {
-            controller.error(reason);
+            controller.error(publishedBytes && /** @type {{name?: string} | null | undefined} */ (reason)?.name === "TimeoutError"
+              ? interrupted(reason) : reason);
             reader.cancel(reason).catch(() => {});
           };
         },
@@ -79,11 +86,13 @@
               controller.close();
             } else {
               controller.enqueue(result.value);
+              publishedBytes ||= result.value.byteLength > 0;
             }
           } catch (error) {
             if (record.settled) return;
             settle(record);
-            controller.error(error);
+            // Once bytes have escaped this attempt, never restart this body.
+            controller.error(publishedBytes ? interrupted(error) : error);
           }
         },
         cancel(reason) {

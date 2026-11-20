@@ -5,7 +5,6 @@ declare namespace ReaderPdfSearch {
   interface Index { book_text: Resource; generation: string; search_partitions?: { start: number; end: number; resource: Resource }[] }
   interface Repository {
     textIndex(ref: Resource): Promise<Index>;
-    textPage(ref: Resource | undefined, page: number): Promise<{ generation: string; text: string; regions: { start: number; end: number; box: number[]; mapping_precision?: string }[] }>;
   }
   interface Snippet { text: string; matchStart: number; matchLength: number; prefix: string; suffix: string }
   interface Box { box: number[]; block?: unknown; precision?: string }
@@ -37,10 +36,14 @@ declare namespace ReaderPdfSearch {
     loadPdfOcrManifest(): Promise<Manifest | null>; ensurePdfBookSearchClient(manifest: Manifest): Promise<Client>;
     pdfBookSearchPrefetchTimer: ReturnType<typeof setTimeout> | 0; PDF_BOOK_SEARCH_PREFETCH_DELAY: number; prefetchPdfBookSearch(): Promise<void>;
     goToPage(page: number, generation: number): Promise<boolean>; isReaderGenerationCurrent(kind: "search" | "navigation", generation: number): boolean;
-    content: HTMLElement; pdfV3Manifest: Manifest | null; renderPdfOcrText(shell: Element): Promise<unknown>;
+    content: HTMLElement; pdfV3Manifest: Manifest | null;
+    loadPdfOcrPage(page: number, priority?: RequestPriority, retry?: boolean): Promise<import('./reader-pdf-text-runtime-strict').OcrPayload>;
+    renderPdfOcrText(shell: Element, loaded?: import('./reader-pdf-text-runtime-strict').OcrPayload): Promise<unknown>;
+    renderPdfText(page: PdfPage, shell: Element): Promise<unknown>;
+    clearFullSearchMarks(): void;
     viewport: HTMLElement; bookmarkRibbon: HTMLElement; readerPageScrollTop(shell: Element): number;
     fullSearchSession: ReaderSearchController.State;
-    updateSearchState(patch: { results: Result[]; index: number }): unknown; renderFullSearchResults(): void; fullSearchStatus: HTMLElement;
+    updateSearchState(patch: { results: Result[] }): unknown; renderFullSearchResults(): void; fullSearchStatus: HTMLElement;
     pdfDocument: PdfDocument | null; readerRuntime: { currentGeneration(kind: "search"): number };
     fullSearchPageOffset(total: number, offset: number, size: number): number; loadPdfSearchText(pdf: PdfDocument, page: number, generation: number): Promise<string>;
     waitForReader(delay?: number, force?: boolean): Promise<unknown>; fullSearchSnippet(text: string, start: number, length: number): Snippet;
@@ -50,7 +53,7 @@ declare namespace ReaderPdfSearch {
     getPdfPersistentTextStore(pdf: PdfDocument): Promise<Store | null>; readerAbortError(): Error; cachePdfSearchText(page: number, text: string): void;
     loadPdfTextContent(page: number, pdfPage: PdfPage, generation: number): Promise<{ items: unknown[] }>;
     pdfTextContent(items: unknown[]): string; normalizePdfSearchText(text: string): string; fullSearchEscape(text: string): string;
-    highlightPdfText(shell: Element | null, query: string): void;
+    highlightPdfText(shell: Element | null, query?: string, selected?: {start: number; value: string}): HTMLElement | undefined;
     publishPdfSearchProgress(generation: number, groups: Group[], total: number, pattern: RegExp, firstPage: Result[], scanned: number, pages: number): boolean;
     syncCapabilityControls(): void;
   }

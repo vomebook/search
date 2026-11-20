@@ -3148,7 +3148,10 @@ function getResultRows() {
     templates: VSCROLL.templateCache,
     contentVersion: () => VSCROLL.contentVersion,
     placeholder: index => createResultWindowPlaceholder(index),
-    bindRecord: (row, record) => resultRowRecords.set(row, record),
+    bindRecord: (row, record) => {
+      resultRowRecords.set(row, record);
+      row.dataset.readerReturnKey = getResultStableId(record);
+    },
   });
   return resultRows;
 }

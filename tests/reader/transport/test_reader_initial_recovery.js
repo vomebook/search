@@ -107,9 +107,18 @@ async function main() {
   const reader = response.body.getReader();
   assert.equal(new TextDecoder().decode((await reader.read()).value), 'prefix');
   streamController.error(new TypeError('network disconnected'));
-  await assert.rejects(reader.read(), {name: 'TypeError'});
+  await assert.rejects(reader.read(), {name: 'TypeError', code: 'READER_BODY_INTERRUPTED'});
   assert.equal(callsAfterBytes, 1, 'never replay a partially delivered unversioned body');
   assert.equal(partial.timers.size, 0);
+
+  const timedBody = harness(() => Promise.resolve(new Response(new ReadableStream({
+    start(controller) {controller.enqueue(new Uint8Array([1]));}
+  }))));
+  const timedReader = (await timedBody.manager.request('timed-partial', 120000)).body.getReader();
+  assert.deepEqual((await timedReader.read()).value, new Uint8Array([1]));
+  [...timedBody.timers.values()][0].callback();
+  await assert.rejects(timedReader.read(), {name:'TimeoutError', code:'READER_BODY_INTERRUPTED'});
+  assert.equal(timedBody.manager.activeCount, 0);
 
   for (const mode of ['stall', 'disconnect']) {
     let calls = 0, held, cancelled = 0;

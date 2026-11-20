@@ -1,3 +1,5 @@
+import { pdfTextRunCaret } from "./reader-pdf-text.js";
+
 /** @param {import('../../../typings/reader-page-window-strict').PageWindowContext} readerContext */
 export function createReaderPdfPageWindow(readerContext) {
   /** @param {number} total @param {number} [generation] */
@@ -199,38 +201,18 @@ export function createReaderPdfPageWindow(readerContext) {
       }
     }
     if (!anchorNode || !origin || !target || origin === target || !readerContext.content.contains(origin) || !readerContext.content.contains(target)) return;
-    const runs = [...target.querySelectorAll(".reader-pdf-text-run")].filter((run) => run.firstChild?.nodeType === Node.TEXT_NODE);
-    if (!runs.length) return;
+    const runs = target.querySelectorAll(".reader-pdf-text-run");
     let nearest = null, distance = Infinity;
     for (const run of runs) {
+      if (!run.textContent) continue;
       const rect = run.getBoundingClientRect();
       const dx = Math.max(rect.left - x, x - rect.right, 0);
       const dy = Math.max(rect.top - y, y - rect.bottom, 0);
       const gap = Math.hypot(dx, dy);
       if (gap < distance) { nearest = run; distance = gap; }
     }
-    if (!nearest || nearest.firstChild?.nodeType !== Node.TEXT_NODE) return;
-    const node = /** @type {Text} */ (nearest.firstChild), rect = nearest.getBoundingClientRect();
-    let offset;
-    if (y < rect.top || y > rect.bottom) {
-      offset = y < rect.top ? 0 : node.length;
-    } else {
-      const range = document.createRange();
-      const vertical = getComputedStyle(nearest).writingMode.startsWith("vertical");
-      const position = vertical ? y : x;
-      let low = 0, high = node.length;
-      while (low < high) {
-        const mid = Math.floor((low + high) / 2);
-        range.setStart(node, mid);
-        range.setEnd(node, mid + 1);
-        const glyph = range.getBoundingClientRect();
-        const center = vertical ? (glyph.top + glyph.bottom) / 2 : (glyph.left + glyph.right) / 2;
-        if (center < position) low = mid + 1;
-        else high = mid;
-      }
-      offset = low;
-    }
-    selection.setBaseAndExtent(anchorNode, anchorOffset, node, offset);
+    const endpoint = nearest && pdfTextRunCaret(nearest, x, y);
+    if (endpoint) selection.setBaseAndExtent(anchorNode, anchorOffset, endpoint.node, endpoint.offset);
   }
 
   /**

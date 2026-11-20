@@ -11,6 +11,7 @@ const PDF_SEARCH_CHECKPOINT_BYTES = 4 * 1024 * 1024;
 export function createReaderPdfSearch(readerContext) {
   /** @type {Promise<typeof import('../search/reader-pdf-hit-projection.mjs')> | undefined} */
   let hitProjection;
+  let projectionRequest = 0;
 
   async function loadHitProjection() {
     const source = "/search/static/reader/search/reader-pdf-hit-projection.mjs";
@@ -19,7 +20,8 @@ export function createReaderPdfSearch(readerContext) {
       readerContext.assertReaderActive();
       // This is a leaf: a fresh URL bypasses Chromium's rejected module entry
       // without leaving a failed static dependency (such as the validator).
-      const url = attempt ? `${source}?reader-module-retry=${attempt}` : source;
+      const request = projectionRequest++;
+      const url = request ? `${source}?reader-module-retry=${request}` : source;
       try {
         return await readerContext.awaitReader(/** @type {Promise<typeof import('../search/reader-pdf-hit-projection.mjs')>} */ (import(url)));
       } catch (error) {
@@ -27,6 +29,26 @@ export function createReaderPdfSearch(readerContext) {
             !/failed to fetch dynamically imported module|error loading dynamically imported module|importing a module script failed/i.test(error.message)) throw error;
       }
     }
+  }
+
+  function getHitProjection() {
+    // Keep successful modules and share in-flight work, but let another explicit
+    // result click start a fresh, bounded batch after a transport failure.
+    return hitProjection ||= loadHitProjection().catch(error => {
+      hitProjection = undefined;
+      throw error;
+    });
+  }
+
+  /** @param {Element} shell @param {Element} mark */
+  function scrollToHit(shell, mark) {
+    // Keep the hit visible without leaving the previous page under the ribbon.
+    const viewport = readerContext.viewport;
+    const view = viewport.getBoundingClientRect();
+    const ribbon = readerContext.bookmarkRibbon.getBoundingClientRect().bottom - view.top;
+    const pageTop = readerContext.readerPageScrollTop(shell);
+    const desired = pageTop + mark.getBoundingClientRect().top - shell.getBoundingClientRect().top - viewport.clientHeight / 2;
+    viewport.scrollTop = Math.max(pageTop - Math.max(0, ribbon) + 1, desired);
   }
 
   /** @param {ReaderPdfSearch.Manifest} manifest */
@@ -116,42 +138,42 @@ export function createReaderPdfSearch(readerContext) {
         if (previous?.page === hit.page && previous.start === hit.start && previous.length === hit.length)
           return previous;
         return { ...hit, location: `第 ${hit.page} 页`, activate: async (/** @type {number} */ nav) => {
-          if (!await readerContext.goToPage(hit.page, nav) || !readerContext.isReaderGenerationCurrent("navigation", nav))
-            return false;
-          readerContext.content.querySelectorAll(".reader-text-hit-box").forEach(node => node.remove());
+          const search = readerContext.readerRuntime.currentGeneration("search");
+          const current = () => readerContext.isReaderGenerationCurrent("navigation", nav) &&
+            readerContext.isReaderGenerationCurrent("search", search);
+          if (!await readerContext.goToPage(hit.page, nav) || !current()) return false;
+          readerContext.clearFullSearchMarks();
           const shell = /** @type {HTMLElement | null} */ (readerContext.content.querySelector(`.reader-page[data-page="${hit.page}"]`));
           if (shell && (hit.boxes.length || hit.textGeneration)) {
-            // Share the bounded attempts across clicks; open/render don't need them.
-            const { hitBoxes, paintTextHit } = await (hitProjection ||= loadHitProjection());
-            if (!readerContext.isReaderGenerationCurrent("navigation", nav)) return false;
+            const { hitBoxes, paintTextHit } = await getHitProjection();
+            if (!current() || !shell.isConnected) return false;
             let boxes = hit.boxes;
-            if (hit.textGeneration) {
-              const layer = await (/** @type {ReaderPdfSearch.Repository} */ (readerContext.pdfTextLayerRepository)).textPage(/** @type {ReaderPdfSearch.Resource | undefined} */ (manifest.text_layer), hit.page);
-              if (!readerContext.isReaderGenerationCurrent("navigation", nav)) return false;
-              if (layer.generation !== hit.textGeneration) throw new Error("PDF_V3_GENERATION_CHANGED");
-              boxes = hitBoxes({text: layer.text, text_spans: layer.regions.map(region => ({
-                start: region.start, end: region.end, box: region.box, precision: region.mapping_precision
-              }))}, hit.start, hit.length);
-            }
-            if (readerContext.pdfV3Manifest) {
-              await readerContext.renderPdfOcrText(shell);
-              if (!readerContext.isReaderGenerationCurrent("navigation", nav)) return false;
-            }
+            if (hit.textGeneration || (readerContext.pdfV3Manifest && manifest.text_layer)) {
+              let layer;
+              try {
+                layer = await readerContext.loadPdfOcrPage(hit.page, "high", true);
+              } catch (error) {
+                // Legacy book hits already have geometry. Keep that fallback
+                // even if the optional OCR text object is unavailable.
+                if (hit.textGeneration || !boxes.length) throw error;
+              }
+              if (!current() || !shell.isConnected) return false;
+              if (hit.textGeneration) {
+                if (layer?.kind !== "pdf-text-layer" || layer.generation !== hit.textGeneration)
+                  throw new Error("PDF_V3_GENERATION_CHANGED");
+                boxes = hitBoxes({text: layer.text, text_spans: layer.regions.map(region => ({
+                  start: region.start, end: region.end, box: region.box,
+                  precision: "mapping_precision" in region && typeof region.mapping_precision === "string"
+                    ? region.mapping_precision : undefined
+                }))}, hit.start, hit.length);
+              }
+              if (layer) await readerContext.renderPdfOcrText(shell, layer);
+            } else if (readerContext.pdfV3Manifest) await readerContext.renderPdfOcrText(shell);
             // A virtual page can leave the DOM while the module or OCR loads.
-            if (!shell.isConnected) return false;
+            if (!current() || !shell.isConnected) return false;
             paintTextHit(shell, boxes, hit);
             const mark = shell.querySelector(".reader-text-hit-box");
-            if (mark) {
-              // Keep the search hit visible without leaving the previous page
-              // under the ribbon on short mobile pages.
-              const viewport = readerContext.viewport;
-              const view = viewport.getBoundingClientRect();
-              const ribbon = readerContext.bookmarkRibbon.getBoundingClientRect().bottom - view.top;
-              const desired = readerContext.readerPageScrollTop(shell) +
-                mark.getBoundingClientRect().top - shell.getBoundingClientRect().top - viewport.clientHeight / 2;
-              const earliest = readerContext.readerPageScrollTop(shell) - Math.max(0, ribbon) + 1;
-              viewport.scrollTop = Math.max(earliest, desired);
-            }
+            if (mark) scrollToHit(shell, mark);
           }
           return true;
         } };
@@ -164,7 +186,7 @@ export function createReaderPdfSearch(readerContext) {
       if (!readerContext.isReaderGenerationCurrent("search", generation)) return;
       const partialPage = attach(partial);
       readerContext.fullSearchSession.page = partialPage;
-      readerContext.updateSearchState({ results: partialPage.results, index: -1 });
+      readerContext.updateSearchState({ results: partialPage.results });
       readerContext.renderFullSearchResults();
       readerContext.fullSearchStatus.textContent = partial.total
         ? `${partial.total} 个结果（正在搜索… ${partial.scanned} / ${partial.pages} 页）`
@@ -174,6 +196,35 @@ export function createReaderPdfSearch(readerContext) {
     const resultPage = attach(page);
     readerContext.fullSearchSession.page = resultPage;
     return resultPage.results;
+  }
+
+  /** @param {number} page @param {string} text @param {number} start @param {string} value @returns {ReaderPdfSearch.Result} */
+  function nativeResult(page, text, start, value) {
+    return {
+      location: `第 ${page} 页`,
+      snippet: readerContext.fullSearchSnippet(text, start, value.length),
+      async activate(nav) {
+        const search = readerContext.readerRuntime.currentGeneration("search");
+        const current = () => readerContext.isReaderGenerationCurrent("navigation", nav) &&
+          readerContext.isReaderGenerationCurrent("search", search);
+        if (!await readerContext.goToPage(page, nav) || !current()) return false;
+        const shell = /** @type {HTMLElement | null} */ (readerContext.content.querySelector(`.reader-page[data-page="${page}"]`));
+        if (!shell?.isConnected) return false;
+        if (shell.dataset.textReady !== "1") {
+          const pdf = readerContext.pdfDocument;
+          if (!pdf) return false;
+          const pdfPage = await readerContext.awaitReader(pdf.getPage(page));
+          if (!current() || !shell.isConnected || pdf !== readerContext.pdfDocument) return false;
+          await readerContext.renderPdfText(pdfPage, shell);
+        }
+        if (!current() || !shell.isConnected) return false;
+        readerContext.clearFullSearchMarks();
+        const mark = readerContext.highlightPdfText(shell, undefined, { start, value });
+        if (!mark) return false;
+        scrollToHit(shell, mark);
+        return true;
+      }
+    };
   }
 
   /** @param {ReaderPdfSearch.Group[]} groups @param {number} total @param {RegExp} pattern @param {ReaderPdfSearch.Result[]} firstPage */
@@ -220,11 +271,7 @@ export function createReaderPdfSearch(readerContext) {
               throw new DOMException("Search cancelled", "AbortError");
           }
           if (skipped++ < offset) continue;
-          results.push({
-            location: `第 ${group.page} 页`,
-            snippet: readerContext.fullSearchSnippet(text, start + match.index, match[0].length),
-            activate: (/** @type {number} */ navigationGeneration) => readerContext.goToPage(group.page, navigationGeneration)
-          });
+          results.push(nativeResult(group.page, text, start + match.index, match[0]));
           if (results.length === pageSize) break;
         }
         if (results.length === pageSize) break;
@@ -238,7 +285,7 @@ export function createReaderPdfSearch(readerContext) {
     if (!readerContext.isReaderGenerationCurrent("search", generation)) return false;
     readerContext.fullSearchSession.pageLoader = readerContext.makePdfSearchPageLoader(groups, total, pattern, firstPage);
     readerContext.fullSearchSession.page = { total, offset: 0, pageSize: 50, results: firstPage.slice() };
-    readerContext.updateSearchState({ results: firstPage.slice(), index: -1 });
+    readerContext.updateSearchState({ results: firstPage.slice() });
     readerContext.renderFullSearchResults();
     readerContext.fullSearchStatus.textContent = total
       ? `${total} 个结果（正在搜索… ${scanned} / ${pages} 页）`
@@ -361,11 +408,7 @@ export function createReaderPdfSearch(readerContext) {
         if (count % PDF_SEARCH_CHECKPOINT_STRIDE === 0 && canCheckpoint &&
             checkpointCount + checkpoints.length < PDF_SEARCH_CHECKPOINT_MAX)
           checkpoints.push({ ordinal: count - 1, start: match.index });
-        if (firstPage.length < 50) firstPage.push({
-          location: `第 ${page} 页`,
-          snippet: readerContext.fullSearchSnippet(text, match.index, match[0].length),
-          activate: (/** @type {number} */ navigationGeneration) => readerContext.goToPage(page, navigationGeneration)
-        });
+        if (firstPage.length < 50) firstPage.push(nativeResult(page, text, match.index, match[0]));
         if (count % 2048 === 0) {
           await readerContext.waitForReader();
           if (!readerContext.isReaderGenerationCurrent("search", generation)) return [];

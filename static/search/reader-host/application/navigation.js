@@ -522,7 +522,8 @@
       } catch (_) {
         return;
       }
-      if (!handoff || !(Date.now() - handoff.at < 300000) || frame || parked || !document.body) return;
+      if (!handoff || !(Date.now() - handoff.at < 300000) || frame || parked || !document.body ||
+          (handoff.settings?.deadline && handoff.settings.deadline <= Date.now())) return;
       let url;
       try {
         url = parse(handoff.readerUrl);
@@ -535,8 +536,8 @@
       next.className = "reader-overlay reader-overlay-parked";
       next.title = "在线阅读";
       next.name = "reader-speech-resume:" + JSON.stringify(handoff.pending
-        ? { pending: true }
-        : { unit: handoff.unit, offset: handoff.offset });
+        ? { pending: true, settings: handoff.settings }
+        : { unit: handoff.unit, offset: handoff.offset, settings: handoff.settings });
       next.src = url.href;
       document.body.append(next);
       // A first load of the search page can take longer than the old 30 s

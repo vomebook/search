@@ -595,6 +595,59 @@ class ReaderOptimizationTests(unittest.TestCase):
         self.assertLess(result['budget']['marked'], 25)
         self.assertTrue(result['budget']['lastIsFallback'])
 
+    def test_native_pdf_deep_hit_scrolls_and_cross_page_drag_keeps_marked_text(self):
+        self.expose()
+        # Keep the selected hit far below the page top and past the initial
+        # 100-hit paint budget. The following page starts with the same word.
+        items = [dict(str='needle', transform=[12, 0, 0, 12, 40 + (i % 8) * 60, 950 - (i // 8) * 60],
+                      width=36, height=12, fontName='f', hasEOL=True) for i in range(102)]
+        module = fixtures.support.PDF_MODULE.replace('numPages: 30', 'numPages: 2').replace(
+            'return { width: 600 * scale, height: 800 * scale };',
+            'return { width: 600 * scale, height: 1000 * scale, scale, transform: [scale,0,0,-scale,0,1000*scale], '
+            'convertToViewportPoint:(x,y)=>[x*scale,(1000-y)*scale] };').replace(
+            "{ items: [{ str: 'Accessible PDF text', hasEOL: false }] }", json.dumps({'items': items}))
+        self.page.route('**/static/vendor/pdf.min.*.mjs', lambda route: route.fulfill(
+            content_type='text/javascript', body=module))
+        self.open(self.reader_url('pdf'))
+        self.search('needle')
+        field = self.page.locator('#full-search-page')
+        field.fill('3')
+        field.dispatch_event('change')
+        first = self.page.locator('.full-search-result').first
+        self.page.wait_for_function("() => document.querySelector('.full-search-rank')?.textContent === '101.'")
+        first.click()
+        self.page.locator('#history-panel').wait_for(state='hidden')
+        mark = self.page.locator('.reader-page[data-page="1"] mark.full-search-highlight')
+        self.assertEqual(mark.count(), 1)
+        self.assertEqual(mark.text_content(), 'needle')
+        self.assertTrue(mark.evaluate('''mark => {
+          const runs = [...mark.closest('.reader-pdf-text').querySelectorAll('.reader-pdf-text-run')];
+          const viewport = document.querySelector('#viewport').getBoundingClientRect();
+          const rect = mark.getBoundingClientRect();
+          return runs[100].contains(mark) && rect.top >= viewport.top && rect.bottom <= viewport.bottom;
+        }'''))
+        self.page.locator('.reader-page[data-page="2"] .reader-pdf-text-run').first.wait_for(state='attached')
+        drag = self.page.evaluate('''() => {
+          const c = __pdfRenderContext, selection = document.getSelection();
+          const layers = document.querySelectorAll('.reader-pdf-text');
+          const anchor = layers[1].querySelector('.reader-pdf-text-run').firstChild;
+          const target = layers[0].querySelector('mark').parentElement;
+          const bounds = target.getBoundingClientRect();
+          selection.setBaseAndExtent(anchor, 6, anchor, 5);
+          c.correctPdfCrossPageSelection(bounds.left + 1, (bounds.top + bounds.bottom) / 2,
+            {anchorNode: anchor, anchorOffset: 6});
+          return {insideMark: target.querySelector('mark').contains(selection.focusNode),
+            text: selection.toString(), original: layers[0].textContent};
+        }''')
+        self.assertTrue(drag['insideMark'])
+        self.assertTrue(drag['text'].startswith('needle'))
+        self.assertEqual(drag['text'].count('needle'), 3)
+        self.assertEqual(drag['original'], 'needle\n' * 102)
+        fixtures.support.open_reader_panel(self.page)
+        self.page.locator('#full-search-input').fill('other')
+        self.page.locator('#full-search-toggle').click()
+        self.assertEqual(self.page.locator('.reader-pdf-text mark.full-search-highlight').count(), 0)
+
     def test_mobile_pdf_search_keeps_one_demand_slot_and_drops_queued_cancelled_work(self):
         self.expose()
         self.serve('mobile scheduling fixture')
@@ -933,6 +986,7 @@ class ReaderOptimizationTests(unittest.TestCase):
           const quiet=()=>{emptyReads=0; for(let i=0;i<10;i++)tools.sync();return [tools.hasCache(),emptyReads];};
           const before=quiet(), target=document.createElement('h2');target.textContent='Late heading';
           document.querySelector('#content').prepend(target);
+          target.getBoundingClientRect = () => ({top:rect.call(v).top});
           const entries=[{target,label:'Late heading',activate:()=>true}];
           tools.set(entries);tools.sync();const late=tools.hasCache() && tools.index()===0;
           tools.set([]);const cleared=quiet();

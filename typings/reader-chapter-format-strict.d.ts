@@ -33,7 +33,7 @@ export interface ChapterFormatContext {
   readerContentUrl(url: string): string;
   isReaderGenerationCurrent(kind: string, generation: number): boolean;
   setToc(entries: TocEntry[]): unknown[];
-  fetchReaderUrl(url: string, init: {signal: AbortSignal; priority: 'high' | 'low'}): Promise<Response>;
+  fetchReaderUrl(url: string, init: {signal: AbortSignal; priority: 'high' | 'low'}, policy?: {retryBucket?: boolean}): Promise<Response>;
   parseChapterDocument(text: string): Document;
   alignReaderDestination(anchor: Element): void;
   holdReaderDestination(anchor: Element): void;

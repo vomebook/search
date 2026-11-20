@@ -9,7 +9,7 @@ export function createReaderSearchController({
   const search = /** @type {{query: string, results: ReaderSearchController.Result[], index: number}} */ (runtime.state.search);
   /** @type {ReaderSearchController.State} */
   const state = {
-    page: null, failedPage: null, complete: false, pageLoader: null
+    page: null, failedPage: null, complete: false, pageLoader: null, highlightsEnabled: false
   };
   /** @type {{generation: number, mode: string | null} | null} */
   let initialSearch = null;
@@ -18,7 +18,7 @@ export function createReaderSearchController({
   /** @type {ReturnType<typeof setTimeout> | 0} */
   let inputTimer = 0;
   let disposed = false, confirmedNoText = false;
-  let searchViewActive = false;
+  let searchViewActive = false, closingFromResult = false, closingSearchView = false;
   /** @type {ReaderSearchController.Result[]} */
   let renderedResults = [];
   let renderedOffset = -1;
@@ -94,6 +94,10 @@ export function createReaderSearchController({
   const nextResultIndex = step => search.index < 0 ? (step > 0 ? 0 : -1) : search.index + step;
   function updateNavigation() {
     const lockPage = !!state.page && busy();
+    for (const [index, row] of Array.from(results.children).entries()) {
+      if (index === search.index) row.setAttribute("aria-current", "true");
+      else row.removeAttribute("aria-current");
+    }
     for (const [selector, step] of /** @type {const} */ ([["#full-search-prev", -1], ["#full-search-next", 1]])) {
       const next = nextResultIndex(step);
       /** @type {HTMLButtonElement} */ (view.querySelector(selector)).disabled = !search.results.length ||
@@ -134,8 +138,17 @@ export function createReaderSearchController({
     if (renderedOffset === offset && results.childElementCount === search.results.length &&
         renderedResults.length === search.results.length &&
         search.results.every((result, index) => result === renderedResults[index])) return;
+    // Progress appends rows. Leave the existing buttons attached so focus
+    // and an in-flight activation survive a fresh Worker snapshot.
+    let firstChanged = 0;
+    if (renderedOffset === offset) {
+      const sharedLength = Math.min(results.childElementCount, renderedResults.length, search.results.length);
+      while (firstChanged < sharedLength && renderedResults[firstChanged] === search.results[firstChanged]) firstChanged++;
+    }
+    while (results.childElementCount > firstChanged) results.lastElementChild?.remove();
     const fragment = document.createDocumentFragment();
-    for (const [index, result] of search.results.entries()) {
+    for (let index = firstChanged; index < search.results.length; index++) {
+      const result = /** @type {ReaderSearchController.Result} */ (search.results[index]);
       const row = document.createElement("button");
       const location = document.createElement("small");
       row.type = "button";
@@ -149,7 +162,7 @@ export function createReaderSearchController({
       row.addEventListener("click", () => activate(index));
       fragment.appendChild(row);
     }
-    results.replaceChildren(fragment);
+    results.appendChild(fragment);
     renderedResults = search.results.slice();
     renderedOffset = offset;
   }
@@ -165,29 +178,45 @@ export function createReaderSearchController({
     // still cancel an unfinished jump to a result that is being cleared.
     if (hasQuery || (resultNavigation !== null && navigation.current(resultNavigation))) navigation.begin();
   }
+  function clearHighlights() {
+    state.highlightsEnabled = false;
+    backend.clearMarks();
+  }
   function cancelPending(hasQuery = false) {
     clearInputTimer();
     nextGeneration();
     supersedeSearchNavigation(hasQuery);
     backend.chapterClient()?.cancel();
     backend.pdfClient()?.cancel();
+    clearHighlights();
     resetResults();
   }
-  function close() {
-    const restoreFocus = view.contains(document.activeElement);
-    const closingButtonFocused = document.activeElement === button;
+  function dismissSearch() {
     clearInputTimer();
     const interrupted = busy();
     const mode = initialSearch?.mode;
+    const retain = state.complete && search.query === input.value.trim() && resultNavigation === null;
     nextGeneration();
+    supersedeSearchNavigation();
+    if (!retain) clearHighlights();
     initialSearch = null;
     if (interrupted) {
       if (mode === "epub-chapters") backend.chapterClient()?.cancel();
       else if (mode === "pdf" || mode === "pdf-pages") backend.pdfClient()?.cancel();
       resetResults();
+    } else if (resultNavigation !== null) {
+      updateSearch({ index: -1 });
+      updateNavigation();
     }
     cancel.hidden = retry.hidden = true;
-    panel.hide();
+  }
+  function close() {
+    const restoreFocus = view.contains(document.activeElement);
+    const closingButtonFocused = document.activeElement === button;
+    dismissSearch();
+    closingSearchView = true;
+    try { panel.hide(); }
+    finally { closingSearchView = false; }
     updateButton(false);
     const hiding = confirmedNoText || button.hidden;
     if ((restoreFocus || (hiding && closingButtonFocused)) && panel.isOpen())
@@ -204,7 +233,7 @@ export function createReaderSearchController({
     const generation = nextGeneration();
     backend.pdfClient()?.cancel();
     supersedeSearchNavigation(!!query);
-    backend.clearMarks();
+    clearHighlights();
     resetResults(query);
     retry.hidden = true;
     retry.textContent = "重试搜索";
@@ -214,6 +243,7 @@ export function createReaderSearchController({
       status.textContent = "输入关键词搜索正文";
       return;
     }
+    state.highlightsEnabled = true;
     const owner = { generation, mode: backend.mode() };
     initialSearch = owner;
     const ownsSearch = () => initialSearch === owner && current(generation);
@@ -247,8 +277,21 @@ export function createReaderSearchController({
   }
   /** @param {ReaderSearchController.Page<ReaderSearchController.ChapterResult>} page */
   function applyChapterPage(page) {
+    const previous = state.page;
+    const selected = search.results[search.index];
+    /** @param {ReaderSearchController.ChapterResult} hit */
+    const key = hit => `${hit.chapterIndex}:${hit.start}:${hit.length}`;
+    /** @type {Map<string, ReaderSearchController.Result>} */
+    const existing = new Map();
+    if (previous?.offset === page.offset) {
+      for (const [index, hit] of previous.results.entries()) {
+        const result = search.results[index];
+        if ("chapterIndex" in hit && result) existing.set(key(hit), result);
+      }
+    }
+    const results = page.results.map(hit => existing.get(key(hit)) ?? backend.chapterResult(hit));
     state.page = page;
-    updateSearch({ results: page.results.map(backend.chapterResult), index: -1 });
+    updateSearch({ results, index: selected ? results.indexOf(selected) : -1 });
   }
   /** @param {number} offset @param {boolean | null} [selectLast] */
   async function loadPage(offset, selectLast = null) {
@@ -290,31 +333,34 @@ export function createReaderSearchController({
     if (!active()) return;
     const result = search.results[index];
     if (!result) return;
-    const previousIndex = search.index;
+    const previous = search.results[search.index];
     const panelSerial = panel.serial();
     const searchGeneration = runtime.currentGeneration("search");
     const generation = navigation.begin();
     resultNavigation = generation;
-    const ownsResult = () => current(searchGeneration) && search.results[index] === result;
+    const ownsResult = () => current(searchGeneration) && search.results.includes(result);
     updateSearch({ index });
     updateNavigation();
     try {
       const activated = await backend.activate(result, generation);
       if (activated === false && navigation.current(generation) && ownsResult()) {
-        updateSearch({ index: previousIndex });
+        updateSearch({ index: previous ? search.results.indexOf(previous) : -1 });
         updateNavigation();
         status.textContent = "搜索结果定位失败，请重试";
         return;
       }
-      if (activated === false || !navigation.current(generation) || search.results[index] !== result) return;
+      if (activated === false || !navigation.current(generation) || !ownsResult()) return;
       if (status.textContent === "搜索结果定位失败，请重试")
         status.textContent = `${state.page?.total ?? search.results.length} 个结果`;
-      if (closePanel && panelSerial === panel.serial() && current(searchGeneration)) panel.close();
-      else if (!closePanel) results.children[index]?.scrollIntoView({ block: "nearest" });
+      if (closePanel && panelSerial === panel.serial()) {
+        closingFromResult = true;
+        try { panel.close(); }
+        finally { closingFromResult = false; }
+      } else if (!closePanel) results.children[search.results.indexOf(result)]?.scrollIntoView({ block: "nearest" });
     } catch (error) {
       const failure = /** @type {{name?: string, message?: string} | null | undefined} */ (error);
       if (failure?.name !== "AbortError" && navigation.current(generation) && ownsResult()) {
-        updateSearch({ index: previousIndex });
+        updateSearch({ index: previous ? search.results.indexOf(previous) : -1 });
         updateNavigation();
         status.textContent = backend.mode() === "epub-chapters"
           ? failure?.message || "搜索结果定位失败，请重试" : "搜索结果定位失败，请重试";
@@ -361,7 +407,10 @@ export function createReaderSearchController({
   listeners.push(runtime.events.on("state:panel", event => {
     const { panel: state } = /** @type {{panel: {open: boolean, selected: string}}} */ (event);
     const activeView = state.open && state.selected === "full-search";
-    if (searchViewActive && !activeView && confirmedNoText) button.hidden = true;
+    if (searchViewActive && !activeView) {
+      if (!closingFromResult && !closingSearchView) dismissSearch();
+      if (confirmedNoText) button.hidden = true;
+    }
     searchViewActive = activeView;
     updateButton(activeView);
   }));

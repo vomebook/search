@@ -85,6 +85,24 @@ test('stalled proxy retries the proxy instead of the blocked dataset host', asyn
   }
 });
 
+test('media reloads the trusted Bucket proxy once when playback and download coincide', async () => {
+  const f=fixture();try {
+    const path=`media/audio/native/${'a'.repeat(64)}/audio.wav`;
+    const url=f.context.readerContentUrl(`/api/reader-bucket-resource?path=${encodeURIComponent(path)}`);
+    globalThis.VoiceOfMLReader.isBucketPath=value=>value===path;
+    Object.assign(f.context,{sourceUrl:url,contentUrl:url,downloadUrl:url});
+    assert.equal(f.context.validSource(url),true);
+    const loading=f.context.renderMedia('audio');
+    f.media.error={code:4};f.media.dispatchEvent(new Event('error'));
+    assert.equal(f.media.loads,1);assert.equal(f.media.src,url);
+    f.media.currentTime=0;f.media.readyState=1;f.media.dispatchEvent(new Event('loadedmetadata'));
+    await loading;assert.equal(f.media.currentTime,4);
+    f.media.dispatchEvent(new Event('error'));
+    assert.equal(f.media.loads,1);
+    assert.ok(f.events.some(value=>Array.isArray(value)&&value[2]==='READER_MEDIA'));
+  } finally {f.restore();}
+});
+
 test('media source retries only once and restores position on metadata', async () => {
   for(const {restorationReady,time,duration,expected} of [
     {restorationReady:true,time:4,duration:10,expected:4},

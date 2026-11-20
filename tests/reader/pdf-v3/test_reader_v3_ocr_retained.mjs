@@ -48,13 +48,17 @@ const index = await object('text-layer-manifest.json', {version: 1, kind: 'pdf-t
 let corrupt = false;
 const requests = [];
 const reader = {readerAbortController: new AbortController(), validateResource, createV3Repository,
+  ocrManifestUrl: '/fixture/ocr-manifest.json', pdfOcrPagePromises: new Map(), documentState: {zoom: 1},
+  pdfOcrPageCache: new Map(), pdfOcrPageCacheBytes: 0,
+  PDF_OCR_PAGE_CACHE_BYTES: 1024 * 1024, assertReaderActive: () => {},
+  pdfOcrManifest: {source_sha256: source, page_count: 1, text_layer: index},
   readerDownloadApiUrl: value => value,
   fetchReaderUrl: async url => {
     const key = new URL(url).searchParams.get('path');
     requests.push(key);
     const bytes = objects.get(key);
     if (!bytes) return new Response('', {status: 404});
-    const data = bytes.slice();
+    const data = Uint8Array.from(bytes);
     if (corrupt && key === page.path) data[data.length - 2] ^= 1;
     return new Response(data);
   }};
@@ -70,4 +74,24 @@ corrupt = true;
 const bad = reader.createPdfV3Repository(source, 1);
 await assert.rejects(bad.textPage(index, 1), /PDF_OCR_HASH_MISMATCH/);
 bad.dispose();
+
+requests.length = 0;
+await assert.rejects(reader.loadPdfOcrPage(1), /PDF_OCR_HASH_MISMATCH/);
+assert.deepEqual(requests, [index.path, partition.path, page.path]);
+for (let i = 0; i < 3; i++) await assert.rejects(reader.loadPdfOcrPage(1), /PDF_OCR_PAGE_UNAVAILABLE/);
+assert.equal(requests.length, 3, 'same-zoom remounts do not repeatedly refetch OCR');
+for (const zoom of [1.25, 1.5]) {
+  reader.documentState.zoom = zoom;
+  await assert.rejects(reader.loadPdfOcrPage(1), /PDF_OCR_HASH_MISMATCH/);
+}
+reader.documentState.zoom = 2;
+await assert.rejects(reader.loadPdfOcrPage(1), /PDF_OCR_PAGE_UNAVAILABLE/);
+assert.equal(requests.length, 5, 'additional zoom changes cannot keep refetching exhausted OCR');
+corrupt = false;
+const retry = reader.loadPdfOcrPage(1, 'high', true);
+assert.equal(reader.loadPdfOcrPage(1, 'high', true), retry, 'simultaneous clicks share the page read');
+assert.deepEqual(await retry, layer);
+assert.deepEqual(await reader.loadPdfOcrPage(1), layer);
+assert.deepEqual(requests, [index.path, partition.path, ...Array(4).fill(page.path)]);
+reader.pdfTextLayerRepository.dispose();
 console.log('Independent OCR text, accepted corrections and SHA-256 checks remain available', root);

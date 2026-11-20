@@ -263,15 +263,69 @@ function scaleVerticalRuns(layer) {
   for (const [run, scale] of scales) run.style.transform = `scaleY(${scale})`;
 }
 
+/** @param {Element} run @param {number} x @param {number} y */
+export function pdfTextRunCaret(run, x, y) {
+  const doc = run.ownerDocument;
+  const walker = doc.createTreeWalker(run, NodeFilter.SHOW_TEXT);
+  /** @type {{node: Text, start: number, end: number}[]} */
+  const parts = [];
+  let length = 0;
+  while (walker.nextNode()) {
+    const node = /** @type {Text} */ (walker.currentNode);
+    if (!node.length) continue;
+    parts.push({ node, start: length, end: length + node.length });
+    length += node.length;
+  }
+  if (!length) return null;
+  /** @param {number} offset */
+  const caretAt = offset => {
+    let low = 0, high = parts.length - 1;
+    while (low < high) {
+      const mid = (low + high) >> 1;
+      if ((parts[mid]?.end ?? Infinity) <= offset) low = mid + 1;
+      else high = mid;
+    }
+    const part = /** @type {{node: Text, start: number, end: number}} */ (parts[low]);
+    return { node: part.node, offset: offset - part.start };
+  };
+  const rect = run.getBoundingClientRect();
+  if (y < rect.top) return caretAt(0);
+  if (y > rect.bottom) return caretAt(length);
+  const range = doc.createRange();
+  const style = doc.defaultView?.getComputedStyle(run);
+  const vertical = style?.writingMode.startsWith("vertical");
+  const reverse = !vertical && style?.direction === "rtl";
+  const position = vertical ? y : x;
+  let low = 0, high = length;
+  while (low < high) {
+    const mid = (low + high) >> 1;
+    const caret = caretAt(mid);
+    range.setStart(caret.node, caret.offset);
+    range.setEnd(caret.node, caret.offset + 1);
+    const glyph = range.getBoundingClientRect();
+    const center = vertical ? (glyph.top + glyph.bottom) / 2 : (glyph.left + glyph.right) / 2;
+    if (reverse ? center > position : center < position) low = mid + 1;
+    else high = mid;
+  }
+  const caret = caretAt(low);
+  caret.offset = codePointBoundary(caret.node, caret.offset);
+  return caret;
+}
+
+/** @param {Text} node @param {number} offset */
+function codePointBoundary(node, offset) {
+  if (offset > 0 && offset < node.length && /[\uDC00-\uDFFF]/.test(node.data.charAt(offset)) &&
+      /[\uD800-\uDBFF]/.test(node.data.charAt(offset - 1))) return offset - 1;
+  return offset;
+}
+
 /** @param {Document} doc @param {number} x @param {number} y */
 export function independentTextCaret(doc, x, y) {
   const position = doc.caretPositionFromPoint?.(x, y);
   const range = position ? null : doc.caretRangeFromPoint?.(x, y);
   const node = /** @type {Text | undefined} */ (position?.offsetNode || range?.startContainer);
-  let offset = /** @type {number} */ (position?.offset ?? range?.startOffset);
+  const offset = /** @type {number} */ (position?.offset ?? range?.startOffset);
   if (node?.nodeType !== 3 || !node.parentElement?.closest(
       '.reader-pdf-text[data-text-generation] .reader-pdf-text-run[data-region-id]')) return null;
-  if (offset > 0 && offset < node.length && /[\uDC00-\uDFFF]/.test(node.data.charAt(offset)) &&
-      /[\uD800-\uDBFF]/.test(node.data.charAt(offset - 1))) offset--;
-  return { node, offset };
+  return { node, offset: codePointBoundary(node, offset) };
 }

@@ -119,4 +119,6 @@ for (const extension of ['pdf', 'caj', 'kdh', 'ppt', 'ps']) {
   const mismatch = structuredClone(direct);mismatch.primary.resource.sha256 = 'c'.repeat(64);
   assert.throws(() => validateReadingManifest(mismatch, 10000), /PDF_V3_INVALID/);
 }
+// Let Node flush deferred import diagnostics before the final TAP marker.
+await new Promise(resolve => setImmediate(resolve));
 console.log('PDF and DjVu primary reading, no legacy image fallback, OCR retention passed', root);

@@ -46,8 +46,24 @@ for(const etag of ['', 'W/"weak"']) await assert.rejects(open({fetchResponse:tra
 }
 {
   let attempts=0;const source=transport();const range=await open({fetchResponse:async(...args)=>{
-    if(++attempts===1)throw new TypeError('temporary network error');return source(...args);
+    if(++attempts===1)return new Response('temporary',{status:503});return source(...args);
   }});assert.equal(attempts,2);range.close();
+}
+for (const status of [403,404,503]) {
+  for (const first of [true,false]) {
+    let failures=0;const source=transport();const fetchResponse=(...args)=>{
+      if (!first && args[1].headers.Range.startsWith('bytes=0-')) return source(...args);
+      failures++;return new Response('unavailable',{status});
+    };
+    const expected={status,message:`DJVU_RANGE_HTTP_${status}`};
+    if (first) await assert.rejects(open({fetchResponse}),expected);
+    else {
+      const range=await open({fetchResponse});
+      await assert.rejects(range.read(65536,100),expected);
+      assert.equal(range.failure.status,status);range.close();
+    }
+    assert.equal(failures,status===503?3:1);
+  }
 }
 {
   const controller=new AbortController();let started;

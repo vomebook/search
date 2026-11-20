@@ -89,11 +89,14 @@ export function createReaderSource(readerContext) {
     return readerContext.readerDownloadApiUrl(`/api/download?file=${encodeURIComponent(readerOriginalFilename(filename || "file"))}&link=${encodeURIComponent(link || "")}`);
   }
 
+  let readerDownloadAttempt = 0;
+
   /** @param {Event} event */
   async function startReaderDownload(event) {
     event.preventDefault();
     const button = event.currentTarget;
     if (!(button instanceof Element) || button.hasAttribute("aria-busy")) return;
+    const attempt = ++readerDownloadAttempt;
     readerContext.showDownloadFeedback("正在准备下载…", 0);
     const controller = new AbortController();
     let timer;
@@ -114,9 +117,19 @@ export function createReaderSource(readerContext) {
       const frame = document.createElement("iframe");
       frame.hidden = true;
       frame.setAttribute("aria-hidden", "true");
+      frame.setAttribute("sandbox", "allow-downloads");
       frame.src = readerContext.readerDownloadUrl(filename, readerContext.downloadUrl);
+      const cleanup = setTimeout(() => frame.remove(), 60000);
+      // An attachment goes to the browser; a proxy error loads a document.
+      // No DOM access to the (possibly cross-origin) response is needed.
+      frame.addEventListener("load", () => {
+        clearTimeout(cleanup);
+        frame.remove();
+        if (attempt === readerDownloadAttempt && !readerContext.readerLifecycle.disposed)
+          readerContext.showDownloadFeedback("下载失败，请重试（已发起下载，未收到附件）");
+      }, { once: true });
       document.body.appendChild(frame);
-      setTimeout(() => frame.remove(), 60000);
+      // Request handed off, not server acceptance or download completion.
       readerContext.showDownloadFeedback("已发起下载");
     } catch (error) {
       if (!readerContext.readerLifecycle.disposed) {

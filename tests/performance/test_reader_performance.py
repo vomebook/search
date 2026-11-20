@@ -826,18 +826,19 @@ class ReaderPerformanceTest(unittest.TestCase):
         attempts = []
         def revision(route):
             attempts.append(route.request.url)
-            if len(attempts) == 1:
+            if len(attempts) <= 3:
                 route.fulfill(status=503, body='temporary', headers={'Access-Control-Allow-Origin': '*'})
             else:
                 route.fulfill(json={'url': state['source_url'], 'revision': 'a' * 40}, headers={'Access-Control-Allow-Origin': '*'})
         page.route('**/api/reader-source-revision?**', revision)
         page.goto(state['url'], wait_until='domcontentloaded')
         page.locator('.reader-error').wait_for(timeout=10000)
-        self.assertIn('DJVU_SOURCE_REVISION_HTTP_', page.locator('.reader-error').inner_text())
+        self.assertIn('DJVU_SOURCE_REVISION_HTTP_503', page.locator('.reader-error').inner_text())
+        self.assertEqual(len(attempts), 2, 'version resolution must stop after one retry')
         self.assertFalse(state['source'])
         page.reload(wait_until='domcontentloaded')
         page.locator('.reader-page[data-page="1"] canvas.ready').wait_for(timeout=10000)
-        self.assertEqual(len(attempts), 2)
+        self.assertEqual(len(attempts), 4, 'the first 503 after reload recovers without another navigation')
         self.assertTrue(state['source'][0]['range'])
 
     def test_djvu_range_jump_renders_complete_page(self):

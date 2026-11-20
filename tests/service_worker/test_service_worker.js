@@ -195,7 +195,7 @@ test("unversioned shells and data revalidate past the HTTP cache; pinned hashes 
   const install = harness({ Request: MockRequest, source: hashed, fetch: manifestsFetch() });
   await lifecycle(install.listeners.install);
   const byUrl = new Map(install.operations.addAll[0].map(item => [keyOf(item), item]));
-  for (const url of ["/search/", "/search/data/initial/global.json", "/search/static/style.css"]) {
+  for (const url of ["/search/", "/search/static/reader.html", "/search/data/initial/global.json", "/search/static/style.css"]) {
     assert.strictEqual(byUrl.get(url).cache, "no-cache", url);
   }
   assert.strictEqual(byUrl.get("/search/static/app.0123456789ab.js"), "/search/static/app.0123456789ab.js");
@@ -249,7 +249,8 @@ for (const [site, workerSource, prefix] of [['Pages', source, '/search/static/']
     await lifecycle(h.listeners.activate);
     assert.strictEqual(h.stores.get(old).get(shell).body, 'serving shell');
     assert.strictEqual((await dispatchFetch(h, 'https://example.test' + asset)).body, 'old bytes');
-    await assert.rejects(dispatchFetch(h, shell, 'navigate'));
+    h.stores.get(cacheName(firstSource)).delete(prefix + 'reader.html');
+    await assert.rejects(dispatchFetch(h, shell, 'navigate'), 'an evicted current shell must not fall back to retained HTML');
     let latest = h;
     for (let i = 1; i <= 3; i++) {
       latest = harness({source: release('upgrade' + i), stores: h.stores, fetch: () => Promise.reject(new Error('offline'))});
@@ -1022,7 +1023,7 @@ for (const [site, workerSource, prefix] of [
     }
   });
 }
-test("install precaches only the search shell and global data", async () => {
+test("install precaches the search and Reader shells and global data, not documents or engines", async () => {
   const instance = harness({ fetch: manifestsFetch() });
   await lifecycle(instance.listeners.install);
   assert.strictEqual(instance.operations.addAll.length, 1);
@@ -1030,7 +1031,10 @@ test("install precaches only the search shell and global data", async () => {
   assert.ok(instance.operations.addAll[0].includes("/search/static/search/index-worker.js"));
   assert.ok(instance.operations.addAll[0].includes("/search/data/initial/global.json"));
   assert.ok(instance.operations.addAll[0].includes("/search/data/sidebar/global.json"));
-  assert.ok(!instance.operations.addAll[0].some(url => /\/repos\/|\/reader\.(?:html|js|css)$/.test(url)));
+  const urls = instance.operations.addAll[0];
+  for (const url of require('../../static/reader-resources.js').shellAssets('/search/static/'))
+    assert.strictEqual(urls.filter(entry => entry === url).length, 1, url);
+  assert.ok(!urls.some(url => /\/repos\/|\/vendor\/|\/tts-client\.js$/.test(url)));
   assert.deepStrictEqual(instance.operations.fetch, []);
   assert.strictEqual(instance.operations.skipWaiting, 1);
 });
@@ -1146,6 +1150,8 @@ test("late old-worker writes remain available only at exact immutable URLs", asy
   old.stores.get(cacheName(oldSource)).set('https://example.test' + queried, response('queried immutable bytes'));
   assert.strictEqual((await dispatchFetch(restarted, 'https://example.test' + queried)).body, 'queried immutable bytes');
   await assert.rejects(dispatchFetch(restarted, 'https://example.test' + oldPath + '?different'), 'query matches must be exact');
+  // A missing shell in the serving cache must not be replaced with late stale HTML.
+  restarted.stores.get(cacheName(nextSource)).delete('/search/static/reader.html');
   const excluded = ['/search/static/reader.html', '/search/data/late.json', '/search/static/reader/late.mjs',
     oldPath + '?sw-retained-generation', oldPath + '?reader-v1&sw-retained-generation'];
   for (const path of excluded) {

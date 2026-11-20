@@ -51,7 +51,7 @@ export interface ReaderFormatControllerContext {
   setReaderPhase(phase: string): boolean; updateDocumentState(state: { restorationReady?: boolean; page?: number; pageCount?: number }): void;
   restorationFailed: boolean; scheduleSave(): void; readerResources: Set<() => void>;
   markReaderContentReady(): void; isReaderGenerationCurrent(kind: string, generation: number): boolean;
-  schedulePdfBookSearchPrefetch(): void; updateProgressTools(): void; fullSearchInput: HTMLInputElement; runFullSearch(): void;
+  syncHeadingLocation(): void; schedulePdfBookSearchPrefetch(): void; updateProgressTools(): void; fullSearchInput: HTMLInputElement; runFullSearch(): void;
   readerAbortController: AbortController; classifyReaderError(error: unknown, fallback: string): unknown;
   pageInvertToggle: HTMLElement; mediaTab: HTMLElement; ocrManifestUrl: string;
   panelState: { selected: string }; fullSearchButton: HTMLElement; bookmarkRibbon: HTMLElement; readingProgressSummary: HTMLElement;

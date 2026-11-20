@@ -542,8 +542,36 @@ for (const invalid of [
   const good=make({url,revision});const resolved=await resolveDjvuSource(good.context,source,signal);
   assert.equal(resolved.href,url);assert.equal(good.calls.length,1);assert.equal(good.calls[0].timeout,7654);
   assert.strictEqual(good.calls[0].signal,signal);assert.ok(good.calls[0].endpoint.startsWith('/proxy/api/reader-source-revision?url='));
-  const failed=make({},503);await assert.rejects(resolveDjvuSource(failed.context,source,signal),/DJVU_SOURCE_REVISION_HTTP_503/);
+  for (const status of [403,404,503]) {
+    const failed=make({},status);
+    await assert.rejects(resolveDjvuSource(failed.context,source,signal),{status,message:`DJVU_SOURCE_REVISION_HTTP_${status}`});
+    assert.equal(failed.calls.length,status===503?2:1);
+  }
+  // Unavailable metadata is discarded even when stream cleanup rejects.
+  // A transient fetch error also gets just one fresh lookup, never a range read.
+  for (const failure of [null,new TypeError('network disconnected'),new DOMException('stalled','TimeoutError')]) {
+    const recovered=make({url,revision});
+    const request=recovered.context.fetchWithReaderTimeout;
+    let attempts=0,cancelled=0;
+    recovered.context.fetchWithReaderTimeout=async (...args)=>{
+      if (++attempts>1) return request(...args);
+      if (failure) throw failure;
+      return new Response(new ReadableStream({cancel(){cancelled++;throw Error('cleanup failed');}}),{status:503});
+    };
+    assert.equal((await resolveDjvuSource(recovered.context,source,signal)).href,url);
+    assert.equal(attempts,2);assert.equal(cancelled,failure?0:1);
+  }
+  const stopping=new AbortController(), interrupted=make({},503);
+  const request=interrupted.context.fetchWithReaderTimeout;
+  interrupted.context.fetchWithReaderTimeout=async (...args)=>{
+    const response=await request(...args);
+    setTimeout(()=>stopping.abort(),0);
+    return response;
+  };
+  await assert.rejects(resolveDjvuSource(interrupted.context,source,stopping.signal),{name:'AbortError'});
+  assert.equal(interrupted.calls.length,1);
   const malformed=make('{');await assert.rejects(resolveDjvuSource(malformed.context,source,signal),SyntaxError);
+  assert.equal(malformed.calls.length,1);
   for(const reply of [null,{}, {url:5,revision}, {url,revision:5}, {url,revision:'b'.repeat(40)},
     {url:url.replace('huggingface.co','evil.example'),revision}, {url:url+'?download=1',revision},
     {url:url+'#fragment',revision}, {url:url.replace('/book.djvu','/other.djvu'),revision},

@@ -4,6 +4,8 @@
 // a chapter or a PDF page) in reading order from the unit the reader starts at.
 // DOM text is never modified: highlights use the CSS Custom Highlight API in
 // the realm (frame document / shadow tree) that owns the range.
+/** @typedef {import('../../../typings/reader-speech-strict').Position} SpeechPosition
+ * @typedef {import('../../../typings/tts-client-strict').PlaybackSettings} PlaybackSettings */
 const SKIP = new Set(["SCRIPT", "STYLE", "NOSCRIPT", "TEMPLATE"]);
 // A standalone Reader left while reading aloud (← or browser back) records
 // where it was; search/reader-host/application/navigation.js resumes it in a background Reader
@@ -41,6 +43,21 @@ function until(check, timeout) {
 
 /** @param {Node | null | undefined} root */
 function rootText(root) { return textNodes(root).map((node) => node.data).join(""); }
+
+/** Map a DOM boundary (which may be between elements) to the spoken UTF-16 text.
+ * @param {Node} root @param {Node} node @param {number} offset */
+function textOffset(root, node, offset) {
+  if (!root.contains(node)) return null;
+  const point = (root.ownerDocument || document).createRange();
+  point.setStart(node, offset); point.collapse(true);
+  let total = 0;
+  for (const item of textNodes(root)) {
+    if (item === node) return total + offset;
+    if (point.comparePoint(item, 0) >= 0) return total;
+    total += item.length;
+  }
+  return total;
+}
 
 // PDF/OCR line breaks are layout, not sentences. Keep the length (and thus
 // every offset) identical: a break not after sentence punctuation becomes a space.
@@ -235,7 +252,15 @@ export function createReaderSpeech(readerContext, loadPlayer) {
         if (part) return part.start + Math.min(position.offset, part.raw.length);
         return parts.find((item) => item.unit > position.unit)?.start ?? text.length;
       },
-      locateTop: () => locateTop(),
+      locateTop: () => {
+        const position = topPosition();
+        return position ? locatePosition(position) : Promise.resolve(null);
+      },
+      selectionStart: () => selectionStart(),
+      onStart() {
+        if (readerContext.isReaderOverlayFrame?.())
+          window.parent.postMessage({ type: "voice-reader-speech-start" }, location.origin);
+      },
       partAt(offset) {
         let low = 0, high = parts.length - 1;
         while (low <= high) {
@@ -338,18 +363,6 @@ export function createReaderSpeech(readerContext, loadPlayer) {
         if (!position) return 0;
         const part = parts.find((item) => item.unit === position.unit);
         return part ? part.start + Math.min(position.offset, part.raw.length) : text.length;
-      },
-      offsetFromNode(node, offset) {
-        for (const part of parts) {
-          const root = sourceInfo.root(part.unit);
-          if (!root || !(root === node || root.contains(node) || root.getRootNode?.() === node.getRootNode?.() && root.contains?.(node))) continue;
-          let total = 0;
-          for (const item of textNodes(root)) {
-            if (item === node) return part.start + Math.min(part.raw.length, total + offset);
-            total += item.length;
-          }
-        }
-        return null;
       }
     };
     self.root = sourceInfo.root(base) || readerContext.content;
@@ -405,18 +418,45 @@ export function createReaderSpeech(readerContext, loadPlayer) {
     return { unit, offset: 0 };
   }
 
-  // Exact start for "听书"/"从当前阅读位置开始": the window is re-based to the
-  // unit in view when it is not loaded (or would need many earlier units).
-  async function locateTop() {
-    const position = topPosition();
-    if (!adapter || !position) return 0;
+  // Rebase before loading a distant unit; never walk all the intervening pages.
+  /** @param {SpeechPosition} position */
+  async function locatePosition(position) {
     let target = adapter;
-    if (target.source.units > 1 && (position.unit < target.base || !target.covers(position.unit) && position.unit - target.base > 2)) {
-      target = /** @type {import('../../../typings/reader-speech-strict').SpeechAdapter} */ (rebase(position.unit));
+    if (!target || position.unit < target.source.first || position.unit >= target.source.units) return null;
+    if (position.unit < target.base || !target.covers(position.unit) && position.unit - target.base > 2) {
+      target = rebase(position.unit);
+      if (!target) return null;
     }
     await target.ensureUnit(position.unit);
-    target.following = true; // Reading starts where the reader looks: follow it.
+    if (adapter !== target) return null;
+    target.following = true;
     return target.offsetOf(position);
+  }
+
+  /** @param {Node} node @param {number} offset */
+  function nodePosition(node, offset) {
+    const info = adapter?.source;
+    if (!info) return null;
+    const element = node.nodeType === Node.ELEMENT_NODE ? /** @type {Element} */ (node) : node.parentElement;
+    const unit = info.dom ? info.first : info.page
+      ? Number(element?.closest(".reader-page[data-page]")?.getAttribute("data-page"))
+      : Number(element?.closest(".reader-epub-chapter[data-chapter]")?.getAttribute("data-chapter")) - 1;
+    if (!Number.isInteger(unit) || unit < info.first || unit >= info.units) return null;
+    const root = info.root(unit), local = root && textOffset(root, node, offset);
+    return local === null ? null : { unit, offset: local };
+  }
+
+  function selectionStart() {
+    const info = adapter?.source;
+    if (!info) return null;
+    const doc = info.frame?.contentDocument || document;
+    const selection = doc.getSelection();
+    if (!selection || selection.isCollapsed || !selection.rangeCount || !selection.toString().trim()) return null;
+    const range = selection.getRangeAt(0);
+    const position = nodePosition(range.startContainer, range.startOffset);
+    // Require both ends to belong to reader text, not to the surrounding UI.
+    if (!position || !nodePosition(range.endContainer, range.endOffset)) return null;
+    return () => locatePosition(position);
   }
 
   // ---- Publication to the shared player --------------------------------------
@@ -432,14 +472,20 @@ export function createReaderSpeech(readerContext, loadPlayer) {
 
   // ---- Leaving a standalone Reader while reading aloud -----------------------
   // Unit-local position: adapter offsets depend on the unit the window started at.
-  /** @type {{pending: true} | import('../../../typings/reader-speech-strict').Position | null} */
+  /** @type {(({pending: true} | SpeechPosition) & {settings?: PlaybackSettings}) | null} */
   let resume = (() => {
     try {
       if (!String(window.name).startsWith(RESUME_PREFIX)) return null;
-      const value = /** @type {{pending?: boolean; unit?: number; offset?: number} | null} */ (JSON.parse(window.name.slice(RESUME_PREFIX.length)));
+      const raw = window.name.slice(RESUME_PREFIX.length);
       window.name = "";
-      if (value?.pending === true) return { pending: true };
-      return Number.isInteger(value?.unit) && Number.isInteger(value?.offset) ? /** @type {import('../../../typings/reader-speech-strict').Position} */ (value) : null;
+      const value = /** @type {{pending?: boolean; unit?: number; offset?: number; settings?: PlaybackSettings} | null} */ (JSON.parse(raw));
+      const settings = value?.settings;
+      if (settings && (!Number.isFinite(settings.rate) || settings.rate < 0.5 || settings.rate > 2 ||
+          !["off", "clip", "5", "15", "30", "60"].includes(settings.timer) ||
+          !Number.isFinite(settings.deadline) || settings.deadline < 0 ||
+          (settings.timer === "off" || settings.timer === "clip" ? settings.deadline !== 0 : settings.deadline <= Date.now()))) return null;
+      if (value?.pending === true) return settings ? { pending: true, settings } : { pending: true };
+      return Number.isInteger(value?.unit) && Number.isInteger(value?.offset) ? /** @type {SpeechPosition & {settings?: PlaybackSettings}} */ (value) : null;
     } catch (_) { return null; }
   })();
 
@@ -452,8 +498,10 @@ export function createReaderSpeech(readerContext, loadPlayer) {
       if (!(state?.playing || state?.interrupted) || typeof owner?.partAt !== "function" || !Number.isInteger(state.position)) return;
       const part = owner.partAt(/** @type {number} */ (state.position));
       if (!part) return;
+      if (state.settings?.deadline && state.settings.deadline <= Date.now()) return;
       const value = JSON.stringify({ readerUrl: location.href, unit: part.unit,
-        offset: Math.max(0, Math.min(part.raw.length, /** @type {number} */ (state.position) - part.start)), at: Date.now() });
+        offset: Math.max(0, Math.min(part.raw.length, /** @type {number} */ (state.position) - part.start)),
+        settings: state.settings, at: Date.now() });
       sessionStorage.setItem(HANDOFF_KEY, value);
       // A Reader opened as the first page later reaches a search document that
       // was never loaded in this tab; sessionStorage is still shared there, but
@@ -462,26 +510,10 @@ export function createReaderSpeech(readerContext, loadPlayer) {
     } catch (_) { /* Optional: without storage, leaving stops reading as before. */ }
   }
 
-  /** @param {{pending: true} | import('../../../typings/reader-speech-strict').Position} target */
-  async function resumeAt(target) {
-    const info = adapter?.source;
-    if (!adapter || !info) return;
-    if ('pending' in target && target.pending) {
-      let offset = 0;
-      try { offset = await adapter.locateTop(); } catch (_) {}
-      if (adapter?.source !== info) return;
-      adapter.following = true;
-      speech()?.readFrom(offset);
-      return;
-    }
-    if ('pending' in target) return;
-    if (target.unit < info.first || target.unit >= info.units) return;
-    let owner = adapter;
-    if (info.units > 1 && (target.unit < owner.base || !owner.covers(target.unit) && target.unit - owner.base > 2)) owner = /** @type {import('../../../typings/reader-speech-strict').SpeechAdapter} */ (rebase(target.unit));
-    await owner.ensureUnit(target.unit);
-    if (owner !== adapter) return;
-    owner.following = true;
-    speech()?.readFrom(owner.offsetOf(target));
+  /** @param {({pending: true} | SpeechPosition) & {settings?: PlaybackSettings}} target */
+  function resumeAt(target) {
+    const position = "pending" in target ? topPosition() : target;
+    if (position) speech()?.readFrom(() => locatePosition(position), { exact: !("pending" in target), settings: target.settings });
   }
 
   /** @param {number} unit */
@@ -502,27 +534,6 @@ export function createReaderSpeech(readerContext, loadPlayer) {
     if (position && !adapter.covers(position.unit)) rebase(Math.max(adapter.source.first, position.unit - 1));
   }
 
-  /** @param {Node} node @param {number} offset */
-  async function readAt(node, offset) {
-    let global = adapter?.offsetFromNode(node, offset);
-    if (global === null || global === undefined) {
-      // A unit outside the loaded window: start a window there.
-      const info = /** @type {import('../../../typings/reader-speech-strict').SpeechSource} */ (adapter?.source || source());
-      let unit = null;
-      for (let index = info.first; index < info.units && unit === null; index++) {
-        const root = info.root(index);
-        if (root && (root.contains(node) || root.getRootNode?.()?.contains?.(node))) unit = index;
-      }
-      if (unit === null) return;
-      const next = /** @type {import('../../../typings/reader-speech-strict').SpeechAdapter} */ (rebase(unit));
-      await next.ensure(1);
-      global = next.offsetFromNode(node, offset);
-      if (global === null || global === undefined) return;
-    }
-    if (adapter) adapter.following = true;
-    speech()?.readFrom(global);
-  }
-
   /** @param {MouseEvent} event */
   function onDoubleClick(event) {
     if (!adapter || !speech()) return;
@@ -530,7 +541,9 @@ export function createReaderSpeech(readerContext, loadPlayer) {
     const path = event.composedPath?.() || [];
     const shadow = /** @type {ShadowRoot | undefined} */ (path.map((node) => /** @type {Node} */ (node)?.getRootNode?.()).find((root) => root?.nodeType === 11));
     const caret = caretIn(doc, event.clientX, event.clientY, shadow ? [shadow] : []);
-    if (caret?.node?.nodeType === Node.TEXT_NODE) readAt(caret.node, caret.offset);
+    if (!caret || caret.node.nodeType !== Node.TEXT_NODE) return;
+    const position = nodePosition(caret.node, caret.offset);
+    if (position) speech()?.readFrom(() => locatePosition(position));
   }
 
   // ---- Lifecycle ---------------------------------------------------------------
@@ -686,13 +699,6 @@ export function createReaderSpeech(readerContext, loadPlayer) {
         localStorage.removeItem(HANDOFF_KEY);
       }
     } catch (_) {}
-    // Starting speech in a newly opened book takes over from the Reader that
-    // was left reading in the background.
-    document.addEventListener("click", (event) => {
-      if (!(/** @type {Element | null} */ (event.target))?.closest?.("[data-speech-toggle]")) return;
-      if (readerContext.isReaderOverlayFrame?.())
-        window.parent.postMessage({ type: "voice-reader-speech-start" }, location.origin);
-    }, { capture: true });
     // ← records it before navigating; pagehide covers browser back and other exits.
     window.addEventListener("pagehide", handoff, { capture: true });
     document.querySelector("#back")?.addEventListener("click", handoff, { capture: true });

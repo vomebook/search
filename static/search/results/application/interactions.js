@@ -87,7 +87,11 @@
           }
           if (action === "read") {
             const record = deps.recordForRow(actionBtn.closest(".result-item"));
-            if (record) actionBtn.dataset.readerUrl = deps.freshReaderLink(record);
+            if (record) {
+              actionBtn.dataset.readerUrl = deps.freshReaderLink(record);
+              // Pointer activation does not focus buttons in every browser.
+              actionBtn.focus({ preventScroll: true });
+            }
             deps.navigateToReader(actionBtn.dataset.readerUrl);
             return undefined;
           }

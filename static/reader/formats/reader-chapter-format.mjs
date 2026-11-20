@@ -364,7 +364,7 @@ export function createReaderChapterFormat(readerContext) {
         readerContext.assertReaderActive();
         const url = chapterUrl(chapter);
         if (!url) throw new Error("EPUB_INVALID_PATH");
-        const result = await readerContext.fetchReaderUrl(url, { signal, priority });
+        const result = await readerContext.fetchReaderUrl(url, { signal, priority }, {retryBucket:true});
         if (!result.ok) throw new Error(`HTTP ${result.status}`);
         const bytes = await VoiceOfMLReaderSecurity.readBytes(
           result,

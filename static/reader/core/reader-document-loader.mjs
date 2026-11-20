@@ -10,9 +10,11 @@
  * @property {number} READER_PROXY_TIMEOUT_MS
  * @property {(error: unknown) => boolean} retryableReaderProxyError
  * @property {(delay: number) => Promise<void>} waitForReader
+ * @property {<T>(promise: T | PromiseLike<T>, signal?: AbortSignal | null) => Promise<Awaited<T>>} awaitReader
  * @property {(rawUrl: string) => string} readerContentUrl
+ * @property {(path: string) => string} readerDownloadApiUrl
  * @property {(url: string, timeoutMs?: number, requestInit?: ReaderRequestInit) => Promise<Response>} fetchWithReaderTimeout
- * @property {<T>(open: () => Promise<T>) => Promise<T>} retryReaderProxy
+ * @property {<T>(open: () => Promise<T>, signal?: AbortSignal | null) => Promise<T>} retryReaderProxy
  * @property {(url: string, requestInit?: RequestInit) => Promise<Response>} fetchReaderUrl
  * @property {() => Promise<Response>} fetchReaderResponse
  * @property {(tasks: Promise<unknown>[]) => PreparedReaderDocument} prepareReaderDocument
@@ -68,35 +70,53 @@ export function createReaderDocumentLoader(readerContext) {
   /** @param {unknown} value */
   function retryableReaderProxyError(value) {
     const error = /** @type {ReaderLoaderError | null | undefined} */ (value);
-    return /** @type {(number | undefined)[]} */ ([408, 429, 500, 502, 503, 504]).includes(error?.status) ||
-      /** @type {(string | undefined)[]} */ (["TypeError", "TimeoutError"]).includes(error?.name) ||
+    if (error?.name === "AbortError" || error?.code === "READER_BODY_INTERRUPTED") return false;
+    if (typeof error?.status === "number") return [408, 429, 500, 502, 503, 504].includes(error.status);
+    return /** @type {(string | undefined)[]} */ (["TypeError", "TimeoutError"]).includes(error?.name) ||
       /failed to fetch|network|timeout|HTTP\s*(?:408|429|5\d\d)|server response\s*\((?:408|429|5\d\d)\)/i.test(error?.message || "");
   }
 
-  /** @template T @param {() => Promise<T>} open @returns {Promise<T>} */
-  async function retryReaderProxy(open) {
+  /** @template T @param {() => Promise<T>} open @param {AbortSignal | null} [signal] @returns {Promise<T>} */
+  async function retryReaderProxy(open, signal) {
     for (let attempt = 0; ; attempt++) {
       readerContext.assertReaderActive();
+      signal?.throwIfAborted();
       try {
         return await open();
       } catch (error) {
+        signal?.throwIfAborted();
         if (attempt >= 2 || /** @type {ReaderLoaderError | null | undefined} */ (error)?.code === "READER_PDF_RATE_LIMIT" || !readerContext.retryableReaderProxyError(error)) throw error;
-        await readerContext.waitForReader(350 * (attempt + 1));
+        const backoff = readerContext.waitForReader(350 * (attempt + 1));
+        await (signal ? readerContext.awaitReader(backoff, signal) : backoff);
       }
     }
   }
 
-  /** @param {string} rawUrl @param {RequestInit} [requestInit] */
-  function fetchReaderUrl(rawUrl, requestInit = {}) {
-    if (String(rawUrl).includes("/api/reader-bucket-resource?"))
-      return readerContext.fetchWithReaderTimeout(rawUrl, readerContext.READER_PROXY_TIMEOUT_MS, requestInit);
-    const proxyUrl = readerContext.readerContentUrl(rawUrl);
+  /** @param {string} rawUrl @param {RequestInit} [requestInit] @param {{retryBucket?: boolean}} [policy] */
+  function fetchReaderUrl(rawUrl, requestInit = {}, {retryBucket = false} = {}) {
+    let proxyUrl = readerContext.readerContentUrl(rawUrl), alreadyProxied = false;
+    // Some chapter URLs already name the deployed API, even on a local Space
+    // origin. Don't interpret an arbitrary URL containing the route as a proxy.
+    try {
+      const base = typeof location === "undefined" ? "https://voiceofml-search.hf.space" : location.href;
+      const target = new URL(rawUrl, base);
+      const proxyOrigin = new URL(readerContext.readerDownloadApiUrl("/api/reader-bucket-resource"), base).origin;
+      if (["https://voiceofml-search.hf.space", proxyOrigin].includes(target.origin) &&
+          !target.username && !target.password && !target.hash && target.pathname === "/api/reader-bucket-resource" &&
+          target.searchParams.getAll("path").length === 1 && [...target.searchParams.keys()].every(key => key === "path")) {
+        alreadyProxied = true;
+        if (/^https?:\/\//.test(rawUrl)) proxyUrl = target.href;
+      }
+    } catch (_) {}
+    // OCR and other sidecars already own their own recovery policy.
+    if (alreadyProxied && !retryBucket)
+      return readerContext.fetchWithReaderTimeout(proxyUrl, readerContext.READER_PROXY_TIMEOUT_MS, requestInit);
     return readerContext.retryReaderProxy(async () => {
-        const response = await readerContext.fetchWithReaderTimeout(proxyUrl, readerContext.READER_PROXY_TIMEOUT_MS, requestInit);
+      const response = await readerContext.fetchWithReaderTimeout(proxyUrl, readerContext.READER_PROXY_TIMEOUT_MS, requestInit);
       if (response.ok) return response;
-      await response.body?.cancel();
+      void response.body?.cancel().catch(() => {});
       throw Object.assign(new Error(`HTTP ${response.status}`), { status: response.status });
-    }).catch(error => {
+    }, requestInit.signal).catch(error => {
       readerContext.assertReaderActive();
       requestInit.signal?.throwIfAborted();
       throw error;
@@ -118,7 +138,11 @@ export function createReaderDocumentLoader(readerContext) {
     const pending = takeMatchingManifestPreload(target, early);
     const fallback = () => readerContext.fetchReaderUrl(target);
     if (!pending) return fallback();
-    return pending.then(response => response?.ok ? response : fallback(), fallback);
+    return pending.then(response => {
+      if (response?.ok) return response;
+      void response?.body?.cancel().catch(() => {});
+      return fallback();
+    }, fallback);
   }
 
   function fetchReaderResponse() {

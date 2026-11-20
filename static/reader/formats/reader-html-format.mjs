@@ -1,3 +1,5 @@
+import { bindReaderScrollIntent } from "../core/reader-bindings.mjs";
+
 /** @param {string | null | undefined} markdown */
 export function stripMarkdownFrontMatter(markdown) {
   // Marxists-Library Markdown carries YAML metadata for EPUB generation and
@@ -92,18 +94,48 @@ export function createReaderHtmlFormat(readerContext) {
 
   const XLINK_NAMESPACE = "http://www.w3.org/1999/xlink";
   const SVG_ANIMATION_ELEMENTS = new Set(["animate", "animatemotion", "animatetransform", "set", "discard"]);
-  // Offline HTML may embed only inline images. Restrict URL-bearing attributes to
-  // that rule; ordinary attributes (colspan, width, lang...) keep DOMPurify defaults.
+  // Offline HTML may embed only inline images and link within its own document.
+  // Ordinary attributes (colspan, width, lang...) keep DOMPurify defaults.
   const OFFLINE_URL_ATTRIBUTES = new Set([
     "href", "xlink:href", "src", "srcset", "poster", "action", "formaction", "background",
     "cite", "data", "longdesc", "ping", "usemap", "codebase", "manifest", "lowsrc", "dynsrc"
   ]);
   const OFFLINE_INLINE_IMAGE = /^data:image\/(?:gif|png|jpeg|webp|svg\+xml);/i;
-  /** @param {Element} _node @param {{attrName: string, attrValue: string, keepAttr: boolean}} data */
-  function restrictOfflineUrlAttribute(_node, data) {
+  /** @param {string | null} value */
+  function isLocalFragment(value) {
+    return !!value && value.startsWith("#") && !/[\u0000-\u001f\u007f-\u009f]/.test(value);
+  }
+
+  /** @param {Element} node @param {{attrName: string, attrValue: string, keepAttr: boolean}} data */
+  function restrictOfflineUrlAttribute(node, data) {
+    if (data.attrName === "href" && node.localName === "a" && isLocalFragment(data.attrValue)) return;
     if (OFFLINE_URL_ATTRIBUTES.has(data.attrName) &&
         !OFFLINE_INLINE_IMAGE.test(String(data.attrValue || "").replace(/[\u0000-\u0020\u007f-\u009f]/g, "")))
       data.keepAttr = false;
+  }
+
+  /** @param {MouseEvent} event */
+  function clickedLink(event) {
+    return /** @type {HTMLAnchorElement | null | undefined} */ (/** @type {Element | null} */ (event.target)?.closest?.("a[href]"));
+  }
+
+  /** @param {HTMLElement | Document} root @param {string} fragment @param {MouseEvent} event */
+  function jumpWithoutHistory(root, fragment, event) {
+    // Never let a nested document navigate, even for a missing fragment. A
+    // child fragment traversal joins the tab's history and consumes its Back.
+    event.preventDefault();
+    let name = fragment.slice(1);
+    try { name = decodeURIComponent(name); } catch (_) {}
+    const target = [...root.querySelectorAll("[id]")].find(node => node.id === name) ||
+      [...root.querySelectorAll("a[name]")].find(node => node.getAttribute("name") === name);
+    if (target) {
+      readerContext.beginReaderNavigation(event);
+      target.scrollIntoView({ block: "start" });
+    } else if (!name || name.toLowerCase() === "top") {
+      readerContext.beginReaderNavigation(event);
+      if ("scrollingElement" in root) root.defaultView?.scrollTo(0, 0);
+      else root.scrollIntoView({ block: "start" });
+    }
   }
 
   // Style attributes and SVG presentation attributes that accept CSS url().
@@ -380,16 +412,9 @@ export function createReaderHtmlFormat(readerContext) {
     return readerContext.sanitizeEpubDocument(new DOMParser().parseFromString(text, "text/html"));
   }
 
-  /** @param {string | null} raw @param {string} source */
-  function readerMarkdownLink(raw, source) {
-    const value = String(raw || "").trim();
-    if (!value || value.startsWith("#") || /[\u0000-\u001f\u007f\\]/.test(value)) return null;
+  /** @param {URL} url @param {URL | null} base */
+  function readerMarkdownLink(url, base) {
     try {
-      // Converted text lives in a cache; relative links belong to the original
-      // document, not to the cache object or the Reader's own HTML page.
-      // A source-less/bucket-only document can still have absolute dataset links.
-      const base = source ? new URL(source) : null;
-      const url = base ? new URL(value, base) : new URL(value);
       if (url.protocol !== "https:" || !["huggingface.co", "hf-mirror.com"].includes(url.hostname) ||
           url.username || url.password || url.port || url.search ||
           !/^\/datasets\/VoiceOfML\/[^/]+\/(?:resolve|raw)\/[^/]+\/.+/.test(url.pathname)) return null;
@@ -399,6 +424,7 @@ export function createReaderHtmlFormat(readerContext) {
       if (!ext || VoiceOfMLReader.capability(ext).readerMode !== VoiceOfMLReader.ReaderMode.ORIGINAL) return null;
       const fragment = url.hash;
       if (fragment && !["md", "markdown"].includes(ext)) return null;
+      url = new URL(url.href);
       url.hash = "";
       if (base) {
         const baseFile = new URL(base.href);
@@ -417,28 +443,47 @@ export function createReaderHtmlFormat(readerContext) {
 
   /** @param {HTMLElement} article */
   function prepareMarkdownLinks(article) {
-    const original = readerContext.downloadUrl || readerContext.sourceUrl;
+    // Cache-backed text still resolves relative links against the original file.
+    /** @type {URL | null} */
+    let base = null;
+    try { base = new URL(readerContext.downloadUrl || readerContext.sourceUrl); } catch (_) {}
     const readerLinks = new WeakSet();
     for (const link of article.querySelectorAll("a[href]")) {
-      if (link.hasAttribute("download")) continue;
-      const target = readerMarkdownLink(link.getAttribute("href"), original);
+      const value = (link.getAttribute("href") || "").trim();
+      if (isLocalFragment(value)) continue;
+      const relative = !/^(?:[a-z][a-z0-9+.-]*:|\/\/)/i.test(value);
+      let destination = null;
+      if (value && !/[\u0000-\u001f\u007f-\u009f\\]/.test(value)) {
+        try {
+          const url = base ? new URL(value, base) : new URL(value);
+          if (/^https?:$/.test(url.protocol) && !url.username && !url.password &&
+              (!relative || url.origin === base?.origin)) destination = url;
+        } catch (_) {}
+      }
+      const target = destination && !link.hasAttribute("download") ? readerMarkdownLink(destination, base) : null;
       if (target) {
         link.setAttribute("href", target);
         if (!target.startsWith("#")) readerLinks.add(link);
+      } else if (relative) {
+        if (destination) link.setAttribute("href", destination.href);
+        else link.removeAttribute("href");
       }
     }
     article.addEventListener("click", (event) => {
       if (event.defaultPrevented || event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
-      const link = /** @type {HTMLAnchorElement | null | undefined} */ (/** @type {Element | null} */ (event.target)?.closest?.("a[href]"));
-      if (!link || !readerLinks.has(link) || !article.contains(link) || link.hasAttribute("download") ||
-          (link.target && link.target.toLowerCase() !== "_self")) return;
+      const link = clickedLink(event);
+      if (!link || !article.contains(link) || link.hasAttribute("download") ||
+          (link.target && link.target.toLowerCase() !== "_self") || !readerContext.isReaderOverlayFrame()) return;
+      const href = (link.getAttribute("href") || "").trim();
+      if (isLocalFragment(href)) {
+        jumpWithoutHistory(article, href, event);
+        return;
+      }
+      if (!readerLinks.has(link)) return;
       try {
         const target = new URL(link.href);
         if (target.origin !== location.origin || target.pathname !== location.pathname || !target.searchParams.has("url")) return;
-        // Standalone readers use ordinary browser navigation, retaining the
-        // previous document in history. The search overlay needs its host to
-        // replace the child Reader and update its own URL instead.
-        if (!readerContext.isReaderOverlayFrame()) return;
+        // The overlay host replaces the child Reader and updates its own URL.
         event.preventDefault();
         readerContext.navigateReader(target.href);
       } catch (_) {}
@@ -597,11 +642,22 @@ export function createReaderHtmlFormat(readerContext) {
           });
            frame.contentDocument.addEventListener("keydown", readerContext.handleReaderKeydown);
            const doc = frame.contentDocument;
+           /** @param {MouseEvent} event */
+           const jump = (event) => {
+             const href = clickedLink(event)?.getAttribute("href")?.trim() || "";
+             if (!event.defaultPrevented && isLocalFragment(href)) jumpWithoutHistory(doc, href, event);
+           };
+           doc.addEventListener("click", jump);
+           doc.addEventListener("auxclick", jump);
            doc.addEventListener("click", readerContext.handleReaderOutsideClick);
-           readerContext.trackReaderResource(() => doc.removeEventListener("click", readerContext.handleReaderOutsideClick));
+           readerContext.trackReaderResource(() => {
+             doc.removeEventListener("click", jump);
+             doc.removeEventListener("auxclick", jump);
+             doc.removeEventListener("click", readerContext.handleReaderOutsideClick);
+           });
           readerContext.installReaderTapSelectionClear(frame.contentDocument.body, frame.contentDocument);
-          for (const type of ["wheel", "touchstart", "pointerdown"])
-            frame.contentDocument.addEventListener(type, readerContext.beginReaderNavigation, { passive: true });
+          // Input in the srcdoc does not bubble into the Reader viewport.
+          bindReaderScrollIntent(doc.documentElement, event => readerContext.beginReaderNavigation(event));
           readerContext.setToc(readerContext.headingTocEntries(frame.contentDocument));
           if (documentData.spreadsheet) {
             // The sanitized cells are already readable. Let them take the

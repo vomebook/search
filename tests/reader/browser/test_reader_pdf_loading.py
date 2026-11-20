@@ -155,27 +155,33 @@ class PdfLoadingTests(unittest.TestCase):
         self.assertTrue(self.page.evaluate('window.pdfHitTestDocument'))
         self.assertEqual(self.errors, [])
 
-    def test_pdf_hit_projection_exhaustion_does_not_mint_more_urls(self):
+    def test_pdf_hit_projection_exhaustion_is_bounded_and_manual_retry_recovers(self):
         result = self.open_ocr_hit()
         attempts = []
+        available = False
 
-        def fail_leaf(route):
+        def temporary_failure(route):
             attempts.append(route.request.url)
-            route.fulfill(status=503)
+            if available:
+                route.continue_()
+            else:
+                route.fulfill(status=503)
 
-        self.page.route(HIT_PROJECTION, fail_leaf)
+        self.page.route(HIT_PROJECTION, temporary_failure)
         result.click()
-        failure = '搜索结果定位失败，请重试'
-        self.page.wait_for_function('(failure) => document.querySelector("#full-search-status").textContent === failure',
-                                    arg=failure)
-        # Observe a second completed activation, not the status from the first.
-        self.page.locator('#full-search-status').evaluate("node => { node.textContent = ''; }")
-        result.click()
-        self.page.wait_for_function('(failure) => document.querySelector("#full-search-status").textContent === failure',
-                                    arg=failure)
-        self.assertEqual([urllib.parse.urlsplit(url).query for url in attempts],
-                         ['', 'reader-module-retry=1', 'reader-module-retry=2'])
+        self.page.wait_for_function("() => document.querySelector('#full-search-status').textContent === '搜索结果定位失败，请重试'")
         self.assertEqual(self.page.locator('.reader-text-hit-box').count(), 0)
+        available = True
+        # Give a stray automatic retry time to run before the second click.
+        self.page.wait_for_timeout(1100)
+        first_batch = ['', 'reader-module-retry=1', 'reader-module-retry=2']
+        self.assertEqual([urllib.parse.urlsplit(url).query for url in attempts], first_batch)
+
+        result.click()
+        mark = self.page.locator('.reader-page[data-page="1"] .reader-text-hit-box')
+        mark.wait_for(state='visible')
+        self.assertEqual(mark.get_attribute('data-mapping-precision'), 'block')
+        self.assertEqual([urllib.parse.urlsplit(url).query for url in attempts], first_batch + ['reader-module-retry=3'])
         self.assertTrue(self.page.evaluate('window.pdfHitTestDocument'))
         self.assertEqual(self.errors, [])
 

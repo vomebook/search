@@ -174,6 +174,7 @@ export function createReaderFormatController(readerContext) {
       const restorationPromise = readerContext.loadReaderRestoration();
       readerContext.readerRestorationPromise = restorationPromise;
       const prepareResources = new Set(readerContext.readerResources);
+      let pagedImageFallback = false;
       try {
         const active = readerContext.formatAdapters.active;
         if (!active) throw new Error("READER_ADAPTER_MISSING");
@@ -193,6 +194,9 @@ export function createReaderFormatController(readerContext) {
           cleanup();
           readerContext.readerResources.delete(cleanup);
         }
+        // The original can be viewed, but its single-image coordinates cannot
+        // replace the converted document's history or consume its bookmark.
+        pagedImageFallback = mode === "image-pages";
         readerContext.formatAdapters.dispose();
         readerContext.content.replaceChildren();
         readerContext.extension = originalExtension;
@@ -210,7 +214,7 @@ export function createReaderFormatController(readerContext) {
       // Capture the match before restoration consumes the bookmark parameters.
       const explicitBookmark = readerContext.capability.mode === "markdown" && restored?.id &&
         restored.id === readerContext.params.get("bookmark") && restored.url === readerContext.params.get("bookmark_source");
-      await readerContext.applyInitialRestoration(restored, generation);
+      if (!pagedImageFallback) await readerContext.applyInitialRestoration(restored, generation);
       readerContext.assertReaderActive();
       // A Markdown anchor overrides ordinary progress, but not a matched bookmark.
       if (readerContext.capability.mode === "markdown" && !explicitBookmark && location.hash &&
@@ -224,7 +228,8 @@ export function createReaderFormatController(readerContext) {
         } catch (_) {}
       }
       if (!readerContext.setReaderPhase("ready")) return;
-      readerContext.updateDocumentState({ restorationReady: !readerContext.restorationFailed });
+      readerContext.updateDocumentState({ restorationReady: !readerContext.restorationFailed && !pagedImageFallback });
+      readerContext.syncHeadingLocation();
       readerContext.schedulePdfBookSearchPrefetch();
       readerContext.updateProgressTools();
       if (readerContext.fullSearchInput.value.trim()) readerContext.runFullSearch();

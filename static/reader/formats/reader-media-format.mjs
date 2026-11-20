@@ -104,8 +104,17 @@ export function createReaderMediaFormat(readerContext) {
     // exact URL instead of broadening the source policy or retrying the dataset URL.
     const directSource = originalMode === mode && readerContext.validSource(readerContext.downloadUrl) ? readerContext.downloadUrl : readerContext.sourceUrl;
     const retryUrl = readerContext.contentUrl;
-    const canRetry = readerContext.validSource(readerContext.sourceUrl) &&
-      retryUrl === readerContext.readerContentUrl(readerContext.sourceUrl) && retryUrl !== directSource;
+    const canRetry = (() => {
+      if (!readerContext.validSource(readerContext.sourceUrl) ||
+          retryUrl !== readerContext.readerContentUrl(readerContext.sourceUrl)) return false;
+      const target = new URL(retryUrl, location.href);
+      if (target.href !== new URL(directSource, location.href).href) return true;
+      // Native media can retry a transient failure even if playback and
+      // download already use the same trusted Bucket proxy. Never add a query
+      // parameter or switch to a raw URL to force the retry.
+      return target.pathname === "/api/reader-bucket-resource" &&
+        !target.username && !target.password && !target.hash && readerContext.validSource(target.href);
+    })();
     const retryProxy = () => {
       if (readerContext.readerAbortController.signal.aborted || sourceRetried || !canRetry) return false;
       readerContext.saveProgress();

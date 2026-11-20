@@ -9,6 +9,51 @@ class ReaderFormatPipelineTests(unittest.TestCase):
     setUpClass = classmethod(support.PdfFollowupTests.setUpClass.__func__)
     setUp = support.PdfFollowupTests.setUp
 
+    def test_reader_download_reports_navigation_failure_then_retries_native_attachment(self):
+        requests = []
+        fail_download = True
+
+        def check(route):
+            requests.append(('check', route.request.method, route.request.resource_type))
+            route.fulfill(json={'ok': True}, headers={'Access-Control-Allow-Origin': '*'})
+
+        def download(route):
+            requests.append(('download', route.request.method, route.request.resource_type))
+            if fail_download:
+                route.fulfill(status=502, json={'error': 'upstream failure'})
+            else:
+                route.fulfill(content_type='application/octet-stream', body=b'original',
+                              headers={'Content-Disposition': "attachment; filename*=UTF-8''book.txt"})
+
+        self.page.route('**/api/reader-content**', lambda route: route.fulfill(
+            content_type='text/plain', body='Readable text', headers={'Access-Control-Allow-Origin': '*'}))
+        self.page.route('**/api/download/check?**', check)
+        self.page.route('**/api/download?**', download)
+        source = 'https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/book.txt'
+        url = self.origin + support.PREFIX + '/static/reader.html?' + urlencode(dict(url=source, ext='txt'))
+        self.page.goto(url)
+        self.page.locator('html[data-reader-phase="ready"]').wait_for()
+        button = self.page.locator('#download')
+        feedback = self.page.locator('#download-feedback')
+        failures = self.page.locator('#download-feedback', has_text='下载失败，请重试')
+
+        with self.page.expect_response('https://voiceofml-search.hf.space/api/download?**') as failed:
+            button.click()
+        self.assertEqual(failed.value.status, 502)
+        failures.wait_for()
+        self.assertEqual(self.page.locator('iframe[src*="/api/download?"]').count(), 0)
+        self.assertIsNone(button.get_attribute('aria-busy'))
+
+        fail_download = False
+        with self.page.expect_download() as event:
+            button.click()
+        self.assertEqual(event.value.suggested_filename, 'book.txt')
+        self.assertEqual(event.value.path().read_bytes(), b'original')
+        self.assertEqual(feedback.text_content(), '已发起下载')
+        self.assertEqual(requests, [('check', 'GET', 'fetch'), ('download', 'GET', 'document')] * 2)
+        self.assertEqual(self.page.url, url)
+        self.assertEqual(self.page.locator('.reader-text').text_content(), 'Readable text')
+
     def test_body_consumption_overlaps_delayed_format_engines(self):
         self.page.add_init_script('''(()=>{
           const native=fetch;window.__bodyReads=0;

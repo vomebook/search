@@ -2,6 +2,7 @@
 
 The TTS backend is routed offline (no model/network); playback is muted.
 """
+import base64
 import json
 import re
 import unittest
@@ -113,8 +114,8 @@ class ReaderSpeechTest(unittest.TestCase):
         cls.playwright.stop()
         cls.server.__exit__(None, None, None)
 
-    def open(self, ext, body, content_type, viewport=None, host=False, name="sample", setup=None):
-        context = self.browser.new_context(viewport=viewport or {"width": 1280, "height": 860})
+    def open(self, ext, body, content_type, viewport=None, host=False, name="sample", setup=None, touch=False, inline=False):
+        context = self.browser.new_context(viewport=viewport or {"width": 1280, "height": 860}, has_touch=touch)
         page = context.new_page()
         posts, errors = [], []
         page.on("pageerror", lambda error: errors.append(str(error)))
@@ -137,6 +138,9 @@ class ReaderSpeechTest(unittest.TestCase):
                                  {"index": i, "start": a, "end": b, "bytes": len(MP3), "pitch_semitones": data["pitch_semitones"],
                                   "pause_kind": "comma", "pause_after_seconds": 0.6, "audio_seconds": 1.515,
                                   "audio_url": f"/tts/audio/{job}/parts/{i}.mp3"} for i, (a, b) in enumerate(spans)]}}
+                if inline and data["inline_first"]:
+                    jobs[job]["first_audio"] = {"index": 0, "bytes": len(MP3), "content_type": "audio/mpeg",
+                                                "encoding": "base64", "data": base64.b64encode(MP3).decode("ascii")}
                 return route.fulfill(status=202, content_type="application/json", body=json.dumps(jobs[job]), headers=headers)
             if path.startswith("/tts/jobs/"):
                 return route.fulfill(status=200, content_type="application/json", body=json.dumps(jobs.get(path.rsplit("/", 1)[-1], {})), headers=headers)
@@ -258,6 +262,119 @@ class ReaderSpeechTest(unittest.TestCase):
             self.assertEqual(result['third'], len('First chapter.\nSecond chapter.\n'))
             self.assertTrue(result['done'])
             self.assertEqual(result['calls'], [1, 2, 2, 2, 3])
+            self.assertFalse(errors, errors)
+        finally:
+            context.close()
+
+    def test_pause_cancels_locating_and_loading_before_audio_exists(self):
+        context, page, posts, errors = self.open("txt", TEXT.encode(), "text/plain; charset=utf-8")
+        try:
+            button = page.locator("[data-speech-toggle]")
+            button.wait_for()
+            page.evaluate('''() => {
+              let text = '';
+              CCRDSpeech.previewLoaded({id:'slow', title:'Slow', host:document.body, adapter:{
+                get text(){return text}, get done(){return !!text},
+                locateTop: () => new Promise(resolve => {window.__located = () => resolve(0)}),
+                ensure: () => text ? Promise.resolve() : new Promise(resolve => {window.__loaded = () => {text = '迟到的正文。'; resolve()}})
+              }});
+            }''')
+            play = page.locator("#speech-play")
+            button.click()
+            wait(page, "() => !!window.__located")
+            self.assertEqual(play.inner_text(), "暂停")
+            play.click()
+            page.evaluate("() => __located()")
+            self.assertFalse(page.evaluate("() => !!window.__loaded || CCRDSpeech.state().playing"))
+            play.click()  # A new, explicit continue retries the cancelled locate.
+            page.evaluate("() => __located()")
+            wait(page, "() => !!window.__loaded")
+            play.click()
+            page.evaluate("() => __loaded()")
+            self.assertFalse(page.evaluate("() => CCRDSpeech.state().playing"))
+            self.assertFalse(posts)
+            play.click()
+            wait(page, "() => document.querySelector('#speech-audio')?.currentTime > 0.05")
+            self.assertTrue(posts[0]["text"].startswith("迟到的正文。"))
+            self.assertFalse(errors, errors)
+        finally:
+            context.close()
+
+    def test_double_click_rebases_to_the_clicked_chapter_and_rejects_old_clip(self):
+        context, page, posts, errors = self.open("txt", TEXT.encode(), "text/plain; charset=utf-8", inline=True)
+        try:
+            page.locator("[data-speech-toggle]").wait_for()
+            page.evaluate('''async () => {
+              const {createReaderSpeech} = await import('./reader/ui/reader-speech.mjs');
+              const viewport = document.querySelector('#viewport'), content = document.createElement('div');
+              viewport.replaceChildren(content);
+              const make = (chapter, text) => {
+                const el = document.createElement('article'); el.className = 'reader-epub-chapter'; el.dataset.chapter = chapter;
+                const lead = document.createElement('p'); lead.textContent = text;
+                el.append(lead, '这段用来填充窗口的正文。'.repeat(300)); return el;
+              };
+              const first = make(1, '近章正文。'), far = make(40, '远章正文。');
+              let phase; window.__loads = [];
+              const loader = async unit => { __loads.push(unit); throw Error('unexpected chapter load'); };
+              loader.count = 40;
+              const speech = createReaderSpeech({capability:{mode:'epub-chapters'}, content, viewport,
+                chapterManifestLoader:loader, readerRuntime:{events:{on(_name, fn){phase=fn}}}}, async()=>{});
+              content.append(first);
+              speech.installReaderSpeech(); phase({phase:'ready'});
+              window.__jump = () => { content.append(far); far.scrollIntoView(); };
+            }''')
+            job = self.play(page, posts)
+            self.assertTrue(job["text"].startswith("近章正文。"))
+            first_url = page.locator("#speech-audio").get_attribute("src")
+            self.assertTrue(first_url.startswith("blob:"), first_url)
+            page.evaluate("() => __jump()")
+            page.locator('.reader-epub-chapter[data-chapter="40"] p').dblclick(position={"x": 14, "y": 10})
+            wait(page, """() => CCRDSpeech.state().adapter?.base === 39 &&
+              document.querySelector('#speech-status').textContent === '朗读中'""")
+            self.assertTrue(any(post["text"].startswith("远章正文。") for post in posts))
+            self.assertNotEqual(page.locator("#speech-audio").get_attribute("src"), first_url)
+            self.assertEqual(page.evaluate("() => __loads.filter(unit => unit > 1 && unit < 40)"), [])
+            self.assertFalse(errors, errors)
+        finally:
+            context.close()
+
+    def test_keyboard_and_touch_start_at_selection_even_if_tap_collapses_it(self):
+        for touch in (False, True):
+            with self.subTest(touch=touch):
+                body = "起初不要读这里，准确从所选位置朗读直到句尾。后续正文。"
+                context, page, posts, errors = self.open("txt", body.encode(), "text/plain; charset=utf-8", touch=touch)
+                try:
+                    button = page.locator("[data-speech-toggle]")
+                    button.wait_for()
+                    if not touch:
+                        button.focus()
+                    else:
+                        button.evaluate("""button => button.addEventListener('pointerdown', () => getSelection().removeAllRanges(), {once:true})""")
+                    page.locator('.reader-text-block').evaluate('''el => {
+                      const node = el.firstChild, start = node.data.indexOf('所选位置');
+                      getSelection().setBaseAndExtent(node, start + 4, node, start);
+                    }''')
+                    if touch:
+                        button.tap()
+                    else:
+                        page.keyboard.press("Enter")
+                    wait(page, "() => document.querySelector('#speech-audio')?.currentTime > 0.05")
+                    self.assertTrue(posts[0]["text"].startswith("所选位置朗读"), posts[0]["text"])
+                    self.assertFalse(errors, errors)
+                finally:
+                    context.close()
+
+    def test_sleep_reads_past_comma_clips_but_does_not_start_next_sentence(self):
+        sentence = "这句话先读一小段，然后继续读到真正的句号。"
+        context, page, posts, errors = self.open("txt", (sentence + "下一句不应该起播。" * 40).encode(), "text/plain; charset=utf-8")
+        try:
+            job = self.play(page, posts)
+            self.assertTrue(sentence.startswith(job["text"][:job["segment_ends"][0]]))
+            self.assertLess(job["segment_ends"][0], len(sentence))
+            page.locator("#speech-timer").select_option("clip")
+            wait(page, "() => document.querySelector('#speech-status').textContent === '本句已读完，睡眠定时结束'", 8000)
+            self.assertEqual(page.evaluate("() => CCRDSpeech.state().position"), len(sentence))
+            self.assertTrue(page.evaluate("() => [...document.querySelectorAll('audio')].every(a => a.paused)"))
             self.assertFalse(errors, errors)
         finally:
             context.close()
@@ -476,6 +593,21 @@ class ReaderSpeechTest(unittest.TestCase):
         finally:
             context.close()
 
+    def test_double_click_takes_over_background_speech(self):
+        context, page, posts, errors, frame = self.open("txt", TEXT.encode(), "text/plain; charset=utf-8", host=True)
+        try:
+            self.play(frame, posts)
+            page.evaluate("url => { __nav.unmount(); window.__next = __nav.mount(new URL(url)); }", self.reader_url("txt", "other"))
+            page.locator(".reader-speech-mini").wait_for(timeout=3000)
+            next_frame = page.wait_for_selector("iframe.reader-overlay:not(.reader-overlay-parked)").content_frame()
+            next_frame.locator("[data-speech-toggle]").wait_for()
+            next_frame.locator(".reader-text-block").first.dblclick(position={"x": 16, "y": 10})
+            wait(next_frame, "() => CCRDSpeech.state().playing", 5000)
+            wait(page, "() => !__reader.isConnected && !__nav.backgroundReader", 5000)
+            self.assertFalse(errors, errors)
+        finally:
+            context.close()
+
     def test_leaving_a_standalone_reader_keeps_reading_on_the_search_page(self):
         # A Reader opened directly (not as an overlay) cannot keep its audio when
         # ← navigates to the search page; that page resumes it at the same sentence.
@@ -490,6 +622,9 @@ class ReaderSpeechTest(unittest.TestCase):
             playing = page.evaluate("""() => { const s = CCRDSpeech.state(), t = s.adapter.text; let i = s.position;
               while (i > 0 && !/[。！？\\n]/.test(t[i - 1])) i--; return t.slice(i, i + 8).trim(); }""")
             self.assertTrue(playing and not playing.startswith("第0段"), playing)
+            page.locator("#speech-speed").evaluate("n => { n.value = '1.65'; n.dispatchEvent(new Event('input')); }")
+            page.locator("#speech-timer").select_option("5")
+            settings = page.evaluate("() => CCRDSpeech.state().settings")
             before = len(posts)
             reader = page.url
             base = reader.split("reader.html")[0]
@@ -504,11 +639,17 @@ class ReaderSpeechTest(unittest.TestCase):
             frame = kept.content_frame()
             wait(frame, "()=>{const a=document.querySelector('#speech-audio');return !!a&&!a.paused&&a.currentTime>0.05}", 30000)
             self.assertTrue(posts[before]["text"].lstrip().startswith(playing), (playing, posts[before]["text"][:30]))
+            self.assertEqual(frame.evaluate("() => CCRDSpeech.state().settings"), settings)
+            self.assertEqual(frame.locator("#speech-audio").evaluate("n => n.playbackRate"), 1.65)
             self.assertEqual(frame.evaluate("() => window.name"), "")
             self.assertEqual(page.evaluate("() => sessionStorage.getItem('reader-speech-handoff')"), None)
             bar.get_by_role("button", name="返回阅读").click()
             self.assertEqual(page.locator(".reader-speech-mini").count(), 0)
             self.assertFalse(frame.evaluate("() => document.querySelector('#speech-audio').paused"))
+            # Expiry in the resumed frame uses the original absolute deadline.
+            frame.evaluate("deadline => { Date.now = () => deadline; document.dispatchEvent(new Event('visibilitychange')); }", settings["deadline"])
+            self.assertFalse(frame.evaluate("() => CCRDSpeech.state().playing"))
+            self.assertTrue(frame.locator("#speech-audio").evaluate("n => n.paused"))
             # A Reader left without reading aloud (or reloaded) leaves nothing to resume.
             frame.locator("#speech-stop").click()
             page.goto(reader, wait_until="domcontentloaded")

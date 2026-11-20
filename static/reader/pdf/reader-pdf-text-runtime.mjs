@@ -1,5 +1,14 @@
 /** @param {import('../../../typings/reader-pdf-text-runtime-strict').Context} readerContext */
 export function createReaderPdfTextRuntime(readerContext) {
+  // Remounts and visibility changes must not spin on a failed OCR object.
+  // Keep the existing retry after zoom, but bound retries per page even then.
+  /** @type {Map<number, {zoom: number, attempts: number}>} */
+  const failedOcrPages = new Map();
+  /** @param {number} page */
+  function automaticOcrBlocked(page) {
+    const failed = failedOcrPages.get(page);
+    return !!failed && (failed.attempts >= 3 || failed.zoom === readerContext.documentState.zoom);
+  }
   /** @returns {import('../../../typings/reader-pdf-text-runtime-strict').OcrSource | null} */
   function pdfOcrSource() {
     return /** @type {import('../../../typings/reader-pdf-text-runtime-strict').OcrSource | null} */ (VoiceOfMLReader.pdfPageSource(readerContext.ocrManifestUrl, location.href, "https://voiceofml-search.hf.space", "ocr-manifest.json"));
@@ -58,12 +67,14 @@ export function createReaderPdfTextRuntime(readerContext) {
     catch (error) { readerContext.pdfOcrManifestPromise = null; throw error; }
   }
 
-  /** @param {number} page @param {RequestPriority} [priority] */
-  function loadPdfOcrPage(page, priority = "high") {
+  /** @param {number} page @param {RequestPriority} [priority] @param {boolean} [retry] */
+  function loadPdfOcrPage(page, priority = "high", retry = false) {
     const cached = readerContext.cachedPdfOcrPage(page);
     if (cached) return Promise.resolve(cached);
     const pending = readerContext.pdfOcrPagePromises.get(page);
     if (pending) return pending;
+    if (!retry && automaticOcrBlocked(page)) return Promise.reject(new Error("PDF_OCR_PAGE_UNAVAILABLE"));
+    const zoom = readerContext.documentState.zoom;
     const task = Promise.resolve().then(() => {
       // OCR is published as its own manifest. The image page manifest may be
       // intentionally lean and contain only page_count.
@@ -98,6 +109,13 @@ export function createReaderPdfTextRuntime(readerContext) {
             return validated;
           });
       });
+    }).then(payload => {
+      failedOcrPages.delete(page);
+      return payload;
+    }, error => {
+      if (!readerContext.readerAbortController.signal.aborted && error?.name !== "AbortError")
+        failedOcrPages.set(page, {zoom, attempts: (failedOcrPages.get(page)?.attempts ?? 0) + 1});
+      throw error;
     }).finally(() => readerContext.pdfOcrPagePromises.delete(page));
     readerContext.pdfOcrPagePromises.set(page, task);
     return task;
@@ -243,22 +261,25 @@ export function createReaderPdfTextRuntime(readerContext) {
     return record.payload;
   }
 
-  /** @param {import('../../../typings/reader-pdf-text-runtime-strict').Shell} shell */
-  async function renderPdfOcrText(shell) {
+  /** @param {import('../../../typings/reader-pdf-text-runtime-strict').Shell} shell @param {import('../../../typings/reader-pdf-text-runtime-strict').OcrPayload} [loaded] */
+  async function renderPdfOcrText(shell, loaded) {
     if ((shell.dataset.textReady === "1" && shell.dataset.nativeTextFallback !== "1") || !readerContext.ocrManifestUrl) return;
-    if (shell._ocrPromise) return shell._ocrPromise;
-    const layer = shell.querySelector(".reader-pdf-text");
-    if (!layer) return;
+    if (shell._ocrPromise) {
+      await shell._ocrPromise;
+      if (loaded) return renderPdfOcrText(shell, loaded);
+      return;
+    }
+    const layer = shell.querySelector(".reader-pdf-text"), page = Number(shell.dataset.page);
+    if (!layer || (!loaded && automaticOcrBlocked(page))) return;
     const epoch = shell._textEpoch || 0;
     const task = (async () => {
       try {
-         // Never replace the DOM underneath an active native-text selection.
-         if (shell.dataset.nativeTextFallback === "1" && readerContext.pdfSelectionIntersects?.(shell)) return;
-         const page = Number(shell.dataset.page);
-         await readerContext.acquirePdfTextSlot(readerContext.isPdfPageVisible(shell));
+        // Never replace the DOM underneath an active native-text selection.
+        if (shell.dataset.nativeTextFallback === "1" && readerContext.pdfSelectionIntersects?.(shell)) return;
+        await readerContext.acquirePdfTextSlot(readerContext.isPdfPageVisible(shell));
         try {
           if (epoch !== (shell._textEpoch || 0)) return;
-          const payload = await readerContext.loadPdfOcrPage(page, readerContext.isPdfPageVisible(shell) ? "high" : "low");
+          const payload = loaded ?? await readerContext.loadPdfOcrPage(page, readerContext.isPdfPageVisible(shell) ? "high" : "low");
           readerContext.assertReaderActive();
           if (epoch !== (shell._textEpoch || 0)) return;
           if (shell.dataset.nativeTextFallback === "1" && readerContext.pdfSelectionIntersects?.(shell)) return;
@@ -309,7 +330,7 @@ export function createReaderPdfTextRuntime(readerContext) {
       readerContext.assertReaderActive();
       if (signal?.aborted) return;
       if (readerContext.ocrManifestUrl && !text.items?.some(item => String(item.str || "").trim())) return;
-      if (shell.dataset.textReady === "1" && shell.dataset.nativeTextFallback !== "1") return;
+      if (shell.dataset.textReady === "1") return;
       readerContext.cachePdfTextContent(pageNumber, text);
       if (epoch !== (shell._textEpoch || 0) || !shell.isConnected) return;
       const pdfViewport = page.getViewport({ scale: 1 });
@@ -349,11 +370,12 @@ export function createReaderPdfTextRuntime(readerContext) {
     }
   }
 
-  /** @param {import('../../../typings/reader-pdf-text-runtime-strict').Shell | null} shell */
-  function highlightPdfText(shell, query = readerContext.searchState.query) {
-    if (!shell || readerContext.readerAbortController.signal.aborted || !query) return;
+  /** @param {import('../../../typings/reader-pdf-text-runtime-strict').Shell | null} shell @param {string} [query] @param {{start: number, value: string}} [selected] */
+  function highlightPdfText(shell, query = readerContext.searchState.query, selected) {
+    if (!shell || readerContext.readerAbortController.signal.aborted ||
+        (!selected && (!query || readerContext.fullSearchController?.state?.highlightsEnabled === false))) return;
     const layer = shell.querySelector(".reader-pdf-text");
-    if (!layer || layer.querySelector("mark")) return;
+    if (!layer || layer.querySelector("mark.full-search-highlight")) return;
     const walker = document.createTreeWalker(layer, NodeFilter.SHOW_TEXT), runs = [];
     let raw = "";
     while (walker.nextNode()) {
@@ -363,12 +385,19 @@ export function createReaderPdfTextRuntime(readerContext) {
     }
     const mapping = readerContext.pdfSearchText(raw);
     const hits = [];
-    for (const hit of mapping.text.matchAll(new RegExp(readerContext.fullSearchEscape(readerContext.normalizePdfSearchText(query)), "giu"))) {
-      hits.push(hit);
-      if (hits.length === 100) break;
+    if (selected) {
+      if (mapping.text.slice(selected.start, selected.start + selected.value.length) !== selected.value) return;
+      hits.push(selected);
+    } else {
+      const pattern = new RegExp(readerContext.fullSearchEscape(readerContext.normalizePdfSearchText(query)), "giu");
+      for (const hit of mapping.text.matchAll(pattern)) {
+        hits.push({ start: hit.index, value: hit[0] });
+        if (hits.length === 100) break;
+      }
     }
+    let target;
     for (const hit of hits.reverse()) {
-      const start = readerContext.pdfSourceOffset(mapping, hit.index), end = readerContext.pdfSourceOffset(mapping, hit.index + hit[0].length - 1) + 1;
+      const start = readerContext.pdfSourceOffset(mapping, hit.start), end = readerContext.pdfSourceOffset(mapping, hit.start + hit.value.length - 1) + 1;
       // Runs have monotonically increasing boundaries; seek to the first
       // possible overlap instead of filtering every text node for each hit.
       let low = 0, high = runs.length;
@@ -385,8 +414,9 @@ export function createReaderPdfTextRuntime(readerContext) {
         parts.push({ node: run.node, start: Math.max(start, run.start) - run.start,
           end: Math.min(end, run.end) - run.start });
       }
-      readerContext.highlightTextParts(parts);
+      [target] = readerContext.highlightTextParts(parts);
     }
+    return target;
   }
 
   return {

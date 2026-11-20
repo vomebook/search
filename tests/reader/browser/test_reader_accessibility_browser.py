@@ -122,7 +122,8 @@ class ReaderAccessibilityTests(unittest.TestCase):
 
     def test_directory_current_location_and_keys_do_not_scroll_the_book(self):
         self.open_book()
-        self.assertEqual(self.page.locator('#toc-list [aria-current="location"]').count(), 1)
+        current = self.page.locator('#toc-list [aria-current="location"]')
+        self.assertEqual(current.count(), 0, 'the opening viewport is before the first chapter')
         self.assertEqual(self.page.locator('.toc-current-mark[aria-hidden="true"]').count(), 2)
         link = self.page.locator('#toc-list [role="link"]').first
         link.focus()
@@ -134,10 +135,28 @@ class ReaderAccessibilityTests(unittest.TestCase):
         self.assertEqual(self.page.evaluate('document.activeElement.id'), 'history')
         self.page.locator('#history').press('Enter')
         self.page.wait_for_function('()=>document.querySelector("#toc-list .toc-item:last-child [aria-current=location]")')
+        self.assertEqual(current.count(), 1)
         self.page.get_by_role('button', name='搜索目录', exact=True).press('Enter')
         field = self.page.locator('#toc-panel .panel-search')
         self.assertTrue(field.evaluate('node=>node===document.activeElement'))
         self.assertEqual(self.page.locator('#toc-panel .panel-search-toggle').get_attribute('aria-controls'), field.get_attribute('id'))
+
+    def test_no_directory_tabs_reach_bookmarks_and_history_with_keyboard(self):
+        self.open_book('txt', 'Long plain text\n' * 2000)
+        self.open_with_keyboard()
+        reading = self.page.get_by_role('tab', name='阅读', exact=True)
+        self.assertTrue(reading.evaluate('node => node === document.activeElement'))
+        self.assertEqual(reading.get_attribute('aria-selected'), 'true')
+        self.page.keyboard.press('ArrowRight')
+        self.assertEqual(self.page.evaluate('document.activeElement.id'), 'bookmarks-tab')
+        self.assertTrue(self.page.locator('#bookmarks-panel').is_visible())
+        self.page.keyboard.press('ArrowRight')
+        self.assertEqual(self.page.evaluate('document.activeElement.id'), 'history-tab')
+        self.assertTrue(self.page.locator('#history-view').is_visible())
+        self.page.keyboard.press('Tab')
+        self.assertTrue(self.page.locator('#history-view').evaluate('node => node.contains(document.activeElement)'))
+        self.page.keyboard.press('Escape')
+        self.assertEqual(self.page.evaluate('document.activeElement.id'), 'history')
 
     def test_keyboard_progress_can_undo_without_pointer_events(self):
         self.open_book('txt', 'Long plain text\n' * 2000)

@@ -210,6 +210,65 @@ class ReaderReloadSearchDocumentCases:
         self.wait_search('paging')
         self.assertEqual(self.page.url, before['url'])
 
+    def assert_forward_book(self, reader_url, text):
+        self.page.go_forward(wait_until='domcontentloaded')
+        self.assertEqual(self.page.url, reader_url)
+        self.page.locator('.reader-text, iframe.reader-overlay').wait_for(state='visible')
+        document = (self.page.frame_locator('iframe.reader-overlay')
+                    if self.page.locator('iframe.reader-overlay').count() else self.page)
+        expect(document.locator('.reader-text')).to_contain_text(text)
+
+    def test_toolbar_back_after_reload_restores_real_result_button_and_forward(self):
+        search_url = self.page.url
+        read = self.page.get_by_role('button', name='在线阅读：paging-4.txt', exact=True)
+        read.focus()
+        read.press('Enter')
+        frame = self.page.frame_locator('iframe.reader-overlay')
+        expect(frame.locator('.reader-text')).to_contain_text('Reader history forward content.')
+        reader_url = self.page.url
+        self.page.reload(wait_until='domcontentloaded')
+        expect(self.page.locator('.reader-text')).to_contain_text('Reader history forward content.')
+        length = self.page.evaluate('history.length')
+        self.page.locator('#back').click()
+        self.wait_search('paging')
+        self.assertEqual(self.page.url, search_url)
+        expect(read).to_be_focused()
+        self.assertEqual(self.page.evaluate("JSON.parse(sessionStorage.getItem('test-reader-popstate'))"),
+                         {'trusted': True, 'url': search_url})
+        self.assert_forward_book(reader_url, 'Reader history forward content.')
+        self.assertEqual(self.page.evaluate('history.length'), length)
+
+    def test_overlay_fragment_scrolls_without_consuming_the_only_back(self):
+        search_url = self.page.url
+        base = SOURCE.rsplit('/', 1)[0] + '/'
+        source = base + 'anchors.md'
+        markdown = ('[Direct fragment](#section) · [Same file](anchors.md#section) · '
+                    '[Missing fragment](#missing) · [Unsupported relative](../archive.chm?dl=1#ref)\n\n'
+                    + 'Filler paragraph.\n\n' * 150 + '<a id="section"></a>\n\n## End\n\n' + 'More.\n\n' * 60)
+        for pattern in ('**/api/reader-content**', '**/api/reader-resource**', source):
+            self.page.route(pattern, lambda route: route.fulfill(
+                content_type='text/markdown', body=markdown, headers={'Access-Control-Allow-Origin': '*'}))
+        target = PREFIX + '/static/reader.html?' + urlencode({'ext': 'md', 'url': source})
+        self.assertTrue(self.page.evaluate('target => navigateToReader(target)', target))
+        reader_url = self.page.url
+        frame = self.page.frame_locator('iframe.reader-overlay')
+        article = frame.locator('.reader-markdown')
+        self.assertEqual(article.get_by_role('link', name='Unsupported relative').get_attribute('href'),
+                         base.removesuffix('main/') + 'archive.chm?dl=1#ref')
+        for label in ('Direct fragment', 'Same file', 'Missing fragment'):
+            link = article.get_by_role('link', name=label)
+            link.press('Enter')
+            self.assertEqual(link.evaluate('() => location.hash'), '')
+            if label != 'Missing fragment':
+                self.assertGreater(frame.locator('#viewport').evaluate('node => node.scrollTop'), 100)
+        self.page.go_back(wait_until='domcontentloaded')
+        self.page.locator('iframe.reader-overlay').wait_for(state='detached')
+        self.wait_search('paging')
+        self.assertEqual(self.page.url, search_url)
+        self.page.go_forward(wait_until='domcontentloaded')
+        self.assertEqual(self.page.url, reader_url)
+        expect(self.page.frame_locator('iframe.reader-overlay').locator('.reader-markdown')).to_contain_text('Direct fragment')
+
     def test_back_then_forward_renders_book_without_consuming_forward_entry(self):
         search_url = self.page.url
         reader_url = self.open_and_reload()

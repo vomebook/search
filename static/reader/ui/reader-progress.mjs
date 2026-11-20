@@ -152,11 +152,16 @@ export function createReaderProgress(readerContext) {
     return Number.isInteger(page) ? Math.max(1, Math.min(total, page)) : 1;
   }
 
+  function mediaSeekDuration() {
+    const duration = readerContext.mediaElement?.duration ?? 0;
+    return Number.isFinite(duration) && duration > 0 ? duration : 0;
+  }
+
   function readerProgressPercent() {
-    if (readerContext.mediaElement)
-      return readerContext.mediaElement.duration
-        ? Math.round((readerContext.mediaElement.currentTime / readerContext.mediaElement.duration) * 1000) / 10
-        : 0;
+    if (readerContext.mediaElement) {
+      const duration = mediaSeekDuration();
+      return duration ? Math.round((readerContext.mediaElement.currentTime / duration) * 1000) / 10 : 0;
+    }
     if (readerContext.capability.mode === "epub-chapters")
       return Math.round((readerContext.chapterManifestLoader?.progressFraction() ?? 0) * 1000) / 10;
     if (readerContext.htmlFrame && readerContext.htmlFrame.contentDocument) {
@@ -252,8 +257,21 @@ export function createReaderProgress(readerContext) {
         const shell = readerContext.content.querySelector(
           `.reader-page[data-page="${readerContext.documentState.page}"]`
         );
-        if (shell && Number.isFinite(entry.pageOffset))
-          readerContext.viewport.scrollTop = readerContext.readerPageScrollTop(shell) + /** @type {number} */ (entry.pageOffset);
+        if (shell) {
+          const fraction = entry.pageOffsetFraction;
+          const pdf = mode === "pdf" || mode === "pdf-pages";
+          const height = pdf ? shell.getBoundingClientRect().height : 0;
+          const offset = pdf && typeof fraction === "number" && Number.isFinite(fraction) && fraction >= 0 && fraction <= 1
+            ? fraction * height : entry.pageOffset;
+          if (typeof offset === "number" && Number.isFinite(offset)) {
+            // Older bookmarks lack a capture scale. Keep their pixel offset
+            // when possible, but never let it carry the marker into another page.
+            const marker = pdf ? readerContext.bookmarkRibbon.getBoundingClientRect().bottom -
+              readerContext.viewport.getBoundingClientRect().top : 0;
+            const withinPage = pdf ? Math.min(Math.max(0, offset), Math.max(0, height - Math.max(0, marker) - 2)) : offset;
+            readerContext.viewport.scrollTop = readerContext.readerPageScrollTop(shell) + withinPage;
+          }
+        }
         readerContext.updateProgressTools();
         readerContext.scheduleSave();
       } else if (!(await readerContext.restoreProgressState(entry, generation))) return false;
@@ -301,7 +319,10 @@ export function createReaderProgress(readerContext) {
   }
 
   function updateProgressTools() {
-    if (readerContext.progressSeeking) return;
+    const mode = readerContext.capability.mode;
+    const disabled = (mode === "audio" || mode === "video" || !!readerContext.mediaElement) && !mediaSeekDuration();
+    if (readerContext.progressRange.disabled !== disabled) readerContext.progressRange.disabled = disabled;
+    if (readerContext.progressSeeking && !disabled) return;
     const percent = readerContext.readerProgressPercent(),
       value = String(percent), label = `${percent.toFixed(1)}%`;
     if (readerContext.progressRange.value !== value) readerContext.progressRange.value = value;
@@ -399,14 +420,18 @@ export function createReaderProgress(readerContext) {
   /** @param {string | number} value
    * @param {boolean} [preserve] */
   function seekProgress(value, preserve = false) {
+    const numeric = Number(value), media = readerContext.mediaElement, duration = mediaSeekDuration();
+    // Unavailable metadata must not supersede the pending media restore or
+    // translate a media seek into a viewport scroll and history write.
+    if (!Number.isFinite(numeric) || (media && !duration) ||
+        (!media && (readerContext.capability.mode === "audio" || readerContext.capability.mode === "video"))) return false;
+    const percent = Math.max(0, Math.min(100, numeric));
     if (!preserve || !readerContext.previousProgressState) readerContext.previousProgressState = readerContext.captureProgressState();
-    const generation = readerContext.beginReaderNavigation(),
-      percent = Math.max(0, Math.min(100, Number(value)));
-    if (!readerContext.isReaderGenerationCurrent("navigation", generation)) return;
-    if (readerContext.mediaElement && readerContext.mediaElement.duration)
-      readerContext.mediaElement.currentTime = (readerContext.mediaElement.duration * percent) / 100;
+    const generation = readerContext.beginReaderNavigation();
+    if (!readerContext.isReaderGenerationCurrent("navigation", generation)) return false;
+    if (media) media.currentTime = (duration * percent) / 100;
     else if (readerContext.capability.mode === "epub-chapters") {
-      const target = Number.isFinite(percent) ? readerContext.chapterManifestLoader?.progressTarget(percent / 100) : null;
+      const target = readerContext.chapterManifestLoader?.progressTarget(percent / 100);
       if (target) {
         readerContext.epubSeekPromise = readerContext.restoreChapterPosition({
           chapterIndex: target.chapterIndex, chapterManifest: readerContext.chapterManifestUrl || readerContext.sourceUrl
@@ -430,6 +455,7 @@ export function createReaderProgress(readerContext) {
         (Math.max(0, readerContext.viewport.scrollHeight - readerContext.viewport.clientHeight) * percent) / 100;
     readerContext.updateProgressTools();
     readerContext.scheduleSave();
+    return true;
   }
 
   /** @param {number} index */

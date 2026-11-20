@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { createReaderFormatController } from "../../../static/reader/formats/reader-format-controller.mjs";
 import { createReaderLifecycle } from "../../../static/reader/core/reader-lifecycle.mjs";
+import { createReaderProgress } from "../../../static/reader/ui/reader-progress.mjs";
 
 test("DjVu loader remains a separate module at the Pages runtime URL", async () => {
   const source = await readFile(new URL("../../../static/reader/formats/reader-format-controller.mjs", import.meta.url), "utf8");
@@ -111,7 +112,8 @@ test("image fallback only accepts a string original extension", async () => {
   for (const [original, shouldRender, mode, sameSource] of [[null, false, "image-pages", false], [hostile, false, "image-pages", false], ["JpG", true, "image-pages", false], ["jpg", true, "image", false], ["jpg", false, "image", true], ["tiff", false, "image", false]]) {
     const f = fixture({ url: "https://example.test/pages" });
     const error = new Error("page loading failed");
-    let rendered = false, failure;
+    let rendered = false, failure, applied = false;
+    const saved = { page: 4, pageCount: 12, pageOffset: 300, id: 'bookmark' };
     Object.assign(f.context, {
       readerId: "", sourceUrl: sameSource ? "https://example.test/book.jpg" : "https://example.test/pages", downloadUrl: "https://example.test/book.jpg",
       capability: { mode }, resolvedReaderData: { original_extension: original },
@@ -119,10 +121,13 @@ test("image fallback only accepts a string original extension", async () => {
       measurePdf: promise => promise, resolveReaderSource: async () => {}, syncCapabilityControls() {},
       downloadButton: {}, documentState: { title: "book" }, readerDownloadUrl: () => "download",
       formatAdapters: { active: { open: async () => { throw error; } }, activate() {}, dispose() {} },
-      readerResources: new Set(), loadReaderRestoration: async () => null, awaitReader: promise => promise,
-      content: { replaceChildren() {} }, updateDocumentState() {},
+      readerResources: new Set(), loadReaderRestoration: async () => saved, awaitReader: promise => promise,
+      content: { replaceChildren() {} }, updateDocumentState(patch) { Object.assign(this.documentState, patch); },
       loadImageDocument: async () => "image", renderImageDocument: async () => { rendered = true; },
-      markReaderContentReady() {}, applyInitialRestoration: async () => {}, setReaderPhase: () => false,
+      markReaderContentReady() {},
+      applyInitialRestoration: async entry => { assert.equal(entry, saved); applied = true; },
+      setReaderPhase: () => true, syncHeadingLocation() {}, schedulePdfBookSearchPrefetch() {}, updateProgressTools() {},
+      fullSearchInput: { value: '' }, scheduleSave() {}, readerLifecycle: { disposed: false },
       readerAbortController: new AbortController(), classifyReaderError: () => "parse",
       fail: message => { failure = message; }
     });
@@ -134,6 +139,15 @@ test("image fallback only accepts a string original extension", async () => {
     } finally { console.error = savedError; }
     assert.equal(rendered, shouldRender);
     assert.equal(failure, shouldRender ? undefined : error.message);
-    if (shouldRender) assert.equal(f.context.extension, "jpg");
+    if (shouldRender) {
+      assert.equal(f.context.extension, "jpg");
+      assert.equal(applied, mode !== 'image-pages');
+      assert.equal(f.context.documentState.restorationReady, mode !== 'image-pages');
+      if (mode === 'image-pages') {
+        const { captureProgressEntry } = createReaderProgress(f.context);
+        assert.equal(captureProgressEntry(), undefined, 'Back cannot post incompatible original-image progress');
+        assert.equal(captureProgressEntry(new Event('pagehide')), undefined, 'pagehide cannot save it either');
+      }
+    }
   }
 });

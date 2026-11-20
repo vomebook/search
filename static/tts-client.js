@@ -10,10 +10,13 @@
  * @typedef {import('../typings/tts-client-strict').Batch} SpeechBatch
  * @typedef {import('../typings/tts-client-strict').Clip} SpeechClip
  * @typedef {import('../typings/tts-client-strict').Handoff} SpeechHandoff
+ * @typedef {import('../typings/tts-client-strict').StartLocator} SpeechStartLocator
+ * @typedef {import('../typings/tts-client-strict').ReadOptions} SpeechReadOptions
  */
 // Pure, bounded rolling source planner. All offsets refer to original UTF-16.
 /** @type {typeof globalThis & {CCRDSpeechPlan: import('../typings/tts-client-strict').Plan}} */ (globalThis).CCRDSpeechPlan = (() => {
   const ending = /[。！？!?；;\n]/u;
+  const sentenceClosers = /[”’"'」』）)】〕》〉］\]\s]/u;
   const ascii = /[A-Za-z0-9]/u;
   const words = typeof Intl.Segmenter === "function" ? new Intl.Segmenter("zh", { granularity: "word" }) : null;
   const connectors = "但是|可是|不过|然而|同时|而且|并且|因此|所以|此外|另外|于是|但是同时|与此同时|但是也|但是又|同时也|而是|或者|以及";
@@ -123,7 +126,7 @@
         end = cuts.find(value => value.end > end && !dangling.has(value.word) && !connectorOnly(text.slice(start, value.end).trim()))?.end || text.length;
       }
       // Doubled marks (——, ……) and closing quotes stay with the clip they end.
-      while (end < text.length && /[”’"'」』）)\s—…]/u.test(text.charAt(end))) end += 1;
+      while (end < text.length && (sentenceClosers.test(text.charAt(end)) || /[—…]/u.test(text.charAt(end)))) end += 1;
       if (end <= start) throw new Error("无法确定完整词语边界");
       if (end < text.length && !/[\p{L}\p{N}]/u.test(text.slice(end))) end = text.length;
       ends.push(end); start = end;
@@ -173,8 +176,19 @@
   /** @param {string} text @param {number} end */
   function endsSentence(text, end) {
     let index = end - 1;
-    while (index > 0 && /[”’"'」』）)\t \r]/u.test(text.charAt(index))) index -= 1;
+    while (index > 0 && text[index] !== "\n" && sentenceClosers.test(text.charAt(index))) index -= 1;
     return index >= 0 && boundary(text, index);
+  }
+  // Sleep follows sentence boundaries, not synthesis clips (or semicolons).
+  /** @param {string} text @param {number} start @param {number} end */
+  function finishesSentence(text, start, end) {
+    for (let index = end - 1; index >= start; index--) {
+      const char = text.charAt(index);
+      if (char === "\n") return true;
+      if (sentenceClosers.test(char)) continue;
+      return char !== ";" && char !== "；" && boundary(text, index);
+    }
+    return false;
   }
   // Clause marks for natural cut points; ASCII , and : only outside numbers/times.
   /** @param {string} text @param {number} index */
@@ -225,9 +239,9 @@
     return sentence(text, Math.max(0, cursor)).start;
   }
   /** @param {string} text @param {number} offset */
-  function batch(text, offset, first = false, carry = 0) {
+  function batch(text, offset, first = false, carry = 0, exact = false) {
     // The first batch holds the whole short-to-long clip ramp (see RAMP).
-    const start = first ? clauseStart(text, offset) : safe(text, offset), limit = first ? 260 : 480;
+    const start = first && !exact ? clauseStart(text, offset) : safe(text, offset), limit = first ? 260 : 480;
     if (start >= text.length) return null;
     const chars = Array.from(text.slice(start, start + 1800)), offsets = [start];
     let units = offsets[0] ?? 0;
@@ -270,7 +284,7 @@
       context_before: Array.from(text.slice(Math.max(0, start - 64), start)).slice(-32).join(""),
       context_after: Array.from(text.slice(stop, stop + 64)).slice(0, 32).join("") };
   }
-  return { safe, sentence, batch, phraseEnds, wordEnds, wordStart, clauseStart, numberSpans, partIndex, previousSentence };
+  return { safe, sentence, batch, phraseEnds, wordEnds, wordStart, clauseStart, numberSpans, partIndex, previousSentence, finishesSentence };
 })();
 
 if (typeof document !== "undefined") /** @type {Window & {CCRDSpeech?: unknown}} */ (window).CCRDSpeech = (() => {
@@ -297,7 +311,7 @@ if (typeof document !== "undefined") /** @type {Window & {CCRDSpeech?: unknown}}
   /** @type {SpeechSaved | null} */ let saved = null;
   /** @type {HTMLAudioElement | null} */ let audio = null;
   let switching = false;
-  let sleepDeadline = 0, finishClip = false;
+  let sleepDeadline = 0, finishSentence = false;
   /** @type {number | undefined} */ let sleepTimer;
   /** @type {HTMLElement[] | null} */ let marked = null;
   /** @type {HighlightRegistry | null} */ let markedRegistry = null;
@@ -305,13 +319,39 @@ if (typeof document !== "undefined") /** @type {Window & {CCRDSpeech?: unknown}}
   // grows at its end, plus DOM mapping. Without one, the preview body is used.
   // NEED covers one batch plus its planning context; growth targets LOOKAHEAD.
   const LOOKAHEAD = 2400, NEED = 1800;
-  let starting = 0; // Supersedes pending adapter loads (start/stop).
+  let starting = 0, pendingStart = false, playAttempt = 0;
+  /** @type {(() => void) | null} */ let retryStart = null;
+  function cancelStart() { starting++; pendingStart = false; retryStart = null; }
+  /** @param {import('../typings/tts-client-strict').StartLocator} locate @param {(offset: number) => void} ready
+   * @param {string} message @param {(() => string) | undefined} [progress] */
+  async function waitToStart(locate, ready, message, progress) {
+    const token = ++starting;
+    const restart = () => { void waitToStart(locate, ready, message, progress); };
+    retryStart = restart;
+    pendingStart = true; notice(message); show(); controls();
+    const tick = progress && setInterval(() => {
+      if (token !== starting) { clearInterval(tick); return; }
+      const text = progress();
+      if (text) notice(text);
+    }, 500);
+    try {
+      const found = await locate();
+      if (token !== starting) return;
+      pendingStart = false; retryStart = null;
+      if (found !== null) ready(found);
+    } catch (_) {
+      if (token === starting) notice("正文载入失败 · 点击继续重试，进度保留");
+    } finally {
+      clearInterval(tick);
+      if (token === starting) { pendingStart = false; controls(); }
+    }
+  }
   /** @param {SpeechSnapshot} snapshot */
   function more(snapshot) { return !!snapshot.adapter && !snapshot.adapter.done; }
   /** @param {SpeechSnapshot} snapshot @param {number} offset */
   function loaded(snapshot, offset) { return !more(snapshot) || snapshot.text.length >= offset + NEED; }
-  /** @param {SpeechSnapshot} a @param {SpeechSnapshot} b */
-  function sameSource(a, b) { return a?.id === b?.id && (a.adapter || b.adapter ? a.adapter === b.adapter : a.text === b.text); }
+  /** @param {SpeechSnapshot | undefined} a @param {SpeechSnapshot} b */
+  function sameSource(a, b) { return !!a && a.id === b.id && (a.adapter || b.adapter ? a.adapter === b.adapter : a.text === b.text); }
   /** @param {SpeechSnapshot} snapshot @param {number} offset @param {SpeechOwner} value */
   function grow(snapshot, offset, value) {
     if (!more(snapshot) || snapshot.growing) return;
@@ -398,8 +438,8 @@ if (typeof document !== "undefined") /** @type {Window & {CCRDSpeech?: unknown}}
   /** @param {SpeechOwner} value @param {SpeechJob} job */
   function prefetchAhead(value, job) {
     // Current, a few following parts and the next batch's first parts only;
-    // nothing while paused or after a "finish this clip" sleep request.
-    if (finishClip || !live(value) || !value.wantsPlay || job.preloaded || job.stale) return;
+    // nothing speculative while paused or after "finish this sentence".
+    if (finishSentence || !live(value) || !value.wantsPlay || job.preloaded || job.stale) return;
     // The part already loading from its URL is not downloaded a second time.
     const from = value.current?.job === job && !/** @type {HTMLAudioElement} */ (audio).getAttribute("src")?.startsWith("blob:") ? value.part + 1 : value.part;
     /** @type {[SpeechJob, SpeechPart][]} */
@@ -423,19 +463,20 @@ if (typeof document !== "undefined") /** @type {Window & {CCRDSpeech?: unknown}}
     value.jobs.delete(job.batch.start);
     release(job.id);
   }
+  function playbackSettings() { return { rate: Number(speed.value), timer: timer.value, deadline: sleepDeadline }; }
   function clearSleep() {
-    clearTimeout(sleepTimer); sleepDeadline = 0; finishClip = false; timer.value = "off";
+    clearTimeout(sleepTimer); sleepDeadline = 0; finishSentence = false; timer.value = "off";
   }
   function checkSleep() {
     if (sleepDeadline && Date.now() >= sleepDeadline) { stop("睡眠定时已结束，可继续朗读"); return true; }
     return false;
   }
-  function armSleep() {
+  function armSleep(deadline = timer.value !== "off" && timer.value !== "clip" ? Date.now() + Number(timer.value) * 60000 : 0) {
     clearTimeout(sleepTimer);
-    sleepDeadline = timer.value !== "off" && timer.value !== "clip" ? Date.now() + Number(timer.value) * 60000 : 0;
-    finishClip = timer.value === "clip";
-    if (finishClip && owner) {
-      clearPreload();
+    sleepDeadline = deadline;
+    finishSentence = timer.value === "clip";
+    if (finishSentence && owner) {
+      cancelHandoff(); clearPreload();
       for (const job of Array.from(owner.jobs.values())) if (job.batch.start !== owner.batch.start && job.state !== "ready") discard(owner, job);
     }
     function tickSleep() { if (!checkSleep() && sleepDeadline) sleepTimer = setTimeout(tickSleep, Math.min(1000, sleepDeadline - Date.now())); }
@@ -496,9 +537,9 @@ if (typeof document !== "undefined") /** @type {Window & {CCRDSpeech?: unknown}}
     if (panel.contains(document.activeElement) && button?.isConnected) /** @type {HTMLElement} */ (button).focus({ preventScroll: true });
   }
   function controls() {
-    play.textContent = owner?.wantsPlay ? "暂停" : owner?.blocked ? "重试" : "继续";
+    play.textContent = pendingStart || owner?.wantsPlay ? "暂停" : owner?.blocked ? "重试" : "继续";
     play.setAttribute("aria-label", play.textContent + "朗读");
-    play.disabled = !owner && !saved;
+    play.disabled = !pendingStart && !owner && !saved && !retryStart;
     previous.disabled = !owner || plan.sentence(owner.snapshot.text, owner.position).start <= 0;
     next.disabled = !owner || (plan.sentence(owner.snapshot.text, owner.position).end >= owner.snapshot.text.length && !more(owner.snapshot));
     visible.disabled = !preview;
@@ -619,7 +660,9 @@ if (typeof document !== "undefined") /** @type {Window & {CCRDSpeech?: unknown}}
     }
   }
   function pause() {
-    if (!owner) return;
+    const restart = pendingStart ? retryStart : null;
+    cancelStart(); playAttempt++;
+    if (!owner) { if (restart) { retryStart = restart; notice("已暂停"); controls(); } return; }
     owner.wantsPlay = false;
     clearPreload();
     for (const job of Array.from(owner.jobs.values())) if (job.batch.start !== owner.batch.start && job.state !== "ready") discard(owner, job);
@@ -627,12 +670,13 @@ if (typeof document !== "undefined") /** @type {Window & {CCRDSpeech?: unknown}}
     if ("mediaSession" in navigator) navigator.mediaSession.playbackState = "paused";
   }
   function stop(message = "已停止，可继续朗读", keepalive = false, keepClips = false) {
-    starting += 1; // A pending adapter load must not start playback after stopping.
+    cancelStart(); playAttempt++;
     const value = owner;
     if (value) {
       for (const job of value.jobs.values()) remember(value, job);
       // `interrupted`: stopped by leaving the page while playing, not by the listener.
-      saved = { snapshot: value.snapshot, position: value.position, history: value.history, pitch: value.pitch, interrupted: keepalive && !!value.wantsPlay };
+      saved = { snapshot: value.snapshot, position: value.position, history: value.history, pitch: value.pitch,
+        interrupted: keepalive && !!value.wantsPlay, settings: playbackSettings() };
       value.cancelled = true; clearTimeout(value.timer);
       for (const controller of value.controllers) if (!controller.createsJob) controller.abort();
       for (const job of value.jobs.values()) release(job.id, keepalive);
@@ -666,7 +710,7 @@ if (typeof document !== "undefined") /** @type {Window & {CCRDSpeech?: unknown}}
   function cancelHandoff() {
     if (!handoff) return;
     clearTimeout(handoff.timer); handoff = null;
-    if (spare && spare !== retiring) { spare.removeAttribute("src"); spare.load(); }
+    if (spare && spare !== retiring) { spare.pause(); spare.removeAttribute("src"); spare.load(); }
   }
   function retire() {
     const old = retiring; retiring = null;
@@ -686,7 +730,7 @@ if (typeof document !== "undefined") /** @type {Window & {CCRDSpeech?: unknown}}
     const current = /** @type {NonNullable<SpeechOwner['current']>} */ (value.current);
     const part = current?.part, kind = part?.pause_kind;
     const pause = part?.pause_after_seconds;
-    if (handoffBlocked || retiring || finishClip || !live(value) || !value.wantsPlay || !spare ||
+    if (handoffBlocked || retiring || finishSentence || !live(value) || !value.wantsPlay || !spare ||
         !(/** @type {string} */ (kind) in SPOKEN_PAUSE) || !(/** @type {number} */ (pause) > 0) || !Number.isFinite(/** @type {HTMLAudioElement} */ (audio).duration)) return;
     const next = nextClip(value);
     if (!next) return;
@@ -713,10 +757,8 @@ if (typeof document !== "undefined") /** @type {Window & {CCRDSpeech?: unknown}}
     if ("preservesPitch" in next) next.preservesPitch = true;
     next.muted = /** @type {HTMLAudioElement} */ (audio).muted; next.volume = /** @type {HTMLAudioElement} */ (audio).volume;
     next.play().then(() => {
-      if (handoff !== token || owner !== value || value.current !== token.current || !value.wantsPlay) {
-        if (next !== audio) next.pause();
-        return;
-      }
+      // Cancellation already paused the spare; it may now belong to a newer attempt.
+      if (handoff !== token || owner !== value || value.current !== token.current || !value.wantsPlay || checkSleep()) return;
       handoff = null;
       const previous = /** @type {HTMLAudioElement} */ (audio);
       previous.removeAttribute("id"); next.id = "speech-audio";
@@ -728,16 +770,20 @@ if (typeof document !== "undefined") /** @type {Window & {CCRDSpeech?: unknown}}
       value.current = { job: token.job, part: token.part }; value.position = token.job.batch.start + token.part.start;
       notice("朗读中"); mark(); controls();
       pump(value);
-    }, () => { handoffBlocked = true; handoff = null; }); // e.g. iOS autoplay: keep the ordinary path.
+    }, () => { if (handoff === token) { handoffBlocked = true; cancelHandoff(); } }); // e.g. iOS autoplay.
   }
   /** @param {Event} event */
   function clipEnded(event) {
     const value = owner;
-    if (event.target !== audio || !value?.current || checkSleep()) return;
+    if (event.target !== audio || !value?.current || !value.wantsPlay || checkSleep()) return;
     cancelHandoff();
-    value.position = value.current.job.batch.start + value.current.part.end;
+    const { job, part } = value.current, text = value.snapshot.text;
+    value.position = job.batch.start + part.end;
     value.part += 1; value.current = null;
-    if (finishClip) { stop("本句已读完，睡眠定时结束"); return; }
+    if (finishSentence && (plan.finishesSentence(text, job.batch.start + part.start, value.position) ||
+        (!more(value.snapshot) && value.position >= text.length))) {
+      stop("本句已读完，睡眠定时结束"); return;
+    }
     advance(value); pump(value);
   }
   /** @param {HTMLAudioElement} player */
@@ -749,7 +795,7 @@ if (typeof document !== "undefined") /** @type {Window & {CCRDSpeech?: unknown}}
     });
     player.addEventListener("ended", clipEnded);
     player.addEventListener("pause", () => {
-      if (player === audio && owner && !switching && !audio.ended && owner.wantsPlay) pause();
+      if (player === audio && owner && !switching && audio.paused && !audio.ended && owner.wantsPlay) pause();
     });
     player.addEventListener("error", () => onPlayerError(player));
     player.addEventListener("timeupdate", () => { if (player === audio) checkSleep(); });
@@ -783,9 +829,9 @@ if (typeof document !== "undefined") /** @type {Window & {CCRDSpeech?: unknown}}
   /** @param {SpeechOwner} value */
   function playAudio(value) {
     if (!live(value) || !value.wantsPlay || checkSleep()) return;
-    const current = value.current;
+    const current = value.current, attempt = ++playAttempt;
     /** @type {HTMLAudioElement} */ (audio).play().catch(() => {
-      if (!live(value) || current !== value.current) return;
+      if (attempt !== playAttempt || !live(value) || !value.wantsPlay || current !== value.current) return;
       pause(); notice("音频已就绪，请点击继续播放");
     });
     if ("mediaSession" in navigator) navigator.mediaSession.playbackState = "playing";
@@ -944,7 +990,11 @@ if (typeof document !== "undefined") /** @type {Window & {CCRDSpeech?: unknown}}
         if (!loaded(value.snapshot, job.batch.end)) { grow(value.snapshot, job.batch.end, value); return; }
         value.position = job.batch.end;
         discard(value, job);
-        if (value.position >= value.snapshot.text.length) { stop("已读完全文"); saved = null; controls(); return; }
+        if (value.position >= value.snapshot.text.length) {
+          if (finishSentence) stop("本句已读完，睡眠定时结束");
+          else { stop("已读完全文"); saved = null; controls(); }
+          return;
+        }
         value.batch = /** @type {SpeechBatch} */ (plan.batch(value.snapshot.text, value.position, false, job.batch.first ? lastClip(job.batch) : 0));
         value.part = 0;
         if (!value.jobs.has(value.batch.start)) value.jobs.set(value.batch.start, newJob(value.batch));
@@ -955,8 +1005,8 @@ if (typeof document !== "undefined") /** @type {Window & {CCRDSpeech?: unknown}}
     // work on pause, no document-wide plan/DOM/audio cache and no whole-book POST.
     // Queue the following batch once the current one is publishing: the server
     // runs one synthesis at a time, so this only removes the boundary wait.
-    if (!finishClip && value.current && !loaded(value.snapshot, job.batch.end)) grow(value.snapshot, job.batch.end, value);
-    if (!finishClip && value.current && (job.state === "ready" || (job.parts.length && !job.preloaded && !job.stale)) &&
+    if (!finishSentence && value.current && !loaded(value.snapshot, job.batch.end)) grow(value.snapshot, job.batch.end, value);
+    if (!finishSentence && value.current && (job.state === "ready" || (job.parts.length && !job.preloaded && !job.stale)) &&
         job.batch.end < value.snapshot.text.length && loaded(value.snapshot, job.batch.end) && !value.jobs.has(job.batch.end)) {
       // A completed preceding batch can remain usable briefly after a seek, but
       // never keep a third subscription or add extra speculative inference.
@@ -980,7 +1030,7 @@ if (typeof document !== "undefined") /** @type {Window & {CCRDSpeech?: unknown}}
       // late (2026-10-20 cold CW:0: clips 4-7 arrived together, 2.2 s late).
       // update() skips a job whose request is still pending.
       const current = value.jobs.get(value.batch.start);
-      for (const job of Array.from(value.jobs.values())) if (job !== current) {
+      for (const job of Array.from(value.jobs.values())) if (job !== current && !finishSentence) {
         update(value, job).then(() => { if (live(value) && epoch === value.seekEpoch) advance(value); }, () => {});
       }
       if (current) await update(value, current);
@@ -993,37 +1043,30 @@ if (typeof document !== "undefined") /** @type {Window & {CCRDSpeech?: unknown}}
     }
   }
   /** @param {SpeechSnapshot} snapshot @param {number} offset */
-  function start(snapshot, offset, playing = true, skipHistory = false) {
-    createAudio();
-    if (!loaded(snapshot, offset)) {
-      // Load enough source around the target first; a newer start wins.
-      const token = ++starting;
-      notice("正在载入正文…"); show();
-      // A host may report where a slow search for text has reached.
-      const progress = setInterval(() => {
-        const text = token === starting && (/** @type {NonNullable<SpeechSnapshot['adapter']>} */ (snapshot.adapter)).progress?.();
-        if (text) notice(text); else if (token !== starting) clearInterval(progress);
-      }, 500);
-      Promise.resolve((/** @type {NonNullable<SpeechSnapshot['adapter']>} */ (snapshot.adapter)).ensure(offset + NEED)).then(() => {
-        clearInterval(progress);
-        if (token !== starting) return;
-        if (!snapshot.text.trim()) { notice("这份文档没有可朗读的文字"); return; }
-        start(snapshot, Math.min(offset, snapshot.text.length), playing, skipHistory);
-      }, () => {
-        clearInterval(progress);
-        if (token === starting) notice("正文载入失败 · 点击继续重试，进度保留");
-      });
+  function start(snapshot, offset, playing = true, skipHistory = false, exact = false, announce = false) {
+    if (checkSleep()) return;
+    if (more(snapshot) && !loaded(snapshot, offset)) {
+      const adapter = /** @type {NonNullable<SpeechSnapshot['adapter']>} */ (snapshot.adapter);
+      void waitToStart(async () => {
+        await adapter.ensure(offset + NEED);
+        return Math.min(offset, snapshot.text.length);
+      }, (found) => start(snapshot, found, playing, skipHistory, exact, announce), "正在载入正文…", () => adapter.progress?.() || "");
       return;
     }
-    starting += 1;
-    const mode = timer.value, deadline = sleepDeadline;
+    cancelStart();
+    if (!snapshot.text.trim()) { notice("这份文档没有可朗读的文字"); controls(); return; }
+    const {timer: mode, deadline} = playbackSettings();
     if (owner) for (const job of owner.jobs.values()) remember(owner, job);
     const recent = owner || saved;
-    const history = sameSource(/** @type {SpeechSnapshot} */ (recent?.snapshot), snapshot) && /** @type {SpeechOwner | SpeechSaved} */ (recent).pitch === Number(pitch.value) ? /** @type {SpeechOwner | SpeechSaved} */ (recent).history.slice() : [];
+    const sameWindow = sameSource(recent?.snapshot, snapshot);
+    const history = sameWindow && recent?.pitch === Number(pitch.value) ? recent.history.slice() : [];
     const restored = skipHistory ? undefined : history.find(batch => plan.partIndex(batch, offset) >= 0);
-    stop("正在准备首句…", false, recent?.snapshot.id === snapshot.id);
-    const batch = restored || plan.batch(snapshot.text, offset, true);
-    if (!batch) { notice("已到正文末尾"); return; }
+    const batch = restored || plan.batch(snapshot.text, offset, true, 0, exact);
+    if (!batch) { notice("已到正文末尾"); controls(); return; }
+    // Offsets are only meaningful inside the same adapter window (or immutable plain text).
+    stop("正在准备首句…", false, sameWindow);
+    if (announce) snapshot.adapter?.onStart?.();
+    createAudio();
     /** @type {SpeechOwner} */
     const value = { snapshot, batch, position: restored ? offset : batch.start, part: restored ? plan.partIndex(batch, offset) : 0,
       current: null, pitch: Number(pitch.value), wantsPlay: playing, history,
@@ -1033,43 +1076,55 @@ if (typeof document !== "undefined") /** @type {Window & {CCRDSpeech?: unknown}}
     // cache_only confirmation returns; URLs are replaced once it arrives.
     if (restored?.parts?.length) { job.parts = restored.parts.slice(); job.preloaded = true; }
     value.jobs.set(batch.start, job); owner = value; saved = null;
-    timer.value = mode; armSleep();
-    if (deadline) { sleepDeadline = deadline; if (checkSleep()) return; }
+    timer.value = mode; armSleep(deadline);
+    if (!live(value)) return;
     /** @type {Element} */ ($("#speech-title")).textContent = snapshot.title || "朗读";
     show(); notice(playing ? "正在准备首句…" : "已选择句子，点击继续播放"); controls();
     if ("mediaSession" in navigator && "MediaMetadata" in globalThis) navigator.mediaSession.metadata = new MediaMetadata({ title: snapshot.title });
     if (job.preloaded) advance(value);
     pump(value); // First POST directly; no iframe, voices or health round-trips.
   }
-  /** @param {number} [offset] */
-  function fromPreview(offset, chosen = false) {
-    // An adapter loads its text on demand; start() waits for it.
+  /** @param {number | SpeechStartLocator} [offset] */
+  function fromPreview(offset, chosen = false, exact = false, sentenceStart = false) {
     if (!preview || (!preview.adapter && !preview.text.trim())) { if (typeof showToast === "function") showToast("请等待预览正文加载完成"); return; }
-    if (offset === undefined && preview.adapter?.locateTop) {
-      // Find (and load up to) the text at the reading position first, so a
-      // paged document is not read from its first loaded unit.
-      const token = ++starting;
-      if (!owner || chosen) { notice("正在定位当前阅读位置…"); show(); }
-      Promise.resolve(preview.adapter.locateTop()).then((found) => {
-        if (token === starting && preview?.adapter) fromPreview(plan.safe(preview.text, Number(found) || 0), chosen);
-      }, () => { if (token === starting) notice("正文载入失败 · 点击继续重试，进度保留"); });
-      return;
-    }
-    if (offset === undefined) offset = visibleOffset();
     // 听书 pressed on another article is that choice; other paths still ask.
     if (!chosen && owner && owner.snapshot.id !== preview.id && !confirm("切换到当前预览会停止原朗读，继续吗？")) return;
-    if (owner && sameSource(owner.snapshot, preview) && seek(owner, offset, true)) return;
-    start(preview.adapter ? /** @type {SpeechSnapshot} */ (preview.snapshot) : { id: preview.id, text: preview.text, title: preview.title }, offset);
+    const id = preview.id, adapter = preview.adapter, locateTop = adapter?.locateTop?.bind(adapter);
+    /** @param {number} found */
+    const ready = (found) => {
+      // The locator may republish a rebased adapter for this same document.
+      if (preview?.id !== id || checkSleep()) return;
+      const target = sentenceStart ? plan.sentence(preview.text, found).start : plan.safe(preview.text, found);
+      if (owner && sameSource(owner.snapshot, preview) && seek(owner, target, true)) { preview.adapter?.onStart?.(); return; }
+      start(preview.snapshot || { id, text: preview.text, title: preview.title }, target, true, false, exact || sentenceStart, true);
+    };
+    const locator = typeof offset === "function" ? offset : offset === undefined ? locateTop : undefined;
+    if (locator) void waitToStart(locator, ready, "正在定位朗读位置…");
+    else ready(typeof offset === "number" ? offset : visibleOffset());
+  }
+  /** @param {number | SpeechStartLocator} offset @param {SpeechReadOptions} [options] */
+  function readFrom(offset, options) {
+    const settings = options?.settings;
+    if (settings) {
+      speed.value = String(settings.rate); applyRate();
+      timer.value = settings.timer;
+      armSleep(settings.deadline); controls();
+      if (settings.deadline && settings.deadline <= Date.now()) return;
+    }
+    fromPreview(offset, true, !!options?.exact, !options?.exact);
   }
   function resume() {
     if (checkSleep()) return;
+    if (retryStart) { retryStart(); return; }
     if (!owner) { if (saved) start(saved.snapshot, saved.position); return; }
     if (owner.blocked || owner.settingsChanged) { start(owner.snapshot, owner.position); return; }
     owner.wantsPlay = true; notice("正在继续…"); controls();
     if (owner.current) { playAudio(owner); armHandoff(owner); }
     advance(owner); pump(owner);
   }
-  function launch() {
+  /** @param {SpeechStartLocator | null} [selection] */
+  function launch(selection = preview?.adapter?.selectionStart?.() ?? null) {
+    if (selection) { readFrom(selection, { exact: true }); return; }
     if (!owner) {
       // A host adapter resumes a stopped session only when it is the same
       // window; otherwise "听书" starts where the reader is looking now.
@@ -1086,6 +1141,7 @@ if (typeof document !== "undefined") /** @type {Window & {CCRDSpeech?: unknown}}
   /** @param {number} direction */
   function navigate(direction) {
     if (!owner) return;
+    cancelStart();
     const sentence = plan.sentence(owner.snapshot.text, owner.position);
     const target = direction > 0 ? sentence.end : plan.previousSentence(owner.snapshot.text, owner.position);
     if ((target < owner.snapshot.text.length || more(owner.snapshot)) && !seek(owner, target, owner.wantsPlay)) start(owner.snapshot, target, owner.wantsPlay);
@@ -1096,6 +1152,7 @@ if (typeof document !== "undefined") /** @type {Window & {CCRDSpeech?: unknown}}
     const job = Array.from(value.jobs.values()).find(item => !item.cancelled && !item.blocked && plan.partIndex(item.batch, offset) >= 0);
     if (!job) return false;
     const index = plan.partIndex(job.batch, offset), current = value.current;
+    cancelStart(); playAttempt++; cancelHandoff();
     value.seekEpoch += 1; clearTimeout(value.timer); clearPreload();
     value.position = offset; value.batch = job.batch; value.part = index; value.wantsPlay = playing;
     value.blocked = false;
@@ -1107,7 +1164,7 @@ if (typeof document !== "undefined") /** @type {Window & {CCRDSpeech?: unknown}}
     const player = /** @type {HTMLAudioElement} */ (audio);
     if (current?.job === job && current.part.index === index && player.readyState >= 1 && !player.error) {
       player.currentTime = 0;
-      if (playing) playAudio(value); else player.pause();
+      if (playing) { playAudio(value); armHandoff(value); } else player.pause();
     } else {
       value.current = null; switching = true; player.pause(); player.removeAttribute("src"); player.load();
       advance(value);
@@ -1150,9 +1207,9 @@ if (typeof document !== "undefined") /** @type {Window & {CCRDSpeech?: unknown}}
       link.dataset.speechConnect = ""; document.head.append(link);
     }
   }
-  function previewClosed() { clearMark(); preview = null; if (panel.parentElement !== document.body) document.body.append(panel); controls(); }
+  function previewClosed() { cancelStart(); clearMark(); preview = null; if (panel.parentElement !== document.body) document.body.append(panel); controls(); }
   function previewPending() {
-    clearMark(); preview = null; controls();
+    cancelStart(); clearMark(); preview = null; controls();
     // Keep the old modal preview's controls inside its focus scope while the
     // new source is loading. Detach only immediately before replacing its DOM.
   }
@@ -1163,7 +1220,26 @@ if (typeof document !== "undefined") /** @type {Window & {CCRDSpeech?: unknown}}
     else tools.prepend(button);
   }
   new MutationObserver(arrangeToggle).observe(document.body, { attributes: true, attributeFilter: ["class"] });
-  document.addEventListener("click", event => { if (/** @type {Element} */ (event.target).closest("[data-speech-toggle]")) launch(); });
+  // A tap can collapse a native selection before its click is dispatched.
+  // Keyboard activation (detail === 0) instead reads the current DOM selection.
+  /** @type {{button: Element, locate: SpeechStartLocator} | null} */
+  let pressedSelection = null;
+  document.addEventListener("pointerdown", event => {
+    const button = /** @type {Element | null} */ (event.target)?.closest?.("[data-speech-toggle], #speech-visible");
+    const locate = button && preview?.adapter?.selectionStart?.();
+    pressedSelection = button && locate ? {button, locate} : null;
+  }, { capture: true, passive: true });
+  document.addEventListener("pointercancel", () => { pressedSelection = null; }, { capture: true });
+  /** @param {MouseEvent} event @param {Element} button */
+  function consumeSelection(event, button) {
+    const locate = pressedSelection?.button === button && event.detail ? pressedSelection.locate : preview?.adapter?.selectionStart?.();
+    pressedSelection = null;
+    return locate ?? null;
+  }
+  document.addEventListener("click", event => {
+    const button = /** @type {Element | null} */ (event.target)?.closest?.("[data-speech-toggle]");
+    if (button) launch(consumeSelection(event, button));
+  });
   document.addEventListener("dblclick", event => {
     if (preview?.adapter || !preview?.body?.contains(/** @type {Node | null} */ (event.target))) return;
     const offset = offsetAtPoint(event.clientX, event.clientY);
@@ -1173,10 +1249,13 @@ if (typeof document !== "undefined") /** @type {Window & {CCRDSpeech?: unknown}}
     if (range) { const selection = /** @type {Selection} */ (getSelection()); selection.removeAllRanges(); selection.addRange(range); }
     fromPreview(sentence.start);
   });
-  play.addEventListener("click", () => { if (owner?.wantsPlay) pause(); else resume(); });
+  play.addEventListener("click", () => { if (pendingStart || owner?.wantsPlay) pause(); else resume(); });
   previous.addEventListener("click", () => navigate(-1));
   next.addEventListener("click", () => navigate(1));
-  visible.addEventListener("click", () => fromPreview());
+  visible.addEventListener("click", event => {
+    const selection = consumeSelection(event, visible);
+    if (selection) readFrom(selection, { exact: true }); else fromPreview();
+  });
   locate.addEventListener("click", toggleLocate);
   collapse.addEventListener("click", hide);
   stopButton.addEventListener("click", () => { stop(); clearMark(); hide(); });
@@ -1187,7 +1266,7 @@ if (typeof document !== "undefined") /** @type {Window & {CCRDSpeech?: unknown}}
     else { owner.settingsChanged = true; notice("音高已调整，点击继续后从当前句重新生成"); }
   });
   speed.addEventListener("input", () => { applyRate(); controls(); if (owner?.current && owner.wantsPlay && !retiring) armHandoff(owner); });
-  timer.addEventListener("change", armSleep);
+  timer.addEventListener("change", () => armSleep());
   panel.addEventListener("keydown", event => { if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); hide(); } });
   window.addEventListener("pagehide", () => stop("已停止", true));
   document.addEventListener("visibilitychange", checkSleep);
@@ -1200,13 +1279,14 @@ if (typeof document !== "undefined") /** @type {Window & {CCRDSpeech?: unknown}}
   controls();
   // readFrom: a host adapter's double-click/selection starts at a source offset.
   return { launch, previewLoaded, previewPending, previewClosed, owns: /** @param {Node | null} node */ node => !!node && panel.contains(node), modal: () => false,
-    readFrom: /** @param {number} offset */ offset => { if (preview) fromPreview(plan.sentence(preview.text, offset).start); },
+    readFrom, pause,
     // Host hooks: show the playing sentence (no "回到原位置" toggle) and report
     // scrolling the player cannot observe itself (e.g. inside an iframe).
     reveal: () => { returnView = null; return locateSource().then(updateLocate); },
     viewChanged,
-    state: () => ({ active: !!owner, playing: !!owner?.wantsPlay, adapter: owner?.snapshot.adapter || saved?.snapshot.adapter || null,
-      position: owner ? owner.position : saved ? saved.position : null, interrupted: !owner && !!saved?.interrupted }),
+    state: () => ({ active: !!owner || pendingStart, playing: !!owner?.wantsPlay, adapter: owner?.snapshot.adapter || saved?.snapshot.adapter || null,
+      position: owner ? owner.position : saved ? saved.position : null, interrupted: !owner && !!saved?.interrupted,
+      settings: owner ? playbackSettings() : saved?.settings }),
     stop: () => { stop("已停止", true); clearMark(); hide(); } };
   }
 })();

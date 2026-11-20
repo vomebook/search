@@ -1,3 +1,5 @@
+import base64
+import hashlib
 import json
 import time
 import unittest
@@ -95,7 +97,11 @@ class ServiceWorkerIntegrationTest(unittest.TestCase):
         self.assertEqual(response.status, 200)
         self.page.evaluate("navigator.serviceWorker.ready")
         self.page.wait_for_function("navigator.serviceWorker.controller !== null")
+        self.page.reload(wait_until="domcontentloaded")
+        self.page.wait_for_function("navigator.serviceWorker.controller !== null")
         if wait_for_data:
+            # Verify persistence after the last online navigation; going offline
+            # during its background corpus refresh can interrupt the cache write.
             self.page.wait_for_function("STATE.dataLoaded === true", timeout=30000)
             self.page.wait_for_function(
                 """async () => {
@@ -105,8 +111,6 @@ class ServiceWorkerIntegrationTest(unittest.TestCase):
                 }""",
                 timeout=10000,
             )
-        self.page.reload(wait_until="domcontentloaded")
-        self.page.wait_for_function("navigator.serviceWorker.controller !== null")
 
     def cache_urls(self):
         return self.page.evaluate(
@@ -126,14 +130,20 @@ class ServiceWorkerIntegrationTest(unittest.TestCase):
         # Actual prior release URL; the implementation now lives in reader-host.
         old_asset = '/search/static/search/reader-navigation.6739fa74e2e7.js'
         current_asset = '/search/static/search/reader-host/application/navigation.6739fa74e2e7.js'
+        reader_shell = '/search/static/reader.html'
+        html = self.origin_path('static/reader.html').read_bytes()
+        integrity = 'sha256-' + base64.b64encode(hashlib.sha256(html).digest()).decode()
         prefix = 'vomebook-search-'
         names = {version: prefix + version for version in ('browser-a', 'browser-b', 'browser-c')}
 
         def serve_worker(version, hashed=False):
             worker = source.replace('"development"', json.dumps(version))
             if hashed:
-                worker = worker.replace('const CURRENT_HASHED_ASSETS = []',
-                                        'const CURRENT_HASHED_ASSETS = ' + json.dumps([current_asset]))
+                worker = worker.replace('READER_SHELL_INTEGRITY = "development"',
+                                        f'READER_SHELL_INTEGRITY = {json.dumps(integrity)}')
+                worker = worker.replace('readerWorkerScope.addEventListener("install"',
+                                        f'CURRENT_HASHED_ASSETS.push(...PRECACHE_URLS, {json.dumps(current_asset)});\n'
+                                        'readerWorkerScope.addEventListener("install"')
             with self.server_state.lock:
                 self.server_state.worker_source = worker
 
@@ -176,31 +186,38 @@ class ServiceWorkerIntegrationTest(unittest.TestCase):
             self.assertEqual(result, expected)
 
         serve_worker('browser-a')
-        self.prime()
-        self.assertEqual(state(), {'active': names['browser-a'], 'previous': None})
-        self.page.evaluate('''async path => {
+        # Register from a neutral page in scope, without the Search app's
+        # controllerchange hook warming Reader assets for either generation.
+        self.page.evaluate("navigator.serviceWorker.register('/search/sw.js', {scope: '/search/'})")
+        self.page.wait_for_function('navigator.serviceWorker.controller !== null')
+        self.assertEqual(state(), {'active': names['browser-a'], 'previous': None, 'history': []})
+        self.page.evaluate('''async ([path, shell]) => {
           const cache = await window.findOwnedServiceWorkerCache();
           await cache.put(path, new Response('old immutable bytes', {headers:{'Content-Type':'text/javascript'}}));
+          await cache.put(shell, new Response('old Reader shell'));
           await cache.put('/search/data/upgrade-old.json', new Response('old mutable bytes'));
           await (await caches.open('unrelated-browser-cache')).put('/foreign', new Response('keep'));
-        }''', old_asset)
+        }''', [old_asset, reader_shell])
 
         serve_worker('browser-b', hashed=True)
         with self.server_state.lock:
-            self.server_state.failures['/search/static/style.css'] = 503
+            self.server_state.failures[reader_shell] = 503
         update('redundant')
         self.assertTrue(self.page.evaluate('navigator.serviceWorker.controller === window.__previousController'))
-        self.assertEqual(state(), {'active': names['browser-a'], 'previous': None})
+        self.assertEqual(state(), {'active': names['browser-a'], 'previous': None, 'history': []})
         self.assertNotIn(names['browser-b'], self.cache_urls())
         self.assertEqual(self.page.evaluate('path => fetch(path).then(r => r.text())', old_asset), 'old immutable bytes')
 
         with self.server_state.lock:
-            self.server_state.failures.pop('/search/static/style.css')
+            self.server_state.failures.pop(reader_shell)
         update('activated')
         self.page.wait_for_function('navigator.serviceWorker.controller !== window.__previousController')
-        self.assertEqual(state(), {'active': names['browser-b'], 'previous': names['browser-a']})
+        self.assertEqual(state(), {'active': names['browser-b'], 'previous': names['browser-a'],
+                                   'history': [names['browser-a']]})
         caches_by_name = self.cache_urls()
         self.assertIn(self.origin + old_asset, caches_by_name[names['browser-a']])
+        self.assertNotIn(self.origin + reader_shell, caches_by_name[names['browser-a']])
+        self.assertIn(self.origin + reader_shell, caches_by_name[names['browser-b']])
         self.assertNotIn(self.origin + '/search/data/upgrade-old.json', caches_by_name[names['browser-a']])
         self.assertIn('unrelated-browser-cache', caches_by_name)
         # The server has no such hash: a 404 must fall back to the actual A cache.
@@ -210,12 +227,30 @@ class ServiceWorkerIntegrationTest(unittest.TestCase):
         serve_worker('browser-c', hashed=True)
         update('activated')
         self.page.wait_for_function('navigator.serviceWorker.controller !== window.__previousController')
-        self.assertEqual(state(), {'active': names['browser-c'], 'previous': names['browser-b']})
+        self.assertEqual(state(), {'active': names['browser-c'], 'previous': names['browser-b'],
+                                   'history': [names['browser-b'], names['browser-a']]})
         caches_by_name = self.cache_urls()
-        self.assertNotIn(names['browser-a'], caches_by_name)
+        self.assertIn(names['browser-a'], caches_by_name)
         self.assertIn(names['browser-b'], caches_by_name)
         self.assertEqual(caches_by_name['unrelated-browser-cache'], [self.origin + '/foreign'])
-        self.assertEqual(self.page.evaluate('path => fetch(path).then(r => r.status)', old_asset), 404)
+        self.assertIn(self.origin + reader_shell, caches_by_name[names['browser-c']])
+
+        # No Reader navigation or online warmup under C. Simulate a saved share
+        # link whose document was never cached, not just the no-document shell.
+        self.page.route('**/api/reader-content?*', lambda route: route.abort('internetdisconnected'))
+        self.go_offline()
+        self.assertEqual(self.page.evaluate('path => fetch(path).then(r => r.text())', old_asset), 'old immutable bytes')
+        share = (reader_shell + '?ext=txt&url=https%3A%2F%2Fhuggingface.co%2Fdatasets%2F'
+                 'VoiceOfML%2FTest%2Fresolve%2Fmain%2Fnever-cached.txt')
+        response = self.page.goto(self.origin + share, wait_until='domcontentloaded')
+        self.assertTrue(response.from_service_worker)
+        self.assertEqual(response.status, 200)
+        self.page.locator('#back').wait_for(state='visible')
+        self.page.locator('#content .reader-error').wait_for(state='visible')
+        self.assertEqual(self.page.locator('#status').inner_text(), '无法打开')
+        self.assertEqual(self.page.url, self.origin + share)
+        self.assertEqual([url for url in self.cache_urls()[names['browser-c']] if reader_shell in url],
+                         [self.origin + reader_shell])
 
     def test_registration_scope_and_controller_after_reload(self):
         self.prime()

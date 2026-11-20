@@ -20,7 +20,11 @@
         start: element instanceof HTMLInputElement ? element.selectionStart : null,
         end: element instanceof HTMLInputElement ? element.selectionEnd : null,
         direction: element instanceof HTMLInputElement ? element.selectionDirection : null } : null;
-      return { route: location.href, viewKey: deps.getViewKey(), top, index, offset, focus };
+      const row = element?.matches('button[data-action="read"]') &&
+        /** @type {HTMLElement | null} */ (element.closest('#results-list .result-item[data-reader-return-key]'));
+      const saved = { route: location.href, viewKey: deps.getViewKey(), top, index, offset, focus };
+      const key = row && row.dataset.readerReturnKey;
+      return key ? { ...saved, resultFocus: { index: Number(row.dataset.index), key } } : saved;
     }
     /** @param {ReaderReturnPosition} saved */
     function readerSearchHandoffReady(saved) {
@@ -61,6 +65,27 @@
       restore();
       if (scroll === saved) requestAnimationFrame(() => requestAnimationFrame(restore));
     }
+    /** @param {ReaderReturnPosition} saved */
+    function restoreReaderReturnFocus(saved) {
+      if (saved.route !== location.href || saved.viewKey !== deps.getViewKey()) return;
+      const { focus, resultFocus } = saved;
+      let element = focus && document.getElementById(focus.id);
+      if (resultFocus && typeof resultFocus.key === "string" && resultFocus.key &&
+          Number.isInteger(resultFocus.index) && resultFocus.index >= 0) {
+        const rows = [.../** @type {NodeListOf<HTMLElement>} */ (document.querySelectorAll('#results-list .result-item[data-reader-return-key]'))];
+        const matches = rows.filter(row => row.dataset.readerReturnKey === resultFocus.key);
+        const row = matches.find(row => Number(row.dataset.index) === resultFocus.index) ||
+          (matches.length === 1 ? matches[0] : null);
+        element = row?.querySelector('button[data-action="read"]') || null;
+      }
+      if (!element || (document.activeElement !== document.body && document.activeElement !== element)) return;
+      element.focus({ preventScroll: true });
+      if (focus && !resultFocus && element instanceof HTMLInputElement && Number.isInteger(focus.start) && Number.isInteger(focus.end) &&
+          focus.direction && ["forward", "backward", "none"].includes(focus.direction)) {
+        try { element.setSelectionRange(focus.start, focus.end, focus.direction); } catch (_) {}
+      }
+    }
+
     /** @param {ReturnType<SearchReaderNavigationApi['createNavigation']>} navigation */
     function restoreReaderSearchHandoff(navigation) {
       /** @type {ReaderReturnPosition | null | undefined} */
@@ -95,20 +120,13 @@
         cleanup();
         scroll = position;
         deps.restoreScroll(false, true);
-        const focus = position.focus;
-        const element = focus && document.getElementById(focus.id);
-        if (!element || (document.activeElement !== document.body && document.activeElement !== element)) return;
-        element.focus({ preventScroll: true });
-        if (element instanceof HTMLInputElement && Number.isInteger(focus.start) && Number.isInteger(focus.end) &&
-            focus.direction && ["forward", "backward", "none"].includes(focus.direction)) {
-          try { element.setSelectionRange(focus.start, focus.end, focus.direction); } catch (_) {}
-        }
+        restoreReaderReturnFocus(position);
       };
       requestAnimationFrame(restore);
     }
     return Object.freeze({
       capture: captureReaderReturnScroll, ready: readerSearchHandoffReady,
-      restore: restoreReaderReturnScroll, restoreHandoff: restoreReaderSearchHandoff,
+      restore: restoreReaderReturnScroll, restoreHandoff: restoreReaderSearchHandoff, restoreFocus: restoreReaderReturnFocus,
       get scroll() { return scroll; },
       /** @param {ReaderReturnPosition | null} value */
       setScroll(value) { scroll = value; },

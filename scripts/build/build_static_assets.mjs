@@ -21,7 +21,7 @@ const rewrite = (text, filename) => {
     // DjVu selection belongs to the browser, never the build host. Its vendor
     // URLs are release-pinned; the other formats still need graph hash rewrites.
     (_, extension, base) => `(["djvu","djv"].includes(${extension})?VoiceOfMLReaderResources.djvuSelectedAssets(${JSON.stringify(base)}):` + JSON.stringify(Object.fromEntries(["pdf", "md", "markdown", "html", "htm"].map(ext => [ext, resources.engineAssets(ext, base)]))) + `[${extension}]||[])`);
-  text = text.replace(/VoiceOfMLReaderResources\.(shellAssets|runtimePaths)\("(\/search\/static\/)"\)/g,
+  text = text.replace(/(?:VoiceOfMLReaderResources|readerPrecacheResources)\.(shellAssets|runtimePaths)\("(\/search\/static\/)"\)/g,
     (_, method, base) => JSON.stringify(resources[method](base)));
   for (const [original, versioned] of replacements) text = text.split(original).join(versioned);
   return text;
@@ -47,8 +47,14 @@ for (const filename of ["index.html", "static/reader.html", "sw.js"]) {
   if (filename === "index.html") content = stripBundledScripts(content);
   if (filename === "sw.js") content = stripBundledPrecache(content, "/search/static/");
   content = rewrite(content, filename === "static/reader.html" ? "reader.html" : filename);
-  if (filename === "sw.js") content = content.replace(/CURRENT_HASHED_ASSETS\s*=\s*\[\]/,
-    "CURRENT_HASHED_ASSETS=" + JSON.stringify([...replacements.values()].filter(url => url.startsWith("static/")).map(url => "/search/" + url).concat([...currentVendorAssets], resources.djvuDecoderAssets("/search/static/"), resources.ruffleAssets("/search/static/"))));
+  if (filename === "sw.js") {
+    content = content.replace(/CURRENT_HASHED_ASSETS\s*=\s*\[\]/,
+      "CURRENT_HASHED_ASSETS=" + JSON.stringify([...replacements.values()].filter(url => url.startsWith("static/")).map(url => "/search/" + url).concat([...currentVendorAssets], resources.djvuDecoderAssets("/search/static/"), resources.ruffleAssets("/search/static/"))));
+    content = content.replace(/\bREADER_SHELL_INTEGRITY\s*=\s*(["'])development\1/, () => {
+      const digest = createHash("sha256").update(readFileSync(join(root, "static/reader.html"))).digest("base64");
+      return `READER_SHELL_INTEGRITY="sha256-${digest}"`;
+    });
+  }
   writeFileSync(target, content);
 }
 

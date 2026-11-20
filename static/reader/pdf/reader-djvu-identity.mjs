@@ -38,20 +38,52 @@ function validatesPinnedSource(original,resolved,revision,pinnedRevision) {
   if (!/^[0-9a-f]{40}$/.test(pinnedRevision) || (revision && revision !== pinnedRevision)) return false;
   return resolved.pathname === original.pathname.replace(/\/(?:resolve|raw)\/(?:main|[0-9a-f]{40})\//,`/resolve/${pinnedRevision}/`);
 }
+/** @param {unknown} error */
+function retryableRevisionError(error) {
+  const detail=/** @type {{status?: number, name?: string} | null | undefined} */ (error);
+  return typeof detail?.status === 'number' ? [408,429,500,502,503,504].includes(detail.status)
+    : detail?.name === 'TypeError' || detail?.name === 'TimeoutError';
+}
+/** @param {DjvuIdentityContext} context @param {string} endpoint @param {AbortSignal} signal */
+async function fetchRevision(context,endpoint,signal) {
+  const metadata=await context.fetchWithReaderTimeout(endpoint,context.READER_PROXY_TIMEOUT_MS,{signal});
+  if (!metadata.ok) {
+    void metadata.body?.cancel().catch(() => {});
+    throw Object.assign(new Error(`DJVU_SOURCE_REVISION_HTTP_${metadata.status}`), {status:metadata.status});
+  }
+  // Buffer only the small metadata; retry replaces it in full. JSON and
+  // identity validation failures are not transport failures.
+  const text=await VoiceOfMLReaderSecurity.readText(metadata,64*1024);
+  signal.throwIfAborted();
+  /** @type {unknown} */
+  const raw=JSON.parse(text);
+  if (!validIdentity(raw)) throw new Error('DJVU_SOURCE_REVISION_INVALID');
+  return raw;
+}
+/** @param {DjvuIdentityContext} context @param {string} sourceUrl @param {AbortSignal} signal */
+async function lookupRevision(context,sourceUrl,signal) {
+  const endpoint=context.readerDownloadApiUrl(`/api/reader-source-revision?url=${encodeURIComponent(sourceUrl)}`);
+  for (let attempt = 0; ; attempt++) {
+    signal.throwIfAborted();
+    try {
+      return await fetchRevision(context,endpoint,signal);
+    } catch (error) {
+      signal.throwIfAborted();
+      // One extra lookup, not a second range or full-source attempt.
+      if (!retryableRevisionError(error) || attempt) throw error;
+      await new Promise((resolve,reject) => {
+        const timer=setTimeout(() => { signal.removeEventListener('abort',abort); resolve(undefined); },350);
+        const abort=() => { clearTimeout(timer); reject(signal.reason); };
+        signal.addEventListener('abort',abort,{once:true});
+      });
+    }
+  }
+}
 /** @param {DjvuIdentityContext} context @param {string} sourceUrl @param {AbortSignal} signal @returns {Promise<URL>} */
 export async function resolveDjvuSource(context,sourceUrl,signal) {
   const original=new URL(sourceUrl);
   const revision=/\/resolve\/([0-9a-f]{40})\//.exec(original.pathname)?.[1];
-  let pinned=canonicalIdentity(original,revision);
-  if (!pinned) {
-    const endpoint=context.readerDownloadApiUrl(`/api/reader-source-revision?url=${encodeURIComponent(sourceUrl)}`);
-    const metadata=await context.fetchWithReaderTimeout(endpoint,context.READER_PROXY_TIMEOUT_MS,{signal});
-    if (!metadata.ok) throw new Error(`DJVU_SOURCE_REVISION_HTTP_${metadata.status}`);
-    /** @type {unknown} */
-    const raw=JSON.parse(await VoiceOfMLReaderSecurity.readText(metadata,64*1024));
-    if (!validIdentity(raw)) throw new Error('DJVU_SOURCE_REVISION_INVALID');
-    pinned=raw;
-  }
+  const pinned=canonicalIdentity(original,revision) ?? await lookupRevision(context,sourceUrl,signal);
   const resolved=new URL(pinned.url);
   if (!validatesPinnedSource(original,resolved,revision,pinned.revision)) throw new Error('DJVU_SOURCE_REVISION_INVALID');
   return resolved;

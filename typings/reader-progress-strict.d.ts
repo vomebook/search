@@ -3,6 +3,7 @@ export interface ProgressState {
   url?: string;
   page?: number;
   pageOffset?: number;
+  pageOffsetFraction?: number;
   zoom?: number;
   mediaTime?: number;
   htmlScrollTop?: number;

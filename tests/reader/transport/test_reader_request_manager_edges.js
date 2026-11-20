@@ -80,6 +80,42 @@ async function main() {
     assert.equal(cancelled, 1); assert.equal(h.manager.activeCount, 0);
     assert.equal(h.manager.pendingCount, 0); assert.equal(h.timers.size, 0);
   }
+  // Only a failure after nonempty bytes were published marks the body as
+  // interrupted. An empty chunk does not commit the attempt's bytes.
+  for (const length of [0, 1]) {
+    let controller, calls = 0;
+    const h = fixture(() => {
+      calls++;
+      return Promise.resolve(new Response(new ReadableStream({start(stream) {
+        controller = stream;
+        stream.enqueue(new Uint8Array(length));
+      }})));
+    });
+    const body = (await h.manager.request("body-read", 1000)).body.getReader();
+    assert.deepEqual(await body.read(), {value: new Uint8Array(length), done: false});
+    const reason = new Error("body disconnected");
+    reason.name = "";
+    controller.error(reason);
+    await assert.rejects(body.read(), error => length === 0 ? error === reason :
+      error.code === "READER_BODY_INTERRUPTED" && error.name === "Error" && error.cause === reason);
+    assert.equal(calls, 1); assert.equal(h.manager.activeCount, 0); assert.equal(h.timers.size, 0);
+  }
+
+  // Caller cancellation of a published body preserves the caller's reason.
+  {
+    let cancelled;
+    const h = fixture(() => Promise.resolve(new Response(new ReadableStream({
+      start(stream) {stream.enqueue(new Uint8Array([7]));},
+      cancel(reason) {cancelled = reason; throw new Error("body cleanup failed");}
+    }))));
+    const owner = new AbortController();
+    const body = (await h.manager.request("caller-abort", 1000, {signal: owner.signal})).body.getReader();
+    assert.deepEqual((await body.read()).value, new Uint8Array([7]));
+    const reason = new DOMException("caller cancelled", "AbortError");
+    owner.abort(reason);
+    await assert.rejects(body.read(), error => error === reason);
+    assert.equal(cancelled, reason); assert.equal(h.manager.activeCount, 0); assert.equal(h.timers.size, 0);
+  }
   console.log("reader request manager edge contracts passed");
 }
 require("node:test")("reader request manager edge behavior", {timeout: 10000}, main);

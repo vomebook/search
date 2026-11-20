@@ -109,8 +109,10 @@ export function createReaderLifecycle(readerContext) {
     if ((/** @type {{code?: unknown} | null | undefined} */ (error))?.code === "READER_PDF_RATE_LIMIT") return "READER_PDF_TRANSPORT";
     if ((/** @type {unknown[]} */ (["READER_ENGINE_NETWORK", "READER_RESTORE", "READER_PDF_TRANSPORT"]))
       .includes((/** @type {{code?: unknown} | null | undefined} */ (error))?.code)) return (/** @type {{code?: unknown}} */ (error)).code;
+    if ((/** @type {{code?: unknown} | null | undefined} */ (error))?.code === "READER_BODY_INTERRUPTED" &&
+        ["text", "markdown", "html"].includes(readerContext.capability?.mode || "")) return "READER_DOCUMENT_INTERRUPTED";
     const value = `${(/** @type {{name?: unknown} | null | undefined} */ (error))?.name || ""} ${(/** @type {{message?: unknown} | null | undefined} */ (error))?.message || error || ""}`;
-    if (/AbortError|timeout|network|fetch|HTTP\s*\d+/i.test(value)) return "READER_NETWORK";
+    if (/AbortError|timeout|network|fetch|HTTP[\s_]*\d+/i.test(value)) return "READER_NETWORK";
     if (
       /EPUB_INVALID|corrupt|damage|truncated|central directory|end of data|invalid zip/i.test(value)
     )
@@ -172,10 +174,13 @@ export function createReaderLifecycle(readerContext) {
     readerContext.content.dataset.errorCode = code;
     // The error surface also ends loading, without marking restoration ready.
     readerContext.markReaderContentReady();
-    const visibleMessage = `${message} [${readerContext.readerLifecycle.stage}]`;
+    const description = code === "READER_DOCUMENT_INTERRUPTED"
+      ? "正文下载中断，原阅读进度已保留。请重试加载完整文件。" : message;
+    const visibleMessage = `${description} [${readerContext.readerLifecycle.stage}]`;
     readerContext.content.innerHTML = `<div class="reader-error" role="alert"></div>`;
     (/** @type {Element} */ (readerContext.content.querySelector(".reader-error"))).textContent = visibleMessage;
-    if (["READER_ENGINE_NETWORK", "READER_RESTORE", "READER_PDF_TRANSPORT", "READER_MEDIA"].includes(code)) {
+    const waitForProgress = ["READER_PDF_TRANSPORT", "READER_MEDIA", "READER_DOCUMENT_INTERRUPTED"].includes(code);
+    if (waitForProgress || ["READER_ENGINE_NETWORK", "READER_RESTORE"].includes(code)) {
       const retry = document.createElement("button");
       retry.type = "button";
       retry.className = "text-button";
@@ -183,10 +188,10 @@ export function createReaderLifecycle(readerContext) {
       retry.textContent = "重试加载";
       // Reload clears the browser's failed module map and preserves this book URL.
       retry.addEventListener("click", async () => {
-        if (["READER_PDF_TRANSPORT", "READER_MEDIA"].includes(code)) {
+        if (waitForProgress) {
           let timer;
           try {
-            await Promise.race([readerContext.progressSaveChain,
+            await Promise.race([readerContext.progressSaveChain.catch(() => {}),
               new Promise(resolve => { timer = setTimeout(resolve, 500); })]);
           } finally { clearTimeout(timer); }
           if (readerContext.readerLifecycle.disposed) return;

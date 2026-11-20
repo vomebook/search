@@ -1,6 +1,7 @@
 interface ReaderReturnPosition {
   route: string; viewKey: string; top: number; index: number; offset: number;
   focus: { id: string; start: number | null; end: number | null; direction: "forward" | "backward" | "none" | null } | null;
+  resultFocus?: { index: number; key: string };
 }
 interface ReaderReturnDependencies {
   readView(): { hasContainer: boolean; containerHeight: number; resultCount: number; total: number;
@@ -14,6 +15,7 @@ interface ReaderReturnDependencies {
 interface ReaderReturnController {
   capture(): ReaderReturnPosition | null; ready(saved: ReaderReturnPosition): boolean;
   restore(windowRendered?: boolean, restoreTop?: boolean): void;
+  restoreFocus(saved: ReaderReturnPosition): void;
   restoreHandoff(navigation: ReturnType<SearchReaderNavigationApi['createNavigation']>): void;
   readonly scroll: ReaderReturnPosition | null;
   setScroll(value: ReaderReturnPosition | null): void; invalidate(): void; cancelOnScroll(): void;

@@ -230,27 +230,31 @@ export function createReaderBookmarks(readerContext) {
     }
     readerContext.syncCurrentPageFromMarker();
     const chapterPosition = readerContext.captureChapterPosition();
+    const mode = readerContext.capability.mode;
     const shell = readerContext.documentState.pageCount ? readerContext.pageAtMarker() : null;
-    const pageOffset = shell ? Math.max(0, readerContext.viewport.scrollTop - readerContext.readerPageScrollTop(shell)) : 0;
+    const page = Number(shell?.dataset.page) || readerContext.documentState.page;
+    const scrollTop = readerContext.viewport.scrollTop;
+    const pageOffset = shell ? Math.max(0, scrollTop - readerContext.readerPageScrollTop(shell)) : 0;
+    const pageHeight = shell && (mode === "pdf" || mode === "pdf-pages") ? shell.getBoundingClientRect().height : 0;
+    const pageOffsetFraction = pageHeight > 0 ? Math.min(1, pageOffset / pageHeight) : undefined;
     const progress = readerContext.readerProgressPercent();
     const htmlScrollTop = readerContext.htmlFrame && readerContext.htmlFrame.contentWindow ? readerContext.htmlFrame.contentWindow.scrollY : 0;
-    const scrollTop = readerContext.viewport.scrollTop;
-    const mode = readerContext.capability.mode;
     const pagedDocument = readerContext.documentState.pageCount && mode !== "text" && mode !== "markdown";
     const locator = chapterPosition
       ? `chapter:${chapterPosition.chapterIndex}:${Math.round(chapterPosition.chapterOffset)}`
       : pagedDocument
-          ? `page:${readerContext.documentState.page}:${Math.round(pageOffset)}`
+          ? `page:${page}:${Math.round(pageOffset)}`
           : `progress:${progress}:${Math.round(readerContext.htmlFrame ? htmlScrollTop : scrollTop)}`;
     return {
       locator,
       label: pagedDocument
-        ? `第 ${readerContext.documentState.page} / ${readerContext.documentState.pageCount} 页`
+        ? `第 ${page} / ${readerContext.documentState.pageCount} 页`
         : `阅读进度 ${progress.toFixed(1)}%`,
       excerpt: readerContext.bookmarkExcerpt(),
       progress,
-      page: pagedDocument ? readerContext.documentState.page : 0,
+      page: pagedDocument ? page : 0,
       pageOffset,
+      ...(pageOffsetFraction === undefined ? {} : { pageOffsetFraction }),
       scrollTop,
       htmlScrollTop,
       ...(chapterPosition || {})

@@ -85,7 +85,7 @@ export function createReaderToc(readerContext) {
           if ((positions[middle]?.top ?? Infinity) <= scroll) low = middle + 1;
           else high = middle;
         }
-        return positions[low ? low - 1 : 0]?.index ?? -1;
+        return positions[low - 1]?.index ?? -1;
       },
       dispose() {
         mutations.disconnect(); resize.disconnect();
@@ -106,13 +106,15 @@ export function createReaderToc(readerContext) {
     }
     const marker = readerContext.htmlFrame ? 8 : readerContext.viewport.getBoundingClientRect().top + 8;
     const root = readerContext.htmlFrame?.contentDocument?.body || readerContext.content;
-    if (readerContext.capability.mode !== "epub-chapters") {
+    const mode = readerContext.capability.mode;
+    if (mode === "pdf" || mode === "pdf-pages" || mode === "image-pages") return;
+    if (mode !== "epub-chapters") {
       if (readerContext.headingLocationCache?.root !== root || readerContext.headingLocationCache?.entries !== readerContext.navigationState.tocEntries) {
         readerContext.headingLocationCache?.dispose();
         readerContext.headingLocationCache = readerContext.createHeadingLocationCache(root, tocEntries());
       }
       const current = readerContext.headingLocationCache.at(marker, readerContext.htmlFrame ? /** @type {Window} */ (readerContext.htmlFrame.contentWindow).scrollY : readerContext.viewport.scrollTop);
-      if (current >= 0 && current !== readerContext.navigationState.currentChapterIndex) {
+      if (current !== readerContext.navigationState.currentChapterIndex) {
         readerContext.updateNavigationState({currentChapterIndex:current});
         readerContext.updateTocCurrentMark();
       }
@@ -134,8 +136,11 @@ export function createReaderToc(readerContext) {
         firstPosition = position;
       }
     }
-    if (current < 0) current = first;
-    if (current >= 0 && current !== readerContext.navigationState.currentChapterIndex) {
+    // Only the start of the directory is a preface. At a virtual window's
+    // leading edge the closest mounted target can be a later chapter.
+    if (current < 0 && first >= 0 && first !== tocEntries().findIndex((entry) => !entry.group)) current = first;
+    if (first < 0 && current < 0) return;
+    if (current !== readerContext.navigationState.currentChapterIndex) {
       readerContext.updateNavigationState({ currentChapterIndex: current });
       readerContext.updateTocCurrentMark();
     }
@@ -312,10 +317,7 @@ export function createReaderToc(readerContext) {
     ownedTocEntries = normalizedEntries;
     pageLookupEntries = null;
     pageLookup = [];
-    readerContext.updateNavigationState({
-      tocEntries: normalizedEntries,
-      currentChapterIndex: normalizedEntries.findIndex((entry) => !entry.group && entry.page !== null)
-    });
+    readerContext.updateNavigationState({ tocEntries: normalizedEntries, currentChapterIndex: -1 });
     const tocTab = /** @type {HTMLElement} */ (document.querySelector("#toc-tab"));
     tocTab.hidden = false;
     tocTab.textContent = normalizedEntries.length ? "目录" : "阅读";
@@ -419,7 +421,9 @@ export function createReaderToc(readerContext) {
   }
 
   function updateTocCurrentMark() {
-    if (readerContext.documentState.pageCount > 1 && readerContext.documentState.page > 0) {
+    const mode = readerContext.capability.mode;
+    if (readerContext.documentState.page > 0 && (readerContext.documentState.pageCount > 1 ||
+        mode === "pdf" || mode === "pdf-pages" || mode === "image-pages")) {
       const entries = tocEntries();
       let pageIndex = -1;
       if (entries.length > PAGE_LOOKUP_MIN_ENTRIES && entries === ownedTocEntries && ownedTocEntries !== pageLookupEntries)
@@ -438,7 +442,8 @@ export function createReaderToc(readerContext) {
           if (page !== null && page <= readerContext.documentState.page) pageIndex = index;
         }
       }
-      if (pageIndex >= 0) readerContext.updateNavigationState({ currentChapterIndex: pageIndex });
+      if (pageIndex !== readerContext.navigationState.currentChapterIndex)
+        readerContext.updateNavigationState({ currentChapterIndex: pageIndex });
     }
     syncMarkedTocRow();
   }
@@ -447,8 +452,6 @@ export function createReaderToc(readerContext) {
     const tab = /** @type {HTMLElement | null} */ (document.querySelector("#toc-tab"));
     if (!tab) return;
     tab.hidden = !readerContext.navigationState.tocEntries.length;
-    if (readerContext.navigationState.tocEntries.length && readerContext.navigationState.currentChapterIndex < 0)
-      readerContext.updateNavigationState({ currentChapterIndex: tocEntries().findIndex((entry) => !entry.group) });
   }
 
   return {

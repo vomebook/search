@@ -3,6 +3,7 @@ importScripts("/search/static/reader-resources.js");
 const CACHE_PREFIX = "vomebook-search-";
 const CACHE_VERSION = "development"; // Replaced with a content digest by the static build.
 const CACHE_NAME = CACHE_PREFIX + CACHE_VERSION;
+const READER_SHELL_INTEGRITY = "development"; // Stamped from the rewritten Reader HTML.
 /** @type {string[]} */
 const CURRENT_HASHED_ASSETS = []; // Filled by the static build.
 /** @type {Promise<void> | null} */
@@ -139,8 +140,14 @@ function pruneHashedAssets(cache) {
 /** @param {Request | string} request @returns {Request | string} */
 function revalidatedRequest(request) {
   const url = typeof request === "string" ? request : request.url;
-  if (/\.[0-9a-f]{12}\.(?:js|mjs|css)$/.test(url) || isDjvuDecoderAsset(url) || isRuffleAsset(url) || typeof Request !== "function" ||
-      (typeof request !== "string" && request.cache && request.cache !== "default")) return request;
+  if (/\.[0-9a-f]{12}\.(?:js|mjs|css)$/.test(url) || isDjvuDecoderAsset(url) || isRuffleAsset(url) || typeof Request !== "function") return request;
+  // Pin both installation and background refresh: a concurrent deploy must
+  // not put HTML that references a different graph into this generation.
+  if (READER_SHELL_INTEGRITY !== "development" && new URL(url, self.location.origin).pathname === "/search/static/reader.html") {
+    const cache = typeof request !== "string" && request.cache !== "default" ? request.cache : "no-cache";
+    return new Request(request, { cache, integrity: READER_SHELL_INTEGRITY });
+  }
+  if (typeof request !== "string" && request.cache && request.cache !== "default") return request;
   try { return new Request(request, { cache: "no-cache" }); } catch (_) { return request; }
 }
 
@@ -227,6 +234,15 @@ const PRECACHE_URLS = [
   "/search/icons/icon-512.png"
 ];
 const READER_RUNTIME_PATHS = new Set(VoiceOfMLReaderResources.runtimePaths("/search/static/"));
+const readerPrecacheResources = /** @type {{shellAssets(base: string): string[], readerComponentFiles: readonly string[]}} */
+  (/** @type {unknown} */ (VoiceOfMLReaderResources));
+const READER_SHELL_ASSETS = readerPrecacheResources.shellAssets("/search/static/");
+if (READER_SHELL_INTEGRITY === "development") {
+  // The production Reader entry bundles these static imports.
+  READER_SHELL_ASSETS.push("/search/static/reader/reader-components.mjs",
+    ...readerPrecacheResources.readerComponentFiles.map(file => "/search/static/" + file));
+}
+for (const url of READER_SHELL_ASSETS) if (!PRECACHE_URLS.includes(url)) PRECACHE_URLS.push(url);
 
 readerWorkerScope.addEventListener("install", (event) => {
   event.waitUntil((async () => {

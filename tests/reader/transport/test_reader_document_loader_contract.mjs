@@ -13,7 +13,9 @@ function fixture() {
     readerAbortController: new AbortController(),
     documentState: {title: "book"},
     MARKED_URL: "/marked.js", PURIFY_URL: "/purify.js",
-    readerContentUrl: url => `https://reader.test/api/reader-content?url=${encodeURIComponent(url)}`,
+    readerContentUrl: url => url.startsWith("/api/reader-bucket-resource?") ? `https://reader.test${url}`
+      : `https://reader.test/api/reader-content?url=${encodeURIComponent(url)}`,
+    readerDownloadApiUrl: path => `https://reader.test${path}`,
     readerAbortError: () => new DOMException("closed", "AbortError"),
     assertReaderActive() {if (!active) throw this.readerAbortError();},
     trackReaderResource(fn) {resources.add(fn); return () => resources.delete(fn);},
@@ -32,7 +34,8 @@ test("retry policy keeps bounded delay and never retries rate-limited or aborted
   for (const error of [{status: 408}, {status: 429}, {status: 503}, new TypeError("failed to fetch"),
     new DOMException("late", "TimeoutError"), new Error("network down"), new Error("HTTP 504")])
     assert.equal(h.loader.retryableReaderProxyError(error), true, String(error));
-  for (const error of [{status: 404}, new Error("invalid book"), new DOMException("closed", "AbortError")])
+  const interrupted = Object.assign(new Error("stream timeout"), {name: "TimeoutError", code: "READER_BODY_INTERRUPTED"});
+  for (const error of [{status: 404, message: "network error"}, new Error("invalid book"), new DOMException("closed", "AbortError"), interrupted])
     assert.equal(h.loader.retryableReaderProxyError(error), false, String(error));
   let calls = 0;
   assert.equal(await h.loader.retryReaderProxy(async () => {
@@ -45,7 +48,7 @@ test("retry policy keeps bounded delay and never retries rate-limited or aborted
     calls++; throw Object.assign(new Error("rate limited"), {status: 429, code: "READER_PDF_RATE_LIMIT"});
   }), {code: "READER_PDF_RATE_LIMIT"});
   assert.equal(calls, 1); assert.deepEqual(h.waits, []);
-  for (const failure of [null, undefined, new DOMException("caller closed", "AbortError")]) {
+  for (const failure of [null, undefined, new DOMException("caller closed", "AbortError"), interrupted]) {
     calls = 0; h.waits.length = 0;
     await assert.rejects(h.loader.retryReaderProxy(async () => {calls++; throw failure;}), error => error === failure);
     assert.equal(calls, 1); assert.deepEqual(h.waits, []);
@@ -62,6 +65,19 @@ test("retry policy keeps bounded delay and never retries rate-limited or aborted
     assert.equal(calls, 1, "closing during backoff must prevent a second request");
     assert.deepEqual(closing.waits, [350]);
   }
+  const caller = new AbortController();
+  const cancelled = fixture(); calls = 0;
+  cancelled.context.awaitReader = async (backoff, signal) => {
+    assert.equal(signal, caller.signal);
+    caller.abort();
+    await backoff;
+    signal.throwIfAborted();
+  };
+  const open = async () => {calls++; throw new TypeError("failed to fetch");};
+  await assert.rejects(cancelled.loader.retryReaderProxy(open, caller.signal), {name: "AbortError"});
+  assert.equal(calls, 1); assert.deepEqual(cancelled.waits, [350]);
+  await assert.rejects(cancelled.loader.retryReaderProxy(open, caller.signal), {name: "AbortError"});
+  assert.equal(calls, 1, "a pre-aborted caller must not start a request");
   calls = 0; h.close();
   await assert.rejects(h.loader.retryReaderProxy(async () => {calls++;}), {name: "AbortError"});
   assert.equal(calls, 0);
@@ -71,7 +87,7 @@ test("proxy-only fetching respects response ownership, cancellation and bucket r
   const h = fixture();
   const init = {headers: {Range: "bytes=0-3"}};
   assert.equal(await (await h.loader.fetchReaderUrl("/api/reader-bucket-resource?path=x", init)).text(), "content");
-  assert.equal(h.requests.length, 1); assert.equal(h.requests[0].url, "/api/reader-bucket-resource?path=x");
+  assert.equal(h.requests.length, 1); assert.equal(h.requests[0].url, "https://reader.test/api/reader-bucket-resource?path=x");
   assert.equal(h.requests[0].init, init);
   let cancelled = 0;
   for (const status of [403, 404]) {
@@ -93,7 +109,10 @@ test("proxy-only fetching respects response ownership, cancellation and bucket r
   h.requests.length = 0; cancelled = 0;
   h.context.readerRequestManager.request = async (url, timeout, options) => {
     h.requests.push({url, timeout, init: options});
-    return new Response(new ReadableStream({cancel() {cancelled++;}}), {status: 503});
+    return new Response(new ReadableStream({cancel() {
+      cancelled++;
+      throw new Error("body cleanup failed");
+    }}), {status: 503});
   };
   await assert.rejects(h.loader.fetchReaderUrl("https://books.test/raw"), {status: 503});
   assert.equal(h.requests.length, 3); assert.equal(cancelled, 3); assert.deepEqual(h.waits, [350, 700]);
@@ -113,6 +132,43 @@ test("proxy-only fetching respects response ownership, cancellation and bucket r
   };
   await assert.rejects(h.loader.fetchReaderUrl("https://books.test/raw", {signal: owner.signal}), {name: "AbortError"});
   assert.equal(h.requests.length, 1, "an aborted owner cannot fall back to direct fetch");
+
+  const invalid = fixture();
+  invalid.context.readerDownloadApiUrl = () => "https://[";
+  const rawUrl = "https://books.test/book.txt";
+  assert.equal(await (await invalid.loader.fetchReaderUrl(rawUrl)).text(), "content");
+  assert.deepEqual(invalid.requests.map(({url}) => url), [invalid.context.readerContentUrl(rawUrl)]);
+});
+
+test("trusted Bucket chapters recover on one 503 but never retry permanent errors or escape the proxy", async () => {
+  const target = `https://voiceofml-search.hf.space/api/reader-bucket-resource?path=chapters/ebook/epub/${'a'.repeat(64)}/${'b'.repeat(16)}/chapters/chapter-0001.xhtml`;
+  for (const [statuses, expected] of [[[503, 200], 2], [[403], 1], [[404], 1], [[503, 503, 503], 3]]) {
+    const h = fixture(), urls = [], owner = new AbortController();
+    h.context.awaitReader = promise => promise;
+    h.context.fetchWithReaderTimeout = async (url, timeout, options) => {
+      assert.equal(timeout, h.context.READER_PROXY_TIMEOUT_MS);
+      assert.equal(options.signal, owner.signal);
+      urls.push(url);
+      return new Response("chapter", {status: statuses[urls.length - 1]});
+    };
+    const loading = h.loader.fetchReaderUrl(target, {signal: owner.signal, priority:"high"}, {retryBucket:true});
+    if (statuses.at(-1) === 200) assert.equal(await (await loading).text(), "chapter");
+    else await assert.rejects(loading, {status: statuses[0]});
+    assert.deepEqual(urls, Array(expected).fill(target));
+    assert.deepEqual(h.waits, [350, 700].slice(0, expected - 1));
+  }
+  const h = fixture(), foreign = target.replace("voiceofml-search.hf.space", "untrusted.test");
+  await h.loader.fetchReaderUrl(foreign);
+  assert.equal(h.requests[0].url, h.context.readerContentUrl(foreign));
+  const sidecar = target.replace(/path=.*/, "path=objects/aa/ocr/page-000001.json.gz");
+  let attempts = 0;
+  h.context.fetchWithReaderTimeout = async url => {
+    assert.equal(url, sidecar);
+    attempts++;
+    return new Response("Unavailable", {status: 503});
+  };
+  assert.equal((await h.loader.fetchReaderUrl(sidecar)).status, 503);
+  assert.equal(attempts, 1, "sidecars keep their own recovery policy");
 });
 
 test("preloads are single-owner and fall back on failure or mismatched identity", {timeout: 10000}, async () => {
@@ -148,12 +204,17 @@ test("preloads are single-owner and fall back on failure or mismatched identity"
     assert.equal(h.requests.at(-1).url, h.context.readerContentUrl("./chapter.json"));
     assert.equal(window.__VOICE_READER_CHAPTER_PRELOAD__.manifest, wrong);
     h.context.chapterManifestUrl = undefined;
+    let cancelled = 0;
     window.__VOICE_READER_CHAPTER_PRELOAD__ = {manifestUrl: source,
-      manifest: Promise.resolve(new Response("unavailable", {status: 503}))};
+      manifest: Promise.resolve(new Response(new ReadableStream({cancel() {
+        cancelled++;
+        throw new Error("preload cleanup failed");
+      }}), {status: 503}))};
     const beforeFallback = h.requests.length;
     assert.equal(await (await h.loader.loadChapterManifestDocument()).text(), "content");
     assert.equal(window.__VOICE_READER_CHAPTER_PRELOAD__.manifest, null);
     assert.equal(h.requests.length, beforeFallback + 1);
+    assert.equal(cancelled, 1);
     assert.equal(h.requests.at(-1).url, h.context.readerContentUrl(source));
     const preload = Promise.withResolvers();
     window.__VOICE_PDF_PRELOAD__ = {manifestUrl: source, manifest: preload.promise};

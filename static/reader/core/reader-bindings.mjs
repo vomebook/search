@@ -1,3 +1,33 @@
+/** @param {HTMLElement} viewport @param {(event: Event) => void} onIntent */
+export function bindReaderScrollIntent(viewport, onIntent) {
+  /** @type {{id: number, y: number} | null} */
+  let touch = null;
+  viewport.addEventListener("wheel", (event) => {
+    if (event.deltaY && !event.ctrlKey) onIntent(event);
+  }, { passive: true });
+  viewport.addEventListener("touchstart", (event) => {
+    const start = event.touches.length === 1 ? event.touches[0] : null;
+    touch = start ? { id: start.identifier, y: start.clientY } : null;
+  }, { passive: true });
+  viewport.addEventListener("touchmove", (event) => {
+    const move = event.touches.length === 1 ? event.touches[0] : null;
+    if (touch && move?.identifier === touch.id && Math.abs(move.clientY - touch.y) > 8) {
+      touch = null;
+      onIntent(event);
+    }
+  }, { passive: true });
+  for (const type of ["touchend", "touchcancel"])
+    viewport.addEventListener(type, () => { touch = null; }, { passive: true });
+  viewport.addEventListener("pointerdown", (event) => {
+    // Body taps and selection starts are not navigation. Keep scrollbar and
+    // middle-button autoscroll intent when the browser delivers these events.
+    if (event.pointerType !== "mouse") return;
+    const x = event.clientX - viewport.getBoundingClientRect().left - viewport.clientLeft;
+    if (event.button === 1 || (event.button === 0 && event.target === viewport &&
+        viewport.scrollHeight > viewport.clientHeight && (x < 0 || x >= viewport.clientWidth))) onIntent(event);
+  }, { passive: true });
+}
+
 /** @param {import('../../../typings/reader-bindings-strict').ReaderBindingsContext} readerContext */
 export function createReaderBindings(readerContext) {
   function trackStartupOwners() {
@@ -167,16 +197,24 @@ export function createReaderBindings(readerContext) {
     });
   }
 
+  let ownsReloadedOverlayEntry = false;
+
+  /** @param {URL} url */
+  function isSearchReturn(url) {
+    return url.origin === location.origin && !url.username && !url.password &&
+      ["/search/", "/search/index.html"].includes(url.pathname);
+  }
+
   function restoreReturnNavigation() {
     try {
       const state = history.state;
-      const saved = JSON.parse(sessionStorage.getItem("reader-navigation-current") || "null");
-      let stateUrl =
-        state && state.voiceReaderOverlay && state.readerUrl
-          ? new URL(state.readerUrl, location.origin)
-          : null;
-      if (!stateUrl && saved && saved.shareUrl === location.href && saved.readerUrl)
-        stateUrl = new URL(saved.readerUrl, location.origin);
+      const entryUrl = state?.voiceReaderOverlay && typeof state.readerUrl === "string" ? state.readerUrl : "";
+      let stateUrl = entryUrl ? new URL(entryUrl, location.origin) : null;
+      if (!stateUrl) {
+        const saved = JSON.parse(sessionStorage.getItem("reader-navigation-current") || "null");
+        if (saved?.shareUrl === location.href && saved.readerUrl)
+          stateUrl = new URL(saved.readerUrl, location.origin);
+      }
       const cleanStateUrl = stateUrl && new URL(stateUrl.href);
       if (cleanStateUrl) {
         cleanStateUrl.searchParams.delete("return");
@@ -191,6 +229,10 @@ export function createReaderBindings(readerContext) {
         if (!readerContext.returnUrl) readerContext.returnUrl = stateUrl.searchParams.get("return") || "";
         if (!readerContext.returnNavigationToken) readerContext.returnNavigationToken = stateUrl.searchParams.get("nav") || "";
         readerContext.returnNeedsReload = true;
+        // Session-only restoration (e.g. a copied tab) cannot prove the
+        // browser has a prior search entry. Keep the replace fallback there.
+        ownsReloadedOverlayEntry = !!entryUrl && window === window.top && typeof state.searchUrl === "string" &&
+          isSearchReturn(new URL(state.searchUrl, location.origin));
       }
     } catch (_) {}
   }
@@ -358,16 +400,23 @@ export function createReaderBindings(readerContext) {
         return;
       }
       await Promise.race([readerContext.saveProgress(), new Promise((resolve) => setTimeout(resolve, 300))]);
-      readerContext.clearReturnNavigation();
       try {
         const target = new URL(readerContext.normalizeReaderReturnUrl(readerContext.returnUrl), location.origin);
-        if (target.origin === location.origin) {
+        if (isSearchReturn(target)) {
+          if (ownsReloadedOverlayEntry && readerContext.canReturnWithHistory && history.length > 1) {
+            // The trusted popstate loads the arrived search document. Keep the
+            // session handoff and the Reader entry for native Forward.
+            history.back();
+            return;
+          }
+          readerContext.clearReturnNavigation();
           if (readerContext.returnNeedsReload) location.replace(target.href);
           else if (readerContext.canReturnWithHistory && history.length > 1) history.back();
           else location.assign(target.href);
           return;
         }
       } catch (_) {}
+      readerContext.clearReturnNavigation();
       location.assign("/search/");
     });
     // Replay a Back tap made before this handler was bound.
@@ -391,11 +440,36 @@ export function createReaderBindings(readerContext) {
         readerContext.zoomInput.blur();
       }
     });
-    readerContext.pageInput.addEventListener("change", () => readerContext.goToPage(readerContext.pageInput.value));
-    readerContext.pageInput.addEventListener("keydown", (event) => {
-      if (event.key === "Enter") {
-        readerContext.goToPage(readerContext.pageInput.value);
-        readerContext.pageInput.blur();
+    const pageInput = readerContext.pageInput;
+    let edited = false, commit = 0, pending = false;
+    const syncPageInput = () => { pageInput.value = String(readerContext.documentState.page); };
+    const commitPageInput = () => {
+      if (!edited) {
+        if (!pending) syncPageInput();
+        return;
+      }
+      edited = false;
+      const typed = pageInput.valueAsNumber;
+      if (!readerContext.documentState.pageCount || !Number.isFinite(typed)) {
+        syncPageInput();
+        return;
+      }
+      const request = ++commit;
+      pending = true;
+      void readerContext.goToPage(typed).then(() => {
+        if (request !== commit) return;
+        pending = false;
+        if (!edited) syncPageInput();
+      });
+    };
+    pageInput.addEventListener("input", () => { edited = true; });
+    pageInput.addEventListener("change", commitPageInput);
+    pageInput.addEventListener("blur", commitPageInput);
+    pageInput.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" && !event.isComposing) {
+        event.preventDefault();
+        commitPageInput();
+        pageInput.blur();
       }
     });
 
@@ -420,7 +494,7 @@ export function createReaderBindings(readerContext) {
       // Reloading an overlay URL creates a standalone Reader document which can
       // still own the preceding same-document search entries. Back changes the
       // URL/state first; load THAT document without another traversal or rewrite.
-      if (!["/search/", "/search/index.html"].includes(location.pathname)) return;
+      if (!isSearchReturn(new URL(location.href))) return;
       loadingSearch = true;
       try {
         sessionStorage.removeItem("reader-navigation-restore");
@@ -630,8 +704,7 @@ export function createReaderBindings(readerContext) {
       .addEventListener("click", () => readerContext.setReaderPanelOpen(false, true));
     readerContext.viewport.addEventListener("scroll", readerContext.handleReaderPositionChange, { passive: true });
 
-    for (const type of ["wheel", "touchstart", "pointerdown"])
-      readerContext.viewport.addEventListener(type, readerContext.notePdfScrollIntent, { passive: true });
+    bindReaderScrollIntent(readerContext.viewport, () => readerContext.notePdfScrollIntent());
   }
 
   function bindPdfPointerSelection() {
@@ -781,7 +854,7 @@ export function createReaderBindings(readerContext) {
   function bindProgressActions() {
     let seekChanged = false;
     const startSeeking = () => {
-      if (readerContext.progressSeeking) return;
+      if (readerContext.progressSeeking || readerContext.progressRange.disabled) return;
       readerContext.progressSeeking = true;
       seekChanged = false;
     };
@@ -804,10 +877,14 @@ export function createReaderBindings(readerContext) {
     });
     readerContext.progressRange.addEventListener("blur", finishSeeking);
     readerContext.progressRange.addEventListener("input", () => {
+      // A key or pointer press may leave the value unchanged. Snapshot only on a valid input.
+      if (!readerContext.seekProgress(readerContext.progressRange.value, readerContext.progressSeeking && seekChanged)) {
+        readerContext.progressSeeking = false;
+        readerContext.updateProgressTools();
+        return;
+      }
       readerContext.progressPercent.textContent = `${Number(readerContext.progressRange.value).toFixed(1)}%`;
       readerContext.progressRange.setAttribute("aria-valuetext", readerContext.progressPercent.textContent);
-      // A key or pointer press may leave the value unchanged. Snapshot only on input.
-      readerContext.seekProgress(readerContext.progressRange.value, readerContext.progressSeeking && seekChanged);
       seekChanged = true;
     });
     for (const type of ["pointerup", "pointercancel"])

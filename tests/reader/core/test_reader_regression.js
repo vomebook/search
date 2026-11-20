@@ -259,7 +259,12 @@ assert.strictEqual(parsed.pageUrl, undefined, 'PDF page manifests cannot constru
 const imageBucket = 'pages/image/tiff/' + 'c'.repeat(64) + '/page-manifest.json'
 const imageUrl = 'https://huggingface.co/buckets/vomebook/reader-assets-v2/resolve/' + imageBucket
 const imageSource = assets.imagePageSource(imageUrl, 'https://site.test', 'https://api.test')
-assert.strictEqual(imageSource.pageUrl(2), imageUrl.replace('page-manifest.json', 'pages/page-000002.webp'))
+const pageProxy = new URL(imageSource.pageUrl(2))
+assert.strictEqual(pageProxy.origin + pageProxy.pathname, 'https://api.test/api/reader-bucket-resource')
+assert.strictEqual(pageProxy.searchParams.get('path'), imageBucket.replace('page-manifest.json', 'pages/page-000002.webp'))
+assert.strictEqual(assets.imagePageSource('https://voiceofml-search.hf.space/api/reader-bucket-resource?path=' +
+  encodeURIComponent(imageBucket), 'https://site.test', 'https://site.test').pageUrl(2),
+  pageProxy.href.replace('https://api.test', 'https://voiceofml-search.hf.space'))
 assert.throws(() => imageSource.pageUrl(0), /PDF_PAGE_INVALID/)
 assert.ok(assets.pdfPageSource('https://api.test/api/reader-bucket-resource?path=' + encodeURIComponent(bucket), 'https://site.test', 'https://api.test'))
 for (const url of [

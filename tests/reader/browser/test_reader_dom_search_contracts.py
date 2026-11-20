@@ -114,6 +114,9 @@ class ReaderDomSearchContracts(unittest.TestCase):
     def test_progressive_paging_snapshot_reuse_and_activation(self):
         self.run_contract('progressivePagingAndReuse')
 
+    def test_chapter_progress_preserves_result_identity_and_selection(self):
+        self.run_contract('chapterProgressPreservesSelection')
+
     def test_synchronous_mutation_invalidates_snapshot(self):
         self.run_contract('synchronousSnapshotInvalidation')
 

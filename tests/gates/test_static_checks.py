@@ -413,6 +413,7 @@ keepValue(1, 2);
         original = contract.read_text()
         names = ["retry policy keeps bounded delay and never retries rate-limited or aborted work",
                  "proxy-only fetching respects response ownership, cancellation and bucket routing",
+                 "trusted Bucket chapters recover on one 503 but never retry permanent errors or escape the proxy",
                  "preloads are single-owner and fall back on failure or mismatched identity",
                  "document preparation preserves failure and byte-limit ownership",
                  "script load releases timers, handlers and resources on success, error and close",
@@ -423,7 +424,7 @@ keepValue(1, 2);
             for replacement in ('test("renamed contract"', 'test.skip("' + name + '"', 'test.todo("' + name + '"'):
                 contract.write_text(original.replace(anchor, replacement))
                 self.assert_check(self.run_check(*check), False, "passing named tests")
-        name = names[2]
+        name = names[3]
         for extra in ('test("' + name + '", () => {});', 'test.skip("extra skip", () => {});',
                       'test.todo("extra todo");'):
             contract.write_text(original + "\n" + extra + "\n")

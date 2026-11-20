@@ -1,7 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createReaderBindings } from '../../../static/reader/core/reader-bindings.mjs';
+import { bindReaderScrollIntent, createReaderBindings } from '../../../static/reader/core/reader-bindings.mjs';
 import { createReaderProgress } from '../../../static/reader/ui/reader-progress.mjs';
+import { createReaderBookmarks } from '../../../static/reader/ui/reader-bookmarks.mjs';
 
 function storage(values = {}) {
   const data = new Map(Object.entries(values));
@@ -114,4 +115,73 @@ test('pressing End on the progress slider at 100% preserves the previous seek fo
   assert.equal(context.viewport.scrollTop, 180);
   assert.equal(generation, before + 1, 'only Undo should start a navigation');
   await context.epubSeekPromise;
+});
+
+test('body clicks and taps leave an outstanding restore current; a swipe or wheel takes over', () => {
+  const viewport = Object.assign(new EventTarget(), { getBoundingClientRect: () => ({ left: 0 }) });
+  let navigation = 0;
+  bindReaderScrollIntent(viewport, () => { navigation++; });
+  const dispatch = (type, properties) => viewport.dispatchEvent(Object.assign(new Event(type), properties));
+  const touch = clientY => ({ touches: [{ identifier: 1, clientY }] });
+  dispatch('pointerdown', { pointerType: 'mouse', button: 0, clientX: 20 });
+  dispatch('touchstart', touch(40));
+  dispatch('touchmove', touch(44));
+  dispatch('touchend', {});
+  assert.equal(navigation, 0);
+  dispatch('touchstart', touch(40));
+  dispatch('touchmove', touch(60));
+  dispatch('touchmove', touch(80));
+  assert.equal(navigation, 1);
+  dispatch('wheel', { deltaY: 60, ctrlKey: true });
+  dispatch('wheel', { deltaY: 60 });
+  assert.equal(navigation, 2);
+});
+
+test('media without a finite positive duration cannot supersede restoration or save a seek', () => {
+  const context = {
+    capability: { mode: 'video' }, viewport: { scrollTop: 55 }, previousProgressState: { mediaTime: 12 },
+    beginReaderNavigation() { assert.fail('must not invalidate pending restoration'); },
+    scheduleSave() { assert.fail('must not save'); },
+    captureProgressState() { assert.fail('must not overwrite Undo'); }
+  };
+  const { seekProgress, readerProgressPercent } = createReaderProgress(context);
+  assert.equal(seekProgress(50), false, 'media element not mounted');
+  for (const duration of [NaN, 0, Infinity]) {
+    context.mediaElement = { currentTime: 42, duration };
+    assert.equal(seekProgress(50), false);
+    assert.equal(readerProgressPercent(), 0);
+    assert.equal(context.mediaElement.currentTime, 42);
+  }
+  assert.equal(context.viewport.scrollTop, 55);
+  assert.deepEqual(context.previousProgressState, { mediaTime: 12 });
+});
+
+test('PDF bookmarks follow page height and legacy offsets stay inside the bookmarked page', async () => {
+  for (const mode of ['pdf', 'pdf-pages']) {
+    let height = 800, target;
+    const shell = { dataset: { page: '3' }, getBoundingClientRect: () => ({ height }) };
+    const context = {
+      capability: { mode }, documentState: { page: 2, pageCount: 10 },
+      viewport: { scrollTop: 1400, getBoundingClientRect: () => ({ top: 10 }) },
+      bookmarkRibbon: { getBoundingClientRect: () => ({ bottom: 30 }) },
+      pageAtMarker: () => shell, readerPageScrollTop: () => 1000, syncCurrentPageFromMarker() {},
+      captureChapterPosition: () => null, readerProgressPercent: () => 42, bookmarkExcerpt: () => '',
+      isReaderGenerationCurrent: () => true, goToPage: async page => { target = page; return true; },
+      content: { querySelector: () => shell }, updateProgressTools() {}, scheduleSave() {}, consumeBookmarkHandoff() {}
+    };
+    const bookmark = createReaderBookmarks(context).captureBookmarkSnapshot();
+    assert.equal(bookmark.page, 3);
+    assert.equal(bookmark.pageOffset, 400);
+    assert.equal(bookmark.pageOffsetFraction, 0.5);
+    const { restoreFormat } = createReaderProgress(context);
+    height = 1200;
+    assert.equal(await restoreFormat(mode, bookmark, 0), true);
+    assert.equal(target, 3);
+    assert.equal(context.viewport.scrollTop, 1600);
+    assert.equal(await restoreFormat(mode, { page: 3, pageOffset: 400 }, 0), true);
+    assert.equal(context.viewport.scrollTop, 1400);
+    height = 300;
+    assert.equal(await restoreFormat(mode, { page: 3, pageOffset: 400 }, 0), true);
+    assert.equal(context.viewport.scrollTop, 1278);
+  }
 });
