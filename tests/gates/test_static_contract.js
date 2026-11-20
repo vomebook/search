@@ -152,7 +152,10 @@ test("reader intent prefetches the shell and format engines", () => {
   assertCode(app, 'VoiceOfMLReaderResources.shellAssets("/search/static/")');
   assertCode(app, 'VoiceOfMLReaderResources.engineAssets(extension, "/search/static/")');
   assertCode(sw, 'VoiceOfMLReaderResources.runtimePaths("/search/static/")');
-  assert.ok(workflow.includes('.buildFiles("github")'));
+  const compiler = fs.readFileSync("scripts/build/compile_static_assets.mjs", "utf8");
+  assert.ok(compiler.includes('resolve(cwd, "static/reader-resources.js")'));
+  assert.ok(compiler.includes("resources.buildFiles(project)"));
+  assert.ok(compiler.includes("...resources.bundleArguments(file)"));
   assertCode(app, 'var warmedReaderSources = new Map()');
   assertCode(app, 'const READER_WARMUP_TTL = 5 * 60 * 1000');
   assertCode(app, 'const READER_WARMUP_MAX = 8');
@@ -803,10 +806,21 @@ test("deployment workflow builds and uploads minified static artifacts", () => {
   assert.match(prepare, /uses: actions\/setup-python@v7\s*\n\s*with:\s*\n\s*python-version: '3\.15\.2'/);
   assert.ok(prepare.indexOf("uses: actions/setup-python@v7") < prepare.indexOf("python3 scripts/build/seo.py"));
   assert.match(workflow, /name: Validate source JavaScript syntax[\s\S]*node --check static\/reader\/pdf\/reader-pdf-text\.js/);
-  assert.match(workflow, /node scripts\/build\/compose_app\.mjs/);
-  assert.match(workflow, /esbuild@0\.28\.2 "\$RUNNER_TEMP\/app-composed\.js" --minify --target=es2020/);
-  assert.ok(workflow.includes('bundleArguments(process.argv[1])'));
-  assert.ok(workflow.includes('esbuild@0.28.2 "static/$file" $flags --minify'));
+  assert.ok(prepare.includes("working-directory: ${{ steps.intent.outputs.reader == 'true' && '.pages-code' || '.' }}"));
+  assert.equal([...prepare.matchAll(/--package=esbuild@0\.28\.2/g)].length, 1);
+  assert.doesNotMatch(prepare, /\bnpx\b[^\n]*\besbuild\b/);
+  assert.ok(prepare.includes([
+    '          node scripts/build/compose_app.mjs > "$RUNNER_TEMP/app-composed.js"',
+    "          npm exec --yes --package=esbuild@0.28.2 -- bash -euo pipefail -c '",
+    '            cd -- "$1"',
+    '            test "$(esbuild --version)" = 0.28.2',
+    '            esbuild "$RUNNER_TEMP/app-composed.js" --minify --target=es2020 --charset=utf8 --legal-comments=none --outfile=_site/static/app.js',
+    '            node "$GITHUB_WORKSPACE/scripts/build/compile_static_assets.mjs" github "$PWD" _site/static esbuild',
+    '            cp static/reader.html _site/static/reader.html',
+    '            esbuild static/sw.js --minify --target=es2019 --charset=utf8 --legal-comments=none --outfile=_site/sw.js',
+    "          ' bash \"$PWD\"",
+    '          node --check _site/static/app.js',
+  ].join("\n")));
   assert.match(workflow, /node "\$GITHUB_WORKSPACE\/scripts\/data\/fetch_reader_assets\.mjs" _site\/data\/reader_assets\.json\.gz/);
   assert.match(workflow, /node scripts\/data\/fetch_search_generation\.mjs "\$SEARCH_GENERATION" pages _site\/data/);
   assert.match(workflow, /SEARCH_GENERATION: \$\{\{ inputs\.search_generation \|\| vars\.SEARCH_DATA_GENERATION \}\}/);
@@ -818,8 +832,6 @@ test("deployment workflow builds and uploads minified static artifacts", () => {
   assert.match(workflow, /node scripts\/build\/copy_reader_vendor\.mjs _site\/static\/vendor/);
   assert.match(workflow, /cp -a static\/vendor\/djvu-rs-reader _site\/static\/vendor\//);
   assert.doesNotMatch(workflow, /foliate-reader|fetch_foliate_reader|--foliate-output/);
-  assert.ok(workflow.includes('.buildFiles("github")'));
-  assert.match(workflow, /esbuild@0\.28\.2 static\/sw\.js --minify/);
   assert.match(workflow, /uses: actions\/upload-pages-artifact@v5\s*\n\s*with:\s*[\s\S]*?path: '_site'/);
 });
 test("Pages test jobs materialize pinned data before consumers and preserve independent Reader downloads", () => {

@@ -149,13 +149,14 @@ jobs:
           node scripts/build/copy_reader_vendor.mjs _site/static/vendor
           cp -a static/vendor/djvu-rs-reader _site/static/vendor/
           node scripts/build/compose_app.mjs > "$RUNNER_TEMP/app-composed.js"
-          npx --yes esbuild@0.28.2 "$RUNNER_TEMP/app-composed.js" --minify --target=es2020 --charset=utf8 --legal-comments=none --outfile=_site/static/app.js
-          for file in $(node -e 'console.log(require("./static/reader-resources.js").buildFiles("github").filter(f => f !== "app.js").join(" "))'); do
-            flags=$(node -e 'console.log(require("./static/reader-resources.js").bundleArguments(process.argv[1]).join(" "))' "$file")
-            npx --yes esbuild@0.28.2 "static/$file" $flags --minify --target=es2020 --charset=utf8 --legal-comments=none --outfile="_site/static/$file"
-          done
-          cp static/reader.html _site/static/reader.html
-          npx --yes esbuild@0.28.2 static/sw.js --minify --target=es2019 --charset=utf8 --legal-comments=none --outfile=_site/sw.js
+          npm exec --yes --package=esbuild@0.28.2 -- bash -euo pipefail -c '
+            cd -- "$1"
+            test "$(esbuild --version)" = 0.28.2
+            esbuild "$RUNNER_TEMP/app-composed.js" --minify --target=es2020 --charset=utf8 --legal-comments=none --outfile=_site/static/app.js
+            node "$GITHUB_WORKSPACE/scripts/build/compile_static_assets.mjs" github "$PWD" _site/static esbuild
+            cp static/reader.html _site/static/reader.html
+            esbuild static/sw.js --minify --target=es2019 --charset=utf8 --legal-comments=none --outfile=_site/sw.js
+          ' bash "$PWD"
           node --check _site/static/app.js
           node --check _site/static/search/index-worker.js
           node --check _site/sw.js
