@@ -1,6 +1,6 @@
 # Simple workflow for deploying static content to GitHub Pages
 name: Deploy static content to Pages
-run-name: ${{ inputs.search_transition && format('search-transition/{0}', inputs.search_transition) || 'Deploy static content to Pages' }}
+run-name: ${{ inputs.reader_refresh_id && format('reader-refresh/{0}', inputs.reader_refresh_id) || inputs.search_transition && format('search-transition/{0}', inputs.search_transition) || 'Deploy static content to Pages' }}
 
 on:
   # Runs on pushes targeting the default branch
@@ -12,69 +12,106 @@ on:
   workflow_dispatch:
     inputs:
       search_generation:
-        description: Optional immutable search data generation to verify and deploy
+        description: Immutable Search generation (without an operation ID, explicit manual override)
         required: false
         type: string
       search_transition:
-        description: Optional unique search promotion operation ID, for correlation
+        description: Operation ID of the active Pages apply or rollback in the Search journal
+        required: false
+        type: string
+      reader_refresh_id:
+        description: Unique Reader-only refresh ID (32 lowercase hex)
+        required: false
+        type: string
+      reader_code_sha:
+        description: Exact live Pages code SHA to rebuild (40 lowercase hex)
+        required: false
+        type: string
+      reader_workflow_sha:
+        description: Expected revision of this workflow on main (40 lowercase hex)
+        required: false
+        type: string
+      reader_generation:
+        description: Immutable Reader generation (64 lowercase hex)
+        required: false
+        type: string
+      reader_catalog_sha256:
+        description: Immutable Reader catalog SHA-256 (64 lowercase hex)
         required: false
         type: string
 
-# Sets permissions of the GITHUB_TOKEN to allow deployment to GitHub Pages
 permissions:
   contents: read
   actions: read
+  deployments: read
   pages: write
   id-token: write
 
-# Allow only one concurrent deployment, skipping runs queued between the run in-progress and latest queued.
-# However, do NOT cancel in-progress runs as we want to allow these production deployments to complete.
-concurrency:
-  group: "pages"
-  cancel-in-progress: false
+env:
+  SEARCH_INPUT_GENERATION: ${{ inputs.search_generation }}
+  SEARCH_TRANSITION: ${{ inputs.search_transition }}
+  READER_REFRESH_ID: ${{ inputs.reader_refresh_id }}
+  READER_CODE_SHA: ${{ inputs.reader_code_sha }}
+  READER_WORKFLOW_SHA: ${{ inputs.reader_workflow_sha }}
+  READER_GENERATION: ${{ inputs.reader_generation }}
+  READER_CATALOG_SHA256: ${{ inputs.reader_catalog_sha256 }}
 
 jobs:
-  source-checks:
+  prepare:
     runs-on: ubuntu-24.04
     permissions:
       contents: read
       actions: read
+      deployments: read
+    outputs:
+      artifact_id: ${{ steps.upload.outputs.artifact_id }}
+      release: ${{ steps.readback.outputs.release }}
+      reader_receipt: ${{ steps.readback.outputs.reader_receipt }}
+      search_manifest_sha: ${{ steps.readback.outputs.search_manifest_sha }}
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
-        with:
-          node-version: '26.13.1'
-          cache: npm
-      - uses: actions/setup-python@v7
-        with:
-          python-version: '3.15.2'
-          cache: pip
-          cache-dependency-path: config/dependencies/static-check.txt
-      - name: Install pinned static checkers
-        run: |
-          npm ci --ignore-scripts --no-audit --no-fund
-          python -m pip install -r config/dependencies/static-check.txt
-      - name: Run production Pages source gates
-        run: bash scripts/ci/check_pages_source.sh
-  # Single deploy job since we're just deploying
-  deploy:
-    needs: source-checks
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    runs-on: ubuntu-24.04
-    steps:
-      - name: Checkout
+      - name: Checkout dispatch workflow revision
         uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Validate Pages dispatch intent
+        id: intent
+        run: python3 -B -m scripts.ci.pages_release intent
+      - name: Prove active code and Search for Reader refresh
+        id: proof
+        if: steps.intent.outputs.reader == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 -B -m scripts.ci.pages_release prove
+      - name: Checkout proven live Reader code
+        if: steps.intent.outputs.reader == 'true'
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ steps.intent.outputs.code_sha }}
+          path: .pages-code
+          persist-credentials: false
       - name: Setup Node
         uses: actions/setup-node@v7
         with:
           node-version: '26.13.1'
+          cache: ${{ steps.intent.outputs.reader == 'false' && 'npm' || '' }}
+          package-manager-cache: ${{ steps.intent.outputs.reader == 'false' }}
       - name: Setup Python
         uses: actions/setup-python@v7
         with:
           python-version: '3.15.2'
+          cache: ${{ steps.intent.outputs.reader == 'false' && 'pip' || '' }}
+          cache-dependency-path: config/dependencies/static-check.txt
+      - name: Install pinned static checkers
+        if: steps.intent.outputs.reader == 'false'
+        run: |
+          npm ci --ignore-scripts --no-audit --no-fund
+          python -m pip install -r config/dependencies/static-check.txt
+      - name: Run production Pages source gates
+        if: steps.intent.outputs.reader == 'false'
+        run: bash scripts/ci/check_pages_source.sh
       - name: Validate source JavaScript syntax
+        if: steps.intent.outputs.reader == 'false'
         run: |
           node --check static/app.js
           node --check static/search/index-worker.js
@@ -83,16 +120,16 @@ jobs:
           node --check static/sw.js
       - name: Build static site
         id: build
+        working-directory: ${{ steps.intent.outputs.reader == 'true' && '.pages-code' || '.' }}
         env:
           SEARCH_GENERATION: ${{ inputs.search_generation || vars.SEARCH_DATA_GENERATION }}
-          SEARCH_INPUT_GENERATION: ${{ inputs.search_generation }}
-          SEARCH_TRANSITION: ${{ inputs.search_transition }}
+          CODE_SHA: ${{ steps.intent.outputs.code_sha }}
+          READER_REFRESH: ${{ steps.intent.outputs.reader }}
         run: |
           set -euo pipefail
+          [[ "$(git rev-parse HEAD)" == "$CODE_SHA" ]]
           SEARCH_GENERATION="${SEARCH_GENERATION:-$(node -p 'require("./config/search-data.json").generation')}"
-          if [[ -n "$SEARCH_TRANSITION" ]]; then
-            [[ "$SEARCH_TRANSITION" =~ ^[0-9a-f]{32}$ ]]
-            [[ "$SEARCH_INPUT_GENERATION" =~ ^[0-9a-f]{64}$ ]]
+          if [[ -n "$SEARCH_INPUT_GENERATION" ]]; then
             [[ "$SEARCH_GENERATION" == "$SEARCH_INPUT_GENERATION" ]]
           fi
           [[ "$SEARCH_GENERATION" =~ ^[0-9a-f]{64}$ ]]
@@ -102,7 +139,11 @@ jobs:
           cp -a static/icons _site/icons
           # A failed or incomplete generation never falls back to stale Git data.
           node scripts/data/fetch_search_generation.mjs "$SEARCH_GENERATION" pages _site/data
-          node scripts/data/fetch_reader_assets.mjs _site/data/reader_assets.json.gz
+          reader_args=()
+          if [[ "$READER_REFRESH" == true ]]; then
+            reader_args=(--expected "$READER_GENERATION" "$READER_CATALOG_SHA256")
+          fi
+          node "$GITHUB_WORKSPACE/scripts/data/fetch_reader_assets.mjs" _site/data/reader_assets.json.gz "${reader_args[@]}"
           SEARCH_TEST_DATA_DIR=_site/data node tests/search/data/test_data_integrity.js
           SEARCH_TEST_DATA_DIR=_site/data node tests/search/data/test_corpus_oracle.js
           node scripts/build/copy_reader_vendor.mjs _site/static/vendor
@@ -120,20 +161,31 @@ jobs:
           node --check _site/sw.js
           node scripts/build/build_static_assets.mjs
           python3 scripts/build/seo.py --project pages --corpus _site/data/search_data.json.gz --output _site
-          node scripts/build/check_reader_release.mjs --project github --root "$GITHUB_WORKSPACE" --artifact-root "$GITHUB_WORKSPACE/_site"
+          node scripts/build/check_reader_release.mjs --project github --root "$PWD" --artifact-root "$PWD/_site"
+          if [[ "$READER_REFRESH" == true ]]; then
+            mv -T _site "$GITHUB_WORKSPACE/_site"
+          fi
+      - name: Record candidate release receipt
+        env:
+          CODE_PROOF_RUN_ID: ${{ steps.proof.outputs.run_id }}
+          CODE_PROOF_RUN_ATTEMPT: ${{ steps.proof.outputs.run_attempt }}
+        run: python3 -B -m scripts.ci.pages_release record _site
       - name: Record candidate artifact fingerprint
         env:
           SELECTED_GENERATION: ${{ steps.build.outputs.generation }}
         run: python3 -B scripts/ci/pages_artifact_proof.py record _site "$RUNNER_TEMP/pages-artifact-proof.json"
       - name: Cache PDF Python package downloads
+        if: steps.intent.outputs.reader == 'false'
         uses: actions/cache@v6
         with:
           path: ~/.cache/pip
           key: ${{ runner.os }}-${{ runner.arch }}-pdf-pip-playwright-1.65.2-pypdf-7.1.1
       - name: Install PDF Python dependencies
+        if: steps.intent.outputs.reader == 'false'
         timeout-minutes: 10
         run: python3 -m pip install playwright==1.65.2 pypdf==7.1.1
       - name: Configure official Ubuntu mirrors
+        if: steps.intent.outputs.reader == 'false'
         run: |
           set -euo pipefail
           if python3 -B scripts/ci/ci_ubuntu_mirror.py; then
@@ -146,23 +198,29 @@ jobs:
             echo "::warning::Unrecognized runner mirror configuration; keeping default mirrors"
           fi
       - name: Install qpdf system dependency
+        if: steps.intent.outputs.reader == 'false'
         timeout-minutes: 10
         run: sudo apt-get update && sudo apt-get install -y qpdf
       - name: Install Playwright Chromium system libraries
+        if: steps.intent.outputs.reader == 'false'
         timeout-minutes: 15
         run: python3 -m playwright install-deps chromium
       - name: Identify runner distribution
+        if: steps.intent.outputs.reader == 'false'
         id: pdf-distro
         run: echo "version=$(. /etc/os-release; echo "$ID-$VERSION_ID")" >> "$GITHUB_OUTPUT"
       - name: Cache Playwright Chromium binaries
+        if: steps.intent.outputs.reader == 'false'
         uses: actions/cache@v6
         with:
           path: ~/.cache/ms-playwright
           key: ${{ runner.os }}-${{ runner.arch }}-${{ steps.pdf-distro.outputs.version }}-playwright-1.65.2-chromium
       - name: Install Playwright Chromium browser
+        if: steps.intent.outputs.reader == 'false'
         timeout-minutes: 15
         run: python3 -m playwright install chromium
       - name: Check content-addressed PDF opening
+        if: steps.intent.outputs.reader == 'false'
         timeout-minutes: 30
         run: |
           READER_BUILT_SITE="$GITHUB_WORKSPACE/_site" READER_BUILT_PROJECT=github python3 -B scripts/ci/run_unittest_suite.py \
@@ -175,12 +233,17 @@ jobs:
             tests.reader.browser.test_reader_pdf_first_page.PdfFirstPageTests.test_unknown_or_missing_child_never_commits_count \
             tests.reader.browser.test_reader_pdf_first_page.PdfFirstPageTests.test_full_text_search_waits_for_verified_count \
             tests.reader.browser.test_reader_pdf_first_page.PdfFirstPageTests.test_progress_panel_cannot_add_bookmark_during_validation
+      - name: Require exact Reader matrix and current source before deployment
+        if: steps.intent.outputs.reader == 'false'
+        timeout-minutes: 46
+        env:
+          REQUIRE_READER_MATRIX: '1'
+          GH_TOKEN: ${{ github.token }}
+        run: python3 -B scripts/ci/check_pages_freshness.py
       - name: Verify tested artifact fingerprint
         env:
           SELECTED_GENERATION: ${{ steps.build.outputs.generation }}
         run: python3 -B scripts/ci/pages_artifact_proof.py verify _site "$RUNNER_TEMP/pages-artifact-proof.json"
-      - name: Setup Pages
-        uses: actions/configure-pages@v6
       - name: Upload artifact
         id: upload
         uses: actions/upload-pages-artifact@v5
@@ -193,14 +256,77 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           UPLOADED_ARTIFACT_ID: ${{ steps.upload.outputs.artifact_id }}
         run: python3 -B scripts/ci/wait_pages_artifact.py
-      - name: Require exact Reader matrix and current source before deployment
-        timeout-minutes: 46
+      - name: Download exact uploaded Pages artifact
+        uses: actions/download-artifact@v8
+        with:
+          artifact-ids: ${{ steps.upload.outputs.artifact_id }}
+          path: ${{ runner.temp }}/uploaded-pages
+          digest-mismatch: error
+      - name: Verify uploaded candidate fingerprint
+        id: readback
         env:
-          REQUIRE_READER_MATRIX: '1'
+          SELECTED_GENERATION: ${{ steps.build.outputs.generation }}
+        run: |
+          set -euo pipefail
+          python3 -B scripts/ci/pages_artifact_proof.py verify-upload "$RUNNER_TEMP/uploaded-pages/artifact.tar" "$RUNNER_TEMP/pages-artifact-proof.json"
+          python3 -B -m scripts.ci.pages_release export "$RUNNER_TEMP/uploaded-pages/artifact.tar"
+
+  deploy:
+    needs: prepare
+    # Only promotion is serialized. Keep queued releases and recheck freshness
+    # under this lock instead of canceling other runs or relying on queue order.
+    concurrency:
+      group: "pages"
+      queue: max
+      cancel-in-progress: false
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout dispatch workflow revision
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Setup Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: '26.13.1'
+          package-manager-cache: false
+      - name: Setup Pages
+        uses: actions/configure-pages@v6
+      - name: Wait for the uploaded Pages artifact
+        timeout-minutes: 2
+        env:
           GH_TOKEN: ${{ github.token }}
-        run: python3 -B scripts/ci/check_pages_freshness.py
+          UPLOADED_ARTIFACT_ID: ${{ needs.prepare.outputs.artifact_id }}
+        run: python3 -B scripts/ci/wait_pages_artifact.py
+      - name: Check final promotion
+        timeout-minutes: 4
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BUILT_RELEASE: ${{ needs.prepare.outputs.release }}
+          BUILT_READER_RECEIPT: ${{ needs.prepare.outputs.reader_receipt }}
+        run: |
+          set -euo pipefail
+          if [[ -n "$READER_REFRESH_ID" ]]; then
+            READER_REFRESH=true node scripts/data/fetch_reader_assets.mjs --check-live
+            python3 -B -m scripts.ci.pages_release promote
+          else
+            READER_REFRESH=false node scripts/data/fetch_reader_assets.mjs --check-live
+            python3 -B -m scripts.ci.pages_release promote
+            python3 -B scripts/ci/check_pages_freshness.py
+          fi
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v5
         with:
           artifact_name: github-pages-${{ github.run_id }}-${{ github.run_attempt }}
+      - name: Read back the public Pages release
+        timeout-minutes: 3
+        env:
+          BUILT_RELEASE: ${{ needs.prepare.outputs.release }}
+          BUILT_READER_RECEIPT: ${{ needs.prepare.outputs.reader_receipt }}
+          BUILT_SEARCH_MANIFEST_SHA: ${{ needs.prepare.outputs.search_manifest_sha }}
+        run: python3 -B -m scripts.ci.pages_release readback

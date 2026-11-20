@@ -723,10 +723,22 @@ test("manual search promotion has an exact, validated operation identity", () =>
   assert.match(workflow, /search_transition:\s*\n\s*description:.*\n\s*required: false\s*\n\s*type: string/);
   assert.match(workflow, /SEARCH_TRANSITION: \$\{\{ inputs\.search_transition \}\}/);
   assert.match(workflow, /SEARCH_INPUT_GENERATION: \$\{\{ inputs\.search_generation \}\}/);
-  assert.ok(workflow.includes('[[ "$SEARCH_TRANSITION" =~ ^[0-9a-f]{32}$ ]]'));
-  assert.ok(workflow.includes('[[ "$SEARCH_INPUT_GENERATION" =~ ^[0-9a-f]{64}$ ]]'));
+  assert.match(workflow, /run: python3 -B -m scripts\.ci\.pages_release intent/);
   assert.ok(workflow.includes('[[ "$SEARCH_GENERATION" == "$SEARCH_INPUT_GENERATION" ]]'));
-  assert.match(workflow, /group: "pages"\s*\n\s*cancel-in-progress: false/);
+});
+test("Reader dispatch pins the workflow/code/data and serializes only promotion", () => {
+  assert.match(workflow, /run-name:.*reader-refresh\/\{0\}.*inputs\.reader_refresh_id/);
+  for (const input of ["reader_refresh_id", "reader_code_sha", "reader_workflow_sha", "reader_generation", "reader_catalog_sha256"]) {
+    assert.match(workflow, new RegExp(`^      ${input}:\\s*\\n\\s*description:.*\\n\\s*required: false\\s*\\n\\s*type: string`, "m"));
+    assert.ok(workflow.includes('${{ inputs.' + input + ' }}'));
+  }
+  const [setup, deploy] = workflow.split("\n  deploy:\n");
+  assert.doesNotMatch(setup, /concurrency:/);
+  assert.equal([...workflow.matchAll(/concurrency:/g)].length, 1);
+  assert.match(deploy, /^    needs: prepare\n[\s\S]*?^    concurrency:\n      group: "pages"\n      queue: max\n      cancel-in-progress: false$/m);
+  assert.match(setup, /name: Prove active code and Search for Reader refresh[\s\S]*?if: steps\.intent\.outputs\.reader == 'true'[\s\S]*?pages_release prove[\s\S]*?name: Checkout proven live Reader code\n        if: steps\.intent\.outputs\.reader == 'true'[\s\S]*?ref: \$\{\{ steps\.intent\.outputs\.code_sha \}\}/);
+  assert.match(setup, /\[\[ "\$\(git rev-parse HEAD\)" == "\$CODE_SHA" \]\]/);
+  assert.ok(setup.includes('reader_args=(--expected "$READER_GENERATION" "$READER_CATALOG_SHA256")'));
 });
 test("deployment workflow grants required Pages permissions", () => {
   assert.match(workflow, /contents: read/);
@@ -739,59 +751,62 @@ test("Pages waits for the exact uploaded artifact before attempting deployment",
   const deploy = workflow.indexOf('name: Deploy to GitHub Pages');
   assert.ok(0 < upload && upload < wait && wait < deploy);
   assert.match(workflow.slice(upload, wait), /id: upload/);
-  assert.match(workflow.slice(wait, deploy), /UPLOADED_ARTIFACT_ID: \$\{\{ steps\.upload\.outputs\.artifact_id \}\}/);
-  assert.match(workflow.slice(wait, deploy), /run: python3 -B scripts\/ci\/wait_pages_artifact\.py/);
-  assert.match(workflow, /^permissions:\n  contents: read\n  actions: read\n  pages: write$/m);
+  const [prep, promotion] = workflow.split("\n  deploy:\n");
+  assert.match(prep.slice(wait), /UPLOADED_ARTIFACT_ID: \$\{\{ steps\.upload\.outputs\.artifact_id \}\}/);
+  assert.match(prep.slice(wait), /run: python3 -B scripts\/ci\/wait_pages_artifact\.py/);
+  assert.match(prep.slice(wait), /uses: actions\/download-artifact@v8\s*\n\s*with:\s*\n\s*artifact-ids: \$\{\{ steps\.upload\.outputs\.artifact_id \}\}[\s\S]*?digest-mismatch: error[\s\S]*?pages_artifact_proof\.py verify-upload/);
+  assert.match(promotion, /UPLOADED_ARTIFACT_ID: \$\{\{ needs\.prepare\.outputs\.artifact_id \}\}\s*\n\s*run: python3 -B scripts\/ci\/wait_pages_artifact\.py/);
+  assert.equal([...workflow.matchAll(/(?:artifact_)?name: github-pages-\$\{\{ github\.run_id \}\}-\$\{\{ github\.run_attempt \}\}/g)].length, 2);
+  assert.match(workflow, /^permissions:\n  contents: read\n  actions: read\n  deployments: read\n  pages: write$/m);
 });
 test("deployment workflow uses official checkout configure upload and deploy actions", () => {
   const actions = Array.from(workflow.matchAll(/uses: ([^\s]+)/g), (match) => match[1]);
   assert.deepStrictEqual(actions, [
     "actions/checkout@v7",
-    "actions/setup-node@v7",
-    "actions/setup-python@v7",
     "actions/checkout@v7",
     "actions/setup-node@v7",
     "actions/setup-python@v7",
     "actions/cache@v6",
     "actions/cache@v6",
-    "actions/configure-pages@v6",
     "actions/upload-pages-artifact@v5",
+    "actions/download-artifact@v8",
+    "actions/checkout@v7",
+    "actions/setup-node@v7",
+    "actions/configure-pages@v6",
     "actions/deploy-pages@v5",
   ]);
 });
 test("Pages jobs pin the Ubuntu release and configure mirrors before apt", () => {
-  const source = workflow.slice(workflow.indexOf("\n  source-checks:"), workflow.indexOf("\n  deploy:"));
-  const deploy = workflow.slice(workflow.indexOf("\n  deploy:"));
-  assert.match(source, /runs-on: ubuntu-24\.04/);
-  assert.match(source, /^\s*run: bash scripts\/ci\/check_pages_source\.sh$/m);
+  const [prepare, deploy] = workflow.split("\n  deploy:\n");
+  assert.match(prepare, /runs-on: ubuntu-24\.04/);
+  assert.match(prepare, /^\s*run: bash scripts\/ci\/check_pages_source\.sh$/m);
   assert.match(fs.readFileSync('scripts/ci/check_pages_source.sh', 'utf8'), /tests\.gates\.test_ci_ubuntu_mirror/);
   assert.match(deploy, /runs-on: ubuntu-24\.04/);
-  assert.match(deploy, /python3 -B scripts\/ci\/ci_ubuntu_mirror\.py[\s\S]*sudo apt-get update[\s\S]*playwright install-deps chromium/);
+  assert.match(prepare, /python3 -B scripts\/ci\/ci_ubuntu_mirror\.py[\s\S]*sudo apt-get update[\s\S]*playwright install-deps chromium/);
 });
 test("deployment workflow builds and uploads minified static artifacts", () => {
-  const source = workflow.slice(workflow.indexOf('\n  source-checks:'), workflow.indexOf('\n  deploy:'));
+  const [prepare, deploy] = workflow.split("\n  deploy:\n");
   const sourceGates = fs.readFileSync('scripts/ci/check_pages_source.sh', 'utf8');
-  assert.match(source, /^\s*run: bash scripts\/ci\/check_pages_source\.sh$/m);
+  assert.match(prepare, /^\s*run: bash scripts\/ci\/check_pages_source\.sh$/m);
   assert.match(sourceGates, /^set -euo pipefail$/m);
   assert.match(sourceGates, /^npm run check:static$[\s\S]*^python -B scripts\/check_python_static\.py$/m);
   assert.match(sourceGates, /python -B -m unittest -v tests\.gates\.test_static_shards_runner[\s\S]*python -B scripts\/ci\/run_static_gate_shards\.py --project github[\s\S]*python -B -m unittest -v tests\.gates\.test_ci_ubuntu_mirror/);
-  assert.match(workflow, /deploy:\s*\n\s*needs: source-checks/);
-  const deployJob = workflow.slice(workflow.indexOf("\n  deploy:\n"));
-  assert.deepStrictEqual(Array.from(deployJob.matchAll(/node (tests\/\S+)/g), match => match[1]), [
+  assert.match(deploy, /^    needs: prepare$/m);
+  assert.deepStrictEqual(Array.from(prepare.matchAll(/node (tests\/\S+)/g), match => match[1]), [
     "tests/search/data/test_data_integrity.js", "tests/search/data/test_corpus_oracle.js",
   ]);
-  assert.match(deployJob, /fetch_reader_assets\.mjs _site\/data\/reader_assets\.json\.gz\s+SEARCH_TEST_DATA_DIR=_site\/data node tests\/search\/data\/test_data_integrity\.js\s+SEARCH_TEST_DATA_DIR=_site\/data node tests\/search\/data\/test_corpus_oracle\.js/);
-  assert.ok(deployJob.indexOf("node tests/search/data/test_corpus_oracle.js") < deployJob.indexOf("uses: actions/upload-pages-artifact"));
+  assert.match(prepare, /fetch_reader_assets\.mjs" _site\/data\/reader_assets\.json\.gz "\$\{reader_args\[@\]\}"\s+SEARCH_TEST_DATA_DIR=_site\/data node tests\/search\/data\/test_data_integrity\.js\s+SEARCH_TEST_DATA_DIR=_site\/data node tests\/search\/data\/test_corpus_oracle\.js/);
+  assert.ok(prepare.indexOf("node tests/search/data/test_corpus_oracle.js") < prepare.indexOf("uses: actions/upload-pages-artifact"));
   assert.match(sourceGates, /^node tests\/reader\/pdf-v3\/test_dataset_primary_policy\.mjs$/m);
   assert.match(workflow, /node-version: '26\.13\.1'/);
-  assert.match(deployJob, /uses: actions\/setup-python@v7\s*\n\s*with:\s*\n\s*python-version: '3\.15\.2'/);
-  assert.ok(deployJob.indexOf("uses: actions/setup-python@v7") < deployJob.indexOf("python3 scripts/build/seo.py"));
+  assert.match(prepare, /uses: actions\/setup-python@v7\s*\n\s*with:\s*\n\s*python-version: '3\.15\.2'/);
+  assert.ok(prepare.indexOf("uses: actions/setup-python@v7") < prepare.indexOf("python3 scripts/build/seo.py"));
   assert.match(workflow, /name: Validate source JavaScript syntax[\s\S]*node --check static\/reader\/pdf\/reader-pdf-text\.js/);
   assert.match(workflow, /node scripts\/build\/compose_app\.mjs/);
   assert.match(workflow, /esbuild@0\.28\.2 "\$RUNNER_TEMP\/app-composed\.js" --minify --target=es2020/);
   assert.ok(workflow.includes('bundleArguments(process.argv[1])'));
   assert.ok(workflow.includes('esbuild@0.28.2 "static/$file" $flags --minify'));
-  assert.match(workflow, /node scripts\/data\/fetch_reader_assets\.mjs _site\/data\/reader_assets\.json\.gz/);
+  assert.match(workflow, /node "\$GITHUB_WORKSPACE\/scripts\/data\/fetch_reader_assets\.mjs" _site\/data\/reader_assets\.json\.gz/);
   assert.match(workflow, /node scripts\/data\/fetch_search_generation\.mjs "\$SEARCH_GENERATION" pages _site\/data/);
   assert.match(workflow, /SEARCH_GENERATION: \$\{\{ inputs\.search_generation \|\| vars\.SEARCH_DATA_GENERATION \}\}/);
   assert.ok(workflow.includes('SEARCH_GENERATION="${SEARCH_GENERATION:-$(node -p \'require("./config/search-data.json").generation\')}"'));
@@ -849,17 +864,30 @@ test("Pages cross-site cache gates receive the reviewed HF worker before any sta
   assert.equal((suite.match(/\.\.\/hf-search\/static\/sw\.js/g) || []).length, 1);
   assert.doesNotMatch(suite, /existsSync|test\.skip/);
 });
-test("PDF release gate tests the selected candidate without reusable proof", () => {
-  const deploy = workflow.slice(workflow.indexOf("\n  deploy:\n"));
+test("full release gates run on the exact candidate; Reader can skip only after proving live code", () => {
+  const [setup, deploy] = workflow.split("\n  deploy:\n");
+  const prepare = setup.split("\n  prepare:\n")[1];
+  const codeOnly = ["Install pinned static checkers", "Run production Pages source gates", "Validate source JavaScript syntax",
+    "Cache PDF Python package downloads", "Install PDF Python dependencies", "Configure official Ubuntu mirrors",
+    "Install qpdf system dependency", "Install Playwright Chromium system libraries", "Identify runner distribution",
+    "Cache Playwright Chromium binaries", "Install Playwright Chromium browser", "Check content-addressed PDF opening",
+    "Require exact Reader matrix and current source before deployment"];
+  assert.deepStrictEqual(prepare.split("      - name: ").slice(1).filter(step => /^        if:/m.test(step)).map(step => {
+    const [name, condition] = step.split("\n").filter((line, i) => i === 0 || line.startsWith("        if:"));
+    return [name, condition];
+  }), ["Prove active code and Search for Reader refresh", "Checkout proven live Reader code"].map(name =>
+    [name, "        if: steps.intent.outputs.reader == 'true'"]).concat(codeOnly.map(name =>
+    [name, "        if: steps.intent.outputs.reader == 'false'"])));
+  assert.doesNotMatch(deploy, /^        if:|Check content-addressed PDF opening|REQUIRE_READER_MATRIX/m);
   for (const [name, timeout] of [
     ["Install PDF Python dependencies", 10], ["Install qpdf system dependency", 10],
     ["Install Playwright Chromium system libraries", 15], ["Install Playwright Chromium browser", 15],
     ["Check content-addressed PDF opening", 30],
-  ]) assert.ok(deploy.includes(`- name: ${name}\n        timeout-minutes: ${timeout}`), name);
-  assert.match(deploy, /key: \$\{\{ runner\.os \}\}-\$\{\{ runner\.arch \}\}-\$\{\{ steps\.pdf-distro\.outputs\.version \}\}-playwright-1\.65\.2-chromium/);
-  assert.match(deploy, /python3 -m pip install playwright==1\.65\.2 pypdf==7\.1\.1/);
-  assert.match(deploy, /python3 -m playwright install-deps chromium/);
-  assert.match(deploy, /python3 -m playwright install chromium/);
+  ]) assert.ok(prepare.includes(`- name: ${name}\n        if: steps.intent.outputs.reader == 'false'\n        timeout-minutes: ${timeout}`), name);
+  assert.match(prepare, /key: \$\{\{ runner\.os \}\}-\$\{\{ runner\.arch \}\}-\$\{\{ steps\.pdf-distro\.outputs\.version \}\}-playwright-1\.65\.2-chromium/);
+  assert.match(prepare, /python3 -m pip install playwright==1\.65\.2 pypdf==7\.1\.1/);
+  assert.match(prepare, /python3 -m playwright install-deps chromium/);
+  assert.match(prepare, /python3 -m playwright install chromium/);
   const pdfChecks = [
     'test_first_page_reused_and_wrong_count_corrected',
     'test_nested_tree_first_page_does_not_wait_for_other_pages',
@@ -871,21 +899,19 @@ test("PDF release gate tests the selected candidate without reusable proof", () 
     'test_full_text_search_waits_for_verified_count',
     'test_progress_panel_cannot_add_bookmark_during_validation',
   ].map(name => `tests.reader.browser.test_reader_pdf_first_page.PdfFirstPageTests.${name}`);
-  assert.match(deploy, /READER_BUILT_SITE="\$GITHUB_WORKSPACE\/_site" READER_BUILT_PROJECT=github python3 -B scripts\/ci\/run_unittest_suite\.py/);
-  assert.deepStrictEqual(deploy.match(/tests\.reader\.browser\.test_reader_pdf_first_page\.PdfFirstPageTests\.test_\w+/g), pdfChecks);
-  assert.ok(deploy.indexOf('name: Check content-addressed PDF opening') < deploy.indexOf('uses: actions/upload-pages-artifact@v5'));
-  assert.doesNotMatch(workflow, /continue-on-error:/);
-  assert.doesNotMatch(workflow, /reuse_pages_code_checks|outputs\.reuse|^\s*if:/m);
-  assert.match(deploy, /SELECTED_GENERATION: \$\{\{ steps\.build\.outputs\.generation \}\}/);
-  assert.ok(deploy.indexOf('pages_artifact_proof.py record') < deploy.indexOf('name: Check content-addressed PDF opening'));
-  assert.ok(deploy.indexOf('name: Check content-addressed PDF opening') < deploy.indexOf('pages_artifact_proof.py verify'));
-  assert.ok(deploy.indexOf('pages_artifact_proof.py verify') < deploy.indexOf('name: Upload artifact'));
-  const matrixCheck = deploy.indexOf('name: Require exact Reader matrix and current source before deployment');
-  assert.ok(deploy.indexOf('name: Wait for the uploaded Pages artifact') < matrixCheck);
-  assert.ok(matrixCheck < deploy.indexOf('name: Deploy to GitHub Pages'));
-  assert.match(deploy.slice(matrixCheck), /timeout-minutes: 46[\s\S]*REQUIRE_READER_MATRIX: '1'[\s\S]*python3 -B scripts\/ci\/check_pages_freshness\.py/);
-  assert.match(workflow, /\n  deploy:\n    needs: source-checks/);
-  assert.match(workflow, /cache: npm/);
+  assert.match(prepare, /READER_BUILT_SITE="\$GITHUB_WORKSPACE\/_site" READER_BUILT_PROJECT=github python3 -B scripts\/ci\/run_unittest_suite\.py/);
+  assert.deepStrictEqual(prepare.match(/tests\.reader\.browser\.test_reader_pdf_first_page\.PdfFirstPageTests\.test_\w+/g), pdfChecks);
+  assert.ok(prepare.indexOf('name: Check content-addressed PDF opening') < prepare.indexOf('uses: actions/upload-pages-artifact@v5'));
+  assert.doesNotMatch(workflow, /continue-on-error:|reuse_pages_code_checks|outputs\.reuse|always\(\)/);
+  assert.match(prepare, /SELECTED_GENERATION: \$\{\{ steps\.build\.outputs\.generation \}\}/);
+  assert.ok(prepare.indexOf('pages_artifact_proof.py record') < prepare.indexOf('name: Check content-addressed PDF opening'));
+  assert.ok(prepare.indexOf('name: Check content-addressed PDF opening') < prepare.indexOf('pages_artifact_proof.py verify'));
+  assert.ok(prepare.indexOf('pages_artifact_proof.py verify') < prepare.indexOf('name: Upload artifact'));
+  const matrixCheck = prepare.indexOf('name: Require exact Reader matrix and current source before deployment');
+  assert.ok(matrixCheck > 0 && matrixCheck < prepare.indexOf('name: Upload artifact'));
+  assert.match(prepare.slice(matrixCheck), /timeout-minutes: 46[\s\S]*REQUIRE_READER_MATRIX: '1'[\s\S]*python3 -B scripts\/ci\/check_pages_freshness\.py/);
+  assert.match(deploy, /name: Wait for the uploaded Pages artifact[\s\S]*name: Check final promotion[\s\S]*pages_release promote[\s\S]*fetch_reader_assets\.mjs --check-live[\s\S]*check_pages_freshness\.py[\s\S]*name: Deploy to GitHub Pages[\s\S]*pages_release readback/);
+  assert.match(workflow, /cache: .*reader == 'false' && 'npm'/);
   assert.match(workflow, /cache-dependency-path: config\/dependencies\/static-check\.txt/);
   assert.match(workflow, /npm ci --ignore-scripts --no-audit --no-fund/);
   assert.doesNotMatch(workflow, /path:.*node_modules/);

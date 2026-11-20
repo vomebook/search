@@ -419,7 +419,7 @@ class TestInventoryCiTests(unittest.TestCase):
         pages = (root / '.github/workflows/static.yml').read_text()
         github = workflow.split('  github-search:\n', 1)[1].split('  firefox-staged-pdf:\n', 1)[0]
         hf = workflow.split('  huggingface-search:\n', 1)[1]
-        pages_source = pages.split('  source-checks:\n', 1)[1].split('  deploy:\n', 1)[0]
+        pages_source = pages.split('  prepare:\n', 1)[1].split('  deploy:\n', 1)[0]
         self.assertIn('        run: bash scripts/ci/check_pages_source.sh\n', pages_source)
         self.assertNotIn('continue-on-error:', pages_source)
         preflight = (root / 'scripts/ci/check_pages_source.sh').read_text()

@@ -26,6 +26,10 @@
       "kind": "script",
       "source": "scripts/ci/check_pages_source.sh"
     },
+    "tests/gates/test_pages_release.py": {
+      "kind": "script",
+      "source": "scripts/ci/check_pages_source.sh"
+    },
     "tests/gates/test_package_resolution.py": {
       "kind": "direct",
       "source": ".github/workflows/reader-refactor.yml"
