@@ -365,8 +365,8 @@ export function createReaderSource(readerContext) {
     }
   }
 
-  /** @param {string} raw @param {string} base @param {string} attribute @param {string} manifestBase */
-  function trustedChapterResourceUrl(raw, base, attribute, manifestBase) {
+  /** @param {string} raw @param {string} base @param {string} manifestBase */
+  function trustedChapterResourceUrl(raw, base, manifestBase) {
     const value = String(raw || "").trim();
     if (!value || /^(?:data:|mailto:|tel:|javascript:)/i.test(value)) return null;
     // Chapters and resources can be siblings within the manifest's asset directory.

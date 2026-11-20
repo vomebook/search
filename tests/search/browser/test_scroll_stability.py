@@ -356,12 +356,16 @@ class ReaderActionRefreshTests(unittest.TestCase):
             top:getResultScrollTop(),text:selection.toString(),revision:measuredHeightRevision};
           let storage=0,renders=0,measures=0;
           const native={set:Storage.prototype.setItem,remove:Storage.prototype.removeItem,
-            schedule:scheduleVirtualRender,measure:measureHeights};
+            schedule:scheduleVirtualRender,rect:Element.prototype.getBoundingClientRect};
           const observer=new MutationObserver(()=>{});
           observer.observe(DOM.resultsList,{subtree:true,childList:true,attributes:true,characterData:true});
           Storage.prototype.setItem=function(...args){storage++;return native.set.apply(this,args)};
           Storage.prototype.removeItem=function(...args){storage++;return native.remove.apply(this,args)};
-          scheduleVirtualRender=()=>{renders++};measureHeights=()=>{measures++};
+          scheduleVirtualRender=()=>{renders++};
+          Element.prototype.getBoundingClientRect=function(...args) {
+            if (this.matches('.result-item')) measures++;
+            return native.rect.apply(this,args);
+          };
           try {
             for(let i=0;i<5;i++) refreshResultReaderActions();
             return {writes:observer.takeRecords().length,storage,renders,measures,
@@ -372,7 +376,7 @@ class ReaderActionRefreshTests(unittest.TestCase):
                 top:getResultScrollTop(),text:selection.toString(),revision:measuredHeightRevision})};
           } finally {
             observer.disconnect();Storage.prototype.setItem=native.set;Storage.prototype.removeItem=native.remove;
-            scheduleVirtualRender=native.schedule;measureHeights=native.measure;
+            scheduleVirtualRender=native.schedule;Element.prototype.getBoundingClientRect=native.rect;
           }
         }''')
         self.assertEqual(result, dict(writes=0, storage=0, renders=0, measures=0,

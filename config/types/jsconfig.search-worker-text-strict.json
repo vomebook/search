@@ -7,9 +7,12 @@
     "noImplicitOverride": true,
     "noImplicitReturns": true,
     "noFallthroughCasesInSwitch": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
     "noUncheckedIndexedAccess": true,
     "exactOptionalPropertyTypes": true,
     "target": "esnext",
+    "moduleDetection": "legacy",
     "lib": ["esnext", "webworker"]
   },
   "files": ["../../static/search/worker/domain/text.js",

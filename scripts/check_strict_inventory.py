@@ -15,16 +15,19 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 DEBT_FILE = "quality/baselines/strict-inventory-debt.json"
-STRICT_FRONTEND_PROJECTS = (
-    "config/types/jsconfig.strict.json",
-    "config/types/jsconfig.service-worker-strict.json",
-    "config/types/jsconfig.chapter-worker-strict.json",
-    "config/types/jsconfig.search-worker-text-strict.json",
-    "config/types/jsconfig.search-index-worker-strict.json",
-)
+STRICT_FRONTEND_PROJECTS = {
+    # Treat bindings as file-local for checking only; these graphs never emit.
+    "config/types/jsconfig.strict.json": "force",
+    "config/types/jsconfig.service-worker-strict.json": "force",
+    "config/types/jsconfig.chapter-worker-strict.json": "force",
+    # importScripts shares globals. ESLint checks the top-level script bindings
+    # that TypeScript's unused checks do not cover in these graphs.
+    "config/types/jsconfig.search-worker-text-strict.json": "legacy",
+    "config/types/jsconfig.search-index-worker-strict.json": "legacy",
+}
 REQUIRED_FRONTEND_FLAGS = (
     "noUncheckedIndexedAccess", "exactOptionalPropertyTypes", "noImplicitOverride",
-    "noImplicitReturns", "noFallthroughCasesInSwitch",
+    "noImplicitReturns", "noFallthroughCasesInSwitch", "noUnusedLocals", "noUnusedParameters",
 )
 
 
@@ -78,10 +81,8 @@ def inventory_errors(root: Path, js_strict: set[str], js_basic: set[str],
 
 
 def compiler_output(root: Path, config: str, flag: str) -> str:
-    if config not in ("config/types/jsconfig.check.json", "config/types/jsconfig.service-worker.json",
-                      "config/types/jsconfig.service-worker-strict.json", "config/types/jsconfig.chapter-worker-strict.json",
-                      "config/types/jsconfig.search-worker-text-strict.json", "config/types/jsconfig.search-index-worker-strict.json",
-                      "config/types/jsconfig.strict.json"):
+    if config not in (*STRICT_FRONTEND_PROJECTS, "config/types/jsconfig.check.json",
+                      "config/types/jsconfig.service-worker.json"):
         raise ValueError("unknown TypeScript configuration")
     node = shutil.which("node")
     if node is None:
@@ -111,10 +112,11 @@ def main() -> int:
     for project in STRICT_FRONTEND_PROJECTS:
         if f"tsc --project {project}" not in commands:
             raise RuntimeError(f"{project}: npm run types must compile this strict frontend project")
-    for config in STRICT_FRONTEND_PROJECTS:
+    for config, module_detection in STRICT_FRONTEND_PROJECTS.items():
         options = json.loads(compiler_output(ROOT, config, "--showConfig"))["compilerOptions"]
         # --showConfig resolves extends, but may omit strict's implied flags.
         if (not all(options.get(key) is True for key in ("strict", "allowJs", "checkJs", "noEmit"))
+                or options.get("noCheck", False) is not False
                 or any(options.get(key, True) is not True for key in (
                     "strictNullChecks", "noImplicitAny", "strictFunctionTypes", "strictBindCallApply",
                     "strictPropertyInitialization", "noImplicitThis", "useUnknownInCatchVariables",
@@ -123,6 +125,8 @@ def main() -> int:
         for flag in REQUIRED_FRONTEND_FLAGS:
             if options.get(flag) is not True:
                 raise RuntimeError(f"{config}: effective {flag} must be enabled")
+        if options.get("moduleDetection") != module_detection:
+            raise RuntimeError(f"{config}: effective moduleDetection must be {module_detection}")
     basic = (compiler_files(ROOT, "config/types/jsconfig.check.json")
              | compiler_files(ROOT, "config/types/jsconfig.service-worker.json"))
     strict = set().union(*(compiler_files(ROOT, project) for project in STRICT_FRONTEND_PROJECTS))
@@ -137,14 +141,15 @@ def main() -> int:
     browser = browser_sources(ROOT)
     errors = inventory_errors(ROOT, strict, basic, py_strict, debt, previous)
     for path in sorted((browser - strict) & set(debt.get("browser_js", []))):
-        errors.append(f"browser source must be checked with all five frontend flags: {path}")
+        errors.append(f"browser source must be checked with all seven frontend flags: {path}")
     if errors:
         print("\n".join(errors), file=sys.stderr)
         return 1
     python_sources = backend_sources(ROOT)
     print(f"Strict inventory: JS {len(browser & strict)}/{len(browser)}; "
           f"production Python {len(python_sources & py_strict)}/{len(python_sources)}; "
-          "no new ungated files; all five frontend flags enforced")
+          "no new ungated files; all seven frontend flags enforced "
+          "(ESLint checks unused top-level bindings in the classic search worker)")
     return 0
 
 
@@ -196,25 +201,28 @@ if __name__ == "__main__":
                     (root / "config/types").mkdir(parents=True)
                     (root / "quality/baselines").mkdir(parents=True)
                     (root / "static").mkdir()
-                    (root / "static/main.js").write_text("const value = 1;\n")
+                    (root / "static/main.js").write_text("const value = 1;\nconsole.log(value);\n")
                     (root / "pyrightconfig.strict.json").write_text(json.dumps({"typeCheckingMode": "strict", "include": []}))
                     (root / DEBT_FILE).write_text(json.dumps({"browser_js": [], "backend_python": []}))
                     options = {"strict": True, "allowJs": True, "checkJs": True, "noEmit": True}
-                    configs = ("jsconfig.strict.json", "jsconfig.service-worker-strict.json",
-                               "jsconfig.chapter-worker-strict.json", "jsconfig.search-worker-text-strict.json",
-                               "jsconfig.search-index-worker-strict.json")
                     options.update(dict.fromkeys(REQUIRED_FRONTEND_FLAGS, True))
-                    all_configs = (*configs, "jsconfig.check.json", "jsconfig.service-worker.json")
+                    module_options = {**options, "moduleDetection": "force"}
+                    classic_options = {**options, "moduleDetection": "legacy"}
+                    basic_config = "config/types/jsconfig.check.json"
+                    index_config = "config/types/jsconfig.search-index-worker-strict.json"
+                    all_configs = (*STRICT_FRONTEND_PROJECTS, basic_config, "config/types/jsconfig.service-worker.json")
                     package = root / "package.json"
-                    commands = [f"tsc --project config/types/{config}" for config in configs]
+                    commands = [f"tsc --project {config}" for config in STRICT_FRONTEND_PROJECTS]
 
                     def configure_types(commands):
                         package.write_text(json.dumps({"scripts": {"types": " && ".join(commands)}}))
 
                     configure_types(commands)
                     for config in all_configs:
-                        (root / "config/types" / config).write_text(json.dumps({
-                            "compilerOptions": options, "files": ["../../static/main.js"]}))
+                        mode = STRICT_FRONTEND_PROJECTS.get(config, "force")
+                        (root / config).write_text(json.dumps({
+                            "compilerOptions": {**options, "moduleDetection": mode},
+                            "files": ["../../static/main.js"]}))
 
                     def run():
                         return subprocess.run([sys.executable, str(root / "scripts/check_strict_inventory.py")],
@@ -227,41 +235,64 @@ if __name__ == "__main__":
                     self.assertNotEqual(result.returncode, 0)
                     self.assertIn("npm run types must compile this strict frontend project", result.stderr)
                     configure_types(commands)
-                    for config in configs:
-                        path = root / "config/types" / config
+                    for config in STRICT_FRONTEND_PROJECTS:
+                        path = root / config
+                        original_config = path.read_text()
+                        current_options = json.loads(original_config)["compilerOptions"]
                         for option in ("strictNullChecks", "noImplicitAny", "strictFunctionTypes", "strictBindCallApply",
                                        "strictPropertyInitialization", "noImplicitThis", "useUnknownInCatchVariables",
                                        "alwaysStrict", "strictBuiltinIteratorReturn"):
                             # Exercise inherited overrides as well as the real CLI entry point.
                             (root / "config/types/base.json").write_text(json.dumps({
-                                "compilerOptions": {**options, option: False}}))
+                                "compilerOptions": {**current_options, option: False}}))
                             path.write_text(json.dumps({"extends": "./base.json", "files": ["../../static/main.js"]}))
                             result = run()
                             self.assertNotEqual(result.returncode, 0, (config, option))
                             self.assertIn("strict JavaScript checking must remain enabled", result.stderr)
-                        path.write_text(json.dumps({"compilerOptions": options, "files": ["../../static/main.js"]}))
+                        path.write_text(original_config)
                     worker_config = root / "config/types/jsconfig.chapter-worker-strict.json"
                     base = root / "config/types/base.json"
-                    base.write_text(json.dumps({"compilerOptions": options}))
+                    fixture = {"extends": "./base.json", "files": ["../../static/main.js"]}
                     for flag in REQUIRED_FRONTEND_FLAGS:
-                        with self.subTest(flag=flag):
-                            worker_config.write_text(json.dumps({"extends": "./base.json",
-                                "compilerOptions": {flag: False}, "files": ["../../static/main.js"]}))
-                            result = run()
-                            self.assertNotEqual(result.returncode, 0)
-                            self.assertIn(f"effective {flag} must be enabled", result.stderr)
-                    worker_config.write_text(json.dumps({"extends": "./base.json", "files": ["../../static/main.js"]}))
-                    (root / "static/worker.js").write_text("const worker = 1;\n")
-                    index_config = root / "config/types/jsconfig.search-index-worker-strict.json"
-                    for config in ("jsconfig.check.json", "jsconfig.search-index-worker-strict.json"):
-                        (root / "config/types" / config).write_text(json.dumps({"compilerOptions": options,
+                        without_flag = module_options.copy()
+                        del without_flag[flag]
+                        for base_options, overrides in ((module_options, {flag: False}), (without_flag, {})):
+                            with self.subTest(flag=flag, overrides=overrides):
+                                base.write_text(json.dumps({"compilerOptions": base_options}))
+                                worker_config.write_text(json.dumps({**fixture, "compilerOptions": overrides}))
+                                result = run()
+                                self.assertNotEqual(result.returncode, 0)
+                                self.assertIn(f"effective {flag} must be enabled", result.stderr)
+                    base.write_text(json.dumps({"compilerOptions": module_options}))
+                    for override, message in (({"moduleDetection": "legacy"}, "effective moduleDetection must be force"),
+                                              ({"noCheck": True}, "strict JavaScript checking must remain enabled")):
+                        worker_config.write_text(json.dumps({**fixture, "compilerOptions": override}))
+                        result = run()
+                        self.assertNotEqual(result.returncode, 0)
+                        self.assertIn(message, result.stderr)
+                    worker_config.write_text(json.dumps(fixture))
+                    (root / "static/worker.js").write_text("console.log('worker');\n")
+                    for config, config_options in ((basic_config, module_options), (index_config, classic_options)):
+                        (root / config).write_text(json.dumps({"compilerOptions": config_options,
                             "files": ["../../static/main.js", "../../static/worker.js"]}))
-                    self.assertIn("static/worker.js", compiler_files(root, "config/types/jsconfig.search-index-worker-strict.json"))
+                    self.assertIn("static/worker.js", compiler_files(root, index_config))
                     self.assertEqual(run().returncode, 0)
-                    index_config.write_text(json.dumps({"compilerOptions": options, "files": ["../../static/main.js"]}))
+                    (root / index_config).write_text(json.dumps({"compilerOptions": module_options,
+                        "files": ["../../static/main.js", "../../static/worker.js"]}))
+                    result = run()
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn("effective moduleDetection must be legacy", result.stderr)
+                    (root / index_config).write_text(json.dumps({"compilerOptions": classic_options,
+                        "files": ["../../static/main.js"]}))
                     self.assertIn("new browser_js source is not in a strict gate: static/worker.js", run().stderr)
+                    (root / DEBT_FILE).write_text(json.dumps({"browser_js": ["static/worker.js"], "backend_python": []}))
+                    result = run()
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn("browser source must be checked with all seven frontend flags: static/worker.js",
+                                  result.stderr)
+                    (root / DEBT_FILE).write_text(json.dumps({"browser_js": [], "backend_python": []}))
                     (root / "static/worker.js").unlink()
-                    (root / "config/types/jsconfig.check.json").write_text(json.dumps({"compilerOptions": options,
+                    (root / basic_config).write_text(json.dumps({"compilerOptions": module_options,
                         "files": ["../../static/main.js"]}))
                     (root / "static/vendor").mkdir()
                     (root / "static/vendor/ignored.js").write_text("const x = 1;\n")

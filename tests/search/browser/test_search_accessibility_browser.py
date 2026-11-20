@@ -90,7 +90,8 @@ class SearchAccessibilityTests(unittest.TestCase):
             isRoot:!path,hasChildren:!!children.length,hasDirectFiles:true,showSelfToggle:!!children.length});
           STATE.mode='repo';STATE.folderTree=[node('',[node('alpha',[node('alpha/deep',[node('alpha/deep/hit')])]),node('beta')])];
           STATE.folderTreeCollapsed={};STATE.filterFolderSubtrees=['alpha/deep/hit'];STATE.filterFolderSelfs=['beta'];
-          STATE.filterFolders=['alpha/deep/hit','beta'];DOM.filterFolderSection.style.display='';renderFilterFolderTree();
+          STATE.filterFolders=['alpha/deep/hit','beta'];DOM.filterFolderSection.style.display='';
+          getSidebarFilters(); sidebarFolderTree.render();
         }''')
         self.page.wait_for_function('!sidebarFolderTree.pending()')
         before = self.page.evaluate('''()=>({selfs:STATE.filterFolderSelfs.slice(),subtrees:STATE.filterFolderSubtrees.slice(),
@@ -136,9 +137,10 @@ class SearchAccessibilityTests(unittest.TestCase):
         self.page.evaluate('''()=>{
           STATE.folderTree=[{path:'wide',name:'wide',hasChildren:true,children:Array.from({length:256},(_,i)=>
             ({path:'wide/'+i,name:String(i),hasChildren:false,children:[],hasDirectFiles:true}))}];
-          renderFilterFolderTree();setAllFoldersCollapsed(false);setAllFoldersCollapsed(true);
+          getSidebarFilters(); sidebarFolderTree.render();
+          setAllFoldersCollapsed(false);setAllFoldersCollapsed(true);
           routeRenderId++;STATE.folderTree=[{path:'new',name:'new',hasChildren:false,children:[],hasDirectFiles:true}];
-          renderFilterFolderTree();
+          sidebarFolderTree.render();
         }''')
         self.page.wait_for_function('!sidebarFolderTree.pending()')
         self.assertEqual(self.page.locator('#filter-folder-tree .filter-folder-item').count(), 1)
@@ -361,14 +363,14 @@ class SearchAccessibilityTests(unittest.TestCase):
         valid += ['older-' + str(i) for i in range(maximum)]
         stored = [None, 42, True, {}, ['nested']] + valid
         self.page.evaluate("value=>sessionStorage.setItem('voml_search_history', JSON.stringify(value))", stored)
-        self.assertEqual(self.page.evaluate('getHistory()'), valid[:maximum])
+        self.assertEqual(self.page.evaluate('searchHistoryStore.get()'), valid[:maximum])
         self.assertEqual(self.page.evaluate("JSON.parse(sessionStorage.getItem('voml_search_history'))"), stored)
         for raw in ('{broken', 'null', '42'):
             with self.subTest(raw=raw):
                 self.page.evaluate("raw=>sessionStorage.setItem('voml_search_history', raw)", raw)
-                self.assertEqual(self.page.evaluate('getHistory()'), [])
+                self.assertEqual(self.page.evaluate('searchHistoryStore.get()'), [])
         self.page.evaluate("sessionStorage.removeItem('voml_search_history')")
-        self.assertEqual(self.page.evaluate('getHistory()'), [])
+        self.assertEqual(self.page.evaluate('searchHistoryStore.get()'), [])
         self.assertEqual(self.page.evaluate('''()=>{
           const original=Storage.prototype.getItem;
           try {
@@ -376,7 +378,7 @@ class SearchAccessibilityTests(unittest.TestCase):
               if(key==='voml_search_history') throw new DOMException('Blocked', 'SecurityError');
               return original.call(this,key);
             };
-            return getHistory();
+            return searchHistoryStore.get();
           } finally { Storage.prototype.getItem=original; }
         }'''), [])
 
@@ -392,7 +394,7 @@ class SearchAccessibilityTests(unittest.TestCase):
         self.page.wait_for_timeout(180)
         self.assertTrue(self.page.locator('#search-history-dropdown').is_visible())
         self.page.keyboard.press('Enter')
-        self.assertEqual(self.page.evaluate('getHistory()'), ['second query'])
+        self.assertEqual(self.page.evaluate('searchHistoryStore.get()'), ['second query'])
         self.assertTrue(self.page.get_by_role('button', name='搜索：second query', exact=True).evaluate('node=>node===document.activeElement'))
         self.page.keyboard.press('Escape')
         self.assertEqual(self.page.evaluate('document.activeElement.id'), 'search-input')
@@ -400,7 +402,7 @@ class SearchAccessibilityTests(unittest.TestCase):
         field.blur()
         field.focus()
         self.page.get_by_role('button', name='清空历史', exact=True).press('Enter')
-        self.assertEqual(self.page.evaluate('getHistory()'), [])
+        self.assertEqual(self.page.evaluate('searchHistoryStore.get()'), [])
         self.assertEqual(self.page.evaluate('document.activeElement.id'), 'search-input')
         self.assertTrue(self.page.locator('#search-history-dropdown').is_hidden())
 
@@ -426,7 +428,7 @@ class SearchAccessibilityTests(unittest.TestCase):
     def test_single_repository_browser_order_is_not_count_sorted(self):
         observed = self.page.evaluate("""()=>{
           const list=document.createElement('div');
-          renderBrowserListItems(list,{folders:[
+          getSidebarDirectoryView().items(list,{folders:[
             {name:'large',path:'large',count:30},
             {name:'small',path:'small',count:2},
             {name:'medium',path:'medium',count:10},
@@ -538,8 +540,9 @@ class SearchAccessibilityTests(unittest.TestCase):
         self.assertEqual(self.page.evaluate('navigations'), [['repo', 'Test']])
         self.page.evaluate('''()=>{
           STATE.repo='Test';const list=document.createElement('div');list.className='browser-list';
-          DOM.sidebarContent.replaceChildren(createSidebarBreadcrumb('docs/sub'),list);
-          renderBrowserListItems(list,{folders:[{name:'inner',path:'docs/sub/inner',count:1}],
+          const view=getSidebarDirectoryView();
+          DOM.sidebarContent.replaceChildren(view.breadcrumb('docs/sub'),list);
+          view.items(list,{folders:[{name:'inner',path:'docs/sub/inner',count:1}],
             files:[{name:'book',ext:'txt',size:1}]},'Test','docs/sub');
           window.downloads=[];list.addEventListener('click',event=>{
             if(event.target.closest('.browser-action')){downloads.push(event.target.textContent);event.stopImmediatePropagation();}
@@ -622,8 +625,9 @@ class SearchAccessibilityTests(unittest.TestCase):
           routeRenderId++;
           STATE.mode='repo';STATE.repo='Test';STATE.repoFull='VoiceOfML/Test';
           const list=document.createElement('div');list.className='browser-list';
-          DOM.sidebarContent.replaceChildren(createSidebarBreadcrumb('docs'),list);
-          renderBrowserListItems(list,{folders:[{name:'inner',path:'docs/inner',count:1}],
+          const view=getSidebarDirectoryView();
+          DOM.sidebarContent.replaceChildren(view.breadcrumb('docs'),list);
+          view.items(list,{folders:[{name:'inner',path:'docs/inner',count:1}],
             files:[{name:'book',ext:'txt',size:1}]},'VoiceOfML/Test','docs');
           window.navigations=[];window.readerLinks=[];
           ROUTER.navigate=(...args)=>navigations.push(args);
@@ -660,7 +664,7 @@ class SearchAccessibilityTests(unittest.TestCase):
           DOM.filterFolderSection.style.display='';
           STATE.folderTree=[{name:'docs',path:'docs',count:1,showSelfToggle:true,children:[
             {name:'child',path:'docs/child',count:1,children:[]}]}];
-          STATE.folderTreeCollapsed={docs:false};renderFilterFolderTree();
+          STATE.folderTreeCollapsed={docs:false};getSidebarFilters();sidebarFolderTree.render();
         }''')
         self.assertEqual(self.page.get_by_role('checkbox', name='选择文件夹：docs', exact=True).count(), 1)
         self.assertEqual(self.page.get_by_role('checkbox', name='选择文件夹：docs/child', exact=True).count(), 1)

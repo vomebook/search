@@ -144,7 +144,7 @@ class InitialIntentReaderRouteTests(unittest.TestCase):
     def test_initial_payload_cannot_overwrite_newer_response(self):
         self.load_initial_clock_fixture()
         self.page.evaluate('''() => {
-          initialNow += 1000; searchResponseCache.clear(); doSearch();
+          initialNow += 1000; searchResponseStore.cache.clear(); doSearch();
         }''')
         self.assert_initial_generation('G2')
         self.assertEqual(len(self.api_requests), 1)
@@ -154,17 +154,17 @@ class InitialIntentReaderRouteTests(unittest.TestCase):
         self.assertEqual((len(self.initial_requests), len(self.api_requests)), (1, 1))
         # Eviction of the newer response must not resurrect a known older initial.
         self.initial_generation = 'G3'
-        self.page.evaluate('searchResponseCache.clear()')
+        self.page.evaluate('searchResponseStore.cache.clear()')
         self.evaluate_bounded('async () => { await searchWithInitialFallbackFresh(); }')
         self.assert_initial_generation('G3')
         self.assertEqual((len(self.initial_requests), len(self.api_requests)), (2, 1))
 
     def test_newer_response_eviction_does_not_resurrect_initial(self):
         self.load_initial_clock_fixture()
-        self.page.evaluate("initialNow += 1000; searchResponseCache.clear(); doSearch()")
+        self.page.evaluate("initialNow += 1000; searchResponseStore.cache.clear(); doSearch()")
         self.assert_initial_generation('G2')
         self.initial_generation = 'G3'
-        self.page.evaluate('searchResponseCache.clear()')
+        self.page.evaluate('searchResponseStore.cache.clear()')
         self.evaluate_bounded('async () => { await searchWithInitialFallbackFresh(); }')
         self.assert_initial_generation('G3')
 
@@ -194,14 +194,14 @@ class InitialIntentReaderRouteTests(unittest.TestCase):
             now+=1000; const acquired=now;
             setCachedSearchResponse(key,data,true); now+=SEARCH_CACHE_TTL-1;
             flushWrite();
-            const keptAge=searchResponseCache.get(key)?.time===acquired;
+            const keptAge=searchResponseStore.cache.get(key)?.time===acquired;
             now++; const expiredAtBoundary=getCachedSearchResponse(key)===null;
             setCachedSearchResponse(key,data,true); now+=SEARCH_CACHE_TTL;
             flushWrite();
-            const flushDropsExpired=!searchResponseCache.has(key) && !searchResponseStore.pendingWrites.has(key);
+            const flushDropsExpired=!searchResponseStore.cache.has(key) && !searchResponseStore.pendingWrites.has(key);
             return {expiredPending,expiredAfterFlush,keptAge,expiredAtBoundary,flushDropsExpired};
           } finally {
-            cancelPendingSearchCacheWrites();searchResponseCache.delete(key);
+            cancelPendingSearchCacheWrites();searchResponseStore.cache.delete(key);
             Date.now=clock;requestAnimationFrame=raf;cancelAnimationFrame=cancel;
           }
         }''')
@@ -211,7 +211,7 @@ class InitialIntentReaderRouteTests(unittest.TestCase):
     def hold_initial_and_search(self):
         self.page.evaluate('''() => {
           cancelSearchPrefetch();
-          searchResponseCache.clear(); initialPayloadCache.clear(); resultSnapshots.snapshots.clear();
+          searchResponseStore.cache.clear(); initialPayloadCache.clear(); resultSnapshots.snapshots.clear();
           STATE.query = ''; STATE.page = 1;
           if (typeof readInitialSearchPayload === 'function') readInitialSearchPayload = () => null;
           window.initialFlights = []; window.searchFlights = [];
@@ -302,7 +302,7 @@ class InitialIntentReaderRouteTests(unittest.TestCase):
         self.hold_initial_and_search()
         self.evaluate_bounded('''async () => {
           initialFlights[0].resolve(payload('seed')); await oldInitial;
-          resultSnapshots.snapshots.clear(); initialPayloadCache.clear(); searchResponseCache.clear();
+          resultSnapshots.snapshots.clear(); initialPayloadCache.clear(); searchResponseStore.cache.clear();
           displayedSearchView = null;
           getReturnPositionTarget = () => ({index:0});
           readSearchViewport = () => new Promise(resolve => { window.releaseViewport = resolve; });

@@ -97,14 +97,14 @@ function fixture(simd = true) {
   assert.strictEqual(first.url,'https://api.test/api/reader-resolve?id=one');
   first.resolve({ok:true,json:()=>new Promise(()=>{})});await tick();
   for(const timer of [...f.timers.values()])timer();await tick();
-  assert.strictEqual(f.run('readerWarmupInFlight'),0,'stalled JSON must release the warming slot');
+  assert.strictEqual(f.run('Number(!!readerWarmupPending)'),0,'stalled JSON must release the warming slot');
   assert.ok(first.options.signal.aborted);
   assert.strictEqual(f.run('warmedReaderSources.size'),0);
   f.run('warmReaderIntent("/reader?id=one&ext=txt")');
   assert.strictEqual(f.calls.filter(call=>call.url.includes('reader-resolve')).length,1,'failure must back off');
   f.advance();f.run('warmReaderIntent("/reader?id=one&ext=txt")');
   f.calls.at(-1).resolve({ok:true,json:async()=>({url:'https://source.test/book'})});await tick();
-  assert.strictEqual(f.run('readerWarmupInFlight'),0);
+  assert.strictEqual(f.run('Number(!!readerWarmupPending)'),0);
   assert.ok(f.stored.has('reader-resolve:one'));
   assert.strictEqual(f.run('warmedReaderSources.size'),1);
   console.log('reader warming: whole-body deadline, coalescing, backoff and successful retry passed');
@@ -112,7 +112,7 @@ function fixture(simd = true) {
   for(const response of [{ok:false},{ok:true,json:async()=>({error:'bad'})}]) {
     const t=fixture();t.run('warmReaderIntent("/reader?id=bad&ext=txt")');
     t.calls.find(call=>call.url.includes('reader-resolve')).resolve(response);await tick();
-    assert.strictEqual(t.run('warmedReaderSources.size'),0);assert.strictEqual(t.run('readerWarmupInFlight'),0);
+    assert.strictEqual(t.run('warmedReaderSources.size'),0);assert.strictEqual(t.run('Number(!!readerWarmupPending)'),0);
   }
   for(const event of ['pagehide','offline','visibilitychange']) {
     const t=fixture();t.run('warmReaderIntent("/reader?id=old&ext=txt")');
@@ -121,7 +121,7 @@ function fixture(simd = true) {
     if(event==='visibilitychange')t.context.document.hidden=true;
     t.events[event]();await tick();assert.ok(pending.options.signal.aborted);
     resolveBody({url:'https://source.test/stale'});await tick();assert.strictEqual(t.stored.size,0);
-    assert.strictEqual(t.run('readerWarmupInFlight'),0);
+    assert.strictEqual(t.run('Number(!!readerWarmupPending)'),0);
   }
   const t=fixture();t.context.document.hidden=true;t.run('warmReaderIntent("/reader?id=x")');
   t.context.document.hidden=false;t.context.navigator.onLine=false;t.run('warmReaderIntent("/reader?id=x")');
@@ -163,11 +163,11 @@ function fixture(simd = true) {
   const next=resolverCalls(priority)[1];
   assert.ok(old.options.signal.aborted,'active intent must abort the previous speculative request');
   assert.ok(next.url.endsWith('id=new'));
-  assert.strictEqual(priority.run('readerWarmupInFlight'),1);
+  assert.strictEqual(priority.run('Number(!!readerWarmupPending)'),1);
   assert.strictEqual(priority.run('readerWarmupRetryAt.size'),0,'superseded work is not a failure');
   finishOld({url:'https://source.test/stale'});await tick();
   assert.strictEqual(priority.stored.has('reader-resolve:old'),false,'late old JSON cannot enter cache');
-  assert.strictEqual(priority.run('readerWarmupInFlight'),1,'late completion cannot release new task');
+  assert.strictEqual(priority.run('Number(!!readerWarmupPending)'),1,'late completion cannot release new task');
   next.resolve({ok:true,json:async()=>({url:'https://source.test/new'})});await tick();
   assert.ok(priority.stored.has('reader-resolve:new'));
   emitIntent(priority,'pointerover','old');
@@ -179,7 +179,7 @@ function fixture(simd = true) {
   emitIntent(priority,'pointerdown','download',true);
   assert.strictEqual(resolverCalls(priority).length,4,'download actions never preempt');
   priority.events.offline();await tick();
-  assert.strictEqual(priority.run('readerWarmupInFlight'),0);
+  assert.strictEqual(priority.run('Number(!!readerWarmupPending)'),0);
   assert.ok(priority.run('readerWarmupRetryAt.has("id:keyboard")'),'offline cancellation retains backoff');
 
   const reentrant=fixture();
@@ -194,7 +194,7 @@ function fixture(simd = true) {
   assert.ok(owner.options.signal.aborted && reentrantCalls[1].url.endsWith('id=reentrant'));
   assert.strictEqual(reentrant.run('readerWarmupPending.key'),'id:reentrant');
   reentrantCalls[1].resolve({ok:true,json:async()=>({url:'https://source.test/reentrant'})});await tick();
-  assert.strictEqual(reentrant.run('readerWarmupInFlight'),0);
+  assert.strictEqual(reentrant.run('Number(!!readerWarmupPending)'),0);
 
   const rapid=fixture();
   emitIntent(rapid,'pointerover','rapid0');
@@ -203,12 +203,12 @@ function fixture(simd = true) {
   assert.strictEqual(rapidCalls.length,21);
   assert.ok(rapidCalls.slice(0,-1).every(call=>call.options.signal.aborted));
   assert.ok(!rapidCalls.at(-1).options.signal.aborted);
-  assert.strictEqual(rapid.run('readerWarmupInFlight'),1);
+  assert.strictEqual(rapid.run('Number(!!readerWarmupPending)'),1);
   assert.strictEqual(rapid.run('readerWarmupRetryAt.size'),0);
   rapidCalls.at(-1).resolve({ok:true,json:async()=>({url:'https://source.test/final'})});
   await tick();
   assert.ok(rapid.stored.has('reader-resolve:rapid20'));
-  assert.strictEqual(rapid.run('readerWarmupInFlight'),0);
+  assert.strictEqual(rapid.run('Number(!!readerWarmupPending)'),0);
 
   const sources=fixture();
   sources.run(`warmReaderIntent('/reader?url=https://source.test/hover');
@@ -218,7 +218,7 @@ function fixture(simd = true) {
   assert.ok(heads[0].options.signal.aborted);
   assert.ok(heads[1].url.includes(encodeURIComponent('https://source.test/activate')));
   heads[1].resolve({ok:true});await tick();
-  assert.strictEqual(sources.run('readerWarmupInFlight'),0);
+  assert.strictEqual(sources.run('Number(!!readerWarmupPending)'),0);
   assert.strictEqual(sources.run('warmedReaderSources.size'),1);
 
   const capacity=fixture();
@@ -234,7 +234,7 @@ function fixture(simd = true) {
   await tick();
   assert.strictEqual(capacity.run('readerWarmupPending.key'),'id:limit','old rejection cannot release the urgent owner');
   resolverCalls(capacity).at(-1).resolve({ok:true,json:async()=>({url:'https://source.test/limit'})});await tick();
-  assert.strictEqual(capacity.run('readerWarmupInFlight'),0);
+  assert.strictEqual(capacity.run('Number(!!readerWarmupPending)'),0);
   assert.strictEqual(capacity.run('warmedReaderSources.size'),8);
 
   const timeout=fixture();
@@ -243,7 +243,7 @@ function fixture(simd = true) {
   // Such a callback argument must not accidentally mark a timeout superseded.
   for (const timer of [...timeout.timers.values()]) timer({simulatedTimer:true});
   await tick();
-  assert.strictEqual(timeout.run('readerWarmupInFlight'),0);
+  assert.strictEqual(timeout.run('Number(!!readerWarmupPending)'),0);
   assert.ok(timeout.run('readerWarmupRetryAt.has("id:timed-out")'));
 
   const previous=fixture();
@@ -254,7 +254,7 @@ function fixture(simd = true) {
   emitIntent(previous,'pointerdown','failed');
   assert.ok(busy.options.signal.aborted,'even a backed-off target should cancel unrelated speculation');
   assert.strictEqual(resolverCalls(previous).length,2,'priority does not bypass retry backoff');
-  assert.strictEqual(previous.run('readerWarmupInFlight'),0);
+  assert.strictEqual(previous.run('Number(!!readerWarmupPending)'),0);
   previous.advance();emitIntent(previous,'focusin','failed');
   assert.strictEqual(resolverCalls(previous).length,3);
   resolverCalls(previous)[2].resolve({ok:true,json:async()=>({url:'https://source.test/failed'})});await tick();

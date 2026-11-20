@@ -46,7 +46,7 @@ function rootText(root) { return textNodes(root).map((node) => node.data).join("
 // every offset) identical: a break not after sentence punctuation becomes a space.
 /** @param {string} text */
 function spokenPageText(text) {
-  return text.replace(/\n(?!\n)/g, (/** @type {string} */ match, /** @type {number} */ offset) => /[。！？!?；;：:…”」』）)\n]\s*$/u.test(text.slice(Math.max(0, offset - 2), offset)) ? "\n" : " ");
+  return text.replace(/\n(?!\n)/g, (/** @type {string} */ _match, /** @type {number} */ offset) => /[。！？!?；;：:…”」』）)\n]\s*$/u.test(text.slice(Math.max(0, offset - 2), offset)) ? "\n" : " ");
 }
 
 /** @param {Document} doc @param {number} x @param {number} y @param {ShadowRoot[]} roots */
@@ -556,8 +556,7 @@ export function createReaderSpeech(readerContext, loadPlayer) {
     } };
   }
 
-  /** @param {import('../../../typings/reader-speech-strict').SpeechSource} info */
-  function needsProbe(info) {
+  function needsProbe() {
     const current = mode();
     if (current === "epub-chapters") return false;
     if (current === "pdf-pages" && (readerContext.ocrManifestUrl || readerContext.pdfOcrManifest)) return false;
@@ -623,7 +622,7 @@ export function createReaderSpeech(readerContext, loadPlayer) {
     if (!hasText()) return;
     const info = source();
     if (!info || info.units <= info.first) return;
-    if (needsProbe(info)) { offerSource = info; offer(info); }
+    if (needsProbe()) { offerSource = info; offer(info); }
     else publish(createAdapter(info, info.units > 1 ? Math.max(info.first, (topPosition()?.unit ?? info.first) - 1) : info.first));
     /** @param {EventTarget | null | undefined} target @param {string} type @param {EventListener} handler @param {AddEventListenerOptions} [options] */
     const listen = (target, type, handler, options) => {

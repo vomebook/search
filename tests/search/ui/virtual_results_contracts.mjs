@@ -76,10 +76,7 @@ function fixture(count = 100) {
   } else {
     c.VSCROLL = c.VoiceOfMLVirtualHeights.createState();
     vm.runInContext(source.match(/^function getVirtualResults\([^]*?^}/m)[0], c);
-    for (const name of names.filter(n => !['layoutResultScrollSegment', 'reconcileVirtualRows'].includes(n))) {
-      const match = source.match(new RegExp('^function ' + name + '\\([^\\n]*', 'm'));
-      vm.runInContext(match[0], c);
-    }
+    Object.assign(c, c.getVirtualResults());
   }
   return {c, STATE, list, container, events, frames, document,
     flush() { const pending = [...frames.values()]; frames.clear(); for (const fn of pending) fn(); },

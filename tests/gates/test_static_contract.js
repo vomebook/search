@@ -80,7 +80,7 @@ test("filter metadata rejects stale requests and uses static sidebar fallback", 
   assert.match(filters, /if \(deps\.readView\(\)\.mode !== renderMode \|\| deps\.readView\(\)\.repo !== renderRepo \|\| deps\.readView\(\)\.repoFull !== renderRepoFull\) return/);
   const directory = fs.readFileSync("static/search/sidebar/application/directory.js", "utf8");
   assert.match(directory, /async function renderRepoList\(routeId\) \{[\s\S]*?var initial = await deps\.initial\(null\)/);
-  assert.match(app, /function renderRepoList\(routeId\) \{\s*return getSidebarDirectory\(\)\.repos\(routeId\)/);
+  assert.match(app, /function renderSidebar\(routeId\) \{\s*getSidebarDirectory\(\)\.render\(routeId\)/);
   assert.doesNotMatch(app, /if \(!currentExtNames\.length && STATE\.mode === "repo"\) currentExtNames = extensionList\.slice\(\)\.sort\(\)/);
 });
 test("background corpus loading uses idle scheduling independently of API prefetch", () => {
@@ -243,7 +243,7 @@ test("search clear control follows the query state", () => {
 test("result actions use equal desktop heights and compact mobile column", () => {
   assert.doesNotMatch(resultRows, /class="result-summary"/);
   assert.match(resultRows, /class="result-title"[\s\S]*class="result-path"[\s\S]*class="result-meta"/);
-  assert.match(app, /function buildResultHTML\(rec, idx\) \{ return getResultRows\(\)\.buildHTML\(rec, idx\); \}/);
+  assert.match(app, /function createResultRow\(rec, idx\) \{ return getResultRows\(\)\.createRow\(rec, idx\); \}/);
   assert.match(css, /body:not\(\.mobile\) \.result-title \{ grid-column: 3; grid-row: 1;/);
   assert.match(css, /body:not\(\.mobile\) \.result-path \{ grid-column: 3 \/ 5; grid-row: 2;/);
   assert.match(css, /body:not\(\.mobile\) \.result-meta \{ grid-column: 3 \/ 5; grid-row: 3;/);
@@ -511,7 +511,7 @@ test("reader uses original files and lazy PDF canvas rendering", () => {
   assertCode(reader, 'const READER_PROXY_TIMEOUT_MS = 120000;');
   assertCode(reader, '}, READER_PROXY_TIMEOUT_MS)');
   assert.match(reader, /function fetchWithReaderTimeout/);
-  assertCode(reader, 'retryReaderProxy(() => loadPdfTaskWithTimeout(pdfjs, options, proxy, takeInitial(proxy)))');
+  assertCode(reader, 'retryReaderProxy(() => loadPdfTaskWithTimeout(pdfjs, options, proxyUrl, takeInitial(proxyUrl)))');
   assert.equal(reader.includes('return loadPdfTaskWithTimeout(pdfjs, options, target)'), false);
   assert.match(reader, /function loadPdfWithTimeout/);
   assertCode(reader, 'trackReaderResource(destroy)');

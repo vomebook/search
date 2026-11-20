@@ -48,7 +48,7 @@ class DownloadLifecycleTests(unittest.TestCase):
         self.assertEqual(self.page.locator('[data-action="download"]').first.text_content(), '准备中…')
         self.assertEqual(self.page.evaluate('launches.length'), 0)
         self.page.evaluate('finishCheck()')
-        self.page.wait_for_function('launches.length === 1 && pendingDownloads.size === 0')
+        self.page.wait_for_function('launches.length === 1 && downloadController.pendingDownloads.size === 0')
         self.page.locator('[data-action="download"]').first.click()
         self.page.wait_for_function('launches.length === 2')
         self.assertEqual(self.page.evaluate('checkCalls'), 1)
@@ -117,7 +117,7 @@ class DownloadLifecycleTests(unittest.TestCase):
                     if (handedOff !== link) return;
                     const cancel=()=>{
                       downloadBatches.cancel();
-                      handoffRetained=pendingDownloads.has(link);
+                      handoffRetained=downloadController.pendingDownloads.has(link);
                     };
                     if (timing==='sync') cancel(); else queueMicrotask(cancel);
                   };
@@ -130,7 +130,7 @@ class DownloadLifecycleTests(unittest.TestCase):
                 self.assertEqual(self.page.evaluate('''[
                   downloadBatches.batch.cancelled,downloadBatches.batch.started,downloadBatches.batch.next,
                   downloadBatches.batch.failed.map(item=>item.link),handoffLaunches,
-                  handoffIndependent,handoffRetained,pendingDownloads.size
+                  handoffIndependent,handoffRetained,downloadController.pendingDownloads.size
                 ]'''), [True, 1, 2, [link+'-queued', link+'-unclaimed'], [link], True, True, 0])
                 self.assertIn('已发起 1/3', self.page.locator('#download-queue [role="status"]').text_content())
                 self.page.locator('#download-queue [data-queue="retry"]').click()
@@ -167,8 +167,8 @@ class DownloadLifecycleTests(unittest.TestCase):
               {status:link==='bad' && calls[link]===1 ? 503 : 200}));
           };
           for(let i=0;i<70;i++) await checkDownload('cache'+i);
-          const size=downloadChecks.size;
-          downloadChecks.get('cache69').expires=Date.now()-1;
+          const size=downloadController.downloadChecks.size;
+          downloadController.downloadChecks.get('cache69').expires=Date.now()-1;
           await checkDownload('cache69');
           const first=await downloadFile('bad.txt','bad');
           const second=await downloadFile('bad.txt','bad');
@@ -237,7 +237,7 @@ class DownloadLifecycleTests(unittest.TestCase):
         self.page.locator('[data-queue="cancel"]').click()
         self.page.evaluate('releases.forEach(release=>release())')
         self.page.wait_for_function('downloadBatches.batch.done')
-        self.assertEqual(self.page.evaluate('[releases.length,launches.length,pendingDownloads.size]'), [2,0,0])
+        self.assertEqual(self.page.evaluate('[releases.length,launches.length,downloadController.pendingDownloads.size]'), [2,0,0])
         self.page.locator('[data-queue="close"]').click()
         self.assertEqual(self.page.locator('#download-queue').count(), 0)
 
@@ -253,7 +253,10 @@ class DownloadLifecycleTests(unittest.TestCase):
         }''')
         self.page.clock.fast_forward(8001)
         self.page.wait_for_function('window.downloadResult === false')
-        self.assertEqual(self.page.evaluate('[activeDownloadChecks,downloadChecks.size,pendingDownloads.size]'), [0,0,0])
+        self.assertEqual(self.page.evaluate('''() => {
+          const {activeDownloadChecks, downloadChecks, pendingDownloads} = downloadController;
+          return [activeDownloadChecks, downloadChecks.size, pendingDownloads.size];
+        }'''), [0,0,0])
         self.assertIn('超时', self.page.locator('#toast').text_content())
 
     def test_attachment_handoff_keeps_search_page_and_filename(self):

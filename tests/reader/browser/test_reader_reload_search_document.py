@@ -488,7 +488,7 @@ class ReaderTrueOfflineCases:
     def wait_local_search(self, query):
         self.page.locator('#search-input').wait_for(state='visible')
         self.page.wait_for_function('''query => typeof STATE !== 'undefined' &&
-          routeInitialized && searchInputReady && STATE.query === query &&
+          routeInitialized && !DOM.searchInput._earlySearchInput && STATE.query === query &&
           STATE.dataLoaded && STATE.useLocalMode && !STATE.isLoading &&
           STATE.total > 0 && STATE._resultBackend === 'local' &&
           getCorpusClient().inspect().worker instanceof Worker''', arg=query)

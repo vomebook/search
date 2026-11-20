@@ -1,4 +1,4 @@
-// Capture the existing host renderer before replacing its HTML assembly.
+// Exercise the directory view with the original markup and scroll expectations.
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -6,9 +6,6 @@ import test from 'node:test';
 import vm from 'node:vm';
 
 const root = process.cwd();
-const source = fs.readFileSync(path.join(root,'static/app.js'),'utf8');
-const match = source.match(/^function renderBrowserListItems\([^]*?^}/m);
-assert.ok(match, 'host sidebar renderer must exist');
 const space = fs.existsSync(path.join(root,'pyrightconfig.json'));
 
 function fixture() {
@@ -28,28 +25,27 @@ function fixture() {
   vm.runInContext(fs.readFileSync(modulePath,'utf8'),c,{filename:modulePath});
   const directoryPath=path.join(root,'static/search/sidebar/presentation/directory.js');
   vm.runInContext(fs.readFileSync(directoryPath,'utf8'),c,{filename:directoryPath});
-  c.getSidebarDirectoryView=()=>c.VoiceOfMLSidebarDirectoryView.create({
+  const view=c.VoiceOfMLSidebarDirectoryView.create({
     surface:space?'space':'pages',scroll:{restore:()=>c.restoreSidebarScroll()},
     markup:{icon:key=>c.sidebarIconMarkup(key),escape:value=>c.escapeHTML(value),
       iconType:value=>c.getFileIconType(value),formatSize:value=>c.formatSize(value),
       name:file=>c.getBrowserFileName(file),link:(...args)=>c.getBrowserFileLink(...args),
       reader:(...args)=>space?c.getBrowserFileReadUrl(...args):c.getBrowserReaderUrl(...args)}
   });
-  vm.runInContext(match[0],c,{filename:'sidebar-host.js'});
-  return {c,calls};
+  return {c,calls,view};
 }
 
 test('empty sidebar preserves original output and scroll restore timing',()=>{
-  const {c,calls}=fixture();const list={innerHTML:'old'};
-  c.renderBrowserListItems(list,{},'Repo','');
+  const {view,calls}=fixture();const list={innerHTML:'old'};
+  view.items(list,{},'Repo','');
   assert.equal(list.innerHTML,'');assert.deepEqual(calls,[['icon','folder'],['restore']]);
 });
 
 test('folder and file markup preserve site-specific attributes, escaping and order',()=>{
-  const {c,calls}=fixture();const list={innerHTML:''};
+  const {view,calls}=fixture();const list={innerHTML:''};
   const data={folders:[{name:'<目录&',path:'a"/b',count:3}],files:[
     {name:'a<b',ext:'pdf',size:12},{name:'raw&',ext:'zip',size:0}]};
-  c.renderBrowserListItems(list,data,'Repo','folder');
+  view.items(list,data,'Repo','folder');
   const html=list.innerHTML;
   assert.match(html,/aria-label="打开文件夹：&lt;目录&amp;"/);
   assert.match(html,/data-path="a&quot;\/b"/);
@@ -64,20 +60,20 @@ test('folder and file markup preserve site-specific attributes, escaping and ord
 });
 
 test('missing folder paths keep each site original serialization',()=>{
-  const {c}=fixture();const list={innerHTML:''};
-  c.renderBrowserListItems(list,{folders:[{name:'missing'}]},'R','');
+  const {view}=fixture();const list={innerHTML:''};
+  view.items(list,{folders:[{name:'missing'}]},'R','');
   assert.match(list.innerHTML,space?/data-path="undefined"/:/data-path=""/);
 });
 
 test('exceptions before final assignment do not restore scroll or partially replace DOM',()=>{
-  const {c,calls}=fixture();const list={innerHTML:'old'};
+  const {c,view,calls}=fixture();const list={innerHTML:'old'};
   c.getBrowserFileName=()=>{throw new Error('name failure');};
-  assert.throws(()=>c.renderBrowserListItems(list,{folders:[],files:[{name:'x',ext:'pdf'}]},'R',''),/name failure/);
+  assert.throws(()=>view.items(list,{folders:[],files:[{name:'x',ext:'pdf'}]},'R',''),/name failure/);
   assert.equal(list.innerHTML,'old');assert.equal(calls.some(x=>x[0]==='restore'),false);
 });
 
 test('DOM assignment exceptions prevent scroll restoration',()=>{
-  const {c,calls}=fixture();const list={set innerHTML(_value){throw new Error('assignment failure');}};
-  assert.throws(()=>c.renderBrowserListItems(list,{folders:[],files:[]},'R',''),/assignment failure/);
+  const {view,calls}=fixture();const list={set innerHTML(_value){throw new Error('assignment failure');}};
+  assert.throws(()=>view.items(list,{folders:[],files:[]},'R',''),/assignment failure/);
   assert.equal(calls.some(x=>x[0]==='restore'),false);
 });

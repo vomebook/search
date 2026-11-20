@@ -28,7 +28,7 @@ export interface ChapterFormatContext {
   assertReaderActive(): void;
   trustedReaderAssetManifestUrl(url: string): string | null;
   trustedChapterUrl(path: string, base: string): string | null;
-  trustedChapterResourceUrl(value: string, base: string, attribute: string, manifestBase: string): string | null;
+  trustedChapterResourceUrl(raw: string, base: string, manifestBase: string): string | null;
   trustedChapterReferenceUrl(value: string | null, base: string | null, manifestBase: string): {url: string; fragment: string} | null;
   readerContentUrl(url: string): string;
   isReaderGenerationCurrent(kind: string, generation: number): boolean;

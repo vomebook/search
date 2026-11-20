@@ -48,7 +48,7 @@ export function createReaderPdfEngine(readerContext) {
         canPrefetchFirstPage: () => readerContext.capability?.mode === "pdf" &&
           readerContext.readerRestorationLoaded && !readerContext.restorationFailed &&
           (!readerContext.readerRestorationEntry || Number(readerContext.readerRestorationEntry.page) === 1),
-        onError(error) {
+        onError() {
           if (!documentReady || readerContext.readerAbortController.signal.aborted) return;
           if (readerContext.capability.mode !== "pdf") return;
           // Page retries cannot revive a destroyed PDF.js document. Capture an
@@ -83,11 +83,10 @@ export function createReaderPdfEngine(readerContext) {
     }));
   }
 
-  /** @param {PdfModule} pdfjs @param {(url: string) => PdfOptions} options @param {string} target @param {string} proxy @param {(url: string) => Initial} takeInitial */
-  function loadPdfWithTimeout(pdfjs, options, target = readerContext.sourceUrl, proxy = readerContext.contentUrl, takeInitial = (_url) => null) {
-    // Keep a failed proxy on the proxied URL. Falling through to target opens
-    // huggingface.co directly, which does not connect on this network.
-    return readerContext.retryReaderProxy(() => readerContext.loadPdfTaskWithTimeout(pdfjs, options, proxy, takeInitial(proxy)));
+  /** @param {PdfModule} pdfjs @param {(url: string) => PdfOptions} options @param {string} proxyUrl @param {(url: string) => Initial} [takeInitial] */
+  function loadPdfWithTimeout(pdfjs, options, proxyUrl, takeInitial = () => null) {
+    // Retry the proxy URL only; never fall back to the original source URL.
+    return readerContext.retryReaderProxy(() => readerContext.loadPdfTaskWithTimeout(pdfjs, options, proxyUrl, takeInitial(proxyUrl)));
   }
 
   function preloadPdfEngine() {
@@ -390,7 +389,7 @@ export function createReaderPdfEngine(readerContext) {
         standardFontDataUrl: readerContext.PDFJS_STANDARD_FONT_URL,
         withCredentials: false
       });
-      return readerContext.measurePdf(readerContext.loadPdfWithTimeout(pdfjs, options, target, proxyUrl, takeInitial), "document")
+      return readerContext.measurePdf(readerContext.loadPdfWithTimeout(pdfjs, options, proxyUrl, takeInitial), "document")
         .catch(async error => {
           readerContext.assertReaderActive();
           if (!stagedWorker || (/** @type {{name?: string} | null | undefined} */ (error))?.name === "AbortError" || readerContext.retryableReaderProxyError(error) ||
@@ -400,7 +399,7 @@ export function createReaderPdfEngine(readerContext) {
           // original worker, not silently accept provisional page identities.
           readerContext.releasePdfWorker?.();
           await readerContext.preparePdfWorker(pdfjs);
-          return readerContext.loadPdfWithTimeout(pdfjs, options, target, proxyUrl, takeInitial);
+          return readerContext.loadPdfWithTimeout(pdfjs, options, proxyUrl, takeInitial);
         });
     }).finally(() => {
       initial = null;

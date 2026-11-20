@@ -198,8 +198,8 @@ export function createReaderPdfRenderer(readerContext) {
   }
 
   // Reveal ordinary image pages only after decoding; respect reduced motion.
-  /** @param {import('../../../typings/reader-pdf-renderer-strict').PdfShell} shell @param {HTMLElement} surface @param {boolean} fade */
-  function revealPdfSurface(shell, surface, fade) {
+  /** @param {HTMLElement} surface @param {boolean} fade */
+  function revealPdfSurface(surface, fade) {
     surface.classList.add("ready");
     if (fade && readerContext.capability?.mode === "image-pages")
       surface.animate?.([{ opacity: 0 }, { opacity: 1 }], { duration: 120, easing: "ease" });
@@ -290,7 +290,7 @@ export function createReaderPdfRenderer(readerContext) {
         readerContext.applyPdfShellGeometry(() => {
           shell.style.aspectRatio = `${image.naturalWidth || 1} / ${image.naturalHeight || 1}`;
           shell.dataset.pageGeometry = "1";
-          revealPdfSurface(shell, image, fade);
+          revealPdfSurface(image, fade);
           readerContext.seedPdfPageGeometry?.(image.naturalWidth, image.naturalHeight);
         });
         // A speculative page may become visible while its image is loading.
@@ -468,7 +468,6 @@ export function createReaderPdfRenderer(readerContext) {
     renderPdfImageShell,
     renderPdfShell,
     applyPdfShellGeometry,
-    revealPdfSurface,
     pdfSurfaceFades
   };
 }

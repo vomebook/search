@@ -220,7 +220,7 @@ class SearchPositionTests(unittest.TestCase):
         self.page.evaluate("ROUTER.navigate('global')")
         self.page.wait_for_function("STATE.mode==='global' && !STATE.isLoading")
         self.page.evaluate('''() => {
-          resultSnapshots.snapshots.clear(); searchResponseCache.clear();
+          resultSnapshots.snapshots.clear(); searchResponseStore.cache.clear();
           STATE.useLocalMode=false; apiAvailable=true;
           STATE.filterExtensions=[]; STATE.query='paging-original'; DOM.searchInput.value=STATE.query;
           scheduleFilterSearch();
@@ -310,8 +310,8 @@ class SearchPositionTests(unittest.TestCase):
         kept = self.page.evaluate('''() => {
           resultSnapshots.snapshots.clear();
           resultSnapshots.snapshots.set('small', {bytes: 1024});
-          resultSnapshots.snapshots.set('large', {bytes: SEARCH_VIEW_SNAPSHOT_BYTES_MAX+1});
-          trimSearchViewSnapshots(); return [...resultSnapshots.snapshots.keys()];
+          resultSnapshots.snapshots.set('large', {bytes: VoiceOfMLSnapshotPolicy.BYTES_MAX+1});
+          resultSnapshots.trim(); return [...resultSnapshots.snapshots.keys()];
         }''')
         self.assertEqual(kept, ['small'])
 
@@ -498,7 +498,7 @@ class SearchPositionTests(unittest.TestCase):
     def test_window_restore_does_not_fetch_unvisited_prefix(self):
         self.begin_rebuild('''() => {
           prefetchNextPage=()=>{}; // Isolate restoration from ordinary lookahead.
-          pagingTotal=800;searchResponseCache.clear();
+          pagingTotal=800;searchResponseStore.cache.clear();
           const originalKey=[...positionPersistence.positions.keys()].find(key=>JSON.parse(key).query==='paging-original');
           positionPersistence.positions.get(originalKey).loadedPage=8;
           const original=fetchPositionPage;window.restoreCalls=[];window.restorePeak=0;let active=0;
@@ -519,7 +519,7 @@ class SearchPositionTests(unittest.TestCase):
     def test_window_retry_reuses_completed_neighbor(self):
         self.begin_rebuild('''() => {
           prefetchNextPage=()=>{};
-          pagingTotal=400;searchResponseCache.clear();
+          pagingTotal=400;searchResponseStore.cache.clear();
           const key=[...positionPersistence.positions.keys()].find(key=>JSON.parse(key).query==='paging-original');
           positionPersistence.positions.get(key).loadedPage=4;
           const original=fetchPositionPage;window.restoreCalls=[];window.failPage=true;
@@ -540,7 +540,7 @@ class SearchPositionTests(unittest.TestCase):
 
     def test_parallel_generation_mismatch_discards_entire_buffer(self):
         self.begin_rebuild('''() => {
-          pagingTotal=400;searchResponseCache.clear();
+          pagingTotal=400;searchResponseStore.cache.clear();
           const key=[...positionPersistence.positions.keys()].find(key=>JSON.parse(key).query==='paging-original');
           positionPersistence.positions.get(key).loadedPage=4;
           const original=fetchPositionPage;window.coherent=false;

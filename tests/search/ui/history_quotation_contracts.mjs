@@ -65,19 +65,18 @@ function historyFixture() {
   c.escapeHTML = value => String(value).replaceAll('&', '&amp;').replaceAll('"', '&quot;').replaceAll('<', '&lt;');
   const submissions = [];
   c.submitSearchQuery = (...args) => { submissions.push(plain(args)); };
-  c.searchHistoryStore = c.VoiceOfMLSearchHistoryStore.create(() => c.sessionStorage);
-  for (const name of ['getSearchHistoryController', 'getHistory', 'saveHistory', 'addHistoryItem', 'renderDropdown', 'hideSearchHistory', 'setupSearchHistory', 'removeHistoryItem']) {
-    const source = app.match(new RegExp('^function ' + name + '\\([^]*?^}', 'm'));
-    // Single-line host wrappers end on their declaration line.
-    const line = app.split('\n').find(line => line.startsWith('function ' + name + '('));
-    vm.runInContext(line.endsWith('}') ? line : source[0], c);
-  }
-  c.setupSearchHistory();
+  const store = c.VoiceOfMLSearchHistoryStore.create(() => c.sessionStorage);
+  const history = c.VoiceOfMLSearchHistory.create({
+    elements: () => c.DOM, store, escapeHTML: c.escapeHTML,
+    recordHistory: () => c.STATE.recordHistory, isComposing: () => c.searchComposing,
+    submitSearchQuery: c.submitSearchQuery,
+  });
+  history.setupSearchHistory();
   function key(key, target = input, extra = {}) {
     const event = {key, target, prevented: false, stopped: false, preventDefault() { this.prevented = true; }, stopPropagation() { this.stopped = true; }, ...extra};
     box.fire('keydown', event); return event;
   }
-  return {...f, storage, rows, input, dropdown, box, results, submissions, key, setStored(value) { stored = value; }};
+  return {...f, store, history, rows, input, dropdown, box, results, submissions, key, setStored(value) { stored = value; }};
 }
 
 test('history and quotation are registered in HTML, composition, resources, offline and strict projects', () => {
@@ -100,44 +99,44 @@ test('history and quotation are registered in HTML, composition, resources, offl
 });
 
 test('history rejects corrupt session JSON, storage failures, live preference, empty query and capped deduplication', () => {
-  const f = historyFixture(), {c} = f;
-  for (const value of [null, '{bad', 'false', '0', 'null']) { f.setStored(value); assert.deepEqual(plain(c.getHistory()), []); }
+  const f = historyFixture(), {c, store, history} = f;
+  for (const value of [null, '{bad', 'false', '0', 'null']) { f.setStored(value); assert.deepEqual(plain(store.get()), []); }
   f.setStored('{"unexpected":true}');
-  assert.deepEqual(plain(c.getHistory()), []);
+  assert.deepEqual(plain(store.get()), []);
   f.setStored(JSON.stringify([null, {}, 1, "valid", ...Array.from({length:25}, (_, i)=>String(i))]));
-  assert.deepEqual(plain(c.getHistory()), ["valid", ...Array.from({length:19}, (_, i)=>String(i))]);
-  c.renderDropdown(); assert.equal(f.rows.length, 20); assert.match(f.dropdown.innerHTML, /history-clear-all/);
-  c.saveHistory([]);
-  for (let i = 0; i < 25; i++) c.addHistoryItem('q' + i);
-  assert.equal(c.getHistory().length, 20); assert.equal(c.getHistory()[19], 'q5');
-  c.addHistoryItem('q12'); assert.equal(c.getHistory()[0], 'q12'); assert.equal(c.getHistory().length, 20);
-  c.addHistoryItem(''); c.STATE.recordHistory = false; c.addHistoryItem('disabled'); assert.equal(c.getHistory()[0], 'q12');
-  c.STATE.recordHistory = true; c.addHistoryItem('live'); assert.equal(c.getHistory()[0], 'live');
+  assert.deepEqual(plain(store.get()), ["valid", ...Array.from({length:19}, (_, i)=>String(i))]);
+  history.renderDropdown(); assert.equal(f.rows.length, 20); assert.match(f.dropdown.innerHTML, /history-clear-all/);
+  store.save([]);
+  for (let i = 0; i < 25; i++) history.addHistoryItem('q' + i);
+  assert.equal(store.get().length, 20); assert.equal(store.get()[19], 'q5');
+  history.addHistoryItem('q12'); assert.equal(store.get()[0], 'q12'); assert.equal(store.get().length, 20);
+  history.addHistoryItem(''); c.STATE.recordHistory = false; history.addHistoryItem('disabled'); assert.equal(store.get()[0], 'q12');
+  c.STATE.recordHistory = true; history.addHistoryItem('live'); assert.equal(store.get()[0], 'live');
   c.sessionStorage = {getItem() { throw Error('denied'); }, setItem() { throw Error('full'); }};
-  assert.deepEqual(plain(c.getHistory()), []); assert.doesNotThrow(() => c.addHistoryItem('safe'));
+  assert.deepEqual(plain(store.get()), []); assert.doesNotThrow(() => history.addHistoryItem('safe'));
 });
 
 test('history keyboard, delete focus, native activation, clear and submission ownership survive extraction', () => {
-  const f = historyFixture(), {c} = f;
-  c.saveHistory(['one', 'two', 'three']); f.input.focus();
+  const f = historyFixture(), {c, store, history} = f;
+  store.save(['one', 'two', 'three']); f.input.focus();
   assert.match(f.dropdown.innerHTML, /button type="button" class="history-text"/);
   assert.ok(f.key('ArrowDown').prevented); assert.equal(c.document.activeElement, f.rows[0].text);
   f.key('ArrowDown', f.rows[0].text); assert.equal(c.document.activeElement, f.rows[1].text);
-  f.rows[1].del.focus(); c.renderDropdown(); assert.equal(c.document.activeElement, f.rows[1].del);
+  f.rows[1].del.focus(); history.renderDropdown(); assert.equal(c.document.activeElement, f.rows[1].del);
   f.dropdown.fire('click', {target: f.rows[1].del, detail: 0});
-  assert.deepEqual(plain(c.getHistory()), ['one', 'three']); assert.equal(c.document.activeElement, f.rows[1].text);
+  assert.deepEqual(plain(store.get()), ['one', 'three']); assert.equal(c.document.activeElement, f.rows[1].text);
   f.dropdown.fire('click', {target: f.rows[1].text, detail: 0});
   assert.deepEqual(f.submissions, [['three', {restore: true, blur: true}]]); assert.equal(c.document.activeElement, f.results);
   f.input.focus(); assert.ok(f.key('Escape').stopped); assert.equal(c.document.activeElement, f.input); assert.equal(f.dropdown.style.display, 'none');
   f.input.focus(); f.key('ArrowUp'); assert.equal(c.document.activeElement, f.input);
   const clear = {closest: selector => selector === '.history-clear-all' ? clear : null};
   f.dropdown.fire('click', {target: clear, detail: 0});
-  assert.deepEqual(plain(c.getHistory()), []); assert.equal(f.dropdown.style.display, 'none'); assert.equal(c.document.activeElement, f.input);
+  assert.deepEqual(plain(store.get()), []); assert.equal(f.dropdown.style.display, 'none'); assert.equal(c.document.activeElement, f.input);
 });
 
 test('history arrow navigation lets the browser scroll the focused entry into view', () => {
   const f = historyFixture(), {c} = f;
-  c.saveHistory(Array.from({length: 20}, (_, i) => 'query ' + i));
+  f.store.save(Array.from({length: 20}, (_, i) => 'query ' + i));
   f.input.focus();
   for (let i = 0; i < f.rows.length; i++) {
     const event = f.key('ArrowDown', c.document.activeElement);
@@ -153,7 +152,7 @@ test('history arrow navigation lets the browser scroll the focused entry into vi
 test('history preserves listener order, live IME guards, hover/blur delay and long-press cancellation', async () => {
   const f = historyFixture(), {c} = f;
   assert.deepEqual(f.listeners.slice(0, 6).map(item => item.slice(0, 2)), [['input', 'focus'], ['box', 'focusout'], ['dropdown', 'mouseenter'], ['dropdown', 'mouseleave'], ['document', 'pointerdown'], ['box', 'keydown']]);
-  c.saveHistory(['one', 'two']); f.input.focus();
+  f.store.save(['one', 'two']); f.input.focus();
   for (const extra of [{isComposing: true}, {keyCode: 229}, {ctrlKey: true}, {metaKey: true}, {altKey: true}]) assert.equal(f.key('ArrowDown', f.input, extra).prevented, false);
   c.searchComposing = true; assert.equal(f.key('Escape').prevented, false); c.searchComposing = false;
   assert.equal(f.key('Enter').prevented, false); assert.equal(f.submissions.length, 0);
@@ -162,7 +161,7 @@ test('history preserves listener order, live IME guards, hover/blur delay and lo
   f.dropdown.fire('mouseleave'); await f.fire(150); assert.equal(f.dropdown.style.display, 'none');
   f.input.focus(); f.dropdown.fire('touchstart', {target: f.rows[0].text}); f.dropdown.fire('touchcancel'); assert.equal([...f.timers.values()].some(t => t.delay === 600), false);
   const old = f.rows[0].text; f.dropdown.fire('mousedown', {target: old}); await f.fire(600);
-  f.dropdown.fire('click', {target: old, detail: 1}); assert.equal(f.submissions.length, 0); assert.deepEqual(plain(c.getHistory()), ['two']);
+  f.dropdown.fire('click', {target: old, detail: 1}); assert.equal(f.submissions.length, 0); assert.deepEqual(plain(f.store.get()), ['two']);
   f.dropdown.fire('click', {target: f.rows[0].text, detail: 0}); assert.equal(f.submissions.length, 1);
   f.input.focus(); c.document.fire('pointerdown', {target: f.results}); assert.equal(f.dropdown.style.display, 'none');
 });

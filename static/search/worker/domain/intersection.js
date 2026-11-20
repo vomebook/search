@@ -1,3 +1,4 @@
+/* exported intersectCandidateLists */
 // Intersect posting lists without changing the first list's order in unsorted mode.
 /** @overload @param {(number[] | Uint32Array)[]} candidateLists @param {true} sorted @returns {number[]} */
 /** @overload @param {(number[] | Uint32Array)[]} candidateLists @param {boolean} [sorted] @returns {number[] | Uint32Array} */

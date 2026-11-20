@@ -1470,11 +1470,11 @@ class PdfFirstPageTests(unittest.TestCase):
             page=context.new_page();attempts=[]
             def fail_once(route):
                 response=route.fetch();script=response.text()
-                needle='return readerContext.measurePdf(readerContext.loadPdfWithTimeout(pdfjs, options, target, proxyUrl, takeInitial), "document")'
+                needle='return readerContext.measurePdf(readerContext.loadPdfWithTimeout(pdfjs, options, proxyUrl, takeInitial), "document")'
                 self.assertIn(needle,script)
                 script=script.replace(needle,'''return readerContext.measurePdf(stagedWorker
                     ? Promise.reject(new Error("injected staged parser failure"))
-                    : readerContext.loadPdfWithTimeout(pdfjs, options, target, proxyUrl, takeInitial), "document")''')
+                    : readerContext.loadPdfWithTimeout(pdfjs, options, proxyUrl, takeInitial), "document")''')
                 route.fulfill(response=response,body=script)
             page.route('**/static/reader/pdf/reader-pdf-engine.mjs*',fail_once)
             page.on('request',lambda req:attempts.append(req.url) if 'pdf-worker-wrapper.mjs' in req.url else None)

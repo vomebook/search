@@ -10,7 +10,8 @@
       /** @type {VoiceOfMLSearchRequestEntry} */
       const entry = { controller, deadline: Date.now() + timeoutMs, listeners: new Map(), nextListenerId: 0,
         expire() {}, promise: Promise.resolve(undefined) };
-      const stopped = new Promise((resolve, reject) => {
+      // Only the rejection side participates in the race.
+      const stopped = new Promise((...[, reject]) => {
         entry.expire = () => {
           reject(new Error("API_TIMEOUT"));
           controller.abort();

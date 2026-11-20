@@ -151,7 +151,8 @@ function folderTokenParts(build, text) {
 /** @param {string} s1 @param {string} s2 @param {number} maxDist */
 function editDistance(s1, s2, maxDist) {
   if (Math.abs(s1.length - s2.length) > maxDist) return 999;
-  let prev = Array.from({ length: s2.length + 1 }, (_, i) => i);
+  let prev = [0];
+  for (let i = 1; i <= s2.length; i++) prev.push(i);
   for (let i = 0; i < s1.length; i++) {
     const curr = [i + 1];
     let rowMin = i + 1;
@@ -703,7 +704,7 @@ function scheduleFulltext(expectedGeneration, delay) {
     if (wordIndex) return;
     try {
       advanceFulltext(FULLTEXT_BATCH_RECORDS, Date.now() + FULLTEXT_BATCH_MS);
-    } catch (_) {
+    } catch {
       // Speculative work must not terminate the Worker. A demanded search can
       // retry construction and report a normal correlated protocol error.
       fulltextBuild = null;

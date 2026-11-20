@@ -99,7 +99,7 @@ class PagingRecoveryTests(unittest.TestCase):
     def check_initial_generation_relocation(self, prefetched, initial_generation='different', local_ready=False):
         self.page.evaluate(r'''({initialGeneration, localReady}) => {
           cancelSearchPrefetch();
-          searchResponseCache.clear(); initialPayloadCache.clear(); resultSnapshots.snapshots.clear();
+          searchResponseStore.cache.clear(); initialPayloadCache.clear(); resultSnapshots.snapshots.clear();
           const previous = window.fetch;
           // Initial/API generations are opaque equality tokens, not the data
           // manifest's generation. Both versions deliberately retain total 301.
@@ -251,7 +251,7 @@ class PagingRecoveryTests(unittest.TestCase):
     def expire_pending(self, mode):
         self.page.evaluate('''mode => {
           window.pagingMode = mode;
-          pendingSearchPages.forEach(entry => { entry.deadline = Date.now() - 1; });
+          getSearchTransport().pending.forEach(entry => { entry.deadline = Date.now() - 1; });
           document.dispatchEvent(new Event('visibilitychange'));
         }''', mode)
 

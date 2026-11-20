@@ -33,7 +33,7 @@ export interface RangeHooks {
 export interface EngineContext {
   assertReaderActive(): void; readerAbortError(): Error; trackReaderResource(destroy: () => void): () => void;
   readerAbortController: AbortController; READER_PROXY_TIMEOUT_MS: number;
-  sourceUrl: string; contentUrl: string; PDFJS_WORKER_URL: string; PDFJS_URL: string;
+  sourceUrl: string; PDFJS_WORKER_URL: string; PDFJS_URL: string;
   PDFJS_WASM_URL: string; PDFJS_CMAP_URL: string; PDFJS_STANDARD_FONT_URL: string;
   capability: { mode?: string | null }; extension: string; ocrManifestUrl: string | null; pdfV3Manifest: unknown;
   readerRestorationLoaded: boolean; restorationFailed: boolean; readerRestorationEntry: Restoration | null;
@@ -45,7 +45,7 @@ export interface EngineContext {
   preparePdfInitialRange(options: {url: string; rangeChunkSize: number}, hooks: RangeHooks): Promise<InitialRange | null>;
   retryReaderProxy<T>(callback: () => Promise<T>): Promise<T>; retryableReaderProxyError(error: unknown): boolean;
   loadPdfTaskWithTimeout(pdfjs: PdfModule, options: (url: string) => PdfOptions, url: string, initial?: Initial): Promise<PdfDocument>;
-  loadPdfWithTimeout(pdfjs: PdfModule, options: (url: string) => PdfOptions, target?: string, proxy?: string, takeInitial?: (url: string) => Initial): Promise<PdfDocument>;
+  loadPdfWithTimeout(pdfjs: PdfModule, options: (url: string) => PdfOptions, proxyUrl: string, takeInitial?: (url: string) => Initial): Promise<PdfDocument>;
   preloadPdfEngine(): Promise<PdfModule>; loadPdfEngine(): Promise<PdfModule>;
   preparePdfWorker(pdfjs: PdfModule, firstPage?: boolean, signal?: AbortSignal | null): Promise<PdfModule>;
   preparePdfWorkerAttempt(pdfjs: PdfModule, attempt: number, firstPage?: boolean, signal?: AbortSignal | null): Promise<PdfModule>;

@@ -21,7 +21,8 @@ function validPage(page, index) {
 /** @param {string} text */
 function codePointLength(text) {
   let length = 0;
-  for (const point of text) length++;
+  const points = text[Symbol.iterator]();
+  while (!points.next().done) length++;
   return length;
 }
 /** @param {unknown} value @returns {value is number[]} */

@@ -63,7 +63,7 @@ class SidebarKeyboardTests(unittest.TestCase):
         result = self.page.evaluate('''() => {
           const repo = 'x"><img src=x onerror="window.injected=true">';
           const row = document.createElement('div');
-          row.innerHTML = buildResultHTML({Repo:repo, File:'book', Extension:'txt', Folder:['docs'], Size:1}, 0);
+          row.innerHTML = getResultRows().buildHTML({Repo:repo, File:'book', Extension:'txt', Folder:['docs'], Size:1}, 0);
           DOM.resultsList.append(row);
           return {images:row.querySelectorAll('img').length,
             attributes:Array.from(row.querySelectorAll('[data-repo]'), node=>node.dataset.repo),
@@ -81,7 +81,7 @@ class SidebarKeyboardTests(unittest.TestCase):
           DOM.historyToggle.dispatchEvent(new Event('change',{bubbles:true}));
           STATE.folderTree=[{name:'root',path:'root',count:1,selfCount:0,children:[
             {name:'child',path:'root/child',count:1,selfCount:1,children:[]}]}];
-          STATE.folderTreeCollapsed={root:true};renderFilterFolderTree();
+          STATE.folderTreeCollapsed={root:true};getSidebarFilters();sidebarFolderTree.render();
           DOM.filterFolderTree.querySelector('.tree-toggle').click();
           const neutral=captures;
           DOM.sortSelect.dispatchEvent(new Event('change',{bubbles:true}));
@@ -251,7 +251,7 @@ class SidebarKeyboardTests(unittest.TestCase):
           STATE.mode='repo';STATE.repo='Test';STATE.repoFull='VoiceOfML/Test';
           STATE.folderTree=[{path:'docs',name:'docs',count:1,children:[],hasDirectFiles:true}];
           STATE.filterFolderSelfs=[];STATE.filterFolderSubtrees=[];STATE.filterFolders=[];
-          DOM.filterFolderSection.style.display='';renderFilterFolderTree();
+          DOM.filterFolderSection.style.display='';getSidebarFilters();sidebarFolderTree.render();
         }''')
         self.page.locator('#filter-min-size').fill('3')
         self.page.locator('#filter-folder-tree input').check()
@@ -323,7 +323,7 @@ class SidebarKeyboardTests(unittest.TestCase):
           STATE.mode='global';STATE.repo=null;STATE.repoFull=null;STATE.browserPath='';
           STATE.filterFolderSelfs=[];STATE.filterFolderSubtrees=[];STATE.filterFolders=[];
           window.__breadcrumbClick=(folder)=>{
-            const row=document.createElement('div');row.innerHTML=buildResultHTML({Repo:'VoiceOfML/Test',
+            const row=document.createElement('div');row.innerHTML=getResultRows().buildHTML({Repo:'VoiceOfML/Test',
               File:'deep',Extension:'txt',Folder:['docs','子'],Size:1},0);
             DOM.resultsList.append(row);
             Array.from(row.querySelectorAll('.path-folder')).find(link=>link.dataset.folder===folder).click();};
@@ -395,7 +395,7 @@ class SidebarKeyboardTests(unittest.TestCase):
             Array.from({length:1000},(_,i)=>({name:'child'+i,path:'root/'+i,count:1,selfCount:1,children:[]}))}];
           STATE.folderTreeCollapsed={root:true};
           STATE.filterFolderSubtrees=[]; STATE.filterFolderSelfs=[]; STATE.filterFolders=[];
-          renderFilterFolderTree();
+          getSidebarFilters(); sidebarFolderTree.render();
           const initial=DOM.filterFolderTree.querySelectorAll('.filter-folder-item').length;
           const root=DOM.filterFolderTree.querySelector('.filter-folder-item');
           root.querySelector('input').click();
@@ -431,7 +431,7 @@ class SidebarKeyboardTests(unittest.TestCase):
             }
             return result;
           };
-          try {renderFilterFolderTree();renderFilterFolderTree();deferred=sidebarFolderTree.pending()>0;}
+          try {getSidebarFilters();sidebarFolderTree.render();sidebarFolderTree.render();deferred=sidebarFolderTree.pending()>0;}
           finally {Element.prototype.appendChild=append;}
           while(sidebarFolderTree.pending()) await new Promise(r=>setTimeout(r,0));
           const rows=DOM.filterFolderTree.querySelectorAll('.filter-folder-item').length;
@@ -449,7 +449,7 @@ class SidebarKeyboardTests(unittest.TestCase):
           STATE.folderTree=[{name:'root',path:'root',count:1000,hasChildren:true,children:
             Array.from({length:1000},(_,i)=>({name:String(i),path:'root/'+i,count:1,hasDirectFiles:true,children:[]}))}];
           STATE.folderTreeCollapsed={root:true};STATE.filterFolderSubtrees=[];STATE.filterFolderSelfs=[];
-          renderFilterFolderTree();const toggle=DOM.filterFolderTree.querySelector('.tree-toggle');
+          getSidebarFilters();sidebarFolderTree.render();const toggle=DOM.filterFolderTree.querySelector('.tree-toggle');
           toggle.click();const partial=DOM.filterFolderTree.querySelectorAll('.filter-folder-item').length;
           toggle.click();await new Promise(r=>setTimeout(r,30));
           const stopped=DOM.filterFolderTree.querySelectorAll('.filter-folder-item').length===partial && !sidebarFolderTree.pending();
@@ -457,7 +457,7 @@ class SidebarKeyboardTests(unittest.TestCase):
           while(sidebarFolderTree.pending()) await new Promise(r=>setTimeout(r,10));
           const final=DOM.filterFolderTree.querySelectorAll('.filter-folder-item').length;
           const late=DOM.filterFolderTree.querySelector('[data-path="root/999"] input').checked;
-          STATE.folderTree=[{name:'new',path:'new',count:1,hasDirectFiles:true,children:[]}];renderFilterFolderTree();
+          STATE.folderTree=[{name:'new',path:'new',count:1,hasDirectFiles:true,children:[]}];sidebarFolderTree.render();
           await new Promise(r=>setTimeout(r,30));
           return {stopped,final,late,current:DOM.filterFolderTree.querySelectorAll('.filter-folder-item').length===1};
         }''')
@@ -468,7 +468,7 @@ class SidebarKeyboardTests(unittest.TestCase):
           STATE.folderTree=[{name:'root',path:'root',count:500,hasChildren:true,children:[
             {name:'branch',path:'root/b',count:500,hasChildren:true,children:Array.from({length:500},(_,i)=>
               ({name:String(i),path:'root/b/'+i,count:1,hasDirectFiles:true,children:[]}))}]}];
-          STATE.folderTreeCollapsed={root:true,'root/b':false};renderFilterFolderTree();
+          STATE.folderTreeCollapsed={root:true,'root/b':false};getSidebarFilters();sidebarFolderTree.render();
           const toggle=DOM.filterFolderTree.querySelector('.tree-toggle');toggle.click();toggle.click();
           const stopped=!sidebarFolderTree.pending();toggle.click();
           while(sidebarFolderTree.pending()) await new Promise(r=>setTimeout(r,10));

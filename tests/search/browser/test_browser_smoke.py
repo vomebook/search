@@ -128,7 +128,7 @@ class BrowserBehaviorTest(unittest.TestCase):
                   readerAssetController.state.assets = {[key]: {s: 2, m: 'h', p: `objects/${digest.slice(0, 2)}/${digest}/${profile}/document.html`}};
                   const enriched = applyReaderAsset(record, repo, relative, buildRecordLink(record));
                   return {readerLink: enriched.ReaderLink, readerExtension: enriched.ReaderExtension,
-                    readable: isReadableRecord(enriched), html: buildResultHTML(record, 0)};
+                    readable: isReadableRecord(enriched), html: getResultRows().buildHTML(record, 0)};
                 }""", [extension, repo, name, folder, digest])
                 self.assertTrue(rendered["readable"], extension)
                 self.assertEqual(rendered["readerExtension"], "html", extension)
@@ -160,7 +160,7 @@ class BrowserBehaviorTest(unittest.TestCase):
           readerAssetController.state.assets = {[repo+'\\0'+path]:{s:2,m:'a',b:'vomebook/reader-assets-v2',p:`media/audio/aac/${hash}/audio.mp3`}};
           const converted=applyReaderAsset(record,repo,path,source);
           return {source,download:converted.DownloadLink,readerLink:converted.ReaderLink,
-            mode:converted.ReaderExtension,icon:getFileIconType('aac'),html:buildResultHTML(record,0)};
+            mode:converted.ReaderExtension,icon:getFileIconType('aac'),html:getResultRows().buildHTML(record,0)};
         }''')
         self.assertEqual(result['icon'], 'audio')
         self.assertEqual(result['mode'], 'audio')
@@ -273,7 +273,7 @@ class BrowserBehaviorTest(unittest.TestCase):
                 readInitialSearchPayload = () => null;
               }
               initialPayloadCache.clear();
-              searchResponseCache.clear();
+              searchResponseStore.cache.clear();
               cancelPendingSearchCacheWrites();
               STATE.query = ""; STATE.page = 1;
               const pending = searchWithInitialFallbackFresh();
@@ -587,12 +587,12 @@ class BrowserBehaviorTest(unittest.TestCase):
             const originalRect = measuredRow.getBoundingClientRect.bind(measuredRow);
             measuredRow.getBoundingClientRect = () => { repeatedReads++; return originalRect(); };
             VSCROLL.measuredWindowKey = "";
-            measureHeights(VSCROLL.renderStart, VSCROLL.renderEnd);
+            getVirtualResults().measureHeights();
             const readsAtSameWidth = repeatedReads;
             const originalWidth = DOM.resultsContainer.style.width;
             DOM.resultsContainer.style.width = Math.max(200, container.clientWidth - 1) + "px";
             VSCROLL.measuredWindowKey = "";
-            measureHeights(VSCROLL.renderStart, VSCROLL.renderEnd);
+            getVirtualResults().measureHeights();
             DOM.resultsContainer.style.width = originalWidth;
             const preservedAfterAppend = preservedRow === DOM.resultsList.querySelector(`.result-item[data-index="${preservedIndex}"]`);
             const treeExtendedInPlace = heightTreeBeforeAppend === VSCROLL.heightTree;
@@ -771,7 +771,7 @@ class BrowserBehaviorTest(unittest.TestCase):
             STATE.results = [];
             STATE.total = 0;
             STATE.page = 1;
-            renderFilterFolderTree();
+            getSidebarFilters(); sidebarFolderTree.render();
             document.querySelector("#folder-select-all").click();
             await new Promise(resolve => {
               const check = () => STATE.total === 3 && STATE.results.length === 3 && !STATE.isLoading
@@ -831,7 +831,7 @@ class BrowserBehaviorTest(unittest.TestCase):
             STATE.results = [];
             STATE.total = 0;
             STATE.page = 1;
-            renderFilterFolderTree();
+            getSidebarFilters(); sidebarFolderTree.render();
             const childCheckbox = DOM.filterFolderTree.querySelector('[data-path="child"] input');
             childCheckbox.click();
             await new Promise(resolve => {
@@ -1004,7 +1004,7 @@ class BrowserBehaviorTest(unittest.TestCase):
             }));
             STATE.folderTree = tree;
             folderTreeCache.set(STATE.repoFull, tree);
-            renderFilterFolderTree();
+            getSidebarFilters(); sidebarFolderTree.render();
             window.__originalFilterRow = DOM.filterFolderTree.firstElementChild;
             window.__filterRuns = 0;
             window.__searchRuns = 0;
@@ -1036,7 +1036,7 @@ class BrowserBehaviorTest(unittest.TestCase):
             const list = document.createElement('div');
             list.className = 'browser-list';
             DOM.sidebarContent.appendChild(list);
-            renderBrowserListItems(list, {
+            getSidebarDirectoryView().items(list, {
                 folders: [{name:'nested', path:'nested', count:1000}],
                 files: Array.from({length:1000}, (_, i) => ({
                     name:`file-${i}`, ext:'txt', size:100, hasTxt:true
@@ -1066,7 +1066,7 @@ class BrowserBehaviorTest(unittest.TestCase):
                 children:[{name:'docs', path:'docs', count:1, hasDirectFiles:true, hasChildren:false, children:[]}]}];
             folderTreeCache.set(STATE.repoFull, STATE.folderTree);
             STATE.folderTreeCollapsed = {};
-            renderFilterFolderTree();
+            getSidebarFilters(); sidebarFolderTree.render();
         }""")
         button = self.page.locator("#filter-folder-tree .folder-self-toggle")
         button.click()
@@ -1561,7 +1561,7 @@ class BrowserBehaviorTest(unittest.TestCase):
         self.load("#/?q=持久搜索&ext=pdf&filters=1")
         self.page.wait_for_function("() => STATE.query === '持久搜索' && STATE.filterExtensions.includes('pdf')")
         self.page.wait_for_function("""async () => {
-          const db = await openSearchSessionDB();
+          const db = await searchSession.openSearchSessionDB();
           const tx = db.transaction('session', 'readonly');
           const request = tx.objectStore('session').get('last-search');
           const saved = await new Promise((resolve, reject) => { request.onsuccess = () => resolve(request.result); request.onerror = reject; });

@@ -1,4 +1,5 @@
 // Pure search text algorithms shared by the classic search worker.
+/* exported compareCodepoints, tokenizeParts, tokenize, isChineseToken, fuzzyDistanceBudget, literalSearch */
 // Python compares lowercased Unicode code points; avoid UTF-16 surrogate ordering.
 /** @param {string} left @param {string} right */
 function compareCodepoints(left, right) {

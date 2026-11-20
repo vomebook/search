@@ -162,11 +162,11 @@ export function choosePdfRangeChunkSize(bytes, total, fallback = PDF_DEFAULT_CHU
     // some edge cases rather than penalizing ordinary books.
     if (/** @type {number} */ (numbers[numbers.length - 1]) - /** @type {number} */ (numbers[0]) >= refs.length * 2) return PDF_ADAPTIVE_CHUNK_BYTES;
   }
-  return chooseLargeFlatTreeChunkSize(bytes, total, fallback);
+  return chooseLargeFlatTreeChunkSize(bytes, fallback);
 }
 
-/** @param {Uint8Array} bytes @param {number} total @param {number} fallback */
-function chooseLargeFlatTreeChunkSize(bytes, total, fallback) {
+/** @param {Uint8Array} bytes @param {number} fallback */
+function chooseLargeFlatTreeChunkSize(bytes, fallback) {
   const head = new TextDecoder('latin1').decode(bytes.subarray(0, Math.min(bytes.length, PDF_LARGE_FLAT_HEADER_BYTES)));
   if (!head.startsWith('%PDF-') || /\/Linearized\b/.test(head.slice(0, 1024))) return fallback;
   // Walk only complete direct-length objects. Skip stream bytes exactly; this

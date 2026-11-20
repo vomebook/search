@@ -110,7 +110,7 @@ process.stdout.write(stripBundledScripts(readFileSync('static/index.html','utf8'
                 self.assertEqual(current.evaluate('''() => [formatSize(0), formatSize(1023), formatSize(1024),
                   formatSize(1048576), formatSize(1073741824)]'''), ['', '1023 B', '1.0 KB', '1.0 MB', '1.00 GB'])
                 row = current.evaluate('''() => {
-                  const html = buildResultHTML({Repo:'VoiceOfML/Test', File:'size', Extension:'txt', Folder:[], Size:1536}, 0);
+                  const html = getResultRows().buildHTML({Repo:'VoiceOfML/Test', File:'size', Extension:'txt', Folder:[], Size:1536}, 0);
                   const node = document.createElement('div'); node.innerHTML = html;
                   return node.textContent.includes('1.5 KB');
                 }''')
@@ -527,7 +527,7 @@ process.stdout.write(stripBundledScripts(readFileSync('static/index.html','utf8'
             {name:'poster.jpg',ext:'jpg',size:1}, {name:'normal',ext:'jpg',size:1},
             {name:'book.PDF',ext:'pdf',size:1}, {name:'README',ext:'',size:1}];
           const list=document.createElement('div');list.className='browser-list';DOM.sidebarContent.append(list);
-          renderBrowserListItems(list,{folders:[],files},repo,folder);
+          getSidebarDirectoryView().items(list,{folders:[],files},repo,folder);
           return [...list.querySelectorAll('.browser-item')].map(row=>({filename:row.dataset.filename,
             link:decodeURIComponent(new URL(row.dataset.link).pathname),
             reader:row.dataset.readerUrl ? new URL(row.dataset.readerUrl,location.href).searchParams.get('id') : null}));
@@ -767,7 +767,7 @@ process.stdout.write(stripBundledScripts(readFileSync('static/index.html','utf8'
             releaseBody({url:'https://source.test/stale'});
             await new Promise(resolve=>setTimeout(resolve,0));
             const stale=sessionStorage.getItem('reader-resolve:warm-hover');
-            const slot=readerWarmupInFlight;
+            const slot=Number(!!readerWarmupPending);
             calls[1].resolve({ok:true,json:async()=>({url:'https://source.test/click'})});
             await new Promise(resolve=>setTimeout(resolve,0));
             const cached=JSON.parse(sessionStorage.getItem('reader-resolve:warm-click') || 'null');
@@ -779,7 +779,7 @@ process.stdout.write(stripBundledScripts(readFileSync('static/index.html','utf8'
             await new Promise(resolve=>setTimeout(resolve,0));
             return {before,replaced,stale,slot,cached:cached?.url,keyboardReplaced,
               keyboard:JSON.parse(sessionStorage.getItem('reader-resolve:warm-keyboard') || 'null')?.url,
-              active:readerWarmupInFlight,errors};
+              active:Number(!!readerWarmupPending),errors};
           } finally {
             cancelReaderWarmup();window.fetch=originalFetch;window.removeEventListener('unhandledrejection',handler);
             hover.remove();click.remove();keyboard.remove();history.replaceState(null,'',savedUrl);
@@ -880,7 +880,7 @@ process.stdout.write(stripBundledScripts(readFileSync('static/index.html','utf8'
             text.wait_for(state='visible',timeout=12000)
             self.assertEqual(len(lookups),1)
             self.page.evaluate('''url=>__lateCalls[1].resolve({ok:true,json:async()=>({url,extension:'txt'})})''', source)
-            self.page.wait_for_function('readerWarmupInFlight === 0')
+            self.page.wait_for_function('!readerWarmupPending')
             self.assertIn('Reader independent of delayed warmup',frame.locator('.reader-text').inner_text())
             self.assertEqual(len(lookups),1)
         finally:
@@ -1051,7 +1051,7 @@ process.stdout.write(stripBundledScripts(readFileSync('static/index.html','utf8'
           DOM.searchInput.value='current query';
           let target=new URL('/search/#/Test?folder_self=docs&ext=stale&q=stale',location.origin);
           target=readerNavigation.mergeSearchParams(target,currentReaderSearchParams(),{
-            hashRoute:true,keys:READER_RETURN_SEARCH_KEYS
+            hashRoute:true,keys:readerHost.keys
           });
           return {route:target.hash.split('?')[0],params:Object.fromEntries(new URLSearchParams(target.hash.split('?')[1]))};
         }''')

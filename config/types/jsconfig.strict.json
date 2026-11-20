@@ -8,10 +8,13 @@
     "noImplicitOverride": true,
     "noImplicitReturns": true,
     "noFallthroughCasesInSwitch": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
     "exactOptionalPropertyTypes": true,
     "target": "esnext",
     "module": "esnext",
     "moduleResolution": "bundler",
+    "moduleDetection": "force",
     "paths": {
       "/static/*": ["../../static/*"],
       "/search/static/*": ["../../static/*"]

@@ -35,6 +35,11 @@ export default [
     }
   },
   { files: ["static/**/*.js"], languageOptions: { sourceType: "script" } },
+  {
+    // TypeScript leaves classic script globals unchecked for unused bindings.
+    files: ["static/search/index-worker.js", "static/search/worker/domain/{text,intersection}.js"],
+    rules: { "no-unused-vars": ["error", { vars: "all", args: "all", caughtErrors: "all" }] }
+  },
   { files: ["static/search/results/domain/result-identity.js"], languageOptions: { globals: { buildRecordRelativePath: "readonly" } } },
   { files: ["static/search/catalog/application/client.js"], languageOptions: { globals: { BoundedResponseCache: "readonly", VoiceOfMLCatalogSidebarPayload: "readonly" } } },
   { files: ["static/search/requests/application/response-store.js"], languageOptions: { globals: { BoundedResponseCache: "readonly" } } },

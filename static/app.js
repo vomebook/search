@@ -18,7 +18,6 @@ const WORKER_REQUEST_TIMEOUT = 10000;
 const WORKER_LOAD_TIMEOUT = 60000;
 const APPEND_REQUEST_TIMEOUT = 5000;
 const DOWNLOAD_CHECK_TIMEOUT = 8000;
-const pendingSearchPages = getSearchTransport().pending;
 // Detached compatibility projection for browser diagnostics; the controller owns recovery.
 let pagingFailures = 0;
 
@@ -266,7 +265,6 @@ const readerHost = VoiceOfMLReaderHost.create({
   closeOverlay: (focus, scroll) => closeReaderOverlay(focus, scroll), reconcile: () => reconcileSearchDestination()
 });
 const readerNavigation = readerHost.navigation;
-const READER_RETURN_SEARCH_KEYS = readerHost.keys;
 // Read-only compatibility projections for existing browser diagnostics.
 Object.defineProperties(window, {
   readerOverlay: { get: () => readerHost.overlay },
@@ -377,7 +375,6 @@ var warmedReaderSources = new Map();
 // Match reader-resolve's metadata freshness without imposing a lifetime quota.
 const READER_WARMUP_TTL = 5 * 60 * 1000;
 const READER_WARMUP_MAX = 8;
-var readerWarmupInFlight = 0;
 /** @type {{key: string, cancel(superseded?: boolean): void} | null} */
 let readerWarmupPending = null;
 /** @type {Map<string, number>} */
@@ -424,7 +421,6 @@ function startReaderSourceWarmup(base, readerId, sourceUrl, urgent = false) {
     if (readerWarmupPending !== task) return;
     clearTimeout(timer);
     readerWarmupPending = null;
-    readerWarmupInFlight = 0;
     if (success) {
       let metadataStored = false;
       if (readerId) {
@@ -451,7 +447,6 @@ function startReaderSourceWarmup(base, readerId, sourceUrl, urgent = false) {
     }
   };
   readerWarmupPending = task;
-  readerWarmupInFlight = 1;
   const timer = setTimeout(() => task.cancel(), 8000);
   (async () => {
     try {
@@ -591,21 +586,7 @@ const downloadController = VoiceOfMLDownloadController.createDownloadController(
   isBatchActive: downloadBatches.isActive,
   timeout: DOWNLOAD_CHECK_TIMEOUT,
 });
-const {
-  downloadChecks,
-  downloadCheckQueue,
-  pendingDownloads,
-  checkDownload,
-  runDownloadCheck,
-  pumpDownloadChecks,
-  scheduleDownloadLaunch,
-  downloadFile,
-  downloadFileDetailed,
-} = downloadController;
-Object.defineProperty(globalThis, "activeDownloadChecks", {
-  configurable: true,
-  get: () => downloadController.activeDownloadChecks,
-});
+const { checkDownload, downloadFile, downloadFileDetailed } = downloadController;
 
 function renderDownloadBatch() { downloadBatches.render(); }
 
@@ -675,7 +656,6 @@ function getSearchHistoryController() {
     submitSearchQuery: (query, options) => submitSearchQuery(query, options)
   }));
 }
-function getHistory() { return searchHistoryStore.get(); }
 /** @param {string[]} list */
 function saveHistory(list) { searchHistoryStore.save(list); }
 
@@ -712,8 +692,6 @@ function addHistoryItem(q) { getSearchHistoryController().addHistoryItem(q); }
 function renderDropdown() { getSearchHistoryController().renderDropdown(); }
 function hideSearchHistory(restoreFocus = false) { getSearchHistoryController().hideSearchHistory(restoreFocus); }
 function setupSearchHistory() { getSearchHistoryController().setupSearchHistory(); }
-/** @param {string} q */
-function removeHistoryItem(q) { getSearchHistoryController().removeHistoryItem(q); }
 
 function updateSelectionUI() {
   if (!DOM.multiSelectToggle || !DOM.multiActionBar) return;
@@ -835,11 +813,6 @@ function getSearchTransport() {
     fetch: (url, options) => fetch(url, options),
     validate: (data, page, size) => isValidSearchResponse(data, page, size),
   });
-}
-
-/** @param {string} cacheKey @param {string} url @param {VoiceOfMLSearchRequestBody} body @param {number} timeoutMs */
-function createSearchPageRequest(cacheKey, url, body, timeoutMs) {
-  return getSearchTransport().createRequest(cacheKey, url, body, timeoutMs);
 }
 
 /** @param {string} cacheKey @param {string} url @param {VoiceOfMLSearchRequestBody} body @param {AbortSignal | null | undefined} signal @param {number} timeoutMs */
@@ -1190,16 +1163,6 @@ function warmConnection(force) {
   return keepalivePending;
 }
 
-function getCurrentExtensionCounts() {
-  if (STATE.mode === "repo" && STATE.repoFull) {
-    /** @type {Record<string, number>} */
-    const counts = {};
-    for (const item of repoExtensionCounts[STATE.repoFull] || []) counts[item.name] = item.count || 0;
-    return counts;
-  }
-  return extensionCounts;
-}
-
 /** @type {PagesSearchState} */
 const STATE = {
   mode: "global",
@@ -1244,11 +1207,7 @@ const STATE = {
   _deferredAppendWhileDragging: false,
 };
 
-const {
-  openSearchSessionDB,
-  persistSearchSession,
-  restoreSearchSession,
-} = VoiceOfMLSearchSession.createSearchSession({
+const searchSession = VoiceOfMLSearchSession.createSearchSession({
   canPersist: () => location.pathname === "/search/" && location.hash.indexOf("#/") === 0,
   canRestore: target => {
     if (initialSearchDraft) return false;
@@ -1258,6 +1217,7 @@ const {
       && target.hash.indexOf("#/") === 0;
   },
 });
+const { persistSearchSession, restoreSearchSession } = searchSession;
 
 const VSCROLL = VoiceOfMLVirtualHeights.createState();
 let pendingResultEntrance = false;
@@ -1622,7 +1582,6 @@ function renderSidebarAndFiltersDeferred(routeId) {
 /** @type {number | null} */
 let searchTimer = null;
 let searchComposing = false;
-let searchInputReady = false;
 let initialSearchDraft = false;
 /** @type {VoiceOfMLInputController} */
 /** @type {VoiceOfMLInputController | undefined} */
@@ -1659,8 +1618,6 @@ const searchResponseStore = VoiceOfMLSearchResponseStore.create({
   getSearchViewKey: () => getSearchViewKey(),
   rememberSearchPageMetadata: data => rememberSearchPageMetadata(data),
 });
-// Retain direct cache diagnostics for browser checks.
-const searchResponseCache = searchResponseStore.cache;
 const INITIAL_BASE_URL = "data/initial";
 /** @type {BoundedResponseCache<{data: SearchInitialPayload, time: number}>} */
 const initialPayloadCache = new BoundedResponseCache(16, SEARCH_CACHE_TTL);
@@ -1713,7 +1670,6 @@ function stableSearchStringify(value) {
 }
 
 const SEARCH_VIEW_SNAPSHOT_VERSION = VoiceOfMLSnapshotPolicy.VERSION;
-const SEARCH_VIEW_SNAPSHOT_BYTES_MAX = VoiceOfMLSnapshotPolicy.BYTES_MAX;
 const resultSnapshots = VoiceOfMLResultSnapshots.create({
   cloneResult: record => cloneSearchResult(record),
   measurementKey: () => getHeightMeasurementKey(),
@@ -2369,9 +2325,6 @@ async function fetchPositionPage(query, page, signal, anchorId) {
   }
 }
 
-function trimSearchViewSnapshots() {
-  resultSnapshots.trim();
-}
 /** @type {VoiceOfMLSearchViewMemo | null} */
 let searchViewKeyMemo = null;
 
@@ -2937,7 +2890,6 @@ function setupSearchInput() {
     onState: state => {
       searchTimer = state.timer;
       searchComposing = state.composing;
-      searchInputReady = state.ready;
       initialSearchDraft = state.dirty;
     }
   });
@@ -3196,8 +3148,6 @@ function getResultRows() {
   });
   return resultRows;
 }
-/** @param {VoiceOfMLResultRecord} rec @param {number} idx */
-function buildResultHTML(rec, idx) { return getResultRows().buildHTML(rec, idx); }
 
 /** @type {ReaderAssetMap | null} */
 let refreshedReaderAssets = null;
@@ -3353,8 +3303,6 @@ function resetVirtualScrollState() { return getVirtualResults().resetVirtualScro
 function ensureVirtualHeights(len) { return getVirtualResults().ensureVirtualHeights(len); }
 function refreshVirtualAfterAppend(updateView = true) { return getVirtualResults().refreshVirtualAfterAppend(updateView); }
 function ensureVirtualViewportCovered() { return getVirtualResults().ensureVirtualViewportCovered(); }
-/** @param {number} [start] @param {number} [end] @param {{index: number, offset: number} | null} [anchor] */
-function measureHeights(start = VSCROLL.renderStart, end = VSCROLL.renderEnd, anchor = null) { return getVirtualResults().measureHeights(start, end, anchor); }
 
 function prepareRouteTransitionResults() {
   saveSearchViewSnapshot();
@@ -3567,16 +3515,6 @@ function renderRepoListItems(repos) {
   return getSidebarDirectoryView().repos(repos);
 }
 
-/** @param {number} [routeId] */
-function renderRepoList(routeId) {
-  return getSidebarDirectory().repos(routeId);
-}
-
-/** @param {HTMLElement} list @param {VoiceOfMLSidebarEntries} data @param {string} currentRepo @param {string} path */
-function renderBrowserListItems(list, data, currentRepo, path) {
-  return getSidebarDirectoryView().items(list, data, currentRepo, path);
-}
-
 /** @param {PagesSidebarFile} file @param {string} repo @param {string} path */
 function getBrowserReaderUrl(file, repo, path) {
   const name = getBrowserFileName(file);
@@ -3585,11 +3523,6 @@ function getBrowserReaderUrl(file, repo, path) {
   let record = { File: file.name, ...(file.ext === undefined ? {} : { Extension: file.ext }), Link: link };
   record = applyReaderAsset(record, repo, assetPath, link);
   return VoiceOfMLReader.readerUrl(record, "/search/static/reader.html");
-}
-
-/** @param {string} path */
-function createSidebarBreadcrumb(path) {
-  return getSidebarDirectoryView().breadcrumb(path);
 }
 
 /** @param {string} path @param {number} [routeId] */
@@ -3660,7 +3593,6 @@ function retainFilterRenderingForRoute(routeId) { return getSidebarFilters().ret
 function renderRepoFilter(routeId) { return getSidebarFilters().renderRepos(routeId); }
 /** @param {number} [routeId] */
 function renderExtensionFilter(routeId) { return getSidebarFilters().renderExtensions(routeId); }
-function renderFilterFolderTree() { getSidebarFilters(); sidebarFolderTree?.render(); }
 function refreshFilterFolderSelectionState() { getSidebarFilters(); sidebarFolderTree?.refresh(); }
 /** @param {boolean} collapsed */
 function setAllFoldersCollapsed(collapsed) { getSidebarFilters(); sidebarFolderTree?.setAllCollapsed(collapsed); }
@@ -4043,8 +3975,6 @@ function applyTheme() { getShell().applyTheme(); }
 function toggleMobile() { getShell().toggleMobile(); }
 function applyMobileMode() { getShell().applyMobileMode(); }
 function autoDetectMobile() { return window.innerWidth <= 768; }
-/** @param {HTMLElement} sidebar */
-function focusSearchSidebar(sidebar) { VoiceOfMLShellView.focusSearchSidebar(sidebar); }
 /** @param {VoiceOfMLShellEvent} [event] */
 function toggleLeftSidebar(event) { getShell().toggleLeftSidebar(event); }
 /** @param {VoiceOfMLShellEvent} [event] */

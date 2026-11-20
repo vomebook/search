@@ -16,7 +16,6 @@ function fixture(source, root) {
     STATE: { results: [], total: 0, _pageCache: {}, _loadedPage: 1 },
     DOM: { resultsContainer: {} }, VSCROLL: { heightCache: new Map(), estimatedHeight: 100 },
     searchPageMetadata: new WeakMap(),
-    SEARCH_VIEW_SNAPSHOT_BYTES_MAX: 8 * 1024 * 1024, SEARCH_VIEW_SNAPSHOT_MAX: 8,
     SEARCH_VIEW_SNAPSHOT_VERSION: 1, measuredHeightRevision: 0, positionRestore: null,
     getReturnPositionTarget: () => null, getHeightMeasurementKey: () => "layout",
     saveSearchPosition: () => ({ index: 0, offset: 0 }), checkSearchPageAppend: () => true,
@@ -31,7 +30,7 @@ function fixture(source, root) {
     const helper = source.match(new RegExp("^function " + name + "\\([^]*?^}", "m"));
     if (helper) vm.runInContext(helper[0], c);
   }
-  for (const name of ["cloneSearchResult", "cloneSearchPageCache", "trimSearchViewSnapshots",
+  for (const name of ["cloneSearchResult", "cloneSearchPageCache",
     "getSearchSnapshotResultsBytes", "extendSearchSnapshotBudget",
     "saveSearchViewSnapshot", "appendSearchResults"]) {
     const match = source.match(new RegExp("^function " + name + "\\([^]*?^}", "m"));
@@ -61,7 +60,7 @@ for (const { name: project, root } of searchTestProjects()) {
   });
   test(project + " oversized snapshots skip cloning and remember rejection across height changes and appends", () => {
     const {c,encoded,view} = fixture(source, root);
-    view([{File:"x".repeat(c.SEARCH_VIEW_SNAPSHOT_BYTES_MAX)}]);
+    view([{File:"x".repeat(c.VoiceOfMLSnapshotPolicy.BYTES_MAX)}]);
     c.cloneSearchResult = () => { throw Error("oversized results cloned"); };
     assert.strictEqual(c.saveSearchViewSnapshot(), null);
     const calls = encoded.length;

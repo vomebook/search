@@ -305,7 +305,7 @@ class ApiIntegrationTest(unittest.TestCase):
           // page 2 must still use the backend that supplied these rows.
           STATE.useLocalMode = true;
           displayedSearchView.key = getSearchViewKey();
-          cancelSearchPrefetch(); STATE._pageCache = {}; searchResponseCache.clear();
+          cancelSearchPrefetch(); STATE._pageCache = {}; searchResponseStore.cache.clear();
         }''')
         self.search_response_override = {"page": 2, "page_size": 100, "total": 200,
                                          "results": [result(f"API-{i}") for i in range(100, 200)]}
@@ -582,7 +582,7 @@ class ApiIntegrationTest(unittest.TestCase):
         self.assertIsInstance(self.page.evaluate("STATE.results"), list)
         self.assertIsInstance(self.page.evaluate("STATE.total"), int)
         self.assertTrue(self.page.evaluate(
-            "Array.from(searchResponseCache.values()).every(entry => entry.data && Array.isArray(entry.data.results))"
+            "Array.from(searchResponseStore.cache.values()).every(entry => entry.data && Array.isArray(entry.data.results))"
         ))
 
     def test_fractional_total_uses_unified_api_failure_fallback(self):
@@ -634,7 +634,7 @@ class ApiIntegrationTest(unittest.TestCase):
                 STATE._loadedPage = 1;
                 STATE.total = Math.max(STATE.total, STATE.pageSize * 3);
                 STATE._pageCache = {};
-                searchResponseCache.clear();
+                searchResponseStore.cache.clear();
                 let calls = 0;
                 const nativeFetch = window.fetch;
                 window.fetch = function(_input, options) {

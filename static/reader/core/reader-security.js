@@ -210,7 +210,6 @@ function (root) {
     return /** @type {import('../../../typings/reader-security-strict').ValidatedPdfPageManifest} */ (/** @type {unknown} */ (manifest));
   }
   const PDF_OCR_PATH = /^objects\/[0-9a-f]{2}\/[0-9a-f]{64}\/(?:[0-9a-f]{16}\/)?ocr\/(?:page-[0-9]{6}\.json\.gz|book-text\.json\.gz)$/;
-  const PDF_OCR_MANIFEST_PATH = /^objects\/[0-9a-f]{2}\/[0-9a-f]{64}\/(?:[0-9a-f]{16}\/)?ocr-manifest\.json$/;
   const PDF_OCR_PAGE_PATH = /^objects\/[0-9a-f]{2}\/[0-9a-f]{64}\/(?:[0-9a-f]{16}\/)?pages\/page-[0-9]{6}\.(?:webp|jxl|png)$/;
   const PDF_OCR_ROOT = /^(objects\/[0-9a-f]{2}\/[0-9a-f]{64}(?:\/[0-9a-f]{16})?)/;
   /** @param {unknown} path */

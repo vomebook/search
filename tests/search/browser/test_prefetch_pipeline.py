@@ -100,14 +100,15 @@ class PrefetchPipelineTests(unittest.TestCase):
         self.start_pipeline()
         self.fixture.reach_bottom()
         self.page.evaluate('''() => {
-          window.pageWork=[];const list=DOM.resultsList,insert=list.insertBefore,write=searchResponseCache.set;
+          window.pageWork=[];const list=DOM.resultsList,insert=list.insertBefore;
+          const cache=searchResponseStore.cache,write=cache.set;
           // Observe actual row publication, including module-internal renders.
           list.insertBefore=function(row,before){
             const result=insert.call(this,row,before);
             if(STATE._loadedPage>=2 && row.classList?.contains('result-item')) pageWork.push('render');
             return result;
           };
-          searchResponseCache.set=function(key,value){
+          cache.set=function(key,value){
             if(value.data.page===2) pageWork.push('cache');return write.call(this,key,value);
           };
           aheadReleases[2]();
@@ -181,7 +182,7 @@ class PrefetchPipelineTests(unittest.TestCase):
     def test_matching_saved_pages_avoid_network_and_old_generation_is_rejected(self):
         result = self.page.evaluate('''async () => {
           cancelSearchPrefetch();
-          STATE._pageCache={};searchResponseCache.clear();positionPersistence.recentPages.clear();
+          STATE._pageCache={};searchResponseStore.cache.clear();positionPersistence.recentPages.clear();
           const key=getSearchViewKey();const template={q:STATE.query,page:1,page_size:100};
           const metadata={generation:'stable',page:1,page_size:100,total:STATE.total,results:STATE.results};
           rememberSearchPageMetadata(metadata);
@@ -199,7 +200,7 @@ class PrefetchPipelineTests(unittest.TestCase):
             while(controllerActive()) await new Promise(resolve=>setTimeout(resolve,0));
             const reused=Object.keys(STATE._pageCache).map(Number);
             const calls=networkPages.slice();
-            cancelSearchPrefetch();STATE._pageCache={};searchResponseCache.clear();
+            cancelSearchPrefetch();STATE._pageCache={};searchResponseStore.cache.clear();
             cached.forEach(entry=>positionPersistence.recentPages.set(JSON.stringify(entry.id), {...entry,generation:'old'}));
             prefetchSearchPages('/api/search',template);
             while(controllerActive()) await new Promise(resolve=>setTimeout(resolve,0));

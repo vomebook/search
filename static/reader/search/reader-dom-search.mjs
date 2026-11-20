@@ -346,8 +346,8 @@ export function createReaderDomSearch({
       return { label: boundaries[low - 1]?.label };
     };
   }
-  /** @param {Node} node @param {string} fallback @param {number} offset @param {number} total @param {DomSearch.HeadingLookup | null} [headingLookup] @param {HTMLElement | null} [parent] */
-  function fullSearchLocation(node, fallback, offset, total, headingLookup = null, parent = node.parentElement) {
+  /** @param {Node} node @param {number} offset @param {number} total @param {DomSearch.HeadingLookup | null} [headingLookup] @param {HTMLElement | null} [parent] */
+  function fullSearchLocation(node, offset, total, headingLookup = null, parent = node.parentElement) {
     const page = parent && parent.closest("[data-page]");
     if (page) return `第 ${/** @type {HTMLElement} */ (page).dataset.page} 页`;
     const indexed = headingLookup?.(offset);
@@ -460,7 +460,7 @@ export function createReaderDomSearch({
     const resultFor = (match) => {
       const part = offsets[locateIndex(match.index)];
       return {
-        location: part ? fullSearchLocation(part.node || part.parent, fallback, match.index, text.length, headingLookup, part.parent) : fallback,
+        location: part ? fullSearchLocation(part.node || part.parent, match.index, text.length, headingLookup, part.parent) : fallback,
         snippet: fullSearchSnippet(text, match.index, match.value.length),
         async activate(navigationGeneration = runtime.currentGeneration("navigation")) {
           if (!isCurrent("navigation", navigationGeneration)) return false;

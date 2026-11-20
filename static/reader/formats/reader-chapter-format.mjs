@@ -192,8 +192,37 @@ export function createReaderChapterFormat(readerContext) {
           }
           }
         : null;
+    /** @type {Map<string, string | null>} */
+    const resolvedChapterUrls = new Map();
     /** @param {import("../../../typings/reader-chapter-format-strict").Chapter} chapter */
-    const chapterUrl = (chapter) => readerContext.trustedChapterUrl(chapter.path, manifestBase);
+    const chapterUrl = (chapter) => {
+      let url = resolvedChapterUrls.get(chapter.path);
+      if (url === undefined) {
+        url = readerContext.trustedChapterUrl(chapter.path, manifestBase);
+        resolvedChapterUrls.set(chapter.path, url);
+      }
+      return url;
+    };
+    /** @type {Map<string, import("../../../typings/reader-chapter-format-strict").Chapter> | null} */
+    let chaptersByUrl = null;
+    let indexedChapterCount = 0;
+    /** @param {string} href */
+    const chapterAtUrl = (href) => {
+      const byUrl = chaptersByUrl ??= new Map();
+      const indexed = byUrl.get(href);
+      if (indexed) return indexed;
+      // Extend only on demand, in manifest order (not chapter load order),
+      // so duplicate URLs still resolve to the first chapter.
+      while (indexedChapterCount < manifest.chapters.length) {
+        const chapter = /** @type {import("../../../typings/reader-chapter-format-strict").Chapter} */ (manifest.chapters[indexedChapterCount]);
+        const url = chapterUrl(chapter);
+        indexedChapterCount++;
+        if (url === null || byUrl.has(url)) continue;
+        byUrl.set(url, chapter);
+        if (url === href) return chapter;
+      }
+      return null;
+    };
     /** @param {number} index */
     const chapterAt = (index) => chapterByIndex.get(index) || null;
     /** @param {number} index @param {string} selector */
@@ -202,11 +231,11 @@ export function createReaderChapterFormat(readerContext) {
         if (Number(/** @type {HTMLElement} */ (node).dataset.chapter) > index) return node;
       return null;
     };
-    /** @param {string} raw @param {string} base @param {string} attribute */
-    const resourceUrl = (raw, base, attribute) => {
+    /** @param {string} raw @param {string} base */
+    const resourceUrl = (raw, base) => {
       const value = String(raw || "").trim();
       if (!value || value.startsWith("#")) return null;
-      return readerContext.trustedChapterResourceUrl(value, base, attribute, manifestBase);
+      return readerContext.trustedChapterResourceUrl(value, base, manifestBase);
     };
     /** @param {HTMLElement} article */
     const insertChapter = (article) => {
@@ -368,7 +397,7 @@ export function createReaderChapterFormat(readerContext) {
                 const value = element.getAttribute(name) || "";
                 if (name === "href" && element.localName === "a" &&
                     readerContext.trustedChapterReferenceUrl(value, url, manifestBase)) continue;
-                const resolved = resourceUrl(value, url, name === "href" ? "href" : "resource");
+                const resolved = resourceUrl(value, url);
                 if (resolved) element.setAttribute(name, resolved);
                 else if (!(name === "href" && value.startsWith("#"))) element.removeAttribute(name);
               }
@@ -511,9 +540,8 @@ export function createReaderChapterFormat(readerContext) {
         return;
       const current = chapterAt(Number(article.dataset.chapter));
       const destination = readerContext.trustedChapterReferenceUrl(link.getAttribute("href"), chapterUrl(/** @type {import("../../../typings/reader-chapter-format-strict").Chapter} */ (current)), manifestBase);
-      const target = destination ? new URL(destination.url) : null;
       const fragment = destination?.fragment || "";
-      const chapter = target && manifest.chapters.find((item) => chapterUrl(item) === target.href);
+      const chapter = destination && chapterAtUrl(new URL(destination.url).href);
       if (!chapter) {
         // A stale or missing book document must not navigate out to an asset 404.
         if (/\.(?:xhtml?|html?)(?:$|#)/i.test(link.getAttribute("href") || "")) {
@@ -744,7 +772,6 @@ export function createReaderChapterFormat(readerContext) {
     chapterWindowReady = true;
     if (readerContext.isReaderGenerationCurrent("navigation", openingGeneration)) readerContext.chapterScrollAnchors.invalidate();
     for (const article of frame.querySelectorAll(".reader-epub-chapter")) readerContext.chapterScrollAnchors.observe(article);
-      frame.style.overflowAnchor = "none";
     scheduleChapterWindow();
     readerContext.assertReaderActive();
     readerContext.markReaderContentReady();

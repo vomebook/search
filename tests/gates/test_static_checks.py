@@ -158,8 +158,30 @@ class StaticGateTests(unittest.TestCase):
     def test_javascript_reports_undefined_names_and_ignores_vendor(self):
         eslint = ROOT / "node_modules/eslint/bin/eslint.js"
         self.assert_check(self.run_check("node", eslint, "static"), True, "")
-        (self.root / "static/main.js").write_text("console.log(missingStaticGateName);\n")
+        main = self.root / "static/main.js"
+        main.write_text("console.log(missingStaticGateName);\n")
         self.assert_check(self.run_check("node", eslint, "static"), False, "no-undef")
+        # Classic worker scripts have an explicit cross-file interface, but a
+        # newly declared global (or skipped leading parameter) must fail lint.
+        probe = ("\nconst unusedWorkerGlobal = 1;\n"
+                 "function workerLintProbe(unusedWorkerArg, value) { return value; }\n"
+                 "workerLintProbe(0, 1);\n")
+        main.write_text(probe)
+        self.assert_check(self.run_check("node", eslint, "static/main.js"), True, "")
+        for relative in ("static/search/index-worker.js", "static/search/worker/domain/text.js",
+                         "static/search/worker/domain/intersection.js"):
+            with self.subTest(source=relative):
+                fixture = self.root / relative
+                fixture.parent.mkdir(parents=True, exist_ok=True)
+                original = (ROOT / relative).read_text()
+                fixture.write_text(original)
+                check = ["node", eslint, relative]
+                self.assert_check(self.run_check(*check), True, "")
+                fixture.write_text(original + probe)
+                result = self.run_check(*check)
+                self.assert_check(result, False, "no-unused-vars")
+                self.assertIn("'unusedWorkerGlobal'", result.stdout)
+                self.assertIn("'unusedWorkerArg'", result.stdout)
 
     def test_python_reports_undefined_names_and_duplicate_tests(self):
         check = [sys.executable, "-B", "scripts/check_python_static.py"]
@@ -220,22 +242,35 @@ class StaticGateTests(unittest.TestCase):
             ("noImplicitReturns", "TS7030", """
 /** @param {boolean} active */
 function readCount(active) { if (active) return 1; }
+readCount(true);
 """),
             ("noImplicitOverride", "TS4119", """
 class BaseProbe { clear() {} }
 class CacheProbe extends BaseProbe { clear() {} }
+new CacheProbe().clear();
 """),
             ("noFallthroughCasesInSwitch", "TS7029", """
 /** @param {number} value */
 function update(value) { switch (value) { case 0: value++; case 1: break; } }
+update(0);
 """),
             ("noUncheckedIndexedAccess", "TS2322", """
 /** @param {string[]} values @returns {string} */
 function firstValue(values) { return values[0]; }
+firstValue(["ok"]);
 """),
             ("exactOptionalPropertyTypes", "TS2375", """
 /** @type {{signal?: AbortSignal}} */
 const options = {signal: undefined};
+console.log(options);
+"""),
+            ("noUnusedLocals", "TS6133: 'unusedBinding'", """
+const unusedBinding = 1;
+"""),
+            ("noUnusedParameters", "TS6133: 'unusedParameter'", """
+/** @param {number} value @param {number} unusedParameter */
+function keepValue(value, unusedParameter) { return value; }
+keepValue(1, 2);
 """),
         )
         source = self.root / "static/strict-options-probe.js"

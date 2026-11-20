@@ -2818,7 +2818,7 @@ class ReaderRefactorTest(unittest.TestCase):
                   const page = part.node.parentElement.closest('[data-page]');
                   const expected = page ? '第 ' + page.dataset.page + ' 页' :
                     heading ? heading.label : '正文 ' + Math.min(100, Math.floor(part.start / Math.max(1,length) * 100)) + '%';
-                  return [window.__domSearchTools.location(part.node, '', part.start, length, lookup), expected];
+                  return [window.__domSearchTools.location(part.node, part.start, length, lookup), expected];
                 });
                 const pairs = compare();
                 setToc([...navigationState.tocEntries].reverse());

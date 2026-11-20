@@ -223,7 +223,7 @@ class ReaderHostHistoryRaceTests(unittest.TestCase):
             self.page.evaluate('''async url => {
               history.replaceState(null, '', url);
               await persistSearchSession();
-              const db = await openSearchSessionDB();
+              const db = await searchSession.openSearchSessionDB();
               const saved = await new Promise((resolve, reject) => {
                 const request = db.transaction('session', 'readonly').objectStore('session').get('last-search');
                 request.onsuccess = () => resolve(request.result);
@@ -296,9 +296,14 @@ class ReaderHostHistoryRaceTests(unittest.TestCase):
             self.page.wait_for_timeout(10)
         self.assertEqual(len(held), 1)
         route = held.pop()
-        route.fulfill(response=route.fetch())
+        response = route.fetch()
+        source = response.text()
+        startup = 'finishInitialSearchInput(initialDraftCurrent);'
+        self.assertEqual(source.count(startup), 1)
+        route.fulfill(response=response, body=source.replace(
+            startup, startup + ' window.__testSearchInputReady = true;'))
         self.page.unroute(pattern, hold_app)
-        self.page.wait_for_function('typeof searchInputReady !== "undefined" && searchInputReady')
+        self.page.wait_for_function('window.__testSearchInputReady === true')
         self.assertFalse(field.evaluate('input => "_earlySearchInput" in input'))
         self.assertEqual(self.page.evaluate('searchComposing'), mode == 'spanning')
         current_query = 'paging-before-bind-B' if navigate else 'paging-before-bind'

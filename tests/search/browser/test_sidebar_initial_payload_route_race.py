@@ -99,7 +99,7 @@ class SidebarInitialPayloadRouteRaceTests(unittest.TestCase):
         # The original URL synchronization also writes the normalized route to
         # the existing search session; wait for that actual IndexedDB write.
         self.page.wait_for_function('''async () => {
-          const db = await openSearchSessionDB();
+          const db = await searchSession.openSearchSessionDB();
           try {
             const record = await new Promise((resolve, reject) => {
               const request = db.transaction('session', 'readonly').objectStore('session').get('last-search');
@@ -196,7 +196,7 @@ class SidebarInitialPayloadRouteRaceTests(unittest.TestCase):
         self.assertEqual(result["path"], "")
         self.assertEqual(parse_qs(result["hash"].partition("?")[2]).get("path"), ["docs"])
         self.page.wait_for_function('''async expected => {
-          const db = await openSearchSessionDB();
+          const db = await searchSession.openSearchSessionDB();
           try {
             const record = await new Promise((resolve, reject) => {
               const request = db.transaction('session', 'readonly').objectStore('session').get('last-search');
@@ -240,7 +240,7 @@ class SidebarInitialPayloadRouteRaceTests(unittest.TestCase):
           const path = STATE.browserPath;
           const initialUrl = getInitialPayloadUrl();
           initialPayloadCache.delete(initialUrl);
-          searchResponseCache.clear();
+          searchResponseStore.cache.clear();
           fetchJsonWithTimeout = (url, ...args) => url === initialUrl ? held : previous(url, ...args);
           try {
             const pending = tryInitialSearchPayload(STATE.mode, STATE.repo);

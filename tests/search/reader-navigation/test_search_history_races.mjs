@@ -36,7 +36,7 @@ function fixture(names, values = {}) {
 function transportFixture() {
   let now = 0, timerId = 0;
   const timers = new Map(), calls = [];
-  const names = ['getSearchTransport', 'createSearchPageRequest', 'fetchSearchPage', 'expireSearchRequests'];
+  const names = ['getSearchTransport', 'fetchSearchPage', 'expireSearchRequests'];
   if (source.includes('function normalizeSearchError(')) names.push('normalizeSearchError', 'suspendSearchRequests', 'resumeSearchRequests');
   const c = fixture(names, {DOMException, document:{hidden:false}, APPEND_REQUEST_TIMEOUT:50,
     Date:{now:()=>now}, getCorpusClient:()=>({expireRequests(){}}), scheduleScrollRecovery(){},
@@ -44,9 +44,9 @@ function transportFixture() {
     clearTimeout(id){timers.delete(id);},
     isValidSearchResponse:()=>true,
     fetch(url, options){return new Promise((resolve,reject)=>calls.push({url,...options,resolve,reject}));}});
-  c.pendingSearchPages = c.getSearchTransport().pending;
+  const transport = c.getSearchTransport();
   const body = {page:2,page_size:1};
-  return {c,calls,timers,body, now(value){now=value;},
+  return {c,transport,calls,timers,body, now(value){now=value;},
     fetch(signal, timeout=100){return c.fetchSearchPage('shared','/search',body,signal,timeout);},
     reply(index, value){calls[index].resolve({ok:true,json:async()=>value});},
     async flush(){for(let i=0;i<12;i++) await Promise.resolve();}};
@@ -55,14 +55,14 @@ function transportFixture() {
 test('real transport joins subscribers, preserves signal-less ownership and cancels the final owner', async () => {
   const f=transportFixture(), owner=new AbortController();
   const first=f.fetch(owner.signal).catch(error=>error.name), remaining=f.fetch();
-  const entry=f.c.pendingSearchPages.get('shared');
+  const entry=f.transport.pending.get('shared');
   assert.equal(f.calls.length,1);assert.equal(entry.listeners.size,2);
   owner.abort();assert.equal(await first,'AbortError');assert.equal(f.calls[0].signal.aborted,false);
   const data={page:2};f.reply(0,data);assert.equal(await remaining,data);
-  assert.equal(entry.listeners.size,0);assert.equal(f.c.pendingSearchPages.size,0);assert.equal(f.timers.size,0);
+  assert.equal(entry.listeners.size,0);assert.equal(f.transport.pending.size,0);assert.equal(f.timers.size,0);
   const last=new AbortController(), abandoned=f.fetch(last.signal).catch(error=>error.name);
   last.abort();assert.equal(await abandoned,'AbortError');await f.flush();
-  assert.equal(f.calls[1].signal.aborted,true);assert.equal(f.c.pendingSearchPages.size,0);
+  assert.equal(f.calls[1].signal.aborted,true);assert.equal(f.transport.pending.size,0);
   const cancelled=new AbortController();cancelled.abort();
   assert.equal(await f.fetch(cancelled.signal).catch(error=>error.name),'AbortError');assert.equal(f.calls.length,2);
 });
@@ -70,13 +70,13 @@ test('real transport joins subscribers, preserves signal-less ownership and canc
 test('deadline mutation expires all joiners and stale cleanup cannot delete the replacement', async () => {
   const f=transportFixture(), owner=new AbortController();
   const first=f.fetch().catch(error=>error.message), joined=f.fetch(owner.signal).catch(error=>error.message);
-  const old=f.c.pendingSearchPages.get('shared');old.deadline=-1;
+  const old=f.transport.pending.get('shared');old.deadline=-1;
   const replacement=f.fetch();
   assert.equal(f.calls.length,2);assert.equal(f.calls[0].signal.aborted,true);
-  const current=f.c.pendingSearchPages.get('shared');assert.notEqual(current,old);
+  const current=f.transport.pending.get('shared');assert.notEqual(current,old);
   assert.equal(await first,'API_TIMEOUT');assert.equal(await joined,'API_TIMEOUT');
-  assert.equal(f.c.pendingSearchPages.get('shared'),current);assert.equal(old.listeners.size,0);
-  f.reply(0,{stale:true});await f.flush();assert.equal(f.c.pendingSearchPages.get('shared'),current);
+  assert.equal(f.transport.pending.get('shared'),current);assert.equal(old.listeners.size,0);
+  f.reply(0,{stale:true});await f.flush();assert.equal(f.transport.pending.get('shared'),current);
   const data={fresh:true};f.reply(1,data);assert.equal(await replacement,data);assert.equal(f.timers.size,0);
 });
 
@@ -85,19 +85,19 @@ test('deadline timer and explicit expiry settle a stalled body and retain the fi
     const f=transportFixture(), pending=f.fetch().catch(error=>error.message);
     const joined=f.fetch(undefined,1000).catch(error=>error.message);
     let release;f.calls[0].resolve({ok:true,json:()=>new Promise(resolve=>{release=resolve;})});await f.flush();
-    assert.equal(f.c.pendingSearchPages.get('shared').deadline,100);assert.equal(f.timers.size,1);
+    assert.equal(f.transport.pending.get('shared').deadline,100);assert.equal(f.timers.size,1);
     if(explicit){f.now(100);f.c.expireSearchRequests();}else [...f.timers.values()][0].fn();
     assert.equal(await pending,'API_TIMEOUT');assert.equal(await joined,'API_TIMEOUT');
-    release({late:true});await f.flush();assert.equal(f.c.pendingSearchPages.size,0);assert.equal(f.timers.size,0);
+    release({late:true});await f.flush();assert.equal(f.transport.pending.size,0);assert.equal(f.timers.size,0);
   }
 });
 
 if (source.includes('function suspendSearchRequests(')) test('resume retains joined ownership and ignores the previous connection body', async () => {
   const f=transportFixture(), first=f.fetch(), joined=f.fetch();
   let release;f.calls[0].resolve({ok:true,json:()=>new Promise(resolve=>{release=resolve;})});await f.flush();
-  const entry=f.c.pendingSearchPages.get('shared');f.c.suspendSearchRequests();f.now(20);f.c.resumeSearchRequests();
+  const entry=f.transport.pending.get('shared');f.c.suspendSearchRequests();f.now(20);f.c.resumeSearchRequests();
   assert.equal(f.calls.length,2);assert.equal(f.calls[0].signal.aborted,true);
-  assert.equal(f.c.pendingSearchPages.get('shared'),entry);assert.equal(entry.deadline,70);assert.equal(entry.listeners.size,2);
+  assert.equal(f.transport.pending.get('shared'),entry);assert.equal(entry.deadline,70);assert.equal(entry.listeners.size,2);
   let settled=false;first.then(()=>{settled=true;});release({stale:true});await f.flush();assert.equal(settled,false);
   const fresh={fresh:true};f.reply(1,fresh);assert.equal(await first,fresh);assert.equal(await joined,fresh);
   assert.equal(f.timers.size,0);assert.equal(entry.listeners.size,0);
@@ -471,15 +471,14 @@ test('app adapter publishes readable input state and delegates submit with histo
     submitSearchQuery(query, options) { queries.push([query, {...options}]); }
   });
   c.setupSearchInput();
-  assert.equal(c.searchInputReady, false, 'mounting alone does not complete startup');
+  assert.equal(c.initialSearchDraft, false);
   input.dispatchEvent(new Event('input'));
-  assert.equal(c.searchInputReady, false, 'early input waits for route initialization');
+  assert.equal(c.initialSearchDraft, true, 'early input is held as a draft until startup finishes');
   assert.equal(c.searchTimer, null);
   assert.equal(callback, undefined);
   c.finishInitialSearchInput(c.initialSearchDraftIsCurrent());
-  assert.equal(c.searchInputReady, true, 'the controller publishes completed startup');
-  input.dispatchEvent(new Event('input'));
-  assert.equal(c.searchTimer, 42);
+  assert.equal(c.initialSearchDraft, false, 'finishing startup consumes the draft');
+  assert.equal(c.searchTimer, 42, 'the draft is scheduled without a second input event');
   callback();
   assert.equal(c.searchTimer, null);
   assert.deepEqual(queries, [['adapter draft', {record: true, refreshHistory: true}]]);
