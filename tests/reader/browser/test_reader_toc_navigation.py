@@ -363,8 +363,12 @@ class TocNavigationTests(unittest.TestCase):
         held = []
         target = '**/api/reader-bucket-resource?path=*chapter-0010.xhtml'
 
+        def hold_target(route):
+            held.append(route)
+            self.page.evaluate('() => { window.__tocTargetHeld = true; }')
+
         def delay_chapter():
-            self.page.route(target, lambda route: held.append(route))
+            self.page.route(target, hold_target)
 
         # The row click, not ambient prefetch, must request the target chapter.
         self.page.add_init_script("Object.defineProperty(document, 'hidden', {value:true})")
@@ -374,6 +378,8 @@ class TocNavigationTests(unittest.TestCase):
         self.page.locator('#toc-tab').click()
         with self.page.expect_request(target):
             self.page.locator('#toc-list [data-toc-index="9"] [role="link"]').click()
+        # Playwright's request event can precede execution of its route handler.
+        self.page.wait_for_function('() => window.__tocTargetHeld === true')
         self.assertEqual(len(held), 1, 'target chapter request was not held')
         self.assertIsNone(self.offset_of('.reader-epub-chapter[data-chapter="10"]'))
         self.assertTrue(self.panel_open(), 'the drawer should remain open until the chapter lands')
