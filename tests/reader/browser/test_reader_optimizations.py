@@ -1057,6 +1057,112 @@ class ReaderOptimizationTests(unittest.TestCase):
         self.assertEqual(data['reads'],0,data)
         self.assertEqual(data['actual'],data['expected'],data)
 
+    def test_pdf_scroll_window_matches_linear_lookup_with_logarithmic_reads(self):
+        engine = '''export const GlobalWorkerOptions = {};
+          export class PDFWorker { promise = Promise.resolve(); destroy() {} }
+          export function getDocument() {
+            return {promise: Promise.resolve({numPages: 17009, getPage: async number => ({
+              getViewport: ({scale}) => ({width: 600 * scale, height: [740, 450, 610][number % 3] * scale}),
+              getTextContent: async () => ({items: []}),
+              render: () => ({promise: Promise.resolve(), cancel() {}})
+            })})};
+          }'''
+        self.page.route('**/static/vendor/pdf.min.*.mjs', lambda route: route.fulfill(
+            content_type='text/javascript', body=engine))
+        self.serve(b'pdf', 'application/pdf')
+        self.page.set_viewport_size(dict(width=390, height=800))
+        self.open(self.reader_url('pdf', 'chunk-lookup'))
+        self.page.locator('.reader-page[data-page="2"] canvas.ready').wait_for(state='attached')
+        result = self.page.evaluate('''async () => {
+          const viewport = document.querySelector('#viewport'), root = document.querySelector('#content');
+          const chunks = [...root.querySelectorAll('.reader-pdf-chunk')];
+          const edgeChunk = 190;
+          const native = Object.fromEntries(['offsetTop', 'offsetHeight'].map(key =>
+            [key, Object.getOwnPropertyDescriptor(HTMLElement.prototype, key).get]));
+          const end = chunk => native.offsetTop.call(chunk) + native.offsetHeight.call(chunk);
+          const settle = () => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+          const mounted = () => chunks.flatMap((chunk, index) => chunk.firstElementChild ? [index] : []);
+          let recordRead;
+          for (const chunk of chunks) for (const [key, get] of Object.entries(native))
+            Object.defineProperty(chunk, key, {configurable: true, get() {
+              recordRead?.();
+              return get.call(this);
+            }});
+          // Keep the center marker integral so it can land on an exact chunk end.
+          viewport.style.flex = 'none';
+          viewport.style.height = '600px';
+          viewport.style.overflowX = 'hidden';
+          viewport.style.overflowAnchor = 'none';
+          const probe = async (label, scrollTop) => {
+            await settle();
+            const done = Promise.withResolvers();
+            let reads = 0, first, delta;
+            // Sample the live layout immediately before sync changes the mounted set.
+            recordRead = () => {
+              if (reads++) return;
+              const marker = viewport.scrollTop + viewport.clientHeight / 2;
+              const ends = chunks.map(end);
+              first = ends.findIndex(bottom => bottom > marker);
+              delta = marker - ends[edgeChunk];
+              queueMicrotask(() => done.resolve(mounted()));
+            };
+            const timer = setTimeout(() => done.reject(Error(`No chunk lookup for ${label}`)), 2000);
+            let actual;
+            try {
+              viewport.scrollTop = scrollTop();
+              actual = await done.promise;
+            } finally {
+              clearTimeout(timer);
+              recordRead = null;
+            }
+            const index = first < 0 ? chunks.length - 1 : first;
+            const expected = chunks.flatMap((_, i) => Math.abs(i - index) <= 2 ? [i] : []);
+            return {label, reads, first, actual, expected, delta};
+          };
+          const heights = new Set([...chunks[0].children].map(page => page.offsetHeight));
+          const probes = [];
+          for (const delta of [-1, 0, 1]) probes.push(await probe(`edge ${delta}`, () =>
+            end(chunks[edgeChunk]) - viewport.clientHeight / 2 + delta));
+          const beforeZoom = end(chunks[380]);
+          const zoom = document.querySelector('#zoom');
+          zoom.value = '150';
+          zoom.dispatchEvent(new Event('change'));
+          probes.push(await probe('after zoom', () => end(chunks[380]) - viewport.clientHeight / 2 - 5));
+          const zoomed = end(chunks[380]) > beforeZoom;
+          // A trailing spacer lets a real scroll put the marker past the final chunk.
+          const tail = document.createElement('div');
+          tail.style.height = '1200px';
+          root.append(tail);
+          probes.push(await probe('past end', () => viewport.scrollHeight));
+          probes.push(await probe('back to top', () => 0));
+          window.__probePdfChunkScroll = probe;
+          return {count: chunks.length, mixedHeights: heights.size > 1, zoomed, probes};
+        }''')
+        self.assertEqual(result['count'], 532)
+        self.assertTrue(result['mixedHeights'] and result['zoomed'], result)
+        probes = result['probes']
+        self.assertEqual([sample['first'] for sample in probes], [190, 191, 191, 380, -1, 0], probes)
+        self.assertLess(probes[0]['delta'], 0, probes)
+        self.assertEqual(probes[1]['delta'], 0, probes)
+        self.assertGreater(probes[2]['delta'], 0, probes)
+        for sample in probes:
+            with self.subTest(probe=sample['label']):
+                self.assertEqual(sample['actual'], sample['expected'])
+                self.assertGreater(sample['reads'], 0)
+                self.assertLessEqual(sample['reads'], 2 * result['count'].bit_length(), sample)
+
+        # At desktop width and 400% zoom the estimated stack exceeds browser
+        # layout limits. Keep the legacy scan on this geometry.
+        self.page.set_viewport_size(dict(width=1100, height=800))
+        self.page.locator('#zoom').evaluate('''zoom => {
+          zoom.value = '400';
+          zoom.dispatchEvent(new Event('change'));
+        }''')
+        sample = self.page.evaluate("""() => __probePdfChunkScroll('oversized stack',
+          () => document.querySelector('#viewport').scrollHeight)""")
+        self.assertEqual(sample['actual'], sample['expected'], sample)
+        self.assertEqual(sample['reads'], 2 * (result['count'] if sample['first'] < 0 else sample['first'] + 1), sample)
+
     def test_pdf_chunk_layout_batches_reads_and_preserves_protected_pages(self):
         self.expose()
         self.serve('chunk layout fixture')

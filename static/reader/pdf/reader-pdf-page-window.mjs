@@ -358,9 +358,25 @@ export function createReaderPdfPageWindow(readerContext) {
     function sync() {
       frame = 0;
       if (disposed) return;
-      const marker = readerContext.viewport.scrollTop + readerContext.viewport.clientHeight / 2;
-      const index = chunks.findIndex((chunk) => chunk.element.offsetTop + chunk.element.offsetHeight > marker);
-      show(index < 0 ? chunks.length - 1 : index);
+      const { viewport } = readerContext;
+      const marker = viewport.scrollTop + viewport.clientHeight / 2;
+      /** @param {import('../../../typings/reader-page-window-strict').PdfWindowChunk} chunk */
+      const endsAfterMarker = ({ element }) => element.offsetTop + element.offsetHeight > marker;
+      // The flow-root block stack is ordered until layout coordinates saturate
+      // or wrap. Gecko can wrap chunk offsets once the stack exceeds ~35.8M px;
+      // the viewport then reports ~8.95M px. Retain the linear rule for large stacks.
+      if (viewport.scrollHeight >= 8 * 1024 * 1024) {
+        const index = chunks.findIndex(endsAfterMarker);
+        show(index < 0 ? chunks.length - 1 : index);
+        return;
+      }
+      let low = 0, high = chunks.length;
+      while (low < high) {
+        const mid = (low + high) >>> 1;
+        if (endsAfterMarker(/** @type {import('../../../typings/reader-page-window-strict').PdfWindowChunk} */ (chunks[mid]))) high = mid;
+        else low = mid + 1;
+      }
+      show(Math.min(low, chunks.length - 1));
     }
     mount(/** @type {import('../../../typings/reader-page-window-strict').PdfWindowChunk} */ (chunks[0]));
     const resizeObserver = new ResizeObserver(() => resize());
