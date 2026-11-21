@@ -37,6 +37,8 @@
     /** @param {boolean} isDark */
     function applyTheme(isDark) {
       const el = elements();
+      document.documentElement.setAttribute("data-theme", isDark ? "dark" : "light");
+      document.querySelector('meta[name="theme-color"]')?.setAttribute("content", isDark ? "#1a1c1e" : "#fdfbff");
       el.themeBtn.setAttribute('aria-label', isDark ? '切换到浅色主题' : '切换到深色主题');
       if (isDark) {
         document.body.classList.remove("light");

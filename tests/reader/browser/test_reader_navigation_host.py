@@ -27,6 +27,29 @@ class ReaderNavigationHostTests(unittest.TestCase):
         self.assertEqual(self.fixture.errors, [])
         self.fixture.tearDown()
 
+    def test_search_startup_uses_preference_changed_while_entry_is_loading(self):
+        pending = []
+        self.page.route('**/static/app.js', lambda route: pending.append(route))
+        self.page.reload(wait_until='commit')
+        self.page.wait_for_function("document.documentElement.dataset.theme === 'dark'")
+        other = self.fixture.context.new_page()
+        other.goto(self.fixture.origin + '/search/manifest.json')
+        other.evaluate("localStorage.setItem('theme', 'light')")
+        other.close()
+        self.assertEqual(len(pending), 1)
+        pending.pop().continue_()
+        self.page.wait_for_function("typeof STATE !== 'undefined' && !STATE.isDark && document.documentElement.dataset.theme === 'light'")
+
+    def test_search_history_restore_resyncs_theme_without_ripple(self):
+        restored = self.page.evaluate('''() => {
+          localStorage.setItem('theme', 'light');
+          window.dispatchEvent(new PageTransitionEvent('pageshow', {persisted: true}));
+          return [STATE.isDark, getComputedStyle(document.documentElement).colorScheme,
+                  document.querySelector('meta[name="theme-color"]').content,
+                  !!document.querySelector('.theme-ripple')];
+        }''')
+        self.assertEqual(restored, [False, 'light', '#fdfbff', False])
+
     def test_bundled_shell_starts_without_separate_dependency_scripts(self):
         root = Path(__file__).resolve().parents[3]
         shell = subprocess.check_output(['node', '--input-type=module', '-e', '''
@@ -764,8 +787,23 @@ process.stdout.write(stripBundledScripts(readFileSync('static/index.html','utf8'
             self.assertEqual(self.page.url, search_url)
             self.assertTrue(self.page.evaluate('!readerHost.overlay && readerNavigation.backgroundReader === __speechFrame'))
             if reopen:
+                # Model a parked Reader that missed a preference update while
+                # hidden. Reopen must sync theme even before a frame is painted.
+                self.page.evaluate('''() => {
+                  STATE.isDark = false;
+                  applyTheme();
+                  __speechDocument.documentElement.classList.add('theme-transition');
+                  __speechFrame.contentWindow.addEventListener('voice-reader-overlay-resume', () => {
+                    const root = __speechDocument.documentElement;
+                    window.__resumedTheme = [root.dataset.theme, root.classList.contains('theme-transition'),
+                                             document.activeElement === __speechFrame];
+                  }, {once: true});
+                }''')
                 bar.get_by_role('button', name='返回阅读').click()
                 self.assertTrue(self.page.evaluate('readerHost.overlay === __speechFrame && __speechFrame.contentDocument === __speechDocument'))
+                self.assertEqual(self.page.evaluate('__resumedTheme'), ['light', False, False])
+                self.assertEqual(self.page.locator('.reader-overlay').evaluate('el => getComputedStyle(el).backgroundColor'),
+                                 'rgb(244, 245, 246)')
         bar.get_by_role('button', name='停止朗读并关闭阅读器').click()
         self.assertFalse(self.page.evaluate('__speechFrame.isConnected'))
 

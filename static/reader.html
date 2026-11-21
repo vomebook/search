@@ -9,6 +9,22 @@
       content="default-src 'self'; base-uri 'self' blob:; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline' blob:; font-src 'self' blob:; img-src 'self' data: blob: https:; media-src 'self' https://voiceofml-search.hf.space https://hf-mirror.com https://huggingface.co https://*.hf.co https://*.huggingface.co https://vomebook-hitokoto.hf.space blob:; connect-src 'self' blob: https://huggingface.co https://*.hf.co https://*.huggingface.co https://voiceofml-search.hf.space https://hf-mirror.com https://vomebook-hitokoto.hf.space; frame-src 'self' blob: https://voiceofml-search.hf.space;"
     />
     <title>VoiceOfML Reader</title>
+    <meta name="theme-color" content="#111315" />
+    <script>
+      (() => {
+        let theme;
+        try { if (parent !== window) theme = parent.document.documentElement.dataset.theme; } catch (_) {}
+        if (theme !== "light" && theme !== "dark") {
+          try { theme = localStorage.getItem("theme"); } catch (_) {}
+        }
+        document.documentElement.dataset.theme = theme === "light" ? "light" : "dark";
+        if (theme === "light") document.querySelector('meta[name="theme-color"]').setAttribute("content", "#f4f5f6");
+      })();
+    </script>
+    <style>
+      :root { color-scheme: dark; background: #111315; }
+      :root[data-theme="light"] { color-scheme: light; background: #f4f5f6; }
+    </style>
     <script>
       // Start source lookup before the Reader module graph loads; consume it once.
       (() => {

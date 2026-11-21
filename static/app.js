@@ -4147,6 +4147,22 @@ function setupResultDelegation() { getResultInteractions().installDelegation(); 
 
 async function init() {
   cacheDOM();
+  const syncStoredTheme = () => {
+    let theme;
+    try { theme = localStorage.getItem("theme"); } catch (_) { return; }
+    const isDark = theme !== "light";
+    if (STATE.isDark === isDark) return;
+    STATE.isDark = isDark;
+    applyTheme();
+  };
+  STATE.isDark = document.documentElement.dataset.theme !== "light";
+  // Storage may have changed while the deferred entry was loading.
+  try { STATE.isDark = localStorage.getItem("theme") !== "light"; } catch (_) {}
+  applyTheme();
+  window.addEventListener("storage", event => {
+    if (event.key === "theme" || event.key === null) syncStoredTheme();
+  });
+  window.addEventListener("pageshow", event => { if (event.persisted) syncStoredTheme(); });
   renderDownloadBatch();
   getSidebarScroll().install();
   syncSearchInputState();
@@ -4162,8 +4178,6 @@ async function init() {
   if ("scrollRestoration" in history) history.scrollRestoration = "manual";
   STATE.sessionRestored = await restoredSession;
   setupReaderIntentWarming();
-  STATE.isDark = readSearchPreference("theme") !== "light";
-  applyTheme();
   const savedMobile = readSearchPreference("mobileMode");
   if (savedMobile === "mobile") STATE.isMobile = true;
   else if (savedMobile === "desktop") STATE.isMobile = false;

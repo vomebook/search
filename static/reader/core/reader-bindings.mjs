@@ -375,17 +375,50 @@ export function createReaderBindings(readerContext) {
     readerContext.applyPageInversion();
   }
 
+  /** @param {string | null} theme @param {boolean} [resume] */
+  function syncReaderTheme(theme, resume = false) {
+    const next = theme === "light" ? "light" : "dark";
+    if (next !== readerContext.readerTheme || (resume && document.documentElement.classList.contains("theme-transition"))) {
+      readerContext.applyReaderTheme(next, false, false);
+    }
+  }
+
+  /** @param {boolean} [resume] */
+  function syncStoredReaderTheme(resume = false) {
+    try { syncReaderTheme(localStorage.getItem("theme"), resume); } catch (_) {}
+  }
+
+  function activeReaderTheme() {
+    // The Search shell also owns the first frame of embedded Readers when
+    // storage is unavailable or the preference changes during module loading.
+    try {
+      if (window.parent !== window) {
+        const theme = window.parent.document.documentElement.dataset.theme;
+        if (theme === "light" || theme === "dark") return theme;
+      }
+    } catch (_) {}
+    try { return localStorage.getItem("theme") === "light" ? "light" : "dark"; }
+    catch (_) { return readerContext.readerTheme; }
+  }
+
   function restoreReaderThemeAndBindReturn() {
     readerContext.readerThemeToggle.className = "theme-toggle";
 
-    readerContext.applyReaderTheme(readerContext.readerTheme, false, false);
+    readerContext.applyReaderTheme(activeReaderTheme(), false, false);
 
     readerContext.readerPath.addEventListener("click", readerContext.navigateReaderFolder);
     document.querySelector("#reader-panel-path")?.addEventListener("click", readerContext.navigateReaderFolder);
     let closing = false;
-    window.addEventListener("pageshow", event => { if (event.persisted) closing = false; });
+    window.addEventListener("pageshow", event => {
+      if (!event.persisted) return;
+      closing = false;
+      syncStoredReaderTheme(true);
+    });
     // A parked speech iframe is shown again without a document navigation.
-    window.addEventListener("voice-reader-overlay-resume", () => { closing = false; });
+    window.addEventListener("voice-reader-overlay-resume", () => {
+      closing = false;
+      syncReaderTheme(activeReaderTheme(), true);
+    });
     /** @type {Element} */ (document.querySelector("#back")).addEventListener("click", async () => {
       if (closing) return;
       closing = true;
@@ -676,7 +709,7 @@ export function createReaderBindings(readerContext) {
         window.parent.postMessage({ type: "voice-reader-theme", theme }, location.origin);
     });
     window.addEventListener("storage", (event) => {
-      if (event.key === "theme" && event.newValue) readerContext.applyReaderTheme(event.newValue, false);
+      if (event.key === "theme" || event.key === null) syncStoredReaderTheme();
     });
     window.addEventListener("voice-reader-capture-progress", event => {
       if (!readerContext.isReaderOverlayFrame()) return;
@@ -706,9 +739,10 @@ export function createReaderBindings(readerContext) {
         event.origin === location.origin &&
         event.source === window.parent &&
         event.data &&
-        event.data.type === "voice-reader-theme-state"
+        event.data.type === "voice-reader-theme-state" &&
+        (event.data.theme === "light" || event.data.theme === "dark")
       )
-        readerContext.applyReaderTheme(event.data.theme, false);
+        syncReaderTheme(event.data.theme);
     });
     /** @type {HTMLButtonElement} */ (document.querySelector("#history"))
       .addEventListener("click", (event) =>

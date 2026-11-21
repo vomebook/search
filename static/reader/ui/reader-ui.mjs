@@ -36,9 +36,14 @@ export function createReaderUi(readerContext) {
       clearTimeout(readerContext.themeAnimationTimer);
       document.documentElement.classList.add("theme-transition");
       void document.documentElement.offsetWidth;
+    } else {
+      clearTimeout(readerContext.themeAnimationTimer);
+      document.documentElement.classList.remove("theme-transition");
+      readerContext.readerThemeToggle.classList.remove("is-changing");
     }
     readerContext.readerTheme = theme === "light" ? "light" : "dark";
     document.documentElement.dataset.theme = readerContext.readerTheme;
+    document.querySelector('meta[name="theme-color"]')?.setAttribute("content", readerContext.readerTheme === "light" ? "#f4f5f6" : "#111315");
     readerContext.readerThemeToggle.innerHTML = readerContext.readerTheme === "dark" ? readerContext.THEME_MOON_ICON : readerContext.THEME_SUN_ICON;
     if (animate) {
       readerContext.readerThemeToggle.classList.remove("is-changing");

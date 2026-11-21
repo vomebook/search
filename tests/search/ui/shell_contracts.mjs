@@ -42,7 +42,8 @@ function fixture() {
   const leftControl = element('leftControl', DOM.leftSidebar), rightControl = element('rightControl', DOM.rightSidebar);
   DOM.leftSidebar.controls = [leftControl]; DOM.rightSidebar.controls = [rightControl];
   document.body = element('body'); document.documentElement = element('html');
-  document.querySelector = selector => { assert.equal(selector, '#main-content'); return main; };
+  const themeColor = element('theme-color');
+  document.querySelector = selector => selector === 'meta[name="theme-color"]' ? themeColor : main;
   document.createElement = () => element('ripple');
   const c = vm.createContext({shell: null, DOM, document,
     STATE: {isDark: true, isMobile: false, leftSidebarOpen: true, rightSidebarOpen: false},
@@ -63,7 +64,7 @@ function fixture() {
     const single = app.match(new RegExp('^function ' + name + '\\([^\\n]*\\}\\s*$', 'm'));
     assert.ok(single || match, name); vm.runInContext((single || match)[0], c);
   }
-  return {c, events, nodes, frames, messages, document, DOM, main, mainControl, leftControl, rightControl, element};
+  return {c, events, nodes, frames, messages, document, DOM, main, mainControl, leftControl, rightControl, element, themeColor};
 }
 
 test('shell modules are registered once in source, bundle, offline, resources and strict projects', async () => {
@@ -97,6 +98,8 @@ test('theme ripple, reader message, persistence and animation cleanup retain ord
   f.c.toggleTheme();
   assert.equal(f.c.STATE.isDark, false);
   assert.equal(f.document.body.classes.has('light'), true);
+  assert.equal(f.document.documentElement.attributes['data-theme'], 'light');
+  assert.equal(f.themeColor.attributes.content, '#fdfbff');
   assert.equal(f.DOM.themeIconDark.style.display, 'none');
   assert.deepEqual(f.messages, [[{type: 'voice-reader-theme-state', theme: 'light'}, 'https://shell.test']]);
   assert.deepEqual(f.events.slice(-3), [['reader', 'light'], ['preference', 'theme', 'light'], ['listen', 'animationend']]);
@@ -111,6 +114,8 @@ test('theme ripple, reader message, persistence and animation cleanup retain ord
   f.c.toggleTheme(); assert.equal(f.c.STATE.isDark, true);
   assert.equal(f.nodes[1].style.background, '#1a1c1e');
   assert.equal(f.document.body.classes.has('light'), false);
+  assert.equal(f.document.documentElement.attributes['data-theme'], 'dark');
+  assert.equal(f.themeColor.attributes.content, '#1a1c1e');
 });
 
 test('mobile defaults apply before header, selection, scheduled scroll and preference write', () => {

@@ -38,6 +38,59 @@ class ReaderAccessibilityTests(unittest.TestCase):
             self.page.locator('#history').press('Enter')
         self.page.locator('#history').press('Enter')
 
+    def test_saved_theme_colors_both_shells_before_app_and_reader_scripts(self):
+        # Hold the main entry out of the test entirely: a post-init assertion
+        # would miss the dark frame while modules or IndexedDB are pending.
+        self.page.route('**/static/app.js', lambda route: route.abort())
+        self.page.route('**/static/reader.js', lambda route: route.abort())
+        search_url = self.origin + support.PREFIX + '/'
+        index = (support.ROOT / 'static/index.html').read_text()
+        self.page.route(search_url, lambda route: route.fulfill(content_type='text/html', body=index))
+        reader_url = self.origin + support.PREFIX + '/static/reader.html?ext=txt'
+        self.page.route(self.origin + '/theme-test-setup', lambda route: route.fulfill(body='setup'))
+        self.page.goto(self.origin + '/theme-test-setup')
+        self.page.evaluate("localStorage.setItem('theme', 'light')")
+        def colors():
+            return self.page.evaluate('''() => {
+              const root = getComputedStyle(document.documentElement);
+              const shell = document.querySelector('.reader-toolbar') || document.body;
+              return [root.colorScheme, root.backgroundColor, getComputedStyle(shell).backgroundColor,
+                      document.querySelector('meta[name="theme-color"]').content];
+            }''')
+        light_search = ['light', 'rgb(253, 251, 255)', 'rgb(253, 251, 255)', '#fdfbff']
+        light_reader = ['light', 'rgb(244, 245, 246)', 'rgb(255, 255, 255)', '#f4f5f6']
+        cdp = self.context.new_cdp_session(self.page)
+        for width, agent in ((390, 'Mozilla/5.0 (Linux; Android 14) Chrome/145 Mobile'),
+                             (1280, 'Mozilla/5.0 (X11; Linux x86_64) Chrome/145')):
+            cdp.send('Network.setUserAgentOverride', {'userAgent': agent})
+            self.page.set_viewport_size(dict(width=width, height=800))
+            self.page.goto(search_url)
+            self.assertEqual(colors(), light_search)
+            self.assertEqual(self.page.locator('html').evaluate("el => el.classList.contains('mobile-boot')"), width == 390)
+            self.page.goto(reader_url)
+            self.assertEqual(colors(), light_reader)
+            self.page.go_back()
+            self.assertEqual(colors(), light_search)
+            self.page.reload()
+            self.assertEqual(colors(), light_search)
+        self.page.evaluate("localStorage.setItem('theme', 'dark')")
+        self.page.reload()
+        self.assertEqual(colors(), ['dark', 'rgb(26, 28, 30)', 'rgb(26, 28, 30)', '#1a1c1e'])
+        self.page.goto(reader_url)
+        self.assertEqual(colors(), ['dark', 'rgb(17, 19, 21)', 'rgb(27, 30, 33)', '#111315'])
+
+    def test_reader_history_restore_applies_theme_without_transition(self):
+        self.open_book(open_panel=False)
+        state = self.page.evaluate('''() => {
+          const root = document.documentElement;
+          localStorage.setItem('theme', 'light');
+          root.classList.add('theme-transition');
+          window.dispatchEvent(new PageTransitionEvent('pageshow', {persisted: true}));
+          return [root.dataset.theme, root.classList.contains('theme-transition'),
+                  document.querySelector('meta[name="theme-color"]').content, localStorage.getItem('theme')];
+        }''')
+        self.assertEqual(state, ['light', False, '#f4f5f6', 'light'])
+
     def test_compact_number_editors_hide_default_outline_only(self):
         self.page.set_viewport_size({'width': 390, 'height': 844})
         # Use the existing offline PDF engine and real toolbar controls.

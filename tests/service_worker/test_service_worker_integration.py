@@ -492,6 +492,7 @@ class ServiceWorkerIntegrationTest(unittest.TestCase):
 
     def test_offline_shell_reload_executes_app_and_renders_initial_results(self):
         self.prime(wait_for_data=True)
+        self.page.evaluate("localStorage.setItem('theme', 'light')")
         self.go_offline()
         response = self.page.reload(wait_until="domcontentloaded")
         self.assertIsNotNone(response)
@@ -499,6 +500,8 @@ class ServiceWorkerIntegrationTest(unittest.TestCase):
         self.page.locator("#search-input").wait_for(state="visible")
         self.page.locator("#results-list .result-item").first.wait_for(timeout=15000)
         self.assertEqual(self.page.title(), "VoiceOfML Search")
+        self.assertEqual(self.page.evaluate('''() => [getComputedStyle(document.documentElement).colorScheme,
+                  document.querySelector('meta[name="theme-color"]').content]'''), ['light', '#fdfbff'])
         self.assertGreater(self.page.locator("#results-list .result-item").count(), 0)
         self.assertTrue(self.page.evaluate("!!navigator.serviceWorker.controller"))
         self.page.wait_for_function("STATE.dataLoaded === true", timeout=30000)
