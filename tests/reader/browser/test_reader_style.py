@@ -383,7 +383,7 @@ class ReaderStyleTests(unittest.TestCase):
                 self.assertEqual(svg.evaluate("e => getComputedStyle(e).filter"), "none")
                 self.assertEqual([node.bounding_box() for node in (chapter, text, svg)], initial)
 
-    def test_numeric_controls_have_visible_keyboard_focus_in_both_themes(self):
+    def test_numeric_controls_keep_keyboard_focus_without_default_outline_in_both_themes(self):
         self.page.locator(".page-controls").evaluate("element => element.hidden = false")
         for theme in ("dark", "light"):
             self.page.locator("html").evaluate("(element, theme) => element.dataset.theme = theme", theme)
@@ -391,14 +391,10 @@ class ReaderStyleTests(unittest.TestCase):
             for selector in ("#page-number", "#zoom"):
                 control = self.page.locator(selector)
                 control.focus()
-                style = control.evaluate("""element => {
-                    const style = getComputedStyle(element.closest('.compact-input'));
-                    return {visible: element.matches(':focus-visible'),
-                            width: parseFloat(style.outlineWidth), style: style.outlineStyle};
-                }""")
-                self.assertTrue(style["visible"])
-                self.assertGreaterEqual(style["width"], 2)
-                self.assertEqual(style["style"], "solid")
+                self.assertEqual(control.evaluate("""element => [
+                    element.matches(':focus-visible'), getComputedStyle(element).outlineStyle,
+                    getComputedStyle(element.closest('.compact-input')).outlineStyle
+                ]"""), [True, "none", "none"])
 
     def test_short_dialog_scrolls_to_actions_and_retains_editor_grid(self):
         self.page.set_viewport_size({"width": 390, "height": 240})
@@ -539,12 +535,12 @@ class ReaderStyleTests(unittest.TestCase):
                     focus = actions.locator(selector).evaluate('''node => {
                       const box = node.getBoundingClientRect();
                       const strip = node.closest('.reader-actions').getBoundingClientRect();
-                      const focusTarget = node.matches('#zoom, #page-number') ? node.closest('.compact-input') : node;
-                      return {focused: node.matches(':focus-visible'), outline: getComputedStyle(focusTarget).outlineStyle,
+                      return {focused: node.matches(':focus-visible'), outline: getComputedStyle(node).outlineStyle,
                         left: box.left - strip.left, right: strip.right - box.right};
                     }''')
                     self.assertTrue(focus['focused'], (selector, focus))
-                    self.assertEqual(focus['outline'], 'solid', (selector, focus))
+                    outline = 'none' if selector in ('#page-number', '#zoom') else 'solid'
+                    self.assertEqual(focus['outline'], outline, (selector, focus))
                     self.assertGreaterEqual(focus['left'], -0.5, (selector, focus))
                     self.assertGreaterEqual(focus['right'], -0.5, (selector, focus))
                     self.page.keyboard.press('Tab')
