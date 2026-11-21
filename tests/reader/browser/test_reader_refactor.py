@@ -3320,20 +3320,57 @@ class ReaderRefactorTest(unittest.TestCase):
                 self.assertTrue(frame.locator(selector).evaluate('n => n.scrollWidth > n.clientWidth'))
 
     def test_legacy_html_widget_text_is_removed_without_dropping_article_content(self):
-        path = 'documents/web/htm/3df698a0af2d8e2df7f403c5047a4f90f5f7636870af3ae83a3a1089ac667fd7/document.html'
+        path = 'documents/web/htm/' + 'a' * 64 + '/document.html'
         source = 'https://voiceofml-search.hf.space/api/reader-bucket-resource?path=' + urllib.parse.quote(path, safe='')
-        html = """<p>正文</p><div class='account'>document.write('&lt;'+'/script&gt;');</div>
+        html = """<p>正文里的 function 和 document.write 不应被删。</p>
+          <div class='account'>document.write('&lt;'+'/script&gt;');</div>
           <div id='tosaypl'>function CheckPl(obj) { return true; }
           <strong>网友评论</strong>document.write('&lt;'+'/script&gt;');$(function(){});</div>
-          <a href='#note'>查看</a><pre id='note'>function CheckPl(obj) { escaped example }</pre>"""
+          <div id='share'>var jiathis_config = {data_track_clickback:'true'};</div>
+          <p>做因果界定。</p>$(function(){ $("#js_newstext img").Resize({box:"#js_newstext"}); });
+          <div id='login'>$(function(){ $('#loginform').submit(function(e){ return false; }); });</div>
+          <a href='#note'>查看</a><pre id='note'>document.write("code example");</pre>"""
+        self.page.route('https://voiceofml-search.hf.space/api/reader-bucket-resource**',
+                        lambda route: route.fulfill(content_type='text/html', body=html))
+        self.serve(html, 'text/html')
+        for converted in (True, False):
+            with self.subTest(converted=converted):
+                self.open(self.reader_url('html', **({'url': source} if converted else {})))
+                frame = self.page.frame_locator('.html-frame')
+                self.assertIn('正文里的 function 和 document.write', frame.locator('body').inner_text())
+                self.assertIn('做因果界定。', frame.locator('body').inner_text())
+                self.assertEqual(frame.locator('a').get_attribute('href'), '#note')
+                self.assertIn('document.write', frame.locator('pre').inner_text())
+                for selector in ('#share', '#login', '.account'):
+                    self.assertEqual(not frame.locator(selector).inner_text(), converted)
+                self.assertEqual('Resize(' not in frame.locator('body').inner_text(), converted)
+                if converted:
+                    self.assertEqual(frame.locator('#tosaypl').inner_text(), '网友评论')
+
+    def test_legacy_web_split_script_scaffold_keeps_adjacent_content(self):
+        path = 'documents/web/mht/' + 'b' * 64 + '/document.html'
+        source = 'https://voiceofml-search.hf.space/api/reader-bucket-resource?path=' + urllib.parse.quote(path, safe='')
+        html = """//树形导航代码
+          var expandState = 0; function expand(){ document.write("<style></style>")
+          document.write("<table id='master'><tr><td>占位图"); document.write("</td></tr></table>");
+          var ie = document.all ? 1 : 0; submitForm.submit(); };
+          <p>正文保留</p>
+          var pkBaseURL = document.location; piwikTracker.trackPageView();
+          <div id='forum-shell'>var PageData = {curr_href: escape(window.location.href)};
+          PageData.user = {}; /**** End 初始化页面 ****/</div>
+          <div id='ArticleKeywordUrl'>ArticleContent.innerHTML = ArticleContent.innerHTML.replace("a","b");
+          var keywordscode="<b>假标签</b>"; document.write(keywordscode); }</div>
+          <table id='ordinary'><tr><td>保留表格</td></tr></table><footer>文后保留</footer>"""
         self.page.route('https://voiceofml-search.hf.space/api/reader-bucket-resource**',
                         lambda route: route.fulfill(content_type='text/html', body=html))
         self.open(self.reader_url('html', url=source))
         frame = self.page.frame_locator('.html-frame')
-        self.assertEqual(frame.locator('#tosaypl').inner_text(), '网友评论')
-        self.assertEqual(frame.locator('.account').inner_text(), '')
-        self.assertEqual(frame.locator('a').get_attribute('href'), '#note')
-        self.assertIn('function CheckPl', frame.locator('pre').inner_text())
+        self.assertEqual(frame.locator('#master, #ArticleKeywordUrl').count(), 0)
+        text = frame.locator('body').inner_text()
+        for residue in ('expandState', 'submitForm', 'piwikTracker', 'PageData', 'document.write', '假标签'):
+            self.assertNotIn(residue, text)
+        for kept in ('正文保留', '保留表格', '文后保留'):
+            self.assertIn(kept, text)
 
     def test_legacy_txt_compacts_only_the_view(self):
         path = 'documents/text/txt/63fa4ecf73e28346a33704c8adbacebaec293f6f649d96590f066fd42187d97c/document.txt'

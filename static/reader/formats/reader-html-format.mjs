@@ -491,12 +491,60 @@ export function createReaderHtmlFormat(readerContext) {
     });
   }
 
-  /** @param {string} path */
-  function isReadingAsset(path) {
+  function readingAssetPath() {
     try {
       const url = new URL(readerContext.sourceUrl, location.href);
-      return (url.searchParams.get("path") || url.pathname.replace(/^\//, "")) === path;
-    } catch (_) { return false; }
+      return url.searchParams.get("path") || url.pathname.replace(/^\//, "");
+    } catch (_) { return ""; }
+  }
+
+  /** @param {DocumentFragment} root */
+  function removeLegacyWebScriptText(root) {
+    // Old web conversions stripped the tags but leaked their contents. This
+    // presentation pass is only for converted web assets, not raw books or code.
+    // Some literal document.write strings even became real nodes. Require both
+    // boundaries and the intervening scaffold before removing such a group.
+    const table = root.querySelector("table#master");
+    if (table?.parentNode === root && table.textContent?.includes("document.write(")) {
+      const opening = [];
+      const closing = table.nextSibling;
+      for (let node = table.previousSibling; node && opening.length < 8; node = node.previousSibling) {
+        if (node.nodeType !== Node.TEXT_NODE && (node.nodeName !== "STYLE" || node.textContent?.trim())) break;
+        opening.push(node);
+        if (node.nodeType === Node.TEXT_NODE && /^\s*\/\/[^\r\n]*\s+var\s+expandState\s*=/.test(node.nodeValue || "") &&
+            /document\.write\(\s*["']\s*$/.test(node.nodeValue || "") &&
+            closing?.nodeType === Node.TEXT_NODE && /^\s*["']\);\s*var\s+ie\s*=\s*document\.all\b/.test(closing.nodeValue || "") &&
+            /submitForm\.submit\(\);\s*\};\s*$/.test(closing.nodeValue || "")) {
+          for (const item of [...opening, table, closing]) root.removeChild(item);
+          break;
+        }
+      }
+    }
+    for (const block of root.querySelectorAll("#ArticleKeywordUrl")) {
+      if (/^\s*ArticleContent\.innerHTML\s*=\s*ArticleContent\.innerHTML\.replace\(/.test(block.firstChild?.nodeValue || "") &&
+          /document\.write\(keywordscode\);\s*\}\s*$/.test(block.lastChild?.nodeValue || "")) block.remove();
+    }
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    while (walker.nextNode()) {
+      const node = /** @type {Text} */ (walker.currentNode);
+      if (node.length > 16384 || node.parentElement?.closest("pre,code,kbd,samp,style,textarea")) continue;
+      const value = node.data.trim();
+      if (!value) continue;
+      // Match executable-shaped blocks with browser APIs, not isolated words
+      // such as 'function' or 'document' in article prose. Never evaluate text.
+      const browserApi = /(?:\b(?:document\s*\.\s*(?:write|createElement|getElementById|location|body)|window\s*\.\s*(?:scroll|open|location)|setInterval\s*\(|UserBar\s*\.\s*(?:init|showMsg)\s*\(|PostEditor\s*\.\s*is_login\s*=)|\$\s*\(\s*["'])/;
+      const start = /^(?:\$?\s*\(\s*function\s*\(|(?:async\s+)?function\s+[\w$]+\s*\(|(?:var|let|const)\s+[\w$]+\s*=|if\s*\([^\r\n]*?\)\s*\{|document\s*\.\s*(?:write|getElementById)\s*\(|login_str\s*=|UserBar\.showMsg\s*\()/;
+      const end = /(?:[;})]|\+\+|--)(?:\s*\/\*[^\r\n]*?\*\/)?$/;
+      const codeStart = value.replace(/^(?:\/\*[^\r\n]*?\*\/\s*|\/\/[^\r\n]*[\r\n]+\s*)+/, "");
+      const shareConfig = /^(?:var|let|const)\s+jiathis_config\s*=\s*\{\s*data_track_clickback\s*:\s*(?:["'](?:true|false)["']|true|false)\s*\};?$/;
+      const legacyComment = /^function CheckPl\(obj\)\s*\{[\s\S]*?\}$/.test(value) && node.parentElement?.id === "tosaypl";
+      if ((start.test(codeStart) && end.test(value) && browserApi.test(codeStart)) || shareConfig.test(value) || legacyComment) {
+        node.data = "";
+        continue;
+      }
+      // Preserve the visible separator/prose before a known footer analytics tail.
+      node.data = node.data.replace(/(?<=^|\n)[\t ]*var _bdhmProtocol\s*=\s*\(\(["']https:["'][\s\S]*?document\.write\(unescape\([^\r\n]+\)\);[\t\r\n ]*$/, "");
+    }
   }
 
   /** @param {boolean} markdown @param {import('../../../typings/reader-html-format-strict').PreparedText} prepared */
@@ -507,9 +555,9 @@ export function createReaderHtmlFormat(readerContext) {
     if (!markdown) {
       // This legacy article pads nearly every line with 12–26 spaces. Compact
       // only its presentation, keeping search, text offsets and download intact.
-      readerContext.content.classList.toggle("reader-content--compact-text", isReadingAsset(
+      readerContext.content.classList.toggle("reader-content--compact-text", readingAssetPath() ===
         "documents/text/txt/63fa4ecf73e28346a33704c8adbacebaec293f6f649d96590f066fd42187d97c/document.txt"
-      ));
+      );
       await readerContext.renderPlainText(response);
     } else {
       const bytes = await readerContext.readPreparedBytes(response, prepared.engines);
@@ -586,26 +634,8 @@ export function createReaderHtmlFormat(readerContext) {
     }
     const template = document.createElement("template");
     template.content.appendChild(clean);
-    // This immutable legacy derivative predates removal of script contents
-    // in the converter. Scope the display repair to its exact bucket key.
-    const legacyArticle = "documents/web/htm/3df698a0af2d8e2df7f403c5047a4f90f5f7636870af3ae83a3a1089ac667fd7/document.html";
-    if (isReadingAsset(legacyArticle)) {
-      const comments = template.content.querySelector("#tosaypl");
-      if (comments) for (const node of comments.childNodes) {
-        if (node.nodeType === Node.TEXT_NODE && /^\s*(?:function CheckPl\(obj\)|document\.write\('<'\+'\/script>'\);)/.test(node.nodeValue || ""))
-          node.nodeValue = "";
-      }
-      for (const node of template.content.querySelector(".account")?.childNodes || []) {
-        if (node.nodeType === Node.TEXT_NODE && /^\s*document\.write\('<'\+'\/script>'\);\s*$/.test(node.nodeValue || ""))
-          node.nodeValue = "";
-      }
-      const walker = document.createTreeWalker(template.content, NodeFilter.SHOW_TEXT);
-      while (walker.nextNode()) {
-        const node = walker.currentNode;
-        const text = node.nodeValue || "";
-        if (text.includes("var _bdhmProtocol") && text.includes("document.write(unescape("))
-          node.nodeValue = text.slice(0, text.indexOf("var _bdhmProtocol"));
-      }
+    if (/^documents\/web\/(?:htm|html|mht|mhtml)\/[a-f0-9]{64}\/document\.html$/.test(readingAssetPath())) {
+      removeLegacyWebScriptText(template.content);
     }
     /** @param {string | null} value */
     const stripUrls = (value) => sanitizeCssReferences(value, { strict: true });

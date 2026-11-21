@@ -343,9 +343,17 @@ export function createReaderProgress(readerContext) {
     if (readerContext.capability.mode === "epub-chapters" && loader && Number.isInteger(index) &&
         !chapterIndexInRange(index, loader.count)) entry = null;
     readerContext.updateDocumentState({ restoredEntry: entry });
-    // Startup already applied the current zoom. Reapplying an identical saved
-    // value needlessly invalidates PDF canvases and lays out every format again.
-    if (entry?.zoom && !readerContext.zoomChangedByUser && readerContext.isReaderGenerationCurrent("navigation", generation) &&
+    // Reflowable HTML follows the last explicit Reader zoom across documents.
+    // Older entries can still restore a zoom if no preference was ever saved.
+    let hasHtmlZoomPreference = false;
+    if (readerContext.capability.mode === "html") {
+      try {
+        const saved = Number(localStorage.getItem("reader-zoom"));
+        hasHtmlZoomPreference = saved >= 25 && saved <= 400;
+      } catch (_) {}
+    }
+    // Reapplying an identical value needlessly invalidates PDF canvases.
+    if (entry?.zoom && !hasHtmlZoomPreference && !readerContext.zoomChangedByUser && readerContext.isReaderGenerationCurrent("navigation", generation) &&
         VoiceOfMLReader.clampNumber(entry.zoom, 25, 400, 100) / 100 !== readerContext.documentState.zoom)
       readerContext.setZoom(entry.zoom, false);
     await readerContext.restoreInitialPosition(entry, generation);

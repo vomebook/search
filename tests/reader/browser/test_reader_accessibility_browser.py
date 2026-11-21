@@ -212,6 +212,66 @@ class ReaderAccessibilityTests(unittest.TestCase):
         for element, color in (('light', 'rgb(17, 17, 17)'), ('dark', 'rgb(245, 245, 245)'), ('same', 'rgb(238, 238, 238)')):
             self.assertEqual(frame.locator(f'#{element}').evaluate('n => getComputedStyle(n).color'), color)
 
+    def legacy_web_book(self, extension, digest):
+        source = 'https://voiceofml-search.hf.space/api/reader-bucket-resource?path=' + (
+            f'documents%2Fweb%2F{extension}%2F{digest * 64}%2Fdocument.html')
+        self.page.route(source, lambda route: route.fulfill(content_type='text/html', body=(
+            '<h1>Legacy article</h1>' + '<p>Readable paragraph</p>' * 120)))
+        url = self.origin + support.PREFIX + '/static/reader.html?' + urlencode(dict(url=source, ext='html'))
+        return source, url
+
+    def assert_html_zoom(self, percent):
+        self.page.locator('html[data-reader-phase="ready"]').wait_for()
+        self.assertEqual(self.page.locator('#zoom').input_value(), str(percent))
+        self.assertEqual(self.page.locator('iframe.html-frame').evaluate(
+            'frame => Number(frame.contentDocument.documentElement.style.zoom)'), percent / 100)
+
+    def test_latest_explicit_zoom_survives_next_legacy_web_book_and_reload(self):
+        _, htm = self.legacy_web_book('htm', 'a')
+        mht_source, mht = self.legacy_web_book('mht', 'b')
+        _, unread = self.legacy_web_book('mht', 'c')
+        self.page.goto(htm)
+        self.assert_html_zoom(100)
+        zoom = self.page.locator('#zoom')
+        zoom.fill('80')
+        zoom.press('Enter')
+        self.page.goto(mht)
+        self.assert_html_zoom(80)
+        iframe = self.page.locator('iframe.html-frame')
+        iframe.evaluate('frame => frame.contentWindow.scrollTo(0, 520)')
+        self.page.wait_for_function('''async source => {
+          const entry = await VoiceOfMLReaderStore.get(source);
+          return entry?.zoom === 80 && entry.htmlScrollTop === 520;
+        }''', arg=mht_source)
+
+        self.page.goto(htm)
+        self.assert_html_zoom(80)
+        zoom.fill('100')
+        zoom.press('Enter')
+        self.assert_html_zoom(100)
+        self.assertEqual(self.page.evaluate("localStorage.getItem('reader-zoom')"), '100')
+        self.page.goto(unread)
+        self.assert_html_zoom(100)
+        # Insert the conflicting history just before opening so delayed pagehide
+        # saves from the setup cannot mask which zoom the new Reader consumes.
+        self.page.evaluate('url => VoiceOfMLReaderStore.put({url, extension:"html", zoom:80, htmlScrollTop:520})',
+                           mht_source)
+        self.page.goto(mht)
+        self.assert_html_zoom(100)
+        self.page.wait_for_function('document.querySelector("iframe.html-frame").contentWindow.scrollY === 520')
+        self.page.reload()
+        self.assert_html_zoom(100)
+        self.page.wait_for_function('document.querySelector("iframe.html-frame").contentWindow.scrollY === 520')
+
+        self.page.goto(unread)
+        self.assert_html_zoom(100)
+        self.page.evaluate('''async url => {
+          localStorage.removeItem('reader-zoom');
+          await VoiceOfMLReaderStore.put({url, extension:'html', zoom:80, htmlScrollTop:520});
+        }''', mht_source)
+        self.page.goto(mht)
+        self.assert_html_zoom(80)
+
     def test_search_escape_restores_focus_and_expansion_state(self):
         self.open_book()
         self.open_with_keyboard()
