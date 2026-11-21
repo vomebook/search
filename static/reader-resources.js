@@ -118,9 +118,9 @@
     "reader/pdf/reader-pdf-network.mjs",
     "reader/pdf/reader-pdf-text-store.mjs",
     "tts-client.js",
-    "reader/ui/reader-speech.mjs",
     "reader.css",
     ...readerComponentFiles,
+    "reader/ui/reader-speech.mjs",
     "reader/reader-components.mjs",
     "reader.js"
   ]);

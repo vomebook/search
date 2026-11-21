@@ -42,6 +42,7 @@ export interface ReaderUiContext {
   zoomInput: HTMLInputElement;
   pdfShellWindow: { resize(): void } | null;
   htmlFrame: HTMLIFrameElement | null;
+  repairHtmlContrast(frame: HTMLIFrameElement): void;
   pdfDocument: object | null;
   rerenderVisiblePdfPages(): void;
   zoomChangedByUser: boolean;

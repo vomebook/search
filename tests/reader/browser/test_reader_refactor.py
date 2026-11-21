@@ -2248,6 +2248,42 @@ class ReaderRefactorTest(unittest.TestCase):
                     self.page.wait_for_function("query => document.querySelector('mark.full-search-highlight')?.textContent === query", arg=query)
                     self.assertIn('&#0 &nbsp;', self.page.locator('.reader-epub-chapter').inner_text())
 
+    def test_legacy_rtf_chapter_hides_only_its_exported_prefix(self):
+        prefix = ('chapters/ebook/epub/'
+                  '399230332a4298771620cb84c9499d5f9d5ea5dab1cd0c843fcc1b6b9c43c52d/a3f30ce1631e2b90/')
+        other = 'chapters/ebook/epub/' + 'a' * 64 + '/' + 'b' * 16 + '/'
+        chapter = b'<html><body><p>Cover</p></body></html>'
+        body = ('<html><body><p class="block_">圾癣应哆间揭</p><h1 id="toc_id_1">正文标题</h1>'
+                '<p class="block_">保留正文</p></body></html>').encode()
+        manifest = {'version': 1, 'kind': 'epub-chapters', 'chapters': [
+            {'index': i, 'path': f'chapters/chapter-{i:04}.xhtml', 'bytes': len(payload),
+             'sha256': hashlib.sha256(payload).hexdigest()}
+            for i, payload in enumerate((chapter, body), 1)
+        ], 'toc': [{'title': '正文标题', 'depth': 0, 'chapter': 2, 'fragment': 'toc_id_1'}]}
+
+        def serve(route):
+            path = urllib.parse.parse_qs(urllib.parse.urlsplit(route.request.url).query)['path'][0]
+            if path.endswith('/chapter-manifest.json'):
+                route.fulfill(json=manifest)
+            elif path.endswith('/chapters/chapter-0001.xhtml'):
+                route.fulfill(content_type='application/xhtml+xml', body=chapter)
+            elif path.endswith('/chapters/chapter-0002.xhtml'):
+                route.fulfill(content_type='application/xhtml+xml', body=body)
+            else:
+                route.fulfill(status=404)
+
+        self.page.route('https://voiceofml-search.hf.space/api/reader-bucket-resource**', serve)
+        for bundle, hidden in [(prefix, True), (other, False)]:
+            source = ('https://voiceofml-search.hf.space/api/reader-bucket-resource?path=' +
+                      urllib.parse.quote(bundle + 'chapter-manifest.json', safe=''))
+            self.open(self.reader_url('epub-chapters', url=source))
+            support.open_reader_panel(self.page)
+            self.page.locator('.toc-item', has_text='正文标题').click()
+            article = self.page.locator('.reader-epub-chapter[data-chapter="2"]')
+            article.wait_for()
+            self.assertEqual(article.locator('p').first.is_hidden(), hidden)
+            self.assertIn('保留正文', article.inner_text())
+
     def test_bucket_chapter_stream_loads_manifest_chapter_and_resource(self):
         prefix = "chapters/ebook/epub/" + "c" * 64 + "/" + "b" * 16 + "/"
         chapter = '<html><body><h1>Bucket chapter</h1><img src="../resources/shared/cover.png"></body></html>'
@@ -3254,6 +3290,65 @@ class ReaderRefactorTest(unittest.TestCase):
         self.page.locator("#back").click()
         self.page.wait_for_url(landing)
 
+    def test_html_paper_wraps_and_compacts_legacy_indents(self):
+        self.page.set_viewport_size({"width": 390, "height": 844})
+        self.page.add_init_script('localStorage.setItem("theme", "light")')
+        self.serve(("""<!doctype html><meta charset=gbk><article style='width:1200px'>
+          <p id='indent' style='white-space:nowrap'>　　　首段<br>　　 　　　换行</p>
+          <p><a id='url' href='#target'>""" + "https://example.test/" + "segment" * 28 + """</a></p>
+          <p id='transparent' style='color:transparent'>透明标记</p>
+          <div style='background:rgba(255,255,255,.12)'><p id='translucent' style='color:white'>可读文字</p></div>
+          <pre id='pre'>　　　""" + "unwrapped-code" * 45 + """</pre>
+          <table id='target' style='width:1000px'><tr><td>表格</td></tr></table></article>""").encode('gb18030'), 'text/html')
+        self.open(self.reader_url('htm', 'old-prose'))
+        frame = self.page.locator('.html-frame').element_handle().content_frame()
+        self.assertEqual(frame.locator('#indent').text_content(), '　　首段　　换行')
+        self.assertTrue(frame.locator('#pre').text_content().startswith('　　　'))
+        self.assertEqual(frame.locator('#url').get_attribute('href'), '#target')
+        self.assertEqual(frame.locator('#transparent').evaluate('n => getComputedStyle(n).color'), 'rgba(0, 0, 0, 0)')
+        self.assertEqual(frame.locator('body').evaluate('n => getComputedStyle(n).fontSize'), '14px')
+        self.assertIn(frame.locator('html').evaluate('n => getComputedStyle(n).webkitTextSizeAdjust'), ('none', '100%'))
+        support.open_reader_panel(self.page)
+        for expected in ('rgb(247, 243, 235)', 'rgb(32, 34, 36)', 'rgb(247, 243, 235)'):
+            if frame.locator('body').evaluate('n => getComputedStyle(n).backgroundColor') != expected:
+                self.page.locator('#theme-toggle').click()
+            frame.wait_for_function('(expected) => getComputedStyle(document.body).backgroundColor === expected', arg=expected)
+            self.assertTrue(frame.evaluate('document.scrollingElement.scrollWidth <= document.scrollingElement.clientWidth + 1'))
+            self.assertEqual(frame.locator('#translucent').evaluate('n => getComputedStyle(n).color'),
+                             'rgb(255, 255, 255)' if expected == 'rgb(32, 34, 36)' else 'rgb(17, 17, 17)')
+            for selector in ('#pre', '.reader-ebook-table-scroll'):
+                self.assertTrue(frame.locator(selector).evaluate('n => n.scrollWidth > n.clientWidth'))
+
+    def test_legacy_html_widget_text_is_removed_without_dropping_article_content(self):
+        path = 'documents/web/htm/3df698a0af2d8e2df7f403c5047a4f90f5f7636870af3ae83a3a1089ac667fd7/document.html'
+        source = 'https://voiceofml-search.hf.space/api/reader-bucket-resource?path=' + urllib.parse.quote(path, safe='')
+        html = """<p>正文</p><div class='account'>document.write('&lt;'+'/script&gt;');</div>
+          <div id='tosaypl'>function CheckPl(obj) { return true; }
+          <strong>网友评论</strong>document.write('&lt;'+'/script&gt;');$(function(){});</div>
+          <a href='#note'>查看</a><pre id='note'>function CheckPl(obj) { escaped example }</pre>"""
+        self.page.route('https://voiceofml-search.hf.space/api/reader-bucket-resource**',
+                        lambda route: route.fulfill(content_type='text/html', body=html))
+        self.open(self.reader_url('html', url=source))
+        frame = self.page.frame_locator('.html-frame')
+        self.assertEqual(frame.locator('#tosaypl').inner_text(), '网友评论')
+        self.assertEqual(frame.locator('.account').inner_text(), '')
+        self.assertEqual(frame.locator('a').get_attribute('href'), '#note')
+        self.assertIn('function CheckPl', frame.locator('pre').inner_text())
+
+    def test_legacy_txt_compacts_only_the_view(self):
+        path = 'documents/text/txt/63fa4ecf73e28346a33704c8adbacebaec293f6f649d96590f066fd42187d97c/document.txt'
+        source = 'https://voiceofml-search.hf.space/api/reader-bucket-resource?path=' + urllib.parse.quote(path, safe='')
+        text = '正文\r\n                  旧网页导出的段落\r\n\r\n             第二段'
+        self.page.route('https://voiceofml-search.hf.space/api/reader-bucket-resource**',
+                        lambda route: route.fulfill(content_type='text/plain', body=text))
+        self.serve(text)
+        for url, expected in [(source, 'pre-line'), (None, 'pre-wrap')]:
+            with self.subTest(white_space=expected):
+                self.open(self.reader_url('txt', **({'url': url} if url else {})))
+                block = self.page.locator('.reader-text-block')
+                self.assertEqual(block.text_content(), text)
+                self.assertEqual(block.evaluate('n => getComputedStyle(n).whiteSpace'), expected)
+
     def test_offline_html_keeps_layout_attributes_and_enforces_frame_csp(self):
         dot = ("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8"
                "/x8AAwMB/6XWbqkAAAAASUVORK5CYII=")
@@ -3494,6 +3589,7 @@ class ReaderRefactorTest(unittest.TestCase):
         self.assertEqual(chapter_root.locator("#local-use").get_attribute("href"), "#dot")
 
     def expose_html_contrast(self):
+        self.page.add_init_script('localStorage.setItem("theme", "light")')
         def instrument(route):
             response = route.fetch()
             script = response.text()
@@ -3553,7 +3649,7 @@ class ReaderRefactorTest(unittest.TestCase):
             'changing': ['rgb(245, 245, 245)', 'important'], 'first': ['white', ''],
             'last': ['rgb(17, 17, 17)', 'important'], 'inherit': ['rgb(17, 17, 17)', 'important'],
             'child': ['', ''], 'dark': ['rgb(245, 245, 245)', 'important'],
-            'ignored': ['rgb(17, 17, 17)', 'important'], 'accepted': ['rgb(245, 245, 245)', 'important'],
+            'ignored': ['rgb(17, 17, 17)', 'important'], 'accepted': ['rgb(17, 17, 17)', ''],
             'link': ['rgb(6, 69, 173)', ''],
         })
 

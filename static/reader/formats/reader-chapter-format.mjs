@@ -201,6 +201,8 @@ export function createReaderChapterFormat(readerContext) {
     let chapterPreviousObserver = null;
     const chapterBudget = VoiceOfMLReaderSecurity.createByteBudget();
     if (!manifestBase) throw new Error("EPUB_INVALID_MANIFEST_PATH");
+    const manifestLocation = new URL(manifestBase);
+    const manifestPath = manifestLocation.searchParams.get("path") || manifestLocation.pathname;
     const searchIndex = manifest.search_index;
     readerContext.chapterSearchConfiguration =
       isChapterSearchIndex(searchIndex)
@@ -499,6 +501,15 @@ export function createReaderChapterFormat(readerContext) {
             article.appendChild(document.importNode(child, true));
             if (++imported % 256 === 0 && imported < children.length && performance.now() >= deadline)
               await yieldIfNeeded(imported, children.length);
+          }
+          // Both catalog copies of this RTF use the same immutable chapter
+          // bundle. Its export lost the leading paragraph's invisibility.
+          if (chapter.index === 2 && manifestPath.endsWith(
+            "/399230332a4298771620cb84c9499d5f9d5ea5dab1cd0c843fcc1b6b9c43c52d/a3f30ce1631e2b90/chapter-manifest.json"
+          )) {
+            const first = article.firstElementChild;
+            if (first?.matches("p.block_") && first.nextElementSibling?.matches("h1#toc_id_1") &&
+                first.textContent?.startsWith("圾癣应哆间揭")) first.setAttribute("hidden", "");
           }
           wrapEbookTables(article);
           const images = article.querySelectorAll("img");

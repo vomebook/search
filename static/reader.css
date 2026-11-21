@@ -1228,6 +1228,10 @@ body {
 .reader-text-block:focus-within {
   content-visibility: visible;
 }
+.reader-content--compact-text .reader-text {
+  white-space: pre-line;
+  line-height: 1.55;
+}
 .reader-markdown {
   margin: 0 auto;
   max-width: 76ch;
@@ -1260,10 +1264,11 @@ body {
   width: 100%;
   height: calc(100vh - 96px);
   border: 0;
-  background: white;
-  color-scheme: only light;
+  background: var(--reader-paper, transparent);
 }
 .html-frame.spreadsheet-html-frame {
+  background: white;
+  color-scheme: only light;
   overflow: auto;
 }
 .reader-content--spreadsheet {
@@ -1414,7 +1419,7 @@ body {
   :root[data-theme="light"] {
     --reader-paper: #f7f3eb;
   }
-  .reader-viewport:has(> .reader-content:is([data-mode="text"], [data-mode="markdown"])),
+  .reader-viewport:has(> .reader-content:is([data-mode="text"], [data-mode="markdown"], [data-mode="html"]:not(.reader-content--spreadsheet))),
   .reader-content[data-mode="epub-chapters"] > .epub-frame {
     background-color: var(--reader-paper);
   }

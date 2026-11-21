@@ -2,6 +2,8 @@ import type { OcrPayload, PdfPage, TextContent, TextItem, TextTask } from './rea
 import type { PlaybackSettings, ReadOptions, StartLocator } from './tts-client-strict';
 
 export interface SpeechContext {
+  extension?: string;
+  resolvedReaderData?: { original_extension?: unknown } | null;
   capability: { mode?: string | null } | null;
   sourceUrl: string; contentUrl: string; content: HTMLElement; viewport: HTMLElement;
   htmlFrame: HTMLIFrameElement | null;

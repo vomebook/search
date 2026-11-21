@@ -44,6 +44,12 @@ export function createReaderUi(readerContext) {
     readerContext.readerTheme = theme === "light" ? "light" : "dark";
     document.documentElement.dataset.theme = readerContext.readerTheme;
     document.querySelector('meta[name="theme-color"]')?.setAttribute("content", readerContext.readerTheme === "light" ? "#f4f5f6" : "#111315");
+    const frame = readerContext.htmlFrame;
+    const frameRoot = frame?.contentDocument?.documentElement;
+    if (frame && frameRoot?.hasAttribute("data-reader-theme")) {
+      frameRoot.dataset.readerTheme = readerContext.readerTheme;
+      readerContext.repairHtmlContrast(frame);
+    }
     readerContext.readerThemeToggle.innerHTML = readerContext.readerTheme === "dark" ? readerContext.THEME_MOON_ICON : readerContext.THEME_SUN_ICON;
     if (animate) {
       readerContext.readerThemeToggle.classList.remove("is-changing");

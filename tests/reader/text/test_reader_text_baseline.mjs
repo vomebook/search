@@ -2,6 +2,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {createReaderTextFormat} from '../../../static/reader/formats/reader-text-format.mjs';
+import {createReaderSpeech} from '../../../static/reader/ui/reader-speech.mjs';
 
 class FakeText {
   constructor(value) { this.nodeType=3;this.data=value; }
@@ -36,6 +37,120 @@ function responseChunks(chunks) {
   const stream = new ReadableStream({start(controller){for(const chunk of chunks)controller.enqueue(chunk);controller.close();}});
   return new Response(stream);
 }
+
+const vCard = [
+  'BEGIN:VCARD', 'VERSION:3.0', 'N:Example;Test;;;', 'FN:测试 Example', 'TITLE:Example role',
+  'ORG:Team\\;A;Division', 'EMAIL;TYPE=WORK,INTERNET:work@example.invalid',
+  'EMAIL;TYPE=HOME:home@example.invalid', 'TEL;TYPE="Work:Voice":+1-555-0100',
+  'item1.ADR;TYPE=WORK:;;One Example St;Example City;;;', 'URL:https://example.invalid/',
+  'NOTE:<img src="https://example.invalid/image">; folded', '\t文字\\nNew\\, line\\\\',
+  'PHOTO;VALUE=URI:https://example.invalid/photo', 'END:VCARD', ''
+].join('\r\n');
+
+const encode = value => new TextEncoder().encode(value);
+const buffered = value => ({headers:new Headers(),body:null,arrayBuffer:async()=>encode(value).buffer});
+
+test('original VCF gets a text-only summary through direct and derived text paths', async t => {
+  const f=fixture(); t.after(f.restore);
+  const requests=[];
+  t.mock.method(globalThis,'fetch',(...args)=>{requests.push(args);throw Error('unexpected fetch');});
+  for (const [extension,metadata,response] of [
+    ['vcf',null,responseChunks([encode(vCard.slice(0,32)),encode(vCard.slice(32))])],
+    ['txt',{original_extension:'.VCF'},new Response(encode('\ufeff'+vCard))],
+    ['txt',{original_extension:'vcf'},buffered(vCard)]
+  ]) {
+    Object.assign(f.context,{extension,resolvedReaderData:metadata});
+    f.context.content.children.length=0;
+    await f.context.renderPlainText(response);
+    const root=f.context.content.children[0];
+    assert.equal(root.className,'reader-text');
+    assert.deepEqual(root.children.map(block=>[block.tag,block.className,...block.children.map(node=>node.nodeType)]),
+      [['pre','reader-text-block',3]]);
+    assert.equal(root.textContent,[
+      '姓名：测试 Example','职务：Example role','单位：Team;A · Division',
+      '电子邮箱：work@example.invalid','电子邮箱：home@example.invalid','电话：+1-555-0100',
+      '地址：One Example St · Example City','网址：https://example.invalid/',
+      '备注：<img src="https://example.invalid/image">; folded文字','New, line\\'
+    ].join('\n'));
+  }
+  assert.deepEqual(requests,[]);
+  await f.context.renderPlainText(new Response('begin:vcard\nversion:3.0\nn:Example;Test;;;\nfn:  \nend:vcard'));
+  assert.equal(f.context.content.children.at(-1).textContent,'姓名：Example · Test');
+});
+
+test('VCF fallback and non-VCF plain text preserve the original whitespace', async t => {
+  const f=fixture(); t.after(f.restore);
+  for (const value of [
+    '', vCard.trimEnd().replace('END:VCARD',''), vCard.replace('3.0','4.0'), vCard+vCard,
+    vCard.replace('TITLE:Example role','not a field'), vCard.replace('TITLE:', 'TITLE;ENCODING=b:'),
+    'BEGIN:VCARD\nVERSION:3.0\nTEL:123\nEND:VCARD', ' \tfirst\r\n  second\r\n\r\n'
+  ]) {
+    f.context.content.children.length=0;
+    f.context.extension='vcf';
+    await f.context.renderPlainText(new Response(value));
+    assert.equal(f.context.content.textContent,value);
+  }
+  for (const [extension,original_extension] of [['txt','txt'],['ini',null],['vcf','txt'],['txt','notvcf'],
+    ['txt','vcf.exe'],['txt','vcf '],['txt',{toString(){throw Error('metadata must not be coerced');}}]]) {
+    f.context.content.children.length=0;
+    Object.assign(f.context,{extension,resolvedReaderData:{original_extension},documentState:{title:'looks-like.vcf'}});
+    await f.context.renderPlainText(new Response(vCard));
+    assert.equal(f.context.content.textContent,vCard);
+  }
+});
+
+test('VCF preview bounds both headers and bytes without publishing partial contact data', async t => {
+  const f=fixture(); t.after(f.restore);
+  f.context.extension='vcf';
+  let cancelCount=0;
+  const unopened=new Response(new ReadableStream({cancel(){cancelCount++;}}),{headers:{'Content-Length':65537}});
+  await assert.rejects(f.context.renderPlainText(unopened),{code:'READER_RESOURCE_LIMIT'});
+  assert.equal(cancelCount,1);
+  const oversized=new Response(new ReadableStream({
+    start(controller){controller.enqueue(encode(vCard));controller.enqueue(new Uint8Array(65536));},
+    cancel(){cancelCount++;}
+  }));
+  await assert.rejects(f.context.renderPlainText(oversized),{code:'READER_RESOURCE_LIMIT'});
+  assert.equal(cancelCount,2);
+  assert.equal(oversized.body.locked,false);
+  await assert.rejects(f.context.renderPlainText(buffered('x'.repeat(65537))),{code:'READER_RESOURCE_LIMIT'});
+  assert.equal(f.context.content.children.length,0);
+  assert.ok(!f.events.includes('ready'));
+  let controller;
+  const atLimit=encode(vCard.replace('END:VCARD','X-PADDING:'+'x'.repeat(65536-encode(vCard).length-12)+'\r\nEND:VCARD'));
+  assert.equal(atLimit.length,65536);
+  const pending=f.context.renderPlainText(new Response(new ReadableStream({start(c){controller=c;}})));
+  controller.enqueue(atLimit);
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(f.context.content.children.length,0);
+  controller.close();
+  await pending;
+  assert.match(f.context.content.textContent,/^姓名：/);
+});
+
+test('Reader speech never loads a player or offers VCF text, including on handoff', async t => {
+  const previous={window:globalThis.window,document:globalThis.document,CCRDSpeech:globalThis.CCRDSpeech};
+  t.after(()=>Object.assign(globalThis,previous));
+  globalThis.window={addEventListener(){}};
+  let readCount=0, offers=0, loadCount=0;
+  globalThis.document={querySelector(selector){if(selector!=='#back')readCount++;return null;}};
+  const player={previewClosed(){},previewLoaded(){offers++;},readFrom(){offers++;}};
+  for (const [extension,resolvedReaderData,existingPlayer] of [
+    ['vcf',null,false],['txt',{original_extension:'.VCF'},true]
+  ]) {
+    globalThis.CCRDSpeech=existingPlayer ? player : undefined;
+    let phase;
+    const speech=createReaderSpeech({extension,resolvedReaderData,capability:{mode:'text'},
+      get content(){readCount++;throw Error('unexpected text access');},
+      isReaderOverlayFrame:()=>true,readerRuntime:{events:{on(name,fn){phase=fn;}}}},
+    async()=>{loadCount++;},'{"unit":0,"offset":0}');
+    speech.installReaderSpeech(true);
+    phase({phase:'ready'});
+    await new Promise(resolve=>setImmediate(resolve));
+    assert.equal(speech.readerSpeechAdapter(),null);
+  }
+  assert.deepEqual([readCount,offers,loadCount],[0,0,0]);
+});
 
 test('encoding detection handles BOMs, valid UTF-8, UTF-16 heuristics and legacy hints',()=>{
   const f=fixture();try {

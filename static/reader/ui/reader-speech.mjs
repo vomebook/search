@@ -6,6 +6,8 @@
 // the realm (frame document / shadow tree) that owns the range.
 /** @typedef {import('../../../typings/reader-speech-strict').Position} SpeechPosition
  * @typedef {import('../../../typings/tts-client-strict').PlaybackSettings} PlaybackSettings */
+import { isReaderVCard } from "../formats/reader-text-format.mjs";
+
 const SKIP = new Set(["SCRIPT", "STYLE", "NOSCRIPT", "TEMPLATE"]);
 // A standalone Reader left while reading aloud (← or browser back) records
 // where it was; search/reader-host/application/navigation.js resumes it in a background Reader
@@ -106,6 +108,8 @@ export function createReaderSpeech(readerContext, loadPlayer, handoffPayload) {
   function pageCount() { return Number(readerContext.documentState?.pageCount) || 0; }
 
   function hasText() {
+    // Neither a formatted contact nor its plain-text fallback may reach TTS.
+    if (isReaderVCard(readerContext)) return false;
     const current = mode();
     if (["text", "markdown", "html", "epub-chapters", "pdf"].includes(current)) return true;
     if (current === "pdf-pages") return !!(readerContext.ocrManifestUrl || readerContext.pdfOcrManifest || readerContext.pdfDocument);

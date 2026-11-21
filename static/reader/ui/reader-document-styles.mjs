@@ -11,6 +11,34 @@ export const EPUB_HTML_VOID_TAGS = new Set(
 export const HTML_FRAME_STYLE =
   '<meta http-equiv="Content-Security-Policy" content="default-src \'none\'; base-uri \'none\'; form-action \'none\'; img-src data: blob:; media-src data: blob:; font-src data: blob:; style-src \'unsafe-inline\'"><meta name="color-scheme" content="only light"><style>:root{color-scheme:only light!important;background:#fff!important}html,body{min-height:100%;background:#fff!important;color:#111!important}</style>';
 
+// The isolated document follows the Reader (not the OS) and keeps width
+// constraints inside the frame. Spreadsheets use their own two-axis viewport.
+export const HTML_PROSE_STYLE = `<style>
+:root{color-scheme:light!important;--paper:#f7f3eb;--ink:#202124;--link:#185abc;
+  font-size:17px!important;text-size-adjust:none!important;-webkit-text-size-adjust:none!important}
+@media(max-width:600px){:root{font-size:14px!important}}
+:root[data-reader-theme="dark"]{color-scheme:dark!important;--paper:#202224;--ink:#e7e9eb;--link:#8ab4e8}
+html,body{background:var(--paper)!important;color:var(--ink)!important}
+body{box-sizing:border-box;max-inline-size:76ch!important;min-inline-size:0!important;
+  margin-inline:auto!important;padding-inline:clamp(10px,3vw,24px);overflow-wrap:anywhere;
+  font-size:1rem!important;line-height:1.75}
+.reader-forum-document{font-size:1rem}
+body :is(article,aside,blockquote,dd,div,dl,dt,figure,figcaption,footer,header,h1,h2,h3,h4,h5,h6,li,main,ol,p,section,ul):not(pre *, .reader-ebook-table-scroll *){
+  box-sizing:border-box!important;min-inline-size:0!important;max-inline-size:100%!important;
+}
+body :where(:not(pre,pre *,code,code *,.reader-ebook-table-scroll *)){
+  text-wrap-mode:wrap!important;overflow-wrap:anywhere!important;
+}
+@supports not (text-wrap-mode:wrap){
+  body :where(:not(pre,pre *,code,code *,.reader-ebook-table-scroll *)){white-space:normal!important}
+}
+body :is(img,video):not(.reader-ebook-table-scroll *){max-inline-size:100%!important;block-size:auto!important}
+body :is(pre,.reader-ebook-table-scroll){box-sizing:border-box!important;max-inline-size:100%!important;overflow-x:auto!important}
+body a{color:var(--link)}
+@media (prefers-contrast:more){:root{--paper:#fff;--ink:#111}:root[data-reader-theme="dark"]{--paper:#101214;--ink:#fff}}
+@media (forced-colors:active){html,body{background:Canvas!important;color:CanvasText!important}body a{color:LinkText!important}}
+</style>`;
+
 export const DISCOURSE_POST_SELECTOR = ".topic-post .cooked";
 
 export const DISCOURSE_TITLE_SELECTOR = "#topic-title .fancy-title, .topic-link, title";
@@ -55,7 +83,7 @@ export const EBOOK_LAYOUT_STYLE = `
 export function wrapEbookTables(body) {
   for (const table of body.querySelectorAll("table")) {
     if (table.parentElement?.closest("table")) continue;
-    const region = document.createElement("div");
+    const region = body.ownerDocument.createElement("div");
     region.className = "reader-ebook-table-scroll";
     region.tabIndex = 0;
     region.setAttribute("role", "region");

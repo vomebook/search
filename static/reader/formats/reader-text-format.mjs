@@ -3,7 +3,8 @@
  * @typedef {ReaderTextPrepared & {engines: Promise<unknown>}} ReaderMarkdownPrepared
  * @typedef {((markdown: false, prepared: ReaderTextPrepared) => Promise<void>) &
  *   ((markdown: true, prepared: ReaderMarkdownPrepared) => Promise<void>)} ReaderTextRenderer
- * @typedef {object} ReaderTextContext
+ * @typedef {{extension?: string, resolvedReaderData?: {original_extension?: unknown} | null}} ReaderOriginalFormat
+ * @typedef {object} ReaderTextHost
  * @property {() => void} assertReaderActive
  * @property {HTMLElement} content
  * @property {() => void} markReaderContentReady
@@ -14,15 +15,70 @@
  * @property {(bytes: Uint8Array, hint?: string, leading?: boolean) => string} detectTextEncoding
  * @property {{title: string}} documentState
  * @property {ReaderTextRenderer} renderText
+ * @typedef {ReaderTextHost & ReaderOriginalFormat} ReaderTextContext
  */
+
+const VCARD_PREVIEW_BYTES = 64 * 1024;
+
+/** @param {ReaderOriginalFormat} context */
+export function isReaderVCard(context) {
+  const original = context.resolvedReaderData?.original_extension;
+  const extension = typeof original === "string" && original ? original : context.extension;
+  return extension?.toLowerCase().replace(/^\./, "") === "vcf";
+}
+
+const vCardLabels = new Map([
+  ["FN", "姓名"], ["N", "姓名"], ["ORG", "单位"], ["TITLE", "职务"],
+  ["TEL", "电话"], ["EMAIL", "电子邮箱"], ["ADR", "地址"], ["URL", "网址"], ["NOTE", "备注"]
+]);
+
+/** @param {string} text */
+function formatVCard(text) {
+  // This is a summary of one vCard 3.0, not a general-purpose contact decoder.
+  const lines = text.replace(/\r?\n[ \t]/g, "").replace(/\r?\n$/, "").split(/\r?\n/);
+  if (lines[0]?.toUpperCase() !== "BEGIN:VCARD" || lines[1]?.toUpperCase() !== "VERSION:3.0" ||
+      lines.at(-1)?.toUpperCase() !== "END:VCARD") return null;
+  const fields = [];
+  for (const line of lines.slice(2, -1)) {
+    // Parameters (including comma-separated TYPEs and quoted values) are
+    // metadata only. Never interpret a URL, attachment or transfer encoding.
+    const [, property, parameters, raw] = /^(?:[\da-z-]+\.)?([\da-z-]+)((?:;[\da-z-]+=(?:"[^"]*"|[^;":]+))*):([^\r\n]*)$/i.exec(line) || [];
+    if (!property || raw === undefined) return null;
+    const key = property.toUpperCase();
+    if (key === "BEGIN" || key === "END" || key === "VERSION") return null;
+    const label = vCardLabels.get(key);
+    if (!label) continue;
+    if (parameters && /;encoding=/i.test(parameters)) return null;
+    const structured = key === "ORG" || key === "ADR" || key === "N";
+    const components = [];
+    let start = 0, component = "";
+    // Consume escapes before delimiters so an escaped semicolon remains text.
+    for (const match of raw.matchAll(/\\([\\;,nN])|;/g)) {
+      component += raw.slice(start, match.index);
+      start = match.index + match[0].length;
+      const escape = match[1];
+      if (escape) component += /^[nN]$/.test(escape) ? "\n" : escape;
+      else if (structured) { components.push(component); component = ""; }
+      else component += ";";
+    }
+    components.push(component + raw.slice(start));
+    const value = components.filter(part => part.trim()).join(" · ");
+    if (value.trim()) fields.push({ key, text: `${label}：${value}` });
+  }
+  const hasFullName = fields.some(field => field.key === "FN");
+  if (!hasFullName && !fields.some(field => field.key === "N")) return null;
+  return fields.filter(field => !hasFullName || field.key !== "N").map(field => field.text).join("\n");
+}
+
 /** @param {ReaderTextContext} readerContext */
 export function createReaderTextFormat(readerContext) {
   /** @param {Response} response */
   async function renderPlainText(response) {
     readerContext.assertReaderActive();
+    const vCard = isReaderVCard(readerContext);
     const pre = document.createElement("div");
     pre.className = "reader-text";
-    readerContext.content.appendChild(pre);
+    if (!vCard) readerContext.content.appendChild(pre);
     let /** @type {HTMLPreElement | null} */ block = null, blockLength = 0;
     /** @param {string} value @param {string} [encoding] */
     const appendDecoded = async (value, encoding = "utf-8") => {
@@ -49,7 +105,7 @@ export function createReaderTextFormat(readerContext) {
         const tail = block.lastChild;
         if (tail?.nodeType === Node.TEXT_NODE) (/** @type {Text} */ (tail)).appendData(text.slice(offset, end));
         else block.appendChild(document.createTextNode(text.slice(offset, end)));
-        if (text.length) readerContext.markReaderContentReady();
+        if (!vCard) readerContext.markReaderContentReady();
         blockLength += end - offset;
         offset = end;
         if (offset < text.length || blockLength >= 32768) { block = null; blockLength = 0; }
@@ -60,8 +116,26 @@ export function createReaderTextFormat(readerContext) {
         }
       }
     };
-    const limit = VoiceOfMLReaderSecurity.LIMITS.documentBytes, sampleLimit = 65540;
-    VoiceOfMLReaderSecurity.assertResponseSize(response, limit);
+    const finishVCard = async () => {
+      readerContext.assertReaderActive();
+      const summary = formatVCard(pre.textContent ?? "");
+      if (summary !== null) {
+        pre.textContent = "";
+        block = null;
+        blockLength = 0;
+        await appendDecoded(summary);
+      }
+      readerContext.assertReaderActive();
+      readerContext.content.appendChild(pre);
+      readerContext.markReaderContentReady();
+    };
+    const documentLimit = VoiceOfMLReaderSecurity.LIMITS.documentBytes;
+    const limit = vCard ? Math.min(documentLimit, VCARD_PREVIEW_BYTES) : documentLimit, sampleLimit = 65540;
+    try { VoiceOfMLReaderSecurity.assertResponseSize(response, limit); }
+    catch (reason) {
+      if (vCard) void response.body?.cancel().catch(() => {});
+      throw reason;
+    }
     if (!response.body?.getReader) {
       const bytes = new Uint8Array(await response.arrayBuffer());
       if (bytes.byteLength > limit) {
@@ -80,6 +154,7 @@ export function createReaderTextFormat(readerContext) {
       const decoder = new TextDecoder(readerContext.detectTextEncoding(bytes.subarray(start, start + sampleLimit),
         readerContext.documentState.title, start === 0));
       await appendDecoded(decoder.decode(bytes), decoder.encoding);
+      if (vCard) await finishVCard();
       return;
     }
     const reader = response.body.getReader(),
@@ -107,7 +182,7 @@ export function createReaderTextFormat(readerContext) {
     };
     /** @param {Uint8Array} chunk */
     const showUtf8Preview = chunk => {
-      if (!utf8Preview) return;
+      if (vCard || !utf8Preview) return;
       if (displayedSampleSize || chunk.includes(0)) { clearUtf8Preview(); return; }
       let decoded;
       try { decoded = utf8Preview.decode(chunk, { stream: true }); }
@@ -238,6 +313,7 @@ export function createReaderTextFormat(readerContext) {
       // startDecoder assigns one even for an empty sample. A failure is caught.
       if (!decoder) await startDecoder();
       await appendDecoded((/** @type {TextDecoder} */ (/** @type {unknown} */ (decoder))).decode(), (/** @type {TextDecoder} */ (/** @type {unknown} */ (decoder))).encoding);
+      if (vCard) await finishVCard();
     } catch (reason) {
       clearUtf8Preview();
       try {

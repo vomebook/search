@@ -2869,7 +2869,8 @@ keepValue(1, 2);
         paths = ['static/reader/formats/reader-text-format.mjs',
                  'scripts/reader/check_reader_text_coverage.mjs', 'scripts/check_tap_contracts.mjs',
                  'tests/reader/text/test_reader_text_baseline.mjs',
-                 'tests/reader/text/test_reader_text_faults.mjs']
+                 'tests/reader/text/test_reader_text_faults.mjs',
+                 'static/reader/ui/reader-speech.mjs']
         for path in paths:
             target = self.root / path
             target.parent.mkdir(parents=True, exist_ok=True)
@@ -3643,7 +3644,7 @@ ctx.renderText(true, {response: new Response(), engines: Promise.resolve([])});
             ('ctx.renderText(true, {response: new Response(), engines: undefined});', 'TS2769'),
             ('/** @type {number} */ const value = text.detectTextEncoding(new Uint8Array());', 'TS2322'),
             ('/** @type {Promise<string>} */ const value = text.renderPlainText(new Response());', 'TS2322'),
-            ('createReaderTextFormat({});', 'TS2740'),
+            ('createReaderTextFormat({});', 'TS2345'),
         ]:
             with self.subTest(expression=expression):
                 source.write_text(prefix + expression + '\n')

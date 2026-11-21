@@ -1,4 +1,5 @@
 import { bindReaderScrollIntent } from "../core/reader-bindings.mjs";
+import { HTML_PROSE_STYLE, wrapEbookTables } from "../ui/reader-document-styles.mjs";
 
 /** @param {string | null | undefined} markdown */
 export function stripMarkdownFrontMatter(markdown) {
@@ -490,13 +491,27 @@ export function createReaderHtmlFormat(readerContext) {
     });
   }
 
+  /** @param {string} path */
+  function isReadingAsset(path) {
+    try {
+      const url = new URL(readerContext.sourceUrl, location.href);
+      return (url.searchParams.get("path") || url.pathname.replace(/^\//, "")) === path;
+    } catch (_) { return false; }
+  }
+
   /** @param {boolean} markdown @param {import('../../../typings/reader-html-format-strict').PreparedText} prepared */
   async function renderText(markdown, prepared) {
     let response = await prepared.response;
     if (!response.ok) response = await readerContext.fetchReaderResponse();
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    if (!markdown) await readerContext.renderPlainText(response);
-    else {
+    if (!markdown) {
+      // This legacy article pads nearly every line with 12–26 spaces. Compact
+      // only its presentation, keeping search, text offsets and download intact.
+      readerContext.content.classList.toggle("reader-content--compact-text", isReadingAsset(
+        "documents/text/txt/63fa4ecf73e28346a33704c8adbacebaec293f6f649d96590f066fd42187d97c/document.txt"
+      ));
+      await readerContext.renderPlainText(response);
+    } else {
       const bytes = await readerContext.readPreparedBytes(response, prepared.engines);
       const text = new TextDecoder(readerContext.detectTextEncoding(bytes, readerContext.documentState.title)).decode(bytes);
       const article = document.createElement("article");
@@ -571,6 +586,27 @@ export function createReaderHtmlFormat(readerContext) {
     }
     const template = document.createElement("template");
     template.content.appendChild(clean);
+    // This immutable legacy derivative predates removal of script contents
+    // in the converter. Scope the display repair to its exact bucket key.
+    const legacyArticle = "documents/web/htm/3df698a0af2d8e2df7f403c5047a4f90f5f7636870af3ae83a3a1089ac667fd7/document.html";
+    if (isReadingAsset(legacyArticle)) {
+      const comments = template.content.querySelector("#tosaypl");
+      if (comments) for (const node of comments.childNodes) {
+        if (node.nodeType === Node.TEXT_NODE && /^\s*(?:function CheckPl\(obj\)|document\.write\('<'\+'\/script>'\);)/.test(node.nodeValue || ""))
+          node.nodeValue = "";
+      }
+      for (const node of template.content.querySelector(".account")?.childNodes || []) {
+        if (node.nodeType === Node.TEXT_NODE && /^\s*document\.write\('<'\+'\/script>'\);\s*$/.test(node.nodeValue || ""))
+          node.nodeValue = "";
+      }
+      const walker = document.createTreeWalker(template.content, NodeFilter.SHOW_TEXT);
+      while (walker.nextNode()) {
+        const node = walker.currentNode;
+        const text = node.nodeValue || "";
+        if (text.includes("var _bdhmProtocol") && text.includes("document.write(unescape("))
+          node.nodeValue = text.slice(0, text.indexOf("var _bdhmProtocol"));
+      }
+    }
     /** @param {string | null} value */
     const stripUrls = (value) => sanitizeCssReferences(value, { strict: true });
     for (const style of template.content.querySelectorAll("style")) {
@@ -644,9 +680,9 @@ export function createReaderHtmlFormat(readerContext) {
     // content; the remaining frame styles keep their later cascade position.
     const frameStyle = readerContext.HTML_FRAME_STYLE;
     const policyEnd = frameStyle.startsWith('<meta http-equiv="Content-Security-Policy"') ? frameStyle.indexOf(">") + 1 : 0;
-    return frameStyle.slice(0, policyEnd) + documentData.html + frameStyle.slice(policyEnd) +
+    return frameStyle.slice(0, policyEnd) + documentData.html +
       (documentData.discourse ? readerContext.DISCOURSE_HTML_STYLE : "") +
-      (documentData.spreadsheet ? readerContext.SPREADSHEET_HTML_STYLE : "");
+      (documentData.spreadsheet ? frameStyle.slice(policyEnd) + readerContext.SPREADSHEET_HTML_STYLE : HTML_PROSE_STYLE);
   }
 
   /** @param {HTMLIFrameElement} frame */
@@ -669,7 +705,7 @@ export function createReaderHtmlFormat(readerContext) {
     frame.title = `${readerContext.documentState.title} 正文`;
     frame.setAttribute("sandbox", "allow-same-origin");
     frame.setAttribute("referrerpolicy", "no-referrer");
-    frame.style.colorScheme = "only light";
+    if (documentData.spreadsheet) frame.style.colorScheme = "only light";
     const frameLoaded = /** @type {Promise<void>} */ (new Promise((resolve, reject) => {
       let untrack = () => {}, frameTimer = 0, deadline = 0, started = false;
       const cleanup = () => {
@@ -684,13 +720,18 @@ export function createReaderHtmlFormat(readerContext) {
         cleanup();
         try {
           readerContext.assertReaderActive();
+          const doc = frame.contentDocument;
+          if (!documentData.spreadsheet) {
+            doc.documentElement.dataset.readerTheme = document.documentElement.dataset.theme || "dark";
+            wrapEbookTables(doc.body);
+            normalizeHtmlIndent(doc);
+          }
           readerContext.repairHtmlContrast(frame);
-          frame.contentDocument.documentElement.style.zoom = String(readerContext.documentState.zoom);
+          doc.documentElement.style.zoom = String(readerContext.documentState.zoom);
           /** @type {Window} */ (frame.contentWindow).addEventListener("scroll", readerContext.handleReaderPositionChange, {
             passive: true
           });
-           frame.contentDocument.addEventListener("keydown", readerContext.handleReaderKeydown);
-           const doc = frame.contentDocument;
+           doc.addEventListener("keydown", readerContext.handleReaderKeydown);
            /** @param {MouseEvent} event */
            const jump = (event) => {
              const href = clickedLink(event)?.getAttribute("href")?.trim() || "";
@@ -741,6 +782,37 @@ export function createReaderHtmlFormat(readerContext) {
      readerContext.status.textContent = documentData.spreadsheet ? "表格" : "HTML";
   }
 
+  /** @param {Document} doc */
+  function normalizeHtmlIndent(doc) {
+    // Legacy exports use literal full-width spaces to indent lines after BR.
+    // Never touch runs in the middle of prose, preformatted code, or tables.
+    const walker = doc.createTreeWalker(doc.body, NodeFilter.SHOW_TEXT);
+    const blocks = /^(?:body|p|div|section|article|li|blockquote|h[1-6])$/;
+    while (walker.nextNode()) {
+      const node = walker.currentNode;
+      const parent = node.parentElement;
+      const value = node.nodeValue || "";
+      const indent = /^[\t\r\n ]*(?:\u3000[ \t]*){3,}(?=\S)/.exec(value);
+      if (!indent || parent?.closest("pre,code,table,style,script")) continue;
+      // Ascend through wrappers only while at their first visible child.
+      let leading = false;
+      for (let sibling = node; sibling.parentElement; sibling = sibling.parentElement) {
+        let previous = sibling.previousSibling;
+        while (previous?.nodeType === Node.COMMENT_NODE ||
+               (previous?.nodeType === Node.TEXT_NODE && !previous.textContent?.trim())) previous = previous.previousSibling;
+        if (previous) {
+          leading = previous.nodeName === "BR";
+          break;
+        }
+        if (blocks.test(sibling.parentElement.localName)) {
+          leading = true;
+          break;
+        }
+      }
+      if (leading) node.nodeValue = "\u3000\u3000" + value.slice(indent[0].length);
+    }
+  }
+
   /** @param {Uint8Array} bytes @param {string} [hint] */
   function detectHtmlEncoding(bytes, hint = "") {
     if (bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf) return "utf-8";
@@ -766,6 +838,9 @@ export function createReaderHtmlFormat(readerContext) {
     }
     return readerContext.detectTextEncoding(bytes, hint);
   }
+
+  /** @type {WeakMap<Document, Map<HTMLElement, [string, string, string]>>} */
+  const contrastEdits = new WeakMap();
 
   /** @param {HTMLIFrameElement} frame */
   function repairHtmlContrast(frame) {
@@ -793,41 +868,61 @@ export function createReaderHtmlFormat(readerContext) {
       const [red = 0, green = 0, blue = 0] = channels;
       return red * 0.2126 + green * 0.7152 + blue * 0.0722;
     };
+    // Undo only the preceding pass's edits, then recompute against the new paper.
+    let repaired = contrastEdits.get(doc);
+    if (repaired) for (const [element, [value, priority, replacement]] of repaired) {
+      if (element.style.color === replacement && element.style.getPropertyPriority("color") === "important")
+        element.style.setProperty("color", value, priority);
+    }
+    repaired = new Map();
+    contrastEdits.set(doc, repaired);
     // Repeated computed color strings (e.g. inherited prose colors) have the
     // same metrics even after a repair changes which strings CSS returns.
-    /** @type {Map<string, {light: number, alpha: number} | null>} */
+    /** @type {Map<string, {light: number, alpha: number, rgb: [number, number, number, number]} | null>} */
     const colors = new Map();
     /** @param {string} value */
     const colorMetrics = (value) => {
       const cached = colors.get(value);
       if (cached !== undefined) return cached;
       const color = parseColor(value);
-      const metrics = color && { light: luminance(color), alpha: color[3] };
+      const metrics = color && { light: luminance(color), alpha: color[3], rgb: color };
       if (colors.size < 128) colors.set(value, metrics);
       return metrics;
     };
-    /** @type {Map<Element, number>} */
+    /** @type {Map<Element, {rgb: [number, number, number, number], light: number}>} */
     const backgrounds = new Map();
     /** @param {HTMLElement} element @param {CSSStyleDeclaration} style */
     const background = (element, style) => {
       const pending = [];
-      let light = 1;
+      /** @type {{rgb: [number, number, number, number], light: number}} */
+      let resolved = { rgb: [255, 255, 255, 1], light: 1 };
       for (let current = /** @type {HTMLElement | null} */ (element); current; current = current.parentElement) {
         const cached = backgrounds.get(current);
         if (cached !== undefined) {
-          light = cached;
+          resolved = cached;
           break;
         }
-        pending.push(current);
         const color = colorMetrics((current === element ? style :
           frameWindow.getComputedStyle(current)).backgroundColor);
-        if (color && color.alpha > 0.1) {
-          light = color.light;
+        if (color?.alpha === 1) {
+          resolved = color;
+          backgrounds.set(current, resolved);
           break;
         }
+        pending.push({ current, color });
       }
-      for (const current of pending) backgrounds.set(current, light);
-      return light;
+      for (let entry = pending.pop(); entry; entry = pending.pop()) {
+        const { current, color } = entry;
+        if (color && color.alpha > 0) {
+          const { alpha, rgb: [r, g, b] } = color;
+          const [br, bg, bb] = resolved.rgb;
+          /** @type {[number, number, number, number]} */
+          const rgb = [r * alpha + br * (1 - alpha), g * alpha + bg * (1 - alpha), b * alpha + bb * (1 - alpha), 1];
+          resolved = { rgb, light: luminance(rgb) };
+        }
+        backgrounds.set(current, resolved);
+      }
+      return resolved.light;
     };
     const walker = doc.createTreeWalker(doc.body, NodeFilter.SHOW_TEXT);
     /** @type {Set<HTMLElement>} */
@@ -840,11 +935,13 @@ export function createReaderHtmlFormat(readerContext) {
       const style = frameWindow.getComputedStyle(element);
       const foreground = colorMetrics(style.color);
       const dark = background(element, style);
-      if (!foreground) continue;
+      if (!foreground || foreground.alpha === 0) continue;
       const light = foreground.light;
       const contrast = (Math.max(light, dark) + 0.05) / (Math.min(light, dark) + 0.05);
       if (contrast < 3) {
+        const original = [element.style.color, element.style.getPropertyPriority("color")];
         element.style.setProperty("color", dark > 0.45 ? "#111" : "#f5f5f5", "important");
+        repaired.set(element, [original[0] || "", original[1] || "", element.style.color]);
         // Inherited color and currentColor backgrounds can change after a repair.
         backgrounds.clear();
       }
