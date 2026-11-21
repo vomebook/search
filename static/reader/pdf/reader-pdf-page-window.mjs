@@ -648,27 +648,47 @@ export function createReaderPdfPageWindow(readerContext) {
       observer.unobserve(shell);
       visibleObserver.unobserve(shell);
     }, book.seedRatio || 1.414);
-    readerContext.pdfShellsReady = readerContext.pdfShellWindow ? Promise.resolve() : readerContext.appendShellsBatched(createShell, totalPages, 250);
-    readerContext.pdfShellsReady.catch(() => {});
+    // The opening image only needs its own shell; history and the background
+    // observers still wait for the complete layout.
+    const mounted = !readerContext.pdfShellWindow && initialPage > 1 ? Promise.withResolvers() : null;
+    const shellsReady = readerContext.pdfShellsReady = readerContext.pdfShellWindow
+      ? Promise.resolve() : readerContext.appendShellsBatched(createShell, totalPages, 250, mounted
+        ? endPage => { if (endPage >= initialPage) mounted.resolve(undefined); } : undefined);
+    shellsReady.catch(() => {});
     publishLayout();
     try {
       if (ownsOpeningPosition()) {
-        if (!readerContext.pdfShellWindow && initialPage !== 1) await readerContext.pdfShellsReady;
+        if (mounted) await Promise.race([mounted.promise, shellsReady]);
         readerContext.assertReaderActive();
         if (ownsOpeningPosition()) {
           const openingShell = readerContext.pdfShellWindow?.ensure(initialPage) || (initialPage === 1
             ? firstShell : readerContext.content.querySelector(`.reader-page[data-page="${initialPage}"]`));
           if (!openingShell) throw new Error("PDF initial page shell missing");
-          await drawOpeningImagePage(openingShell, ownsOpeningPosition);
+          try {
+            await drawOpeningImagePage(openingShell, ownsOpeningPosition);
+          } catch (error) {
+            // An early error can precede a newer, successful page jump
+            // while unrelated shells are still mounting. Don't fail that view.
+            await shellsReady.catch(() => {});
+            readerContext.assertReaderActive();
+            if (ownsOpeningPosition()) throw error;
+          }
+          if (mounted) {
+            await shellsReady;
+            // Near the temporary end the scroll can clamp. Align again before
+            // releasing observers, but leave any newer navigation untouched.
+            if (ownsOpeningPosition() && openingShell.isConnected)
+              readerContext.viewport.scrollTop = readerContext.readerPageScrollTop(openingShell);
+          }
         }
       }
     } finally {
       // Restore or fall back only after the batch stops mutating the layout.
       // Keep the original image error if the abandoned batch also fails.
-      await readerContext.pdfShellsReady.catch(() => {});
+      await shellsReady.catch(() => {});
       if (!readerContext.readerAbortController.signal.aborted) releaseInitialRenderGate();
     }
-    await readerContext.pdfShellsReady;
+    await shellsReady;
   }
 
   /** @param {Element} target @param {() => boolean} ownsOpeningPosition */

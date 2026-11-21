@@ -87,8 +87,9 @@ function ensureStyle(root) {
 }
 
 /** @param {import('../../../typings/reader-speech-strict').SpeechContext} readerContext
- * @param {() => Promise<void>} loadPlayer */
-export function createReaderSpeech(readerContext, loadPlayer) {
+ * @param {() => Promise<void>} loadPlayer
+ * @param {string} [handoffPayload] Captured before Reader startup; omitted by isolated callers. */
+export function createReaderSpeech(readerContext, loadPlayer, handoffPayload) {
   /** @type {import('../../../typings/reader-speech-strict').SpeechAdapter | null} */
   let adapter = null;
   let installed = false, disposed = false, loadingPlayer = false;
@@ -491,9 +492,13 @@ export function createReaderSpeech(readerContext, loadPlayer) {
   /** @type {(({pending: true} | SpeechPosition) & {settings?: PlaybackSettings}) | null} */
   let resume = (() => {
     try {
-      if (!String(window.name).startsWith(RESUME_PREFIX)) return null;
-      const raw = window.name.slice(RESUME_PREFIX.length);
-      window.name = "";
+      let raw = handoffPayload;
+      if (raw === undefined) {
+        if (!String(window.name).startsWith(RESUME_PREFIX)) return null;
+        raw = window.name.slice(RESUME_PREFIX.length);
+        window.name = "";
+      }
+      if (!raw) return null;
       const value = /** @type {{pending?: boolean; unit?: number; offset?: number; settings?: PlaybackSettings} | null} */ (JSON.parse(raw));
       const settings = value?.settings;
       if (settings && (!Number.isFinite(settings.rate) || settings.rate < 0.5 || settings.rate > 2 ||
@@ -715,11 +720,11 @@ export function createReaderSpeech(readerContext, loadPlayer) {
     }).catch(() => {}).finally(() => { loadingPlayer = false; });
   }
 
-  function install() {
+  function install(alreadyReady = false) {
     if (installed) return;
     installed = true;
     try {
-      if (!readerContext.isReaderOverlayFrame?.()) {
+      if (handoffPayload === undefined && !readerContext.isReaderOverlayFrame?.()) {
         sessionStorage.removeItem(HANDOFF_KEY);
         localStorage.removeItem(HANDOFF_KEY);
       }
@@ -732,6 +737,7 @@ export function createReaderSpeech(readerContext, loadPlayer) {
       if (detail.phase === "ready") attachWhenReady();
       else if (detail.phase === "disposed") { disposed = true; speech()?.stop?.(); detach(); }
     });
+    if (alreadyReady) attachWhenReady();
   }
 
   return { installReaderSpeech: install, readerSpeechAdapter: () => adapter };

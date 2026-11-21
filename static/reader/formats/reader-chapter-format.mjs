@@ -391,7 +391,9 @@ export function createReaderChapterFormat(readerContext) {
         const candidates = targets.get(normalizeTocLabel(entry.label));
         if (candidates?.size !== 1) continue;
         const fragment = candidates.values().next().value;
-        if (idCounts.get(fragment) === 1 && chapterTarget(article, fragment)) entry.fragment = fragment;
+        // The census already proves that exactly one descendant has this
+        // generated ID or name. Binding still chooses the target separately.
+        if (idCounts.get(fragment) === 1) entry.fragment = fragment;
       }
     };
     const mergedChmToc = manifest.chapters.some(chapter =>

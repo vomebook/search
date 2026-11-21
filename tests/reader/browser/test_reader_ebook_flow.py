@@ -337,6 +337,59 @@ class EbookFlowTests(unittest.TestCase):
         ''')), 3)
         self.assertEqual(len(requested), 1)
 
+    def test_merged_chm_repairs_dense_toc_without_per_anchor_selectors(self):
+        source = ('https://voiceofml-search.hf.space/api/reader-bucket-resource?path=chapters/ebook/chm/'
+                  + 'a' * 64 + '/1234567890abcdef/chapter-manifest.json')
+        count = 400
+        links = ''.join(f'<a href="#chm-page-{i}">Section {i}</a>' for i in range(1, count + 1))
+        anchors = ''.join(f'<p id="chm-page-{i}">Section {i}</p>' for i in range(1, count - 1))
+        body = ('<html xmlns="http://www.w3.org/1999/xhtml"><body><h1>Opening CHM</h1>' + links +
+                '<a href="#chm-page-1">Section 1</a>' +  # Repeated links to the same page agree.
+                f'<a href="#chm-page-{count + 1}">Ambiguous</a><a href="#chm-page-1">Ambiguous</a>' +
+                f'<a href="#chm-page-{count + 2}">Duplicate anchor</a>' +
+                '<p>Book prose</p>' * 24000 + anchors +
+                f'<a name="chm-page-{count - 1}">Name only</a>' +
+                f'<a id="chm-page-{count}" name="chm-page-{count}">One node with both attributes</a>' +
+                f'<p id="chm-page-{count + 2}"></p><a name="chm-page-{count + 2}"></a>' +
+                '<p style="height:1800px">End</p></body></html>')
+        manifest = {'version': 1, 'kind': 'epub-chapters', 'chapters': [
+            {'index': 1, 'path': 'chapters/chapter-0001.xhtml', 'source_path': 'chm-fallback.html',
+             'bytes': len(body)}], 'toc': [
+            {'title': label, 'chapter': 1, 'depth': 0, 'fragment': ''}
+            for label in [f'Section {i}' for i in range(1, count + 1)] + ['Ambiguous', 'Duplicate anchor']]}
+        self.expose()
+        self.page.route('**/api/reader-bucket-resource**', lambda route: route.fulfill(json=manifest)
+            if 'chapter-manifest.json' in route.request.url else route.fulfill(
+                content_type='application/xhtml+xml', body=body))
+        self.page.add_init_script('''(() => {
+          window.__chmAnchorScans = [0, 0];
+          for (const [index, method] of ['querySelector', 'querySelectorAll'].entries()) {
+            const native = Element.prototype[method];
+            Element.prototype[method] = function (selector) {
+              if (this.matches('article.reader-epub-chapter') &&
+                  (selector.startsWith('[id="chm-page-') || selector === '[id], [name]')) __chmAnchorScans[index]++;
+              return native.call(this, selector);
+            };
+          }
+        })()''')
+        self.page.goto(self.origin + support.PREFIX + '/static/reader.html?' + urlencode(
+            dict(url=source, ext='epub-chapters')))
+        self.page.locator('html[data-reader-phase="ready"]').wait_for()
+        self.assertTrue(self.page.get_by_role('heading', name='Opening CHM').is_visible())
+        scans = self.page.evaluate('__chmAnchorScans.slice()')
+        expected = [[f'chm-page-{i}', f'chm-page-{i}'] for i in range(1, count + 1)] + [['', '1']] * 2
+        self.assertEqual(self.page.evaluate('''() => __ebook.toc().map(({fragment, target}) =>
+            [fragment, target?.isConnected && (target.id || target.getAttribute('name') || target.dataset.chapter)])
+        '''), expected)
+        self.page.locator('#toc-list').get_by_role('link', name=f'Section {count - 1}', exact=True).click()
+        self.page.wait_for_function('''count => {
+          const anchor = document.querySelector(`.reader-epub-chapter [name="chm-page-${count - 1}"]`);
+          return Math.abs(anchor.getBoundingClientRect().top - document.querySelector('#viewport').getBoundingClientRect().top) < 3;
+        }''', arg=count)
+        # One census for fragment repair, one for dense TOC binding, and no
+        # per-anchor selectors until the user deliberately navigates.
+        self.assertEqual(scans, [0, 2])
+
     def test_chapter_rewrites_resource_attributes_without_revisiting_prose(self):
         base = 'chapters/ebook/epub/' + 'a' * 64 + '/1234567890abcdef/'
         endpoint = 'https://voiceofml-search.hf.space/api/reader-bucket-resource?'

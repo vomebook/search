@@ -218,6 +218,26 @@ class ReaderSpeechTest(unittest.TestCase):
         finally:
             context.close()
 
+    def test_ready_does_not_wait_for_speech_adapter(self):
+        held = []
+        adapter = re.compile(r"/static/reader/ui/reader-speech(?:\.[a-f0-9]{12})?\.mjs$")
+        context, page, posts, errors = self.open(
+            "txt", TEXT.encode(), "text/plain; charset=utf-8",
+            setup=lambda page: page.route(adapter, lambda route: held.append(route))
+        )
+        try:
+            self.assertTrue(page.locator(".reader-text").is_visible())
+            wait(page, "() => document.documentElement.dataset.readerPhase === 'ready'")
+            self.assertEqual(len(held), 1)
+            self.assertFalse(posts)
+            self.assertEqual(page.locator("[data-speech-toggle]").count(), 0)
+            held[0].continue_()
+            self.assertTrue(self.play(page, posts)["text"].lstrip().startswith("第0段"))
+            self.stop(page)
+            self.assertEqual(errors, [])
+        finally:
+            context.close()
+
     def test_original_pdf_speech_uses_ocr_only_on_playback_and_falls_back_to_native(self):
         context, page, _, errors = self.open('txt', TEXT.encode(), 'text/plain; charset=utf-8')
         try:

@@ -65,8 +65,7 @@
     "reader/core/reader-document-loader.mjs", "reader/pdf/reader-pdf-page-window.mjs", "reader/pdf/reader-pdf-text-runtime.mjs",
     "reader/core/reader-bindings.mjs", "reader/formats/reader-html-format.mjs", "reader/pdf/reader-pdf-renderer.mjs", "reader/formats/reader-text-format.mjs",
     "reader/formats/reader-chapter-format.mjs", "reader/formats/reader-format-controller.mjs",
-    "reader/pdf/reader-pdf-engine.mjs", "reader/pdf/reader-pdf-search.mjs",
-    "reader/ui/reader-speech.mjs"
+    "reader/pdf/reader-pdf-engine.mjs", "reader/pdf/reader-pdf-search.mjs"
   ]);
   const readerFiles = Object.freeze([
     "reader-resources.js",
@@ -119,6 +118,7 @@
     "reader/pdf/reader-pdf-network.mjs",
     "reader/pdf/reader-pdf-text-store.mjs",
     "tts-client.js",
+    "reader/ui/reader-speech.mjs",
     "reader.css",
     ...readerComponentFiles,
     "reader/reader-components.mjs",
@@ -126,6 +126,7 @@
   ]);
   const lazyFiles = new Set([
     "tts-client.js",
+    "reader/ui/reader-speech.mjs",
     ...readerComponentFiles,
     "reader/reader-components.mjs",
     "reader/pdf/reader-pdf-text-store.mjs",

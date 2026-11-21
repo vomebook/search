@@ -47,8 +47,7 @@ import {
   createReaderChapterFormat,
   createReaderFormatController,
   createReaderPdfEngine,
-  createReaderPdfSearch,
-  createReaderSpeech
+  createReaderPdfSearch
 } from "./reader/reader-components.mjs";
 
 const readerContext = {
@@ -642,9 +641,6 @@ let {
   makePdfSearchPageLoader, publishPdfSearchProgress, getPdfPersistentTextStore, cachePdfSearchText,
   loadPdfSearchText, fullSearchPdfMatches
 } = createReaderPdfSearch(readerContext);
-// Native reading (shared player in reader.html); installed once runtime exists.
-const { installReaderSpeech } = createReaderSpeech(readerContext, () => loadScript("/search/static/tts-client.js"));
-
 /** @type {Array<{at: number, stage: string, page: number, outcome: string, ms: number}>} */
 const pdfPageTimings = [];
 
@@ -678,7 +674,33 @@ const imageLoader = createReaderImageLoader({
 readerBindings.trackEarlySourceResolution();
 const pdfDiagnostics = Object.freeze({snapshot:() => ({pages:pdfPageTimings.map(row=>({...row})), requests:pdfFetchPolicy?.timings || [], cache:pdfPersistentTextStore?.stats || null})});
 readerBindings.publishDiagnosticsAndInstallCompatibility();
-installReaderSpeech();
+// Capture the frame handoff before it can survive a failed or abandoned open.
+let speechResume = "";
+try {
+  const prefix = "reader-speech-resume:";
+  if (String(window.name).startsWith(prefix)) {
+    speechResume = window.name.slice(prefix.length);
+    window.name = "";
+  }
+  if (!isReaderOverlayFrame()) {
+    sessionStorage.removeItem("reader-speech-handoff");
+    localStorage.removeItem("reader-speech-handoff");
+  }
+} catch (_) {}
+const stopWaitingForSpeech = readerRuntime.events.on("phase", detail => {
+  if (!detail || typeof detail !== "object" || !("phase" in detail) || detail.phase !== "ready") return;
+  stopWaitingForSpeech();
+  const mode = readerContext.capability.mode;
+  if (!["text", "markdown", "html", "epub-chapters", "pdf", "pdf-pages"].includes(mode || "")) return;
+  if (mode === "pdf-pages" && !(readerContext.ocrManifestUrl || readerContext.pdfOcrManifest || readerContext.pdfDocument)) return;
+  // Reading is already usable. A stalled adapter can't block it, and a
+  // parked Reader can resume without depending on a visible animation frame.
+  const moduleUrl = "/search/static/reader/ui/reader-speech.mjs";
+  void import(moduleUrl).then((/** @type {typeof import('./reader/ui/reader-speech.mjs')} */ module) => {
+    if (!readerRuntime.state.lifecycle.disposed && readerRuntime.state.lifecycle.phase === "ready")
+      module.createReaderSpeech(readerContext, () => loadScript("/search/static/tts-client.js"), speechResume).installReaderSpeech(true);
+  }).catch(() => {});
+});
 // Source metadata and session navigation.
 // GitHub Pages serves assets under /search/ and delegates document requests to HF.
 // Folder returns use hash routes; explicit folder URLs take precedence over resolved metadata.

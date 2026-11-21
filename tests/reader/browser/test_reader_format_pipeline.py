@@ -93,6 +93,30 @@ class ReaderFormatPipelineTests(unittest.TestCase):
                       self.page.locator('#content').inner_text())
                 self.assertTrue(text.strip())
 
+    def test_legacy_markdown_and_html_without_charset_keep_their_decoding(self):
+        cases = (
+            ('md', 'big5', 'text/markdown', '# 中文\n\n' + '這是中文正文。\n\n' * 50, '這是中文正文。'),
+            ('html', 'gb18030', 'text/html', '<h1>中文</h1>' + '<p>这是中文正文。</p>' * 50, '这是中文正文。'),
+        )
+        for ext, encoding, mime, document, paragraph in cases:
+            with self.subTest(ext=ext, encoding=encoding):
+                def serve(route):
+                    route.fulfill(content_type=mime, body=document.encode(encoding),
+                                  headers={'Access-Control-Allow-Origin': '*'})
+
+                self.page.route('**/api/reader-content**', serve)
+                try:
+                    self.page.goto(self.origin + support.PREFIX + '/static/reader.html?' + urlencode(dict(
+                        url=f'https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/legacy.{ext}',
+                        ext=ext, title='中文')))
+                    self.page.locator('html[data-reader-phase="ready"]').wait_for()
+                    content = (self.page.locator('.reader-markdown') if ext == 'md' else
+                               self.page.frame_locator('iframe.html-frame').locator('body'))
+                    self.assertEqual(content.locator('h1').text_content(), '中文')
+                    self.assertEqual(content.locator('p').all_text_contents(), [paragraph] * 50)
+                finally:
+                    self.page.unroute('**/api/reader-content**', serve)
+
     def test_repeated_inline_styles_keep_exact_sanitized_html(self):
         safe = 'color: #222; padding: 4px 8px'
         remote = 'https://style.reader-fixture.test/asset.png'

@@ -212,6 +212,33 @@ export function createReaderTextFormat(readerContext) {
     }
   }
 
+  /** @type {Uint8Array | undefined} */
+  let cjkWeights;
+
+  function getCjkWeights() {
+    // Index just the CJK range, and only allocate this on the legacy path.
+    const weights = new Uint8Array(0x9fff - 0x3400 + 1).fill(1);
+    const common = "的一是在不了有和人这中大为上个国我以要他时来用们生到作地于出就分对成会可主发年动同工也能下过子说产种面而方后多定行学法所民得经之进着等部家自理起现实都体制当本性应开合因由然前外政社义事相全与关各重新内正反明原利质向道命此变结解问意建公系军情者立代通题党程展料员革文总品活长求老基资级图统知组别期论运农指区战任处理世";
+    for (let i = 0; i < common.length; i++) weights[common.charCodeAt(i) - 0x3400] = 6;
+    return weights;
+  }
+
+  /** @param {string} text */
+  function legacyEncodingScore(text) {
+    // Tally the same UTF-16 code units and weights in one pass, without
+    // materializing an array of matches for each class and candidate.
+    const weights = cjkWeights ??= getCjkWeights();
+    let cjk = 0, cyrillic = 0, controls = 0, replacements = 0;
+    for (let i = 0; i < text.length; i++) {
+      const code = text.charCodeAt(i);
+      if (code >= 0x3400 && code <= 0x9fff) cjk += /** @type {number} */ (weights[code - 0x3400]);
+      else if (code >= 0x0400 && code <= 0x04ff) cyrillic++;
+      else if (code === 0xfffd) replacements++;
+      else if (code < 0x20 && code !== 9 && code !== 10 && code !== 13) controls++;
+    }
+    return Math.max(cjk, cyrillic) - controls * 20 - replacements * 40;
+  }
+
   /** @param {Uint8Array} bytes @param {string} [hint] */
   function detectTextEncoding(bytes, hint = "") {
     if (bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf) return "utf-8";
@@ -238,17 +265,7 @@ export function createReaderTextFormat(readerContext) {
       bestScore = -Infinity;
     for (const encoding of candidates) {
       try {
-        const text = new TextDecoder(encoding).decode(bytes);
-        const controls = (text.match(/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/g) || []).length;
-        const replacements = (text.match(/\ufffd/g) || []).length;
-        const cjk = (text.match(/[\u3400-\u9fff]/g) || []).length;
-        const cyrillic = (text.match(/[\u0400-\u04ff]/g) || []).length;
-        const commonCjk = (
-          text.match(
-            /[的一是在不了有和人这中大为上个国我以要他时来用们生到作地于出就分对成会可主发年动同工也能下过子说产种面而方后多定行学法所民得经之进着等部家自理起现实都体制当本性应开合因由然前外政社义事相全与关各重新内正反明原利质向道命此变结解问意建公系军情者立代通题党程展料员革文总品活长求老基资级图统知组别期论运农指区战任处理世]/g
-          ) || []
-        ).length;
-        const score = Math.max(cjk + commonCjk * 5, cyrillic) - controls * 20 - replacements * 40;
+        const score = legacyEncodingScore(new TextDecoder(encoding).decode(bytes));
         if (score > bestScore) {
           best = encoding;
           bestScore = score;
