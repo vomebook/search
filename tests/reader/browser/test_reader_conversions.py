@@ -13,7 +13,67 @@ class ImagePageFirstViewTests(unittest.TestCase):
     tearDown = fixtures.ReaderRefactorTest.tearDown
     reader_url = fixtures.ReaderRefactorTest.reader_url
 
-    def open_with_held_trailing_shells(self, fail_saved=False):
+    def test_verified_first_image_starts_before_unrelated_shell_construction(self):
+        prefix = 'pages/image/tiff/' + 'b' * 64 + '/'
+        source = 'https://voiceofml-search.hf.space/api/reader-bucket-resource?' + urlencode({
+            'path': prefix + 'page-manifest.json'})
+        self.page.route('**/static/reader/core/reader-store.js*', lambda route: route.fulfill(
+            content_type='text/javascript', body=fixtures.support.STORE_SCRIPT.replace(
+                'new Promise((resolve) => setTimeout(() => resolve(null), 300))', 'Promise.resolve(null)')))
+        self.page.add_init_script('''(() => {
+          // Measure demand, not the separate speculative TIFF preload.
+          Object.defineProperty(navigator, 'connection', {value: {saveData: true}});
+          const create = Document.prototype.createElement;
+          Document.prototype.createElement = function(tag, ...args) {
+            if (tag === 'section' && window.unrelatedShellStart === undefined && document.querySelector('.reader-page'))
+              window.unrelatedShellStart = performance.now();
+            return create.call(this, tag, ...args);
+          };
+          const src = Object.getOwnPropertyDescriptor(HTMLImageElement.prototype, 'src');
+          Object.defineProperty(HTMLImageElement.prototype, 'src', {...src, set(url) {
+            if (!window.openingImage && url.includes('page-000001.webp')) {
+              window.openingImage = this;
+              window.openingImageTotal = document.querySelector('#page-total').textContent;
+            }
+            src.set.call(this, url);
+          }});
+        })()''')
+
+        manifests, requests = [], []
+
+        def resource(route):
+            path = parse_qs(urlsplit(route.request.url).query)['path'][0]
+            if path.endswith('/page-manifest.json'):
+                manifests.append(route)
+            else:
+                requests.append(path)
+                route.fulfill(content_type='image/webp', body=fixtures.support.IMAGE_FIXTURES['webp'][1],
+                              headers={'Timing-Allow-Origin': '*'})
+
+        self.page.route('**/api/reader-bucket-resource?**', resource)
+        for count in (253, 257):
+            with self.subTest(count=count):
+                requests.clear()
+                self.page.goto(self.reader_url('image-pages', url=source), wait_until='domcontentloaded')
+                self.page.wait_for_function('() => window.__storeStartedAt !== undefined')
+                self.page.evaluate('() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))')
+                self.assertEqual(len(manifests), 1)
+                self.assertEqual(requests, [])
+                self.assertFalse(self.page.evaluate('!!window.openingImage'))
+                manifests.pop().fulfill(json=dict(version=1, kind='image-page-stream', page_count=count, pages=[{}] * count))
+                image = self.page.locator('.reader-page[data-page="1"] img.ready')
+                image.wait_for(state='visible')
+                ordered = self.page.evaluate('''() => {
+                  const request = performance.getEntriesByName(window.openingImage.src, 'resource')[0];
+                  return {request: request?.startTime, shells: window.unrelatedShellStart};
+                }''')
+                self.assertLessEqual(ordered['request'], ordered['shells'], ordered)
+                self.assertEqual(self.page.evaluate('window.openingImageTotal'), f'/ {count}')
+                self.assertTrue(image.evaluate('img => img === window.openingImage && img.complete && img.naturalWidth > 0'))
+                self.page.locator('html[data-reader-phase="ready"]').wait_for(state='attached')
+                self.assertEqual(requests.count(prefix + 'pages/page-000001.webp'), 1)
+
+    def open_with_held_trailing_shells(self, fail_saved=False, saved=120):
         prefix = 'pages/image/tiff/' + 'a' * 64 + '/'
         source = 'https://voiceofml-search.hf.space/api/reader-bucket-resource?' + urlencode({
             'path': prefix + 'page-manifest.json'})
@@ -47,7 +107,7 @@ class ImagePageFirstViewTests(unittest.TestCase):
         self.page.route('**/static/reader/core/reader-store.js*', lambda route: route.fulfill(
             content_type='text/javascript', body=fixtures.support.STORE_SCRIPT.replace(
                 'new Promise((resolve) => setTimeout(() => resolve(null), 300))',
-                'Promise.resolve({page:120,pageOffset:28,zoom:100})')))
+                f'Promise.resolve({{page:{saved},pageOffset:28,zoom:100}})')))
         # Require the real image demand, not just a matching speculative preload.
         self.page.add_init_script("Object.defineProperty(navigator,'connection',{value:{saveData:true}})")
         self.page.goto(self.reader_url('image-pages', url=source), wait_until='domcontentloaded')
@@ -73,6 +133,19 @@ class ImagePageFirstViewTests(unittest.TestCase):
         offset = target.evaluate('node => document.querySelector("#viewport").getBoundingClientRect().top - node.getBoundingClientRect().top')
         self.assertAlmostEqual(offset, 28, delta=3)
 
+    def test_saved_image_fetch_does_not_wait_for_its_shell_batch(self):
+        requests = self.open_with_held_trailing_shells(saved=253)
+        target = self.page.locator('.reader-page[data-page="253"]')
+        self.page.wait_for_function('''() => performance.getEntriesByType('resource').some(
+            entry => entry.initiatorType === 'img' && entry.name.includes('page-000253.webp'))''')
+        self.assertEqual(requests, ['page-000253.webp'])
+        self.assertEqual(target.count(), 0)
+        self.assertEqual(self.page.locator('.reader-page img.ready').count(), 0)
+        self.page.evaluate('window.releaseTrailingShells()')
+        target.locator('img.ready').wait_for(state='visible')
+        self.page.locator('html[data-reader-phase="ready"]').wait_for(state='attached')
+        self.assertEqual(self.page.locator('#page-number').input_value(), '253')
+        self.assertEqual(requests.count('page-000253.webp'), 1)
 
     def test_failed_opening_image_does_not_replace_newer_page_while_batch_is_held(self):
         self.open_with_held_trailing_shells(fail_saved=True)

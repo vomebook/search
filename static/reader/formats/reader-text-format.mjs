@@ -114,11 +114,16 @@ export function createReaderTextFormat(readerContext) {
       }
     };
     const startDecoder = async () => {
-      const sample = new Uint8Array(sampleLength);
-      let offset = 0;
-      for (const chunk of sampleChunks) {
-        sample.set(chunk, offset);
-        offset += chunk.byteLength;
+      // A cache-backed or buffered response can deliver the entire book in
+      // one chunk. Use the same sample bytes without copying that chunk.
+      let sample = sampleChunks.length === 1 ? sampleChunks[0] : undefined;
+      if (!sample) {
+        sample = new Uint8Array(sampleLength);
+        let offset = 0;
+        for (const chunk of sampleChunks) {
+          sample.set(chunk, offset);
+          offset += chunk.byteLength;
+        }
       }
       decoder = new TextDecoder(readerContext.detectTextEncoding(sample, readerContext.documentState.title));
       clearUtf8Preview();
@@ -244,15 +249,19 @@ export function createReaderTextFormat(readerContext) {
     if (bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf) return "utf-8";
     if (bytes[0] === 0xff && bytes[1] === 0xfe) return "utf-16le";
     if (bytes[0] === 0xfe && bytes[1] === 0xff) return "utf-16be";
-    let evenNulls = 0, oddNulls = 0;
-    for (let index = 0; index < bytes.length; index++) {
-      if (!bytes[index]) {
-        if (index % 2 === 0) evenNulls++;
-        else oddNulls++;
+    // Skip the indexed UTF-16 heuristic on the common NUL-free path.
+    const firstNull = bytes.indexOf(0);
+    if (firstNull !== -1) {
+      let evenNulls = 0, oddNulls = 0;
+      for (let index = firstNull; index < bytes.length; index++) {
+        if (!bytes[index]) {
+          if (index % 2 === 0) evenNulls++;
+          else oddNulls++;
+        }
       }
+      if (oddNulls > bytes.length / 8 && oddNulls > evenNulls * 4) return "utf-16le";
+      if (evenNulls > bytes.length / 8 && evenNulls > oddNulls * 4) return "utf-16be";
     }
-    if (oddNulls > bytes.length / 8 && oddNulls > evenNulls * 4) return "utf-16le";
-    if (evenNulls > bytes.length / 8 && evenNulls > oddNulls * 4) return "utf-16be";
     try {
       new TextDecoder("utf-8", { fatal: true }).decode(bytes, { stream: true });
       return "utf-8";

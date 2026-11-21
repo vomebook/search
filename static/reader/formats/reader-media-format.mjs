@@ -191,6 +191,12 @@ export function createReaderMediaFormat(readerContext) {
     player.style.minHeight = "360px";
     readerContext.content.appendChild(player);
     readerContext.swfPlayer = player;
+    // The bundled Ruffle 0.7.1 wraps data in new Uint8Array(data). Give it
+    // the whole buffer to avoid a full-file copy. Preserve the original input
+    // for other engines or views that don't span their entire buffer.
+    if (typeof factory.version === "string" && factory.version.startsWith("0.7.1+") &&
+        data instanceof Uint8Array && data.buffer instanceof ArrayBuffer &&
+        data.byteOffset === 0 && data.byteLength === data.buffer.byteLength) data = data.buffer;
     await player.ruffle().load({ data });
     readerContext.markReaderContentReady();
     readerContext.status.textContent = "Flash 内容";

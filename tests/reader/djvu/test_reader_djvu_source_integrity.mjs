@@ -314,7 +314,7 @@ for (const invalid of [
   let started=0,terminated=0;const opens=[];
   globalThis.Worker=class {
     constructor(){started++;}
-    postMessage(message){opens.push(message.operation);if(message.operation==='open')
+    postMessage(message){opens.push(message.operation);if (message.operation==='prepare' || message.operation==='open')
       queueMicrotask(()=>this.onmessage({data:{id:message.id,ok:true,count:1}}));}
     terminate(){terminated++;}
   };
@@ -342,8 +342,31 @@ for (const invalid of [
   aborted.value.readPdfOcrJson=async()=>{controller.abort();throw controller.signal.reason};
   await assert.rejects(openNativeDjvu(aborted.value),{name:'AbortError'});
   assert.equal(aborted.value.ocrManifestUrl,'/historical-ocr','cancel must not erase retained OCR metadata');
-  assert.equal(started,3,'aborted OCR check must not start an additional worker');
-  assert.deepEqual(opens,['open','open','open']);
+  assert.equal(started,4);assert.equal(terminated,4,'abort also closes the prepared worker during the OCR check');
+  assert.deepEqual(opens,['prepare','open','prepare','open','prepare','open','prepare']);
+}
+// A failed full-source response wins over preparation, including a stalled
+// decoder. No original bytes are transferred and the worker is reclaimed.
+for (const engineFails of [false,true]) {
+  let worker, releaseSource;
+  globalThis.Worker=class {
+    constructor(){worker=this;this.terminated=false;}
+    postMessage(message){
+      assert.equal(message.operation,'prepare');
+      assert.equal(message.bytes,undefined);
+      if (engineFails) this.onmessage({data:{id:message.id,ok:false,error:'DJVU_WORKER_FAILED'}});
+    }
+    terminate(){this.terminated=true;}
+  };
+  const value=context(()=>new Promise(resolve=>releaseSource=resolve));
+  Object.assign(value,{sourceUrl:url,ocrManifestUrl:'/historical-ocr'});
+  const opening=openNativeDjvu(value);
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.ok(worker,'prepare starts without waiting for source headers');
+  assert.equal(worker.terminated,engineFails);
+  releaseSource(new Response(null,{status:503}));
+  await assert.rejects(opening,/DJVU_SOURCE_HTTP_503/);
+  assert.equal(worker.terminated,true);
 }
 // Direct immutable primaries bind exact length, SHA-256 and page-map completion
 // before the only transfer of the checked original bytes to the decoder.

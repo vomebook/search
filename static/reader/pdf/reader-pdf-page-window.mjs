@@ -6,23 +6,31 @@ export function createReaderPdfPageWindow(readerContext) {
   async function preloadPdfFirstPage(total, generation) {
     if (readerContext.capability.mode !== "image-pages" || navigator.connection?.saveData) return;
     await readerContext.getInitialReaderRestoration();
+    // Once verified, the opening window owns the request, even if history
+    // resolves late and the speculative callback wakes up after handoff.
     if (readerContext.capability.mode !== "image-pages" || readerContext.readerAbortController.signal.aborted ||
+        readerContext.pdfPageManifest ||
         (generation !== undefined && !readerContext.isReaderGenerationCurrent("navigation", generation))) return;
     try {
-      const source = readerContext.pdfPageManifest || readerContext.pdfManifestSource();
+      const source = readerContext.pdfManifestSource();
       if (!source?.pageUrl) return;
       if (["jxl", "png", "mixed"].includes(source.codec || "")) return;
       const page = readerContext.initialReaderPage(total);
-      readerContext.pdfFirstPagePreloadPage = page;
-      const pageUrl = new URL(source.pageUrl(page));
-      if (readerContext.pdfFirstPagePreload?.src === pageUrl.href) return;
-      readerContext.pdfFirstPagePreload?.removeAttribute("src");
-      const image = readerContext.pdfFirstPagePreload = new Image();
-      image.alt = `第 ${page} 页`;
-      image.decoding = "async";
-      image.fetchPriority = "high";
-      image.src = pageUrl.href;
+      startOpeningImage(page, source.pageUrl(page));
     } catch (_) {}
+  }
+
+  /** @param {number} page @param {string} target */
+  function startOpeningImage(page, target) {
+    const url = new URL(target, location.href).href;
+    if (readerContext.pdfFirstPagePreload?.src === url) return;
+    readerContext.pdfFirstPagePreload?.removeAttribute("src");
+    const image = readerContext.pdfFirstPagePreload = new Image();
+    readerContext.pdfFirstPagePreloadPage = page;
+    image.alt = `第 ${page} 页`;
+    image.decoding = "async";
+    image.fetchPriority = "high";
+    image.src = url;
   }
 
   function pdfManifestSource() {
@@ -548,11 +556,20 @@ export function createReaderPdfPageWindow(readerContext) {
     /** @type {HTMLElement} */ (document.querySelector("#page-total")).textContent = `/ ${totalPages}`;
     readerContext.status.textContent = `${totalPages} 页`;
     await readerContext.getInitialReaderRestoration();
+    readerContext.assertReaderActive();
     const initialPage = readerContext.initialReaderPage(totalPages);
+    // The manifest has validated and this is the image we intend to display,
+    // even on Save-Data. Start its bytes before building the shell window or
+    // waiting for the saved page's batch. The renderer still owns the reveal.
+    if (ownsOpeningPosition()) {
+      startOpeningImage(initialPage, source.pageUrl(initialPage));
+      // Let the browser process the src update before synchronous shell work.
+      await Promise.resolve();
+      readerContext.assertReaderActive();
+    }
     if (readerContext.ocrManifestUrl && !navigator.connection?.saveData) {
       readerContext.loadPdfOcrPage(initialPage).catch(() => {});
     }
-    await readerContext.preloadPdfFirstPage(totalPages);
     let initialRenderGate = true;
     if (Array.isArray(toc) && toc.length)
       readerContext.setToc(
@@ -631,12 +648,16 @@ export function createReaderPdfPageWindow(readerContext) {
       textLayer.setAttribute("role", "document");
       textLayer.setAttribute("aria-label", `第 ${page} 页正文`);
       shell.append(pageState, textLayer);
-      if (
-        page === readerContext.pdfFirstPagePreloadPage &&
-        readerContext.pdfFirstPagePreload &&
-        (!readerContext.pdfFirstPagePreload.complete || readerContext.pdfFirstPagePreload.naturalWidth)
-      )
-        shell.appendChild(readerContext.pdfFirstPagePreload);
+      const openingImage = readerContext.pdfFirstPagePreload;
+      if (openingImage && page === readerContext.pdfFirstPagePreloadPage) {
+        // Hand it off once. A later remount must never move a stale image back
+        // into the window, and a new jump can abandon an unmounted opening page.
+        readerContext.pdfFirstPagePreload = null;
+        if (ownsOpeningPosition() && (!openingImage.complete || openingImage.naturalWidth))
+          shell.appendChild(openingImage);
+        else
+          openingImage.removeAttribute("src");
+      }
       shell.addEventListener("focus", () => readerContext.renderPdfInBackground(shell));
       observeShell(shell);
       return shell;
@@ -686,6 +707,8 @@ export function createReaderPdfPageWindow(readerContext) {
       // Restore or fall back only after the batch stops mutating the layout.
       // Keep the original image error if the abandoned batch also fails.
       await shellsReady.catch(() => {});
+      readerContext.pdfFirstPagePreload?.removeAttribute("src");
+      readerContext.pdfFirstPagePreload = null;
       if (!readerContext.readerAbortController.signal.aborted) releaseInitialRenderGate();
     }
     await shellsReady;

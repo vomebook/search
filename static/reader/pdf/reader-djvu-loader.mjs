@@ -64,23 +64,46 @@ function requireSupportedFallback(transportFailure,error) {
 }
 /** @param {DjvuContext} context @param {URL} resolved @param {AbortSignal} signal @param {number} cacheBytes */
 async function openFullNative(context,resolved,signal,cacheBytes) {
-  const response = await context.fetchReaderUrl(resolved.href, {signal});
-  if (!response.ok) throw new Error(`DJVU_SOURCE_HTTP_${response.status}`);
-  /** @type {Uint8Array<ArrayBuffer> | null} */
-  let packed = await VoiceOfMLReaderSecurity.readBytes(response, VoiceOfMLReaderSecurity.LIMITS.documentBytes);
-  signal.throwIfAborted?.();
-  const hash = [...new Uint8Array(await crypto.subtle.digest('SHA-256',packed))]
-    .map(value=>value.toString(16).padStart(2,'0')).join('');
-  signal.throwIfAborted?.();
-  const bytes = packed.byteOffset === 0 && packed.byteLength === packed.buffer.byteLength
-    ? packed.buffer : packed.buffer.slice(packed.byteOffset,packed.byteOffset+packed.byteLength);
-  if (context.ocrManifestUrl) await attachHistoricalOcr(context,hash,signal);
-  packed = null;
-  const opened = await openDjvuDocument({workerUrl,bytes,signal,cacheBytes,cachePages:2});
-  const document = Object.assign(opened,{sourceSha256:hash});
-  context.trackReaderResource(()=>document.destroy());
-  context.assertReaderActive();
-  return document;
+  signal.throwIfAborted();
+  /** @type {ReturnType<typeof createDjvuWorkerAdapter> | undefined} */
+  let worker;
+  const abort = () => worker?.close(signal.reason);
+  signal.addEventListener('abort',abort,{once:true});
+  // The URL is already pinned and this path has authorized a full read.
+  // Initialize only the decoder while downloading and authenticating the
+  // original; neither source bytes nor OCR reach it before validation.
+  const preparing = (async () => {
+    worker = createDjvuWorkerAdapter(workerUrl,{cacheBytes});
+    await worker.prepare(signal);
+    return worker;
+  })();
+  // Keep the source verdict authoritative even if engine preparation fails first.
+  preparing.catch(()=>{});
+  try {
+    const response = await context.fetchReaderUrl(resolved.href, {signal});
+    if (!response.ok) throw new Error(`DJVU_SOURCE_HTTP_${response.status}`);
+    /** @type {Uint8Array<ArrayBuffer>} */
+    const packed = await VoiceOfMLReaderSecurity.readBytes(response, VoiceOfMLReaderSecurity.LIMITS.documentBytes);
+    signal.throwIfAborted();
+    const hash = [...new Uint8Array(await crypto.subtle.digest('SHA-256',packed))]
+      .map(value=>value.toString(16).padStart(2,'0')).join('');
+    signal.throwIfAborted();
+    if (context.ocrManifestUrl) await attachHistoricalOcr(context,hash,signal);
+    signal.throwIfAborted();
+    const preparedWorker = await preparing;
+    const bytes = packed.byteOffset === 0 && packed.byteLength === packed.buffer.byteLength
+      ? packed.buffer : packed.buffer.slice(packed.byteOffset,packed.byteOffset+packed.byteLength);
+    const opened = await openDjvuDocument({workerUrl,bytes,signal,cacheBytes,cachePages:2,preparedWorker});
+    const document = Object.assign(opened,{sourceSha256:hash});
+    context.trackReaderResource(()=>document.destroy());
+    context.assertReaderActive();
+    return document;
+  } catch (error) {
+    worker?.close(error);
+    throw error;
+  } finally {
+    signal.removeEventListener('abort',abort);
+  }
 }
 /** @param {DjvuContext} context @param {string} hash @param {AbortSignal} signal */
 async function attachHistoricalOcr(context,hash,signal) {

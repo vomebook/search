@@ -78,12 +78,45 @@ test('Flash loader overlaps the bounded body and engine without rendering early'
   } finally {globalThis.VoiceOfMLReaderSecurity=previous;}
 });
 
+test('Flash hands Ruffle a view of the bounded buffer without copying it before decode', async () => {
+  const context=fixture(), old=globalThis.window, events=[];
+  // Ruffle 0.7.1 calls new Uint8Array(data) before handing the view to WASM.
+  globalThis.window={RufflePlayer:{newest:()=>({version:'0.7.1+2026-10-07',createPlayer:()=>({style:{},setAttribute(){},ruffle:()=>({load:async ({data})=>{
+    events.push('load');
+    const decoded=new Uint8Array(data);
+    assert.deepEqual([...decoded],[70,87,83]);
+    events.push(decoded.buffer===bytes.buffer?'shared buffer':'cloned buffer');
+  }})})})}};
+  const bytes=Uint8Array.of(70,87,83);
+  context.RUFFLE_URL='/ruffle.js';
+  context.loadScript=async()=>{};
+  context.prepareReaderDocument=()=>({response:Promise.resolve(new Response(bytes)),engines:Promise.resolve()});
+  context.readPreparedBytes=async()=>{events.push('bounded body complete');return bytes;};
+  try {
+    await context.renderSwf(await context.loadSwfDocument());
+    assert.deepEqual(events,['bounded body complete','load','shared buffer']);
+    assert.equal(context.ready,1);
+  } finally {globalThis.window=old;}
+});
+
 test('Flash renderer forwards the original data and reports unavailable engine', async () => {
   const context=fixture(), old=globalThis.window, values=[];
-  globalThis.window={RufflePlayer:{newest:()=>({createPlayer:()=>({style:{},setAttribute(){},ruffle:()=>({load:async value=>values.push(value.data)})})})}};
+  const factory={createPlayer:()=>({style:{},setAttribute(){},ruffle:()=>({load:async value=>values.push(value.data)})})};
+  globalThis.window={RufflePlayer:{newest:()=>factory}};
   try {
-    const data={custom:'uncoerced'};await context.renderSwf(data);assert.strictEqual(values[0],data);
-    assert.equal(context.ready,1);assert.equal(context.status.textContent,'Flash 内容');
-    globalThis.window={};await assert.rejects(context.renderSwf(data),{code:'READER_SWF_ENGINE'});
+    const bytes=Uint8Array.of(0,70,87,83,0);
+    await context.renderSwf(bytes);
+    assert.strictEqual(values.at(-1),bytes);
+    factory.version='0.8.0+future';
+    await context.renderSwf(bytes);
+    assert.strictEqual(values.at(-1),bytes);
+    factory.version='0.7.1+2026-10-07';
+    const unchanged=[{custom:'uncoerced'},bytes.subarray(1,4),bytes.subarray(0,4),new Uint8Array(new SharedArrayBuffer(3))];
+    for(const data of unchanged) {
+      await context.renderSwf(data);
+      assert.strictEqual(values.at(-1),data);
+    }
+    assert.equal(context.ready,unchanged.length+2);assert.equal(context.status.textContent,'Flash 内容');
+    globalThis.window={};await assert.rejects(context.renderSwf(bytes),{code:'READER_SWF_ENGINE'});
   } finally {globalThis.window=old;}
 });

@@ -64,19 +64,35 @@ const resolved = [], landings = [], articles = new Map();
 let click;
 globalThis.document.createElement = (tag) => {
   const node = {style:{}, dataset:{}, appendChild(){}, addEventListener(){}, setAttribute(){}, querySelectorAll:()=>[]};
+  node.classList = {contains: name => (node.className || '').split(' ').includes(name)};
   if (tag === 'article') node.querySelector = function (selector) { return [Number(this.dataset.chapter), selector]; };
-  if (tag === 'div') Object.assign(node, {
-    addEventListener(type, listener) { assert.equal(type, 'click'); click = listener; },
-    querySelector: selector => articles.get(selector) || null,
-    insertBefore(article) {
-      if (article.className === 'reader-markdown reader-epub-chapter')
-        articles.set(`.reader-epub-chapter[data-chapter="${article.dataset.chapter}"]`, article);
-    }
-  });
+  if (tag === 'div') {
+    const children = [];
+    const rememberArticle = row => {
+      if (row.classList.contains('reader-epub-chapter'))
+        articles.set(`.reader-epub-chapter[data-chapter="${row.dataset.chapter}"]`, row);
+    };
+    Object.assign(node, {
+      children,
+      appendChild: row => children.push(row),
+      addEventListener(type, listener) { assert.equal(type, 'click'); click = listener; },
+      querySelector: selector => articles.get(selector) || null,
+      insertBefore(row, next) {
+        const index = next ? children.indexOf(next) : children.length;
+        assert.ok(index >= 0);
+        children.splice(index, 0, row);
+        rememberArticle(row);
+        row.replaceWith = replacement => {
+          children.splice(children.indexOf(row), 1, replacement);
+          rememberArticle(replacement);
+        };
+      }
+    });
+  }
   return node;
 };
 globalThis.document.removeEventListener = globalThis.window.removeEventListener = () => {};
-globalThis.IntersectionObserver.prototype.disconnect = () => {};
+globalThis.IntersectionObserver.prototype.disconnect = globalThis.IntersectionObserver.prototype.unobserve = () => {};
 globalThis.requestAnimationFrame = () => 1;
 globalThis.cancelAnimationFrame = () => {};
 globalThis.CSS = {escape: value => value};

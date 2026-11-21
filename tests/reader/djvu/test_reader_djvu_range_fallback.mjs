@@ -19,8 +19,8 @@ const context={sourceUrl:original,readerAbortController:new AbortController(),re
   fetchReaderUrl:async()=>{throw new Error('FULL_SOURCE_FALLBACK_REACHED')},
   trackReaderResource(){},assertReaderActive(){}};
 await assert.rejects(openNativeDjvu(context),/FULL_SOURCE_FALLBACK_REACHED/);
-assert.equal(workers,1);
-assert.equal(terminated,1,'unsupported Range must close the prewarmed worker');
+assert.equal(workers,2);
+assert.equal(terminated,2,'close both the abandoned Range worker and the failed full-source worker');
 {
   let started=0,closed=0;
   globalThis.Worker=class {
@@ -29,7 +29,7 @@ assert.equal(terminated,1,'unsupported Range must close the prewarmed worker');
     terminate(){closed++;}
   };
   await assert.rejects(openNativeDjvu(context),/FULL_SOURCE_FALLBACK_REACHED/);
-  assert.equal(started,1);
-  assert.equal(closed,1,'Range fallback must not wait for a stalled decoder preparation');
+  assert.equal(started,2);
+  assert.equal(closed,2,'Range fallback and a full-source error must not wait for a stalled decoder');
 }
 console.log('ignored Range falls back to full original, never page images');

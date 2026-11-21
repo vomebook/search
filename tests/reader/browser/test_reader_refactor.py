@@ -3130,20 +3130,38 @@ class ReaderRefactorTest(unittest.TestCase):
         self.assertNotIn("https://img.remote.test/a.png", remote)
 
     def test_offline_html_relative_same_document_links_jump_without_navigation(self):
+        self.page.add_init_script('''
+          window.__htmlLinkResolutions = 0;
+          URL = new Proxy(URL, {construct(target, args, newTarget) {
+            if (args[0]?.startsWith?.('./report.html#') || args[0]?.startsWith?.('./appendix.html#'))
+              window.__htmlLinkResolutions++;
+            return Reflect.construct(target, args, newTarget);
+          }});
+        ''')
+        repeated = ''.join(f'<a class="local" href="./report.html#note-{i}">note</a>'
+                           f'<a class="other" href="./appendix.html#note-{i}">other</a>'
+                           for i in range(512))
         self.serve('''<!doctype html><body>
             <a id="relative" href="./report.html#methods">Methods (relative)</a>
             <a id="fragment" href="#methods">Methods</a>
             <a id="other-file" href="./appendix.html#methods">Appendix</a>
             <a id="same-name" href="../report.html#methods">Other report</a>
             <a id="other-query" href="./report.html?edition=2#methods">Other edition</a>
+            <a id="space-in-path" href="./report.html #methods">Different path</a>
+            <a id="control-in-fragment" href="./report.html#met&#9;hods">Invalid fragment</a>
             <p style="height: 1800px">Introduction</p>
             <h2 id="methods">Methods</h2><p style="height: 1200px">Details</p>
-            </body>''', "text/html")
+            ''' + repeated + '</body>', "text/html")
         self.open(self.reader_url("html", "books/report"))
         frame = self.page.locator("iframe.html-frame").element_handle().content_frame()
+        # The 1,026 links to these two paths used to construct one URL each.
+        self.assertEqual(self.page.evaluate('window.__htmlLinkResolutions'), 2)
+        self.assertEqual(frame.locator('a.local').evaluate_all('links => links.map(a => a.getAttribute("href"))'),
+                         [f'#note-{i}' for i in range(512)])
+        self.assertEqual(frame.locator('a.other[href]').count(), 0)
         history_length = self.page.evaluate("history.length")
         reader_url = self.page.url
-        for link_id in ("other-file", "same-name", "other-query"):
+        for link_id in ("other-file", "same-name", "other-query", "space-in-path", "control-in-fragment"):
             self.assertIsNone(frame.locator(f"#{link_id}").get_attribute("href"), link_id)
         for link_id in ("relative", "fragment"):
             with self.subTest(link=link_id):

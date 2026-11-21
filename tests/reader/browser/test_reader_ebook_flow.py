@@ -337,6 +337,43 @@ class EbookFlowTests(unittest.TestCase):
         ''')), 3)
         self.assertEqual(len(requested), 1)
 
+    def test_first_chapter_row_bookkeeping_does_not_query_prose(self):
+        source = ('https://voiceofml-search.hf.space/api/reader-bucket-resource?path=chapters/ebook/epub/'
+                  + 'a' * 64 + '/1234567890abcdef/chapter-manifest.json')
+        chapter = '<h1>Opening chapter</h1>' + '<p>Book prose</p>' * 24000
+        manifest = {'version': 1, 'kind': 'epub-chapters', 'chapters': [
+            {'index': i, 'path': f'chapters/chapter-{i:04d}.xhtml', 'bytes': len(chapter)} for i in (1, 2)]}
+
+        def resource(route):
+            if 'chapter-manifest.json' in route.request.url:
+                route.fulfill(json=manifest)
+            elif 'chapter-0001.xhtml' in route.request.url:
+                route.fulfill(content_type='text/html', body=chapter)
+            # Keep chapter two pending so its sentinel remains in the frame.
+
+        self.page.route('**/api/reader-bucket-resource**', resource)
+        self.page.add_init_script('''(() => {
+          window.__populatedFrameRowQueries = [];
+          for (const method of ['querySelector', 'querySelectorAll']) {
+            const native = Element.prototype[method];
+            Element.prototype[method] = function (selector) {
+              if (this.classList.contains('epub-frame') && this.childElementCount > 1 &&
+                  document.documentElement.dataset.readerPhase !== 'ready' &&
+                  /reader-(epub-chapter|chapter-sentinel)/.test(selector)) {
+                __populatedFrameRowQueries.push([method, selector]);
+              }
+              return native.call(this, selector);
+            };
+          }
+        })()''')
+        self.page.goto(self.origin + support.PREFIX + '/static/reader.html?' + urlencode(
+            dict(url=source, ext='epub-chapters')))
+        self.page.wait_for_function("()=>document.documentElement.dataset.readerPhase==='ready'")
+        self.assertTrue(self.page.get_by_role('heading', name='Opening chapter').is_visible())
+        self.assertEqual(self.page.locator('.epub-frame > [data-chapter]').evaluate_all(
+            'rows => rows.map(row => [row.tagName, row.dataset.chapter])'), [['ARTICLE', '1'], ['BUTTON', '2']])
+        self.assertEqual(self.page.evaluate('__populatedFrameRowQueries'), [])
+
     def test_merged_chm_repairs_dense_toc_without_per_anchor_selectors(self):
         source = ('https://voiceofml-search.hf.space/api/reader-bucket-resource?path=chapters/ebook/chm/'
                   + 'a' * 64 + '/1234567890abcdef/chapter-manifest.json')

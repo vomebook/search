@@ -74,8 +74,27 @@ test('encoding detection handles BOMs, valid UTF-8, UTF-16 heuristics and legacy
     const savedFilter=Uint8Array.prototype.filter;
     try {
       Uint8Array.prototype.filter=function(){throw new Error('unexpected copied byte array');};
-      assert.equal(detect(new TextEncoder().encode('中文 plain text')),'utf-8');
+      const bytes=new TextEncoder().encode('中文 plain text\n'.repeat(10000));
+      const observed=[];
+      // Count indexed reads without replacing the native NUL search or decode.
+      const probe=new Proxy(bytes,{get(target,key){
+        if(typeof key==='string'&&/^\d+$/.test(key))observed.push(Number(key));
+        return key==='indexOf'?target.indexOf.bind(target):Reflect.get(target,key,target);
+      }});
+      const originalDecode=TextDecoder.prototype.decode;
+      try {
+        TextDecoder.prototype.decode=function(input,options){return originalDecode.call(this,input===probe?bytes:input,options);};
+        assert.equal(detect(probe),'utf-8');
+        assert.deepEqual(observed,[0,0,0]);
+      } finally {TextDecoder.prototype.decode=originalDecode;}
     } finally {Uint8Array.prototype.filter=savedFilter;}
+    // Sparse NULs do not imply UTF-16; late NULs retain their original parity.
+    assert.equal(detect(new TextEncoder().encode('prefix\u0000'+'ASCII tail'.repeat(20))),'utf-8');
+    for(const parity of [0,1]){
+      const delayed=new Uint8Array(48).fill(65);
+      for(let i=16+parity;i<delayed.length;i+=2)delayed[i]=0;
+      assert.equal(detect(delayed),oldHeuristic(delayed));
+    }
     for(const size of [0,1,7,8,9,63,64,65,65536,65540]) {
       const sample=new Uint8Array(size).fill(65);
       for(let i=1;i<size;i+=2)sample[i]=0;
@@ -243,6 +262,33 @@ test('large samples select the decoder before EOF and retain all streamed text',
     assert.equal(f.context.content.textContent,first+suffix);assert.equal(detections,1);
     assert.equal(stream.locked,false);
     assert.ok(f.events.includes('untrack'));
+  } finally {f.restore();}
+});
+
+test('a large single-chunk stream reuses the encoding sample and keeps every text block',async()=>{
+  const f=fixture({limit:4_000_000});
+  try {
+    const line='中文首屏，正文 😀 �\r\n\r\n';
+    const value=line.repeat(84000)+'末尾';
+    // Model a buffered response whose view is not the entire backing buffer.
+    const source=new TextEncoder().encode('!!'+value+'??');
+    const chunk=source.subarray(2,-2);
+    const samples=[], detect=f.context.detectTextEncoding;
+    f.context.detectTextEncoding=(bytes,title)=>{samples.push(bytes);return detect(bytes,title);};
+    const response=responseChunks([chunk]);
+    await f.context.renderPlainText(response);
+    assert.equal(samples.length,1);
+    assert.ok(samples[0]===chunk,'single chunk must not be copied before detection');
+    const root=f.context.content.children[0];
+    assert.equal(root.textContent,value);
+    assert.equal(root.dataset.textPreview,undefined);
+    assert.equal(response.body.locked,false);
+    assert.ok(root.children.length>32);
+    for(const block of root.children.slice(0,-1)){
+      assert.equal(block.children.length,1);
+      assert.ok(block.textContent.length<=32768);
+      assert.ok(block.textContent.endsWith('\n'));
+    }
   } finally {f.restore();}
 });
 

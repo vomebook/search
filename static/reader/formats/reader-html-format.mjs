@@ -528,18 +528,30 @@ export function createReaderHtmlFormat(readerContext) {
         base = original;
       }
     } catch (_) {}
+    // Converted documents can link to hundreds of fragments in the same file.
+    // Cache only the document match, with bounded keys and a fixed base per book.
+    /** @type {Map<string, boolean>} */
+    const documentMatches = new Map();
     /** @param {Element} node @param {{attrName: string, attrValue: string, keepAttr: boolean}} data */
     const restrict = (node, data) => {
       if (base && data.attrName === "href" && node.localName === "a") {
         const value = data.attrValue, hashIndex = value.indexOf("#");
         if (hashIndex > 0 && !/^(?:[a-z][a-z0-9+.-]*:|\/\/)/i.test(value) &&
             !/[\u0000-\u001f\u007f-\u009f\\]/.test(value)) {
-          try {
-            const target = new URL(value, base);
-            target.hash = "";
-            // Compare the full URL, including the query, before keeping only the fragment.
-            if (target.href === base.href) data.attrValue = value.slice(hashIndex);
-          } catch (_) {}
+          const key = hashIndex <= 256 ? value.slice(0, hashIndex) : null;
+          let matches = key === null ? undefined : documentMatches.get(key);
+          if (matches === undefined) {
+            matches = false;
+            try {
+              // Resolve with the fragment present: otherwise trailing spaces in
+              // the path/query could be trimmed before comparing the full URL.
+              const target = new URL(value, base);
+              target.hash = "";
+              matches = target.href === base.href;
+            } catch (_) {}
+            if (key !== null && documentMatches.size < 128) documentMatches.set(key, matches);
+          }
+          if (matches) data.attrValue = value.slice(hashIndex);
         }
       }
       restrictOfflineUrlAttribute(node, data);

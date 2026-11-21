@@ -219,6 +219,73 @@ class DjvuEngineBootstrapTests(unittest.TestCase):
         self.assertEqual(self.page.evaluate('window.__ops.slice(0, 2)'), ['prepare', 'open-range'])
         self.assertEqual(self.errors, [])
 
+    def test_historical_ocr_prepares_decoder_while_full_source_is_held(self):
+        held_source, held_manifest = [], []
+        state = install(self.page, self.origin, prefix=PREFIX, ocr=True,
+                        source_handler=lambda route: held_source.append(route))
+
+        def is_manifest(request):
+            parsed = urlsplit(request.url)
+            return parsed.path == '/api/reader-bucket-resource' and parse_qs(parsed.query).get('path') == [state['ocr_path']]
+
+        def manifest(route):
+            if is_manifest(route.request):
+                held_manifest.append(route)
+            else:
+                route.fallback()
+
+        self.page.route('**/api/reader-bucket-resource?**', manifest)
+        self.page.route('**/static/reader/core/reader-store.js*', lambda route: route.fulfill(
+            content_type='text/javascript', body='''window.VoiceOfMLReaderStore={
+              get:async()=>({page:2,pageCount:3,zoom:100}),put:async()=>{},
+              list:async()=>[],listBookmarks:async()=>[],listAllBookmarks:async()=>[]};'''))
+        self.page.add_init_script('''(() => {
+          const Native = Worker;
+          window.__ops = [];
+          window.Worker = class extends Native {
+            constructor(url, options) {
+              super(url, options);
+              if (!String(url).includes('reader-djvu-engine-worker')) return;
+              let prepareId;
+              const post = this.postMessage.bind(this);
+              this.postMessage = (message, ...args) => {
+                window.__ops.push(message.operation);
+                if (message.operation === 'prepare') prepareId = message.id;
+                return post(message, ...args);
+              };
+              this.addEventListener('message', ({data}) => {
+                if (prepareId !== undefined && data.id === prepareId && data.ok) window.__decoderPrepared = true;
+              });
+            }
+          };
+          new MutationObserver(() => {
+            const canvas = document.querySelector('.reader-page canvas.ready');
+            if (canvas) window.__firstCanvasPage ??= canvas.closest('.reader-page').dataset.page;
+          }).observe(document, {subtree:true, childList:true, attributes:true, attributeFilter:['class']});
+        })()''')
+        with self.page.expect_request('**/api/reader-content?**'):
+            self.page.goto(state['url'], wait_until='domcontentloaded')
+        self.page.wait_for_function('() => window.__decoderPrepared === true', timeout=5000)
+        self.assertEqual(len(held_source), 1)
+        self.assertEqual(self.page.evaluate('window.__ops'), ['prepare'])
+        self.assertEqual(held_manifest, [], 'OCR remains gated on the full-source hash')
+
+        state['respond_source'](held_source.pop())
+        deadline = time.monotonic() + 5
+        while not held_manifest and time.monotonic() < deadline:
+            self.page.wait_for_timeout(20)
+        self.assertEqual(len(held_manifest), 1)
+        self.assertEqual(self.page.evaluate('window.__ops'), ['prepare'])
+        self.assertEqual(self.page.locator('canvas.ready').count(), 0)
+        held_manifest.pop().fallback()
+        self.page.locator('.reader-page[data-page="2"] canvas.ready').wait_for()
+        self.assertEqual(self.page.evaluate('window.__firstCanvasPage'), '2')
+        self.page.wait_for_function('''text => document.querySelector('.reader-page[data-page="2"] .reader-pdf-text')
+          ?.textContent.includes(text)''', arg=state['texts'][1])
+        self.assertEqual(self.page.evaluate('window.__ops.slice(0, 2)'), ['prepare', 'open'])
+        self.assertEqual([row['range'] for row in state['source']], [None])
+        self.assertEqual(self.errors, [])
+
     def test_failed_wasm_does_not_show_unverified_page(self):
         state=install(self.page,self.origin,prefix=PREFIX)
         self.page.route('**/vendor/djvu-rs-reader/**/djvu_rs_bg.wasm',

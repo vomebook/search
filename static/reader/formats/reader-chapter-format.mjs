@@ -253,10 +253,14 @@ export function createReaderChapterFormat(readerContext) {
     };
     /** @param {number} index */
     const chapterAt = (index) => chapterByIndex.get(index) || null;
-    /** @param {number} index @param {string} selector */
-    const nextChapterNode = (index, selector) => {
-      for (const node of frame.querySelectorAll(/** @type {string} */ (selector)))
-        if (Number(/** @type {HTMLElement} */ (node).dataset.chapter) > index) return node;
+    // Reader-owned rows are sorted direct children; don't search through chapter prose.
+    /** @param {number} index @param {boolean} [skipArticleAtIndex] */
+    const chapterRowAtOrAfter = (index, skipArticleAtIndex = false) => {
+      for (const row of /** @type {HTMLCollectionOf<HTMLElement>} */ (frame.children)) {
+        const rowIndex = Number(row.dataset.chapter);
+        if (rowIndex > index || (rowIndex === index &&
+            (!skipArticleAtIndex || row.classList.contains("reader-chapter-sentinel")))) return row;
+      }
       return null;
     };
     /** @param {string} raw @param {string} base */
@@ -267,18 +271,15 @@ export function createReaderChapterFormat(readerContext) {
     };
     /** @param {HTMLElement} article */
     const insertChapter = (article) => {
-      const existing = frame.querySelector(
-        `.reader-epub-chapter[data-chapter="${article.dataset.chapter}"]`
-      );
-      if (existing) return existing;
-      const next = nextChapterNode(Number(article.dataset.chapter), ".reader-epub-chapter, .reader-chapter-sentinel");
-      const marker = frame.querySelector(`.reader-chapter-sentinel[data-chapter="${article.dataset.chapter}"]`);
+      const row = chapterRowAtOrAfter(Number(article.dataset.chapter));
+      const marker = row && row.dataset.chapter === article.dataset.chapter ? row : null;
+      if (marker?.classList.contains("reader-epub-chapter")) return marker;
       const insert = () => {
         if (marker) {
           /** @type {IntersectionObserver} */ (readerContext.chapterManifestObserver).unobserve(marker);
           /** @type {IntersectionObserver} */ (chapterPreviousObserver).unobserve(marker);
           marker.replaceWith(article);
-        } else frame.insertBefore(article, next || null);
+        } else frame.insertBefore(article, row);
       };
       const preservePosition = chapterWindowReady || !readerContext.isReaderGenerationCurrent("navigation", openingGeneration);
       if (preservePosition) readerContext.chapterScrollAnchors.preserve(insert);
@@ -290,9 +291,9 @@ export function createReaderChapterFormat(readerContext) {
     /** @param {import("../../../typings/reader-chapter-format-strict").Chapter} chapter @param {boolean} [previous] */
     const ensureSentinel = (chapter, previous = false) => {
       if (readerContext.readerAbortController.signal.aborted || loaded.has(chapter.index)) return null;
-      const selector = `.reader-chapter-sentinel[data-chapter="${chapter.index}"]`;
-      const existing = frame.querySelector(selector);
-      if (existing) return existing;
+      // Virtualization creates the sentinel before it removes the old article.
+      const row = chapterRowAtOrAfter(chapter.index, true);
+      if (row?.dataset.chapter === String(chapter.index)) return row;
       const marker = document.createElement("button");
       marker.type = "button";
       marker.className = "reader-chapter-sentinel";
@@ -306,9 +307,7 @@ export function createReaderChapterFormat(readerContext) {
           console.warn("EPUB chapter could not be loaded", error);
         });
       });
-      const next = nextChapterNode(chapter.index,
-        ".reader-epub-chapter[data-chapter], .reader-chapter-sentinel[data-chapter]");
-      const insert = () => frame.insertBefore(marker, next || null);
+      const insert = () => frame.insertBefore(marker, row);
       if (chapterWindowReady || !readerContext.isReaderGenerationCurrent("navigation", openingGeneration))
         readerContext.chapterScrollAnchors.preserve(insert);
       else insert();
@@ -844,7 +843,8 @@ export function createReaderChapterFormat(readerContext) {
     trackOpeningSeek = null;
     cancelOpeningJump();
     if (readerContext.isReaderGenerationCurrent("navigation", openingGeneration)) readerContext.chapterScrollAnchors.invalidate();
-    for (const article of frame.querySelectorAll(".reader-epub-chapter")) readerContext.chapterScrollAnchors.observe(article);
+    for (const row of frame.children)
+      if (row.classList.contains("reader-epub-chapter")) readerContext.chapterScrollAnchors.observe(row);
     scheduleChapterWindow();
     readerContext.assertReaderActive();
     readerContext.markReaderContentReady();
