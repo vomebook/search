@@ -72,6 +72,21 @@ class PdfFollowupTests(unittest.TestCase):
             url='https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/persistent.pdf',ext='pdf')))
         self.page.wait_for_function("()=>document.documentElement.dataset.readerPhase==='ready'")
 
+    def test_pdf_canvas_matches_physical_width_across_mobile_and_desktop(self):
+        # Same simulated 1440 physical pixels, different CSS viewport and DPR.
+        cdp = self.context.new_cdp_session(self.page)
+        for width, ratio, mobile in [(360, 4, True), (980, 1440 / 980, False)]:
+            with self.subTest(width=width, mobile=mobile):
+                cdp.send('Emulation.setDeviceMetricsOverride', dict(
+                    width=width, height=900, deviceScaleFactor=ratio, mobile=mobile))
+                self.page.add_init_script("Object.defineProperty(navigator, 'deviceMemory', {value: 2})")
+                self.open()
+                canvas = self.page.locator('.reader-page[data-page="1"] canvas.ready').first
+                pixels, css_width, dpr = canvas.evaluate('node => [node.width, node.getBoundingClientRect().width, devicePixelRatio]')
+                self.assertAlmostEqual(dpr, ratio, places=4)
+                self.assertLessEqual(abs(pixels - css_width * dpr), 2)
+                self.assertGreater(pixels, 1300)
+
     def search(self, query, total):
         self.page.locator('#history').click()
         self.page.locator('#full-search-toggle').click()

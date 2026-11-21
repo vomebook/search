@@ -35,6 +35,28 @@ class DjvuRangeBrowserTests(unittest.TestCase):
         self.assertFalse([url for url in self.requests if '/pages/page-' in url or '/preview/' in url])
         self.assertEqual(self.page.locator('.reader-page img').count(), 0)
 
+    def test_native_djvu_canvas_matches_physical_width_across_browser_modes(self):
+        cdp = self.context.new_cdp_session(self.page)
+        self.page.add_init_script("Object.defineProperty(navigator, 'deviceMemory', {value: 2})")
+        for width, ratio, mobile in [(360, 4, True), (980, 1440 / 980, False)]:
+            with self.subTest(width=width, mobile=mobile):
+                cdp.send('Emulation.setDeviceMetricsOverride', dict(
+                    width=width, height=900, deviceScaleFactor=ratio, mobile=mobile))
+                state = install(self.page, self.origin, prefix=PREFIX)
+                try:
+                    self.page.goto(state['url'], wait_until='domcontentloaded')
+                    canvas = self.page.locator('.reader-page[data-page="1"] canvas.ready')
+                    width_px, width_css, dpr = canvas.evaluate(
+                        'node => [node.width, node.getBoundingClientRect().width, devicePixelRatio]')
+                    self.assertAlmostEqual(dpr, ratio, places=4)
+                    self.assertLessEqual(abs(width_px - width_css * dpr), 2)
+                    self.assertGreater(width_px, 1300)
+                    self.assertTrue(state['source'])
+                    self.assert_no_page_images()
+                finally:
+                    self.page.unroute('**/api/reader-source-revision?**')
+                    self.page.unroute('**/api/reader-content?**')
+
     def test_late_outline_loads_full_same_version_only_on_demand(self):
         state = install(self.page, self.origin, prefix=PREFIX, body=separated_pages())
         self.page.goto(state['url'], wait_until='domcontentloaded')

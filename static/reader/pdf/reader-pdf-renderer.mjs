@@ -1,14 +1,21 @@
-// Preserve the previous 2x baseline on desktops and low-memory devices, but
-// use high-density mobile pixels when the additional canvas fits the budget.
+// A narrow high-DPR viewport can show the same physical pixels as a wide
+// desktop viewport. Bound the backing store, not the mobile density ratio.
 /** @param {import('../../../typings/reader-pdf-renderer-strict').PdfViewport} viewport */
 export function pdfOutputScale(viewport) {
-  const dpr = Math.max(1, Number(window.devicePixelRatio) || 1), baseline = Math.min(2, dpr);
-  if (!matchMedia("(max-width: 700px)").matches || (Number(/** @type {Navigator & {deviceMemory?: number}} */ (navigator).deviceMemory) > 0 && Number(/** @type {Navigator & {deviceMemory?: number}} */ (navigator).deviceMemory) <= 2))
-    return baseline;
+  const reported = Number(window.devicePixelRatio);
+  const dpr = Number.isFinite(reported) && reported > 0 ? reported : 1;
+  const memory = Number(/** @type {Navigator & {deviceMemory?: number}} */ (navigator).deviceMemory);
+  const lowMemory = memory > 0 && memory <= 2;
   const width = Number(viewport.width), height = Number(viewport.height);
-  if (!(width > 0 && height > 0 && Number.isFinite(width) && Number.isFinite(height))) return baseline;
-  const affordable = Math.sqrt(6_000_000 / ((width + 1) * (height + 1)));
-  return Math.max(baseline, Math.min(3, dpr, affordable));
+  if (!(width > 0 && height > 0 && Number.isFinite(width) && Number.isFinite(height))) return Math.min(2, dpr);
+  // For DjVu this limits the display canvas only, not the native decode.
+  const budget = lowMemory ? 4_000_000 : 6_000_000;
+  if (Math.ceil(width * dpr) * Math.ceil(height * dpr) <= budget) return dpr;
+  // Leave room for the ceil on both axes. The limiting scale may be below
+  // 1 for very large or unusually shaped pages.
+  // Positive root of (width * scale + 1) * (height * scale + 1) = budget.
+  const sum = width + height;
+  return 2 * (budget - 1) / (sum + Math.hypot(sum, 2 * Math.sqrt(width * height * (budget - 1))));
 }
 
 /** @param {import('../../../typings/reader-pdf-renderer-strict').PdfRendererContext} readerContext */

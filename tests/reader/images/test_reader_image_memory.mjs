@@ -78,22 +78,32 @@ globalThis.matchMedia = () => ({matches: false});
   await assert.rejects(pending, {name: 'AbortError'});
 }
 
-// The sharper high-density mobile canvas is bounded, while low-memory,
-// desktop, and already-large pages retain the previous baseline.
+// PDF meets the physical display density when the actual backing store
+// fits. A large canvas has an absolute pixel limit, not a minimum DPR.
 {
   globalThis.matchMedia = () => ({matches: true});
-  window.devicePixelRatio = 3;
-  assert.equal(pdfOutputScale({width: 370, height: 520}), 3);
-  const limited = pdfOutputScale({width: 1000, height: 800});
-  assert.ok(limited > 2 && limited < 3);
-  assert.ok(Math.ceil(1000 * limited) * Math.ceil(800 * limited) <= 6_000_000);
-  assert.equal(pdfOutputScale({width: 1600, height: 1200}), 2);
-  assert.equal(pdfOutputScale({width: Infinity, height: 100}), 2);
-  navigator.deviceMemory = 2;
-  assert.equal(pdfOutputScale({width: 370, height: 520}), 2);
+  window.devicePixelRatio = 4;
+  const phone = {width: 340, height: 492};
+  assert.equal(pdfOutputScale(phone), 4);
+  for (const memory of [8, 2]) {
+    navigator.deviceMemory = memory;
+    assert.equal(pdfOutputScale(phone), 4);
+    const budget = memory === 2 ? 4_000_000 : 6_000_000;
+    for (const [width, height] of [[1000, 800], [1600.5, 1200.5], [3500, 4000], [600, 14000]]) {
+      const scale = pdfOutputScale({width, height});
+      assert.ok(scale > 0 && scale < 4);
+      assert.ok(Math.ceil(width * scale) * Math.ceil(height * scale) <= budget);
+    }
+  }
   delete navigator.deviceMemory;
   globalThis.matchMedia = () => ({matches: false});
-  assert.equal(pdfOutputScale({width: 370, height: 520}), 2);
+  assert.equal(pdfOutputScale(phone), 4);
+  window.devicePixelRatio = 1.5;
+  assert.equal(pdfOutputScale({width: 940, height: 1360}), 1.5);
+  window.devicePixelRatio = 0.75;
+  assert.equal(pdfOutputScale(phone), 0.75);
+  window.devicePixelRatio = Infinity;
+  assert.equal(pdfOutputScale(phone), 1);
   window.devicePixelRatio = 1;
 }
 
