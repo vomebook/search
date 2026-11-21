@@ -246,6 +246,9 @@ class ReaderSpeechTest(unittest.TestCase):
     def test_original_pdf_speech_uses_ocr_only_on_playback_and_falls_back_to_native(self):
         context, page, _, errors = self.open('txt', TEXT.encode(), 'text/plain; charset=utf-8')
         try:
+            # Let the real TXT speech adapter publish before replacing the player
+            # with the isolated PDF fixture; Reader ready precedes speech startup.
+            page.locator('.reader-actions [data-speech-toggle]').wait_for(timeout=10000)
             result = page.evaluate('''async () => {
               const {createReaderSpeech} = await import('./reader/ui/reader-speech.mjs');
               const content = document.createElement('div'), viewport = document.createElement('div');
