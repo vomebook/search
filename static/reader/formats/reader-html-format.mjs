@@ -565,8 +565,19 @@ export function createReaderHtmlFormat(readerContext) {
       const value = style.textContent, stripped = stripUrls(value);
       if (stripped !== value) style.textContent = stripped;
     }
+    // Converted tables and documents repeat inline declarations. Strict CSS
+    // stripping depends only on the exact attribute text, not the element.
+    // Bound both the entry count and the size of cached declarations per document.
+    /** @type {Map<string, string>} */
+    const inlineStyles = new Map();
     for (const element of template.content.querySelectorAll("[style]")) {
-      const value = element.getAttribute("style"), stripped = stripUrls(value);
+      const value = element.getAttribute("style") || "";
+      const cacheable = value.length <= 256;
+      let stripped = cacheable ? inlineStyles.get(value) : undefined;
+      if (stripped === undefined) {
+        stripped = stripUrls(value);
+        if (cacheable && inlineStyles.size < 128) inlineStyles.set(value, stripped);
+      }
       if (stripped !== value) element.setAttribute("style", stripped);
     }
     return template.innerHTML;

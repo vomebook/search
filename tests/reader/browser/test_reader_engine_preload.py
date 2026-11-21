@@ -1,6 +1,7 @@
 """Exercise the actual early engine preloader in Chromium."""
 import contextlib
 import unittest
+from urllib.parse import urlencode
 
 from playwright.sync_api import sync_playwright
 from tests.reader.browser import test_reader_pdf_first_page as support
@@ -114,6 +115,68 @@ class ReaderEnginePreloadTests(unittest.TestCase):
                 self.assertIn("voice-reader-dispose", result["removed"])
             finally:
                 context.close()
+
+
+    def test_reader_first_text_does_not_wait_for_optional_preloader(self):
+        with support.range_source(b"%PDF-1.7\n") as (origin, _state, _lock):
+            prefix = "/search" if "/search/static/" in (support.ROOT / "static/reader.html").read_text() else ""
+            context = self.browser.new_context(service_workers="block")
+            try:
+                page = context.new_page()
+                held, errors = [], []
+                page.on("pageerror", lambda error: errors.append(str(error)))
+                context.route("**/*", lambda route: route.continue_() if route.request.url.startswith(origin + "/") else route.abort())
+                page.route("**/static/reader/pdf/reader-engine-preload*.js", lambda route: held.append(route))
+                page.route("**/api/reader-content**", lambda route: route.fulfill(content_type="text/plain", body="The first readable text"))
+                source = "https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/start.txt"
+                page.goto(origin + prefix + "/static/reader.html?" + urlencode({"url":source,"ext":"txt"}), wait_until="commit")
+                page.locator(".reader-text", has_text="The first readable text").wait_for(state="visible", timeout=8000)
+                self.assertEqual(len(held), 1)
+                page.locator('html[data-reader-phase="ready"]').wait_for(state="attached")
+                held[0].abort()
+                self.assertEqual(errors, [])
+            finally:
+                context.close()
+
+    def test_async_preloader_waits_for_boot_dependencies_not_reader_entry(self):
+        with support.range_source(b"%PDF-1.7\n") as (origin, _state, _lock):
+            prefix = "/search" if "/search/static/" in (support.ROOT / "static/reader.html").read_text() else ""
+            for dispose in (False, True):
+                with self.subTest(dispose=dispose):
+                    context = self.browser.new_context(service_workers="block")
+                    try:
+                        page = context.new_page()
+                        errors, guards, entry, warm = [], [], [], []
+                        page.on("pageerror", lambda error: errors.append(str(error)))
+                        context.route("**/*", lambda route: route.continue_() if route.request.url.startswith(origin + "/") else route.abort())
+                        page.route("**/static/reader/core/reader-security.js", lambda route: guards.append(route))
+                        page.route("**/static/reader.js", lambda route: entry.append(route))
+                        page.route("**/static/reader/pdf/pdf-worker-wrapper*.mjs", lambda route: (warm.append(route.request.url), route.fulfill(content_type="text/javascript", body="export {}")))
+                        page.add_init_script("""(() => {
+                          document.addEventListener('load', e => {
+                            if (e.target?.src?.includes('/reader-engine-preload')) window.__warmScriptLoaded = true;
+                          }, true);
+                        })()""")
+                        page.goto(origin + prefix + "/static/reader.html?ext=pdf", wait_until="commit")
+                        page.wait_for_function("() => window.__warmScriptLoaded === true", timeout=8000)
+                        self.assertTrue(guards and entry)
+                        self.assertEqual(warm, [])
+                        if dispose:
+                            page.evaluate("dispatchEvent(new Event('voice-reader-dispose'))")
+                        guards[0].continue_()
+                        page.wait_for_function("() => !!window.VoiceOfMLReaderResources && !!window.VoiceOfMLReaderSecurity")
+                        if not dispose:
+                            page.locator('link[rel="modulepreload"][href*="pdf.min"]').wait_for(state="attached", timeout=8000)
+                            page.wait_for_function("() => performance.getEntriesByType('resource').some(r => r.name.includes('pdf-worker-wrapper'))")
+                            self.assertEqual(len(warm), 1)
+                        else:
+                            # The dependencies have run; disposal must have detached their load callbacks.
+                            page.evaluate("() => new Promise(r => setTimeout(r, 50))")
+                            self.assertEqual(warm, [])
+                            self.assertEqual(page.locator('link[rel="modulepreload"][href*="pdf.min"]').count(), 0)
+                        self.assertEqual(errors, [])
+                    finally:
+                        context.close()
 
 
 if __name__ == "__main__":

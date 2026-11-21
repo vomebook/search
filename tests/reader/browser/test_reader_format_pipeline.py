@@ -93,6 +93,40 @@ class ReaderFormatPipelineTests(unittest.TestCase):
                       self.page.locator('#content').inner_text())
                 self.assertTrue(text.strip())
 
+    def test_repeated_inline_styles_keep_exact_sanitized_html(self):
+        safe = 'color: #222; padding: 4px 8px'
+        remote = 'https://style.reader-fixture.test/asset.png'
+        escaped = r'color: #222; background: \75rl(' + remote + '); padding: 4px 8px'
+        empty = f'url({remote})'
+        long_style = safe + '; margin: 0' * 30 + f'; background: url({remote})'
+        styles = ([safe, escaped, empty] * 3 + [long_style] * 2 +
+                  [f'padding: {n}px; background: url({remote}); color: #222' for n in range(130)] +
+                  [escaped, empty])
+        body = ('<!doctype html><meta charset="gbk"><body><h1>表格</h1>'
+                f'<style id="layout">@import "{remote}"; td {{ text-align: left }}</style>'
+                '<section class="reader-spreadsheet-sheet"><table><tr>' +
+                ''.join(f'<td style="{style}">内容</td>' for style in styles) +
+                '</tr></table></section>')
+        remote_requests = []
+        self.page.on('request', lambda request: remote_requests.append(request.url) if request.url == remote else None)
+        self.page.route('**/api/reader-content**', lambda route: route.fulfill(
+            content_type='text/html', body=body.encode('gb18030'), headers={'Access-Control-Allow-Origin': '*'}))
+        self.page.goto(self.origin + support.PREFIX + '/static/reader.html?' + urlencode(dict(
+            url='https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/styled.html', ext='html')))
+        self.page.locator('html[data-reader-phase="ready"]').wait_for()
+        frame = self.page.frame_locator('iframe.html-frame')
+        self.assertEqual(frame.locator('h1').text_content(), '表格')
+        self.assertEqual(frame.locator('#layout').text_content(), ' td { text-align: left }')
+        cells = frame.locator('table > tbody > tr > td')
+        expected = [safe, 'color: #222; background: ; padding: 4px 8px', ''] * 3
+        expected += [long_style.removesuffix(f'url({remote})')] * 2
+        expected += [f'padding: {n}px; background: ; color: #222' for n in range(130)]
+        expected += expected[1:3]
+        self.assertEqual(cells.evaluate_all("nodes => nodes.map(node => node.getAttribute('style'))"), expected)
+        self.assertEqual(cells.all_text_contents(), ['内容'] * len(styles))
+        self.assertEqual(frame.locator('head > meta[http-equiv="Content-Security-Policy"]').count(), 1)
+        self.assertEqual(remote_requests, [])
+
     def test_swf_body_finishes_while_ruffle_is_held(self):
         held = []
         self.page.route('**/vendor/ruffle/**/ruffle.js', lambda route: held.append(route))

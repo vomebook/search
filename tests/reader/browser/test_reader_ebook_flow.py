@@ -1,4 +1,5 @@
 """Shared chapter ebook loading and navigation regressions."""
+import json
 import unittest
 from collections import Counter
 from urllib.parse import unquote, urlencode
@@ -133,6 +134,7 @@ class EbookFlowTests(unittest.TestCase):
             response = route.fetch()
             route.fulfill(response=response, body=response.text() + '''
               window.__ebook={captureChapter:captureChapterPosition,
+                toc:()=>navigationState.tocEntries,
                 chapter:i=>navigationState.tocEntries[i-1].activate(beginReaderNavigation()),
                 progress:seekProgress,seekTask:()=>epubSeekPromise,
                 percent:readerProgressPercent,restoreProgress:restoreProgressState,save:saveProgress};
@@ -218,6 +220,75 @@ class EbookFlowTests(unittest.TestCase):
                 self.assertTrue(node.is_visible())
                 style = node.evaluate('n => {const s = getComputedStyle(n); return [s.color, s.letterSpacing, s.wordSpacing]}')
                 self.assertEqual(style, [color, '2px', '4px'])
+
+    def test_long_xhtml_binds_dense_toc_in_one_anchor_scan(self):
+        source = ('https://voiceofml-search.hf.space/api/reader-bucket-resource?path=chapters/ebook/epub/'
+                  + 'a' * 64 + '/1234567890abcdef/chapter-manifest.json')
+        fragments = [f'section:{i}' for i in range(500)]
+        anchors = ''.join(f'<p id="{fragment}">Section</p>' for fragment in fragments)
+        chapter = ('<html xmlns="http://www.w3.org/1999/xhtml"><head><title>Dense TOC</title></head>'
+                   '<body id="body-anchor"><h1>Opening XHTML</h1>' + '<p>Book prose</p>' * 24000 + anchors +
+                   '<a name="shared" data-winner="first-name"></a><p id="shared">Later ID</p>'
+                   '<p id="reversed">First ID</p><a name="reversed">Later name</a>'
+                   '<p id="CR&#13;value" data-winner="CR"></p><a name="LF&#10;value" data-winner="LF"></a>'
+                   '<p id="control&#127;value" data-winner="control"></p>'
+                   '<p id="&#65533;" data-winner="replacement"></p><p id="&#128515;" data-winner="astral"></p>'
+                   '<p id="body-anchor">Body ID takes priority</p><p style="height:1800px">End</p></body></html>')
+        fragments += ['shared', 'reversed', 'body-anchor', 'section:0', 'SECTION:0', '',
+                      'CR\rvalue', 'LF\nvalue', 'control\x7fvalue', '\0', '\ud800', '\U0001f603']
+        manifest = {'version': 1, 'kind': 'epub-chapters', 'chapters': [
+            {'index': 1, 'path': 'chapters/chapter-0001.xhtml', 'bytes': len(chapter)}],
+            'toc': [{'title': f'Row {i}', 'chapter': 1, 'depth': 0, 'fragment': fragment}
+                    for i, fragment in enumerate(fragments)]}
+        requested = []
+
+        def resource(route):
+            if 'chapter-manifest.json' in route.request.url:
+                # Escape the lone surrogate in the wire JSON, not in the parsed manifest.
+                route.fulfill(content_type='application/json', body=json.dumps(manifest, ensure_ascii=True))
+            else:
+                requested.append(route.request.url)
+                route.fulfill(content_type='application/xhtml+xml', body=chapter)
+
+        self.expose()
+        self.page.route('**/api/reader-bucket-resource**', resource)
+        self.page.add_init_script('''(() => {
+          window.__anchorScans = [0, 0];
+          for (const [index, method] of ['querySelector', 'querySelectorAll'].entries()) {
+            const native = Element.prototype[method];
+            Element.prototype[method] = function (selector) {
+              if (this.matches('article.reader-epub-chapter') &&
+                  (selector.startsWith('[id=') || selector === '[id], [name]')) __anchorScans[index]++;
+              return native.call(this, selector);
+            };
+          }
+        })()''')
+        self.page.goto(self.origin + support.PREFIX + '/static/reader.html?' + urlencode(
+            dict(url=source, ext='epub-chapters')))
+        self.page.wait_for_function("()=>document.documentElement.dataset.readerPhase==='ready'")
+        self.assertTrue(self.page.get_by_role('heading', name='Opening XHTML').is_visible())
+        self.assertEqual(len(requested), 1)
+        # Count selector passes on the mounted chapter, not elapsed time.
+        # Only NUL and the lone surrogate should fall back to CSS.escape.
+        scans = self.page.evaluate('__anchorScans')
+        targets = self.page.evaluate('''() => {
+          const article = document.querySelector('.reader-epub-chapter');
+          return __ebook.toc().map(({target, fragment}) => {
+            const legacy = !fragment || fragment === article.id ? article :
+              article.querySelector(`[id="${CSS.escape(fragment)}"], [name="${CSS.escape(fragment)}"]`);
+            if (target !== legacy || (target && !target.isConnected)) return 'mismatch';
+            return target === article ? 'article' : (target?.dataset.winner || target?.id || null);
+          });
+        }''')
+        self.assertEqual(targets, fragments[:500] + ['first-name', 'reversed', 'article', 'section:0', None,
+                         'article', 'CR', 'LF', 'control', 'replacement', None, 'astral'])
+        self.assertEqual(scans, [2, 1])
+        # On-demand fragment navigation must still land on the same first match.
+        self.assertTrue(self.page.evaluate('__ebook.chapter(501)'))
+        self.assertLess(abs(self.page.locator('[data-winner="first-name"]').evaluate('''node =>
+            node.getBoundingClientRect().top - document.querySelector('#viewport').getBoundingClientRect().top
+        ''')), 3)
+        self.assertEqual(len(requested), 1)
 
     def test_chapter_rewrites_resource_attributes_without_revisiting_prose(self):
         base = 'chapters/ebook/epub/' + 'a' * 64 + '/1234567890abcdef/'

@@ -292,6 +292,45 @@ export function createReaderChapterFormat(readerContext) {
     const chapterTarget = (article, fragment) =>
       !fragment || article.id === fragment ? article :
         article.querySelector(`[id="${CSS.escape(fragment)}"], [name="${CSS.escape(fragment)}"]`);
+    /** @param {HTMLElement} article @param {ChapterTocEntry[]} entries */
+    const bindChapterTocTargets = (article, entries) => {
+      const batchThreshold = 16;
+      if (entries.length < batchThreshold) {
+        for (const entry of entries) entry.target = chapterTarget(article, entry.fragment);
+        return;
+      }
+      /** @type {Map<string, Element | null>} */
+      const targets = new Map();
+      for (const entry of entries) {
+        const { fragment } = entry;
+        if (!fragment || fragment === article.id) entry.target = article;
+        // With /u, the surrogate range matches only unpaired code units.
+        // Keep the selector path for these and NUL, which CSS may replace.
+        else if (/[\u0000\uD800-\uDFFF]/u.test(fragment)) entry.target = chapterTarget(article, fragment);
+        else targets.set(fragment, null);
+      }
+      if (!targets.size) return;
+      if (targets.size < batchThreshold) {
+        for (const fragment of targets.keys()) targets.set(fragment, chapterTarget(article, fragment));
+      } else {
+        // Like the selector list, the first exact ID or name in document
+        // order wins, even when a name precedes a matching ID.
+        let remaining = targets.size;
+        for (const node of article.querySelectorAll("[id], [name]")) {
+          for (const value of [node.getAttribute("id"), node.getAttribute("name")]) {
+            if (value !== null && targets.get(value) === null) {
+              targets.set(value, node);
+              remaining--;
+            }
+          }
+          if (!remaining) break;
+        }
+      }
+      for (const entry of entries) {
+        const target = targets.get(entry.fragment);
+        if (target !== undefined) entry.target = target;
+      }
+    };
     /** @param {string | null} value */
     const normalizeTocLabel = value => String(value || "").replace(/\s+/gu, "").toLowerCase();
     // Old merged CHM bundles can lose the TOC fragment while retaining the
@@ -441,7 +480,7 @@ export function createReaderChapterFormat(readerContext) {
           inserted = true;
           const toc = chapterTocEntries(chapter.index);
           if (mergedChmToc) repairMergedChmToc(article, toc);
-          for (const entry of toc) entry.target = chapterTarget(article, entry.fragment);
+          bindChapterTocTargets(article, toc);
           const next = chapterAt(chapter.index + 1);
           if (next) ensureSentinel(next);
           const previous = chapterAt(chapter.index - 1);
