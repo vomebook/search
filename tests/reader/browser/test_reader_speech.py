@@ -5,6 +5,7 @@ The TTS backend is routed offline (no model/network); playback is muted.
 import base64
 import json
 import re
+import time
 import unittest
 import urllib.parse
 from pathlib import Path
@@ -228,6 +229,10 @@ class ReaderSpeechTest(unittest.TestCase):
         try:
             self.assertTrue(page.locator(".reader-text").is_visible())
             wait(page, "() => document.documentElement.dataset.readerPhase === 'ready'")
+            # Ready does not wait for the asynchronous module route callback.
+            deadline = time.monotonic() + 5
+            while not held and time.monotonic() < deadline:
+                page.wait_for_timeout(25)
             self.assertEqual(len(held), 1)
             self.assertFalse(posts)
             self.assertEqual(page.locator("[data-speech-toggle]").count(), 0)

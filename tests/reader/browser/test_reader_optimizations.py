@@ -82,8 +82,14 @@ class ReaderOptimizationTests(unittest.TestCase):
                 const native = doc.createTreeWalker.bind(doc);
                 window.__visits = 0;
                 doc.createTreeWalker = (...args) => {
-                  const walker = native(...args), next = walker.nextNode.bind(walker);
-                  walker.nextNode = () => { __visits++; return next(); };
+                  const walker = native(...args);
+                  // Full search uses element+text traversal for block boundaries.
+                  // The optional speech adapter may attach concurrently and uses
+                  // text-only traversal; don't attribute its work to the search.
+                  if (args[1] === (NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT)) {
+                    const next = walker.nextNode.bind(walker);
+                    walker.nextNode = () => { __visits++; return next(); };
+                  }
                   return walker;
                 };
               };
