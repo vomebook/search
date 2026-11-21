@@ -1465,6 +1465,12 @@ body {
   outline: 2px solid var(--reader-focus-color);
   outline-offset: 2px;
 }
+/* The compact number editors share their visible border with the unit label. */
+@media (forced-colors: none) and (prefers-contrast: no-preference) {
+  .reader-toolbar :is(#page-number, #zoom):focus-visible {
+    outline: none;
+  }
+}
 @media (prefers-reduced-motion: reduce) {
   .reader-panel,
   .panel-search,

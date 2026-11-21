@@ -38,6 +38,24 @@ class ReaderAccessibilityTests(unittest.TestCase):
             self.page.locator('#history').press('Enter')
         self.page.locator('#history').press('Enter')
 
+    def test_compact_number_editors_hide_default_outline_only(self):
+        self.page.set_viewport_size({'width': 390, 'height': 844})
+        # Use the existing offline PDF engine and real toolbar controls.
+        self.page.goto(self.origin + support.PREFIX + '/static/reader.html?' + urlencode(dict(
+            url='https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/accessible.pdf', ext='pdf')))
+        self.page.wait_for_function("() => document.documentElement.dataset.readerPhase === 'ready'")
+        outline = '''node => [node.matches(':focus-visible'), getComputedStyle(node).outlineStyle]'''
+        for mode in (dict(forced_colors='none', contrast='no-preference'),
+                     dict(forced_colors='none', contrast='more'), dict(forced_colors='active', contrast='no-preference')):
+            self.page.emulate_media(**mode)
+            expected = 'none' if mode == dict(forced_colors='none', contrast='no-preference') else 'solid'
+            for selector in ('#page-number', '#zoom'):
+                field = self.page.locator(selector)
+                field.click()
+                self.assertEqual(field.evaluate(outline), [True, expected])
+            self.page.keyboard.press('Tab')
+            self.assertEqual(self.page.locator('#zoom-in').evaluate(outline), [True, 'solid'])
+
     def test_forced_colors_keeps_bookmark_and_selected_controls_visible(self):
         self.open_book()
         self.page.emulate_media(forced_colors='active', reduced_motion='reduce')
