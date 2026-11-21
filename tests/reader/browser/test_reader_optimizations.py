@@ -506,8 +506,11 @@ class ReaderOptimizationTests(unittest.TestCase):
         self.page.wait_for_timeout(150)
         data = self.page.locator('.reader-page[data-page="1"]').evaluate('''shell=>{
           const canvas=shell.querySelector('canvas');return {css:shell.clientWidth,backing:canvas.width,
+            dpr:devicePixelRatio,area:canvas.width*canvas.height,
             next:[2,3,4].map(page=>!!document.querySelector('.reader-page[data-page="'+page+'"] canvas.ready'))};}''')
-        self.assertLessEqual(data['backing'],data['css']*2+1,data)
+        self.assertEqual(data['dpr'],3,data)
+        self.assertLessEqual(abs(data['backing']-data['css']*data['dpr']),1,data)
+        self.assertLessEqual(data['area'],4_000_000,data)
         self.assertTrue(all(data['next']),data)
         self.page.evaluate('''()=>{const shell=document.querySelector('.reader-page[data-page="3"]'),v=document.querySelector('#viewport');
           window.__thirdCount=__renderedPages.filter(page=>page===3).length;v.scrollTop+=shell.getBoundingClientRect().top-v.getBoundingClientRect().top;}''')
