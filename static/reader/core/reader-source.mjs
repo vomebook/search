@@ -334,9 +334,29 @@ export function createReaderSource(readerContext) {
     }
   }
 
+  /** @type {{raw: string, family: AssetFamily} | null} */
+  let manifestFamily = null;
+  /** @type {{raw: string, family: AssetFamily} | null} */
+  let chapterFamily = null;
+
+  // The rewrite pass resolves many attributes against the same two bases.
+  // Keep just the latest validated manifest and chapter bases. Only reuse
+  // exact absolute URLs: relative inputs still depend on location.href.
+  /** @param {string} raw @param {boolean} isManifest */
+  function chapterAssetFamily(raw, isManifest) {
+    const cached = isManifest ? manifestFamily : chapterFamily;
+    if (cached && raw === cached.raw) return cached.family;
+    const family = readerContext.readerAssetObjectFamily(raw);
+    if (family && raw === family.url.href) {
+      if (isManifest) manifestFamily = { raw, family };
+      else chapterFamily = { raw, family };
+    }
+    return family;
+  }
+
   /** @param {string} raw */
   function trustedReaderAssetManifestUrl(raw) {
-    const family = readerContext.readerAssetObjectFamily(raw);
+    const family = chapterAssetFamily(raw, true);
     return family && /\/chapter-manifest\.json$/i.test(family.bucketPath || "")
       ? family.url.href
       : null;
@@ -344,7 +364,7 @@ export function createReaderSource(readerContext) {
 
   /** @param {string} raw @param {string} base */
   function trustedChapterUrl(raw, base) {
-    const manifest = readerContext.readerAssetObjectFamily(base);
+    const manifest = chapterAssetFamily(base, true);
     if (!manifest || !/\/chapter-manifest\.json$/i.test(manifest.bucketPath || ""))
       return null;
     try {
@@ -362,8 +382,8 @@ export function createReaderSource(readerContext) {
 
   /** @param {string} raw @param {string} base @param {string} manifestBase */
   function trustedChapterReferenceUrl(raw, base, manifestBase) {
-    const family = readerContext.readerAssetObjectFamily(manifestBase);
-    const current = readerContext.readerAssetObjectFamily(base);
+    const family = chapterAssetFamily(manifestBase, true);
+    const current = chapterAssetFamily(base, false);
     if (!family || !current) return null;
     try {
       const url = new URL(String(raw || ""), `https://bucket.invalid/${current.bucketPath}`);
@@ -383,8 +403,8 @@ export function createReaderSource(readerContext) {
     const value = String(raw || "").trim();
     if (!value || /^(?:data:|mailto:|tel:|javascript:)/i.test(value)) return null;
     // Chapters and resources can be siblings within the manifest's asset directory.
-    const family = readerContext.readerAssetObjectFamily(manifestBase);
-    const current = readerContext.readerAssetObjectFamily(base);
+    const family = chapterAssetFamily(manifestBase, true);
+    const current = chapterAssetFamily(base, false);
     if (!family || !current) return null;
     try {
       const url = new URL(value, `https://bucket.invalid/${current.bucketPath}`);

@@ -101,6 +101,46 @@ class ReaderAccessibilityTests(unittest.TestCase):
         self.assertTrue(self.page.evaluate('!!window.__chapterAction'))
         self.assertEqual(self.page.locator('#viewport').evaluate('node=>node.scrollTop'), before)
 
+    def test_html_contrast_and_legacy_bookmark_on_initial_view(self):
+        self.open_book('html', '''<!doctype html><meta charset="utf-8">
+            <h1>Opening chapter</h1>
+            <p id="light" style="color:#eee;background:#fff">Low contrast on light</p>
+            <p id="dark" style="color:#222;background:#111">Low contrast on dark</p>
+            <p id="same" style="color:#eee;background:#111">Already readable</p>
+            <p style="height:1200px">Opening text</p>
+            <h2>Later chapter</h2><p style="height:1200px">Later text</p>''')
+        opening = self.page.evaluate('''async () => {
+            const opening = new URL(location.href), url = opening.searchParams.get('url');
+            const db = await new Promise((resolve, reject) => {
+                const request = indexedDB.open(VoiceOfMLReaderStore.DB_NAME);
+                request.onsuccess = () => resolve(request.result);
+                request.onerror = () => reject(request.error);
+            });
+            // Seed the legacy record as written, without current store normalization.
+            await new Promise((resolve, reject) => {
+                const tx = db.transaction('bookmarks', 'readwrite');
+                tx.objectStore('bookmarks').put({id:'legacy', url, label:'Old place', createdAt:1, htmlScrollTop:1300});
+                tx.oncomplete = resolve;
+                tx.onabort = () => reject(tx.error);
+            });
+            db.close();
+            opening.searchParams.set('bookmark', 'legacy');
+            opening.searchParams.set('bookmark_source', url);
+            return opening.href;
+        }''')
+        self.page.goto(opening)
+        self.page.locator('html[data-reader-phase="ready"]').wait_for()
+        self.assertEqual(self.page.locator('.reader-loading-indicator').count(), 0)
+        iframe = self.page.locator('iframe.html-frame')
+        self.assertTrue(iframe.get_attribute('title').endswith('正文'))
+        self.assertEqual(iframe.get_attribute('sandbox'), 'allow-same-origin')
+        frame = self.page.frame_locator('iframe.html-frame')
+        self.assertEqual(frame.get_by_role('heading', name='Later chapter').count(), 1)
+        self.assertEqual(iframe.evaluate('frame => frame.contentWindow.scrollY'), 1300)
+        self.assertNotIn('bookmark=', self.page.url)
+        for element, color in (('light', 'rgb(17, 17, 17)'), ('dark', 'rgb(245, 245, 245)'), ('same', 'rgb(238, 238, 238)')):
+            self.assertEqual(frame.locator(f'#{element}').evaluate('n => getComputedStyle(n).color'), color)
+
     def test_search_escape_restores_focus_and_expansion_state(self):
         self.open_book()
         self.open_with_keyboard()

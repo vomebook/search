@@ -46,6 +46,15 @@
       })();
     </script>
     <link rel="modulepreload" href="/search/static/reader.js" />
+    <!-- Unconditional Reader imports kept outside the entry bundle. Start
+         them with the entry, not after its download/parse. No document I/O. -->
+    <link rel="modulepreload" href="/search/static/reader/search/reader-dom-search.mjs" />
+    <link rel="modulepreload" href="/search/static/reader/search/reader-search-controller.mjs" />
+    <link rel="modulepreload" href="/search/static/reader/formats/reader-image-loader.mjs" />
+    <link rel="modulepreload" href="/search/static/reader/pdf/reader-pdf-network.mjs" />
+    <link rel="modulepreload" href="/search/static/reader/pdf/reader-pdf-range-hints.mjs" />
+    <link rel="modulepreload" href="/search/static/reader/pdf/reader-v3.mjs" />
+    <link rel="modulepreload" href="/search/static/reader/pdf/reader-pdf-text.js" />
     <link rel="preconnect" href="https://huggingface.co" />
     <link rel="preconnect" href="https://voiceofml-search.hf.space" />
     <link rel="stylesheet" href="/search/static/reader.css" />

@@ -761,6 +761,19 @@ export function createReaderHtmlFormat(readerContext) {
       const [red = 0, green = 0, blue = 0] = channels;
       return red * 0.2126 + green * 0.7152 + blue * 0.0722;
     };
+    // Repeated computed color strings (e.g. inherited prose colors) have the
+    // same metrics even after a repair changes which strings CSS returns.
+    /** @type {Map<string, {light: number, alpha: number} | null>} */
+    const colors = new Map();
+    /** @param {string} value */
+    const colorMetrics = (value) => {
+      const cached = colors.get(value);
+      if (cached !== undefined) return cached;
+      const color = parseColor(value);
+      const metrics = color && { light: luminance(color), alpha: color[3] };
+      if (colors.size < 128) colors.set(value, metrics);
+      return metrics;
+    };
     /** @type {Map<Element, number>} */
     const backgrounds = new Map();
     /** @param {HTMLElement} element @param {CSSStyleDeclaration} style */
@@ -774,10 +787,10 @@ export function createReaderHtmlFormat(readerContext) {
           break;
         }
         pending.push(current);
-        const color = parseColor((current === element ? style :
+        const color = colorMetrics((current === element ? style :
           frameWindow.getComputedStyle(current)).backgroundColor);
-        if (color && color[3] > 0.1) {
-          light = luminance(color);
+        if (color && color.alpha > 0.1) {
+          light = color.light;
           break;
         }
       }
@@ -793,10 +806,10 @@ export function createReaderHtmlFormat(readerContext) {
     }
     for (const element of elements) {
       const style = frameWindow.getComputedStyle(element);
-      const foreground = parseColor(style.color);
+      const foreground = colorMetrics(style.color);
       const dark = background(element, style);
       if (!foreground) continue;
-      const light = luminance(foreground);
+      const light = foreground.light;
       const contrast = (Math.max(light, dark) + 0.05) / (Math.min(light, dark) + 0.05);
       if (contrast < 3) {
         element.style.setProperty("color", dark > 0.45 ? "#111" : "#f5f5f5", "important");

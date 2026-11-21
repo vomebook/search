@@ -1,10 +1,15 @@
 """Decoder bootstrap behavior; no external source or original copy is used."""
+import gzip
+import hashlib
+import json
+import time
 import unittest
 from pathlib import Path
+from urllib.parse import parse_qs, urlencode, urlsplit
 
 from playwright.sync_api import sync_playwright
 from scripts.benchmarks.benchmark_djvu import local_server
-from tests.support.reader_native_fixture import PINNED, RAW, REVISION, SHA256, install
+from tests.support.reader_native_fixture import PINNED, RAW, REVISION, SHA256, VERSION, install
 
 ROOT=Path(__file__).resolve().parents[3]
 PREFIX='/search' if '/search/static/' in (ROOT/'static/reader.html').read_text() else ''
@@ -62,6 +67,121 @@ class DjvuEngineBootstrapTests(unittest.TestCase):
         self.assertEqual(self.page.evaluate('window.__ops'), ['prepare', 'open'])
         self.page.evaluate('window.__closeDirectDjvu()')
         self.assertEqual(self.errors, [])
+
+    def test_v3_djvu_reads_checked_map_while_loader_import_is_pending(self):
+        root = f'objects/{SHA256[:2]}/{SHA256}/{VERSION}'
+        manifest_path, map_path, primary_path = [
+            f'{root}/{name}' for name in ('reading-manifest.json', 'page-map.json.gz', 'document.djvu')]
+        pages = [dict(page=n, identity=str(n)*64, width=69.12, height=92.16, rotation=0,
+                      crop_box=[0, 0, 69.12, 92.16], media_box=[0, 0, 69.12, 92.16],
+                      djvu=dict(pixels=[96, 128], dpi=100)) for n in (1, 2, 3)]
+        packed = gzip.compress(json.dumps(dict(version=1, kind='pdf-page-map', source_sha256=SHA256,
+                                               pages=pages)).encode(), mtime=0)
+
+        def ref(path, data):
+            return dict(bucket='vomebook/pdf-pages-v2', path=path, role='runtime', bytes=len(data),
+                        sha256=hashlib.sha256(data).hexdigest())
+
+        manifest = dict(version=3, kind='pdf-reading', source_sha256=SHA256, generation='a'*64,
+                        page_count=3, source_key='fixture', page_map=ref(map_path, packed),
+                        primary=dict(kind='djvu', status='ready', resource=ref(primary_path, RAW)),
+                        preview=dict(complete=False, status='skipped', page_count=3, ready_pages=0, partitions=[]),
+                        components=dict(document='ready', preview='skipped', text='pending'))
+        proxy = '/api/reader-bucket-resource'
+        proxy_origin = 'https://voiceofml-search.hf.space' if PREFIX else self.origin
+        url = self.origin + PREFIX + '/static/reader.html?' + urlencode({
+            'ext': 'pdf-pages', 'url': proxy_origin + proxy + '?' + urlencode({'path': manifest_path})})
+
+        for action in ('resume', 'bad-map', 'dispose'):
+            with self.subTest(action=action), self.browser.new_context(service_workers='block') as context:
+                page = context.new_page()
+                page.set_default_timeout(10000)
+                requests, loader, maps, errors = [], [], [], []
+                page.on('pageerror', lambda error: errors.append(str(error)))
+                page.route('**/*', lambda route: route.continue_() if route.request.url.startswith(self.origin + '/')
+                           else route.abort())
+                page.add_init_script('''(() => {
+                  const fetchImpl = fetch.bind(window);
+                  window.fetch = (input, init) => {
+                    const url = new URL(input, location.href);
+                    if (url.pathname !== '/api/reader-bucket-resource') return fetchImpl(input, init);
+                    if (url.searchParams.get('path').endsWith('/page-map.json.gz'))
+                      window.__mapSignal = init.signal;
+                    return fetchImpl(location.origin + url.pathname + url.search, init);
+                  };
+                  const post = Worker.prototype.postMessage;
+                  window.__ops = [];
+                  Worker.prototype.postMessage = function(message, ...args) {
+                    window.__ops.push(message.operation);
+                    return post.call(this, message, ...args);
+                  };
+                  new MutationObserver(() => {
+                    const canvas = document.querySelector('.reader-page canvas.ready');
+                    if (canvas) window.__firstCanvasPage ??= canvas.closest('.reader-page').dataset.page;
+                  }).observe(document, {subtree:true, childList:true, attributes:true, attributeFilter:['class']});
+                })()''')
+                page.route('**/static/reader/core/reader-store.js*', lambda route: route.fulfill(
+                    content_type='text/javascript', body='''window.VoiceOfMLReaderStore={
+                      get:async()=>({page:2,pageCount:3,zoom:100}),put:async()=>{},
+                      list:async()=>[],listBookmarks:async()=>[],listAllBookmarks:async()=>[]};'''))
+                page.route('**/static/reader/pdf/reader-djvu-loader.mjs*', lambda route: loader.append(route))
+
+                def assets(route):
+                    path = parse_qs(urlsplit(route.request.url).query)['path'][0]
+                    requests.append(path)
+                    if path == manifest_path:
+                        route.fulfill(json=manifest)
+                    elif path == map_path:
+                        maps.append(route)
+                    elif path == primary_path:
+                        route.fulfill(body=RAW, content_type='image/vnd.djvu')
+                    else:
+                        route.fulfill(status=404)
+
+                page.route(self.origin + proxy + '?*', assets)
+                page.goto(url, wait_until='domcontentloaded')
+                deadline = time.monotonic() + 5
+                while not (loader and maps) and time.monotonic() < deadline:
+                    page.wait_for_timeout(20)
+                self.assertEqual(len(loader), 1)
+                self.assertEqual(len(maps), 1, 'the map must be requested before the loader is released')
+                self.assertEqual(requests, [manifest_path, map_path])
+                self.assertEqual(page.evaluate('window.__ops'), [])
+
+                def release_loader():
+                    # Check cancellation after the late import has actually run.
+                    route = loader.pop()
+                    response = route.fetch()
+                    route.fulfill(response=response, body=response.text() + '\nwindow.__djvuLoaderImported = true;\n')
+                    page.wait_for_function('() => window.__djvuLoaderImported === true')
+
+                if action == 'resume':
+                    release_loader()
+                    page.wait_for_function("() => window.__ops.includes('prepare')")
+                    self.assertEqual(page.evaluate('window.__ops'), ['prepare'])
+                    self.assertEqual(page.locator('canvas.ready').count(), 0)
+                    maps.pop().fulfill(body=packed, content_type='application/gzip')
+                    shell = page.locator('.reader-page[data-page="2"]')
+                    shell.locator('canvas.ready').wait_for()
+                    self.assertEqual(page.evaluate('window.__firstCanvasPage'), '2')
+                    page.wait_for_function('''() => document.querySelector('.reader-page[data-page="2"] .reader-pdf-text')
+                      ?.textContent.includes('Page2text')''')
+                    self.assertEqual(requests, [manifest_path, map_path, primary_path])
+                    self.assertEqual(page.evaluate('window.__ops.slice(0, 3)'), ['prepare', 'open', 'page'])
+                else:
+                    if action == 'bad-map':
+                        maps.pop().fulfill(body=bytes([packed[0] ^ 1]) + packed[1:], content_type='application/gzip')
+                        page.wait_for_function("() => document.documentElement.dataset.readerPhase === 'failed'")
+                        self.assertIn('PDF_OCR_HASH_MISMATCH', page.locator('.reader-error').text_content())
+                    else:
+                        page.evaluate("dispatchEvent(new Event('voice-reader-dispose'))")
+                        page.wait_for_function("() => document.documentElement.dataset.readerPhase === 'disposed'")
+                        self.assertTrue(page.evaluate('window.__mapSignal.aborted'))
+                    release_loader()
+                    self.assertEqual(requests, [manifest_path, map_path])
+                    self.assertEqual(page.evaluate('window.__ops'), [])
+                    self.assertEqual(page.locator('canvas.ready').count(), 0)
+                self.assertEqual(errors, [])
 
     def test_native_decoder_prepares_while_revision_is_pending(self):
         state = install(self.page, self.origin, prefix=PREFIX)

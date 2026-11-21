@@ -474,11 +474,17 @@ export function createReaderPdfPageWindow(readerContext) {
       readerContext.syncCapabilityControls();
       /** @type {string} */
       const djvuLoaderUrl = "/search/static/reader/pdf/reader-djvu-loader.mjs";
-      // The deployed URL stays absolute; the relative type import checks the actual loader API.
-      const { openDirectDjvu } = /** @type {typeof import('./reader-djvu-loader.mjs')} */ (await import(djvuLoaderUrl));
+      // The checked map is independent of decoder bootstrap. Start it as soon
+      // as the manifest is validated, not after the loader module graph arrives.
+      const pageMap = repository.read(manifest.page_map).then(map => readerContext.validatePageMap(map, manifest));
+      const loading = import(djvuLoaderUrl);
+      // Fail on a bad map even if the import is stalled. The loader can still
+      // prepare the decoder and read the primary while a valid map is pending.
+      const { openDirectDjvu } = /** @type {typeof import('./reader-djvu-loader.mjs')} */ (await readerContext.awaitReader(
+        Promise.race([loading, pageMap.then(() => loading)])));
+      readerContext.assertReaderActive();
       let pdf;
       try {
-        const pageMap = repository.read(manifest.page_map).then(map => readerContext.validatePageMap(map, manifest));
         pdf = /** @type {import('../../../typings/reader-page-window-strict').DirectDjvuDocument} */ (await openDirectDjvu(readerContext, manifest, pageMap));
         readerContext.pdfV3Map = await pageMap;
         return await readerContext.renderPdf(pdf);

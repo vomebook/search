@@ -1,5 +1,6 @@
 """Shared chapter ebook loading and navigation regressions."""
 import unittest
+from collections import Counter
 from urllib.parse import unquote, urlencode
 from tests.reader.browser import test_reader_pdf_followup as support
 
@@ -16,9 +17,17 @@ class EbookFlowTests(unittest.TestCase):
         manifest = {'version': 1, 'kind': 'epub-chapters', 'chapters': [
             {'index': i, 'path': f'chapters/chapter-{i:04d}.xhtml'} for i in (1, 2)
         ]}
-        self.page.route('**/api/reader-bucket-resource**', lambda route: route.fulfill(json=manifest)
-            if 'chapter-manifest.json' in route.request.url else route.fulfill(
-                content_type='text/html', body='<h1>Chapter</h1><p style="height:1600px">Text</p>'))
+        requested = []
+
+        def resource(route):
+            path = unquote(route.request.url)
+            if path.endswith('chapter-manifest.json'):
+                route.fulfill(json=manifest)
+            else:
+                requested.append(int(path.rsplit('chapter-', 1)[1].split('.', 1)[0]))
+                route.fulfill(content_type='text/html', body='<h1>Chapter</h1><p style="height:1600px">Text</p>')
+
+        self.page.route('**/api/reader-bucket-resource**', resource)
         reader_url = self.origin + support.PREFIX + '/static/reader.html'
         self.page.goto(reader_url)
         entry = {'url': source, 'chapterIndex': index, 'chapterOffset': 180}
@@ -38,7 +47,9 @@ class EbookFlowTests(unittest.TestCase):
         self.assertEqual(self.page.locator('html').get_attribute('data-reader-phase'), 'ready',
                          self.page.locator('.reader-error').all_text_contents())
         self.page.unroute('**/api/reader-bucket-resource**')
-        return self.page.evaluate('__ebook.captureChapter()')
+        position = self.page.evaluate('__ebook.captureChapter()')
+        self.assertEqual(requested[0], position['chapterIndex'], requested)
+        return position
 
     def test_obsolete_chapter_progress_does_not_block_opening(self):
         self.expose()
@@ -255,6 +266,43 @@ class EbookFlowTests(unittest.TestCase):
                 self.assertEqual(self.page.locator(selector).get_attribute(attr), cover)
         for selector in ('#cover', '#only-srcset'):
             self.assertIsNone(self.page.locator(selector).get_attribute('srcset'))
+
+    def test_first_chapter_reuses_trusted_asset_bases(self):
+        base = 'chapters/ebook/epub/' + 'a' * 64 + '/1234567890abcdef/'
+        endpoint = 'https://voiceofml-search.hf.space/api/reader-bucket-resource?'
+        source = endpoint + urlencode({'path': base + 'chapter-manifest.json'})
+        chapter_path = 'chapters/chapter-0001.xhtml'
+        chapter_url = endpoint + urlencode({'path': base + chapter_path})
+        other_revision = '/' + base.replace('1234567890abcdef', '0123456789abcdef')
+        body = ('<h1 id="start">Opening chapter</h1>' +
+                '<p><a href="#start">Back to heading</a><span poster="../resources/cover.svg">Text</span></p>' * 240 +
+                f'<span id="other-revision" poster="{other_revision}resources/cover.svg">Text</span>')
+        manifest = {'version': 1, 'kind': 'epub-chapters', 'chapters': [
+            {'index': 1, 'path': chapter_path, 'bytes': len(body)}]}
+        self.page.route('**/api/reader-bucket-resource**', lambda route: route.fulfill(json=manifest)
+            if 'chapter-manifest.json' in route.request.url else route.fulfill(content_type='text/html', body=body))
+
+        def count_base_parses(route):
+            response = route.fetch()
+            script = response.text()
+            needle = 'const url = new URL(raw, base);'
+            self.assertEqual(script.count(needle), 1)
+            route.fulfill(response=response, body=script.replace(needle,
+                'window.__chapterBaseParses.push(raw);\n      ' + needle))
+
+        self.page.route('**/static/reader/core/reader-source.mjs*', count_base_parses)
+        self.page.add_init_script('window.__chapterBaseParses = []')
+        self.page.goto(self.origin + support.PREFIX + '/static/reader.html?' + urlencode(
+            dict(url=source, ext='epub-chapters')))
+        self.page.wait_for_function("()=>document.documentElement.dataset.readerPhase==='ready'")
+        article = self.page.locator('.reader-epub-chapter')
+        self.assertTrue(article.locator('h1').is_visible())
+        self.assertEqual(article.locator('a[href="#start"]').count(), 240)
+        cover = endpoint + urlencode({'path': base + 'resources/cover.svg'})
+        self.assertEqual(article.locator(f'span[poster="{cover}"]').count(), 240)
+        self.assertIsNone(article.locator('#other-revision').get_attribute('poster'))
+        # Count actual base parser calls, not all destination URL resolutions.
+        self.assertEqual(Counter(self.page.evaluate('window.__chapterBaseParses')), {source: 1, chapter_url: 1})
 
     def test_ebook_first_content_does_not_import_pdf_hit_projection(self):
         requested = []

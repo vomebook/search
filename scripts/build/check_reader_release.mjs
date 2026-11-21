@@ -180,6 +180,24 @@ function checkProject(root, artifact) {
     assert(!fs.existsSync(path.join(output, "foliate-reader")), "obsolete Foliate runtime in release");
     const project = args.project || (fs.existsSync(path.join(root, "Dockerfile")) ? "hf" : "github");
     for (const file of resources.buildFiles(project)) currentAsset(output, file);
+    const readerEntry = currentAsset(output, "reader.js");
+    const readerBundle = fs.readFileSync(path.join(output, readerEntry), "utf8");
+    const readerShell = fs.readFileSync(path.join(output, "reader.html"), "utf8");
+    const staticBase = project === "github" ? "/search/static/" : "/static/";
+    // Check just the relative imports emitted by the pinned compiler. The
+    // bundle also has root-absolute classic bootstrap dependencies with their
+    // own loading contract; do not add new hints for those side effects.
+    const entryImports = [...readerBundle.matchAll(/\b(?:from|import)[ \t]*"\.\/([^"\s]+\.(?:js|mjs))"/g)]
+      .map(match => match[1]);
+    const visibleShell = readerShell.replace(/<!--[\s\S]*?-->/g, "");
+    const preload = [...visibleShell.matchAll(/<link\b[^>]*\brel=["']modulepreload["'][^>]*>/gi)].map(([tag]) => {
+      assert(!/\bcrossorigin\b/i.test(tag), "Reader modulepreload must use the module's default credentials mode");
+      return tag.match(/\bhref=(["'])([^"']+)\1/i)?.[2];
+    });
+    const expectedPreload = new Set([readerEntry, ...entryImports].map(file => staticBase + file));
+    assert(entryImports.length > 0 && preload.length === expectedPreload.size &&
+      new Set(preload).size === preload.length && preload.every(url => expectedPreload.has(url)),
+      "Reader shell must preload exactly the hashed entry and its relative static imports");
     const shellPath = fs.existsSync(path.join(output, "index.html"))
       ? path.join(output, "index.html") : path.join(output, "../index.html");
     const shell = fs.readFileSync(shellPath, "utf8");
@@ -192,6 +210,20 @@ function checkProject(root, artifact) {
       ? path.join(output, "sw.js")
       : path.join(output, "../sw.js");
     const sw = fs.readFileSync(swPath, "utf8");
+    const precache = JSON.parse(sw.match(/\bREADER_SHELL_ASSETS\s*=\s*(\[[^\]]*\])/)?.[1] || "[]");
+    const verifyPrecachedModule = (file, visited) => {
+      if (visited.has(file)) return;
+      visited.add(file);
+      assert(precache.includes(staticBase + file), `Reader boot module is not precached: ${file}`);
+      const text = fs.readFileSync(path.join(output, file), "utf8");
+      for (const [, dep] of text.matchAll(/\b(?:from|import)[ \t]*"((?:\.\.?\/|\/(?:search\/)?static\/)[^"\s]+\.(?:js|mjs))"/g)) {
+        const target = new URL(dep, "https://reader.invalid" + staticBase + file);
+        assert(target.origin === "https://reader.invalid" && target.pathname.startsWith(staticBase),
+          `Reader boot dependency escaped the local static graph: ${dep}`);
+        verifyPrecachedModule(target.pathname.slice(staticBase.length), visited);
+      }
+    };
+    verifyPrecachedModule(readerEntry, new Set());
     assert(
       !/VoiceOfMLReaderResources\.(?:shellAssets|engineAssets)\(/.test(app),
       "unexpanded Reader warming inventory"
