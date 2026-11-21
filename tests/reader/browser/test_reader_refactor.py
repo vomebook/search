@@ -15,6 +15,17 @@ from tests.performance import test_reader_performance as support
 from tests.support.reader_native_fixture import install as install_native_djvu
 
 
+# 4×3 AVIF and a single-frame WebP with a transparent pixel (GIF output).
+AVIF_BYTES = base64.b64decode(
+    'AAAAIGZ0eXBhdmlmAAAAAGF2aWZtaWYxbWlhZk1BMUIAAADrbWV0YQAAAAAAAAAhaGRscgAAAAAAAAAA'
+    'cGljdAAAAAAAAAAAAAAAAAAAAAAOcGl0bQAAAAAAAQAAAB5pbG9jAAAAAEQAAAEAAQAAAAEAAAETAAAA'
+    'KgAAAChpaW5mAAAAAAABAAAAGmluZmUCAAAAAAEAAGF2MDFDb2xvcgAAAABqaXBycAAAAEtpcGNvAAAA'
+    'FGlzcGUAAAAAAAAABAAAAAMAAAAQcGl4aQAAAAADCAgIAAAADGF2MUOBAAwAAAAAE2NvbHJuY2x4AAEA'
+    'DQAGgAAAABdpcG1hAAAAAAAAAAEAAQQBAoMEAAAAMm1kYXQSAAoIGAR5ogIaDQgyHBTHh4ZlAgggnlAA'
+    'AABIWtlc1jBW9U5JHU8QjYA=')
+TRANSPARENT_WEBP_BYTES = base64.b64decode('UklGRh4AAABXRUJQVlA4TBIAAAAvA4AAEA8Q8x/zH4w7PET0Pww=')
+
+
 def expose_dom_search_tools(page):
     def instrument(route):
         response = route.fetch()
@@ -455,21 +466,75 @@ class ReaderRefactorTest(unittest.TestCase):
         self.assertFalse(any(path.startswith('objects/') for path in requested))
         self.assertTrue(self.page.locator('#download').get_attribute('href'))
 
-    def test_tiff_first_image_fetch_overlaps_manifest_without_bypassing_validation(self):
-        for saved, save_data, valid in ((False, False, True), (False, False, False),
-                                        (False, True, True), (True, False, True)):
-            with self.subTest(saved=saved, save_data=save_data, valid=valid):
+    def test_exact_standalone_avif_and_legacy_transparent_gif_webp(self):
+        for original_ext, fmt, body in [('tiff', 'avif', AVIF_BYTES), ('gif', 'webp', TRANSPARENT_WEBP_BYTES)]:
+            with self.subTest(format=fmt):
+                path = f'pages/image/{original_ext}/{hashlib.sha256(body).hexdigest()}/document.{fmt}'
+                source = 'https://huggingface.co/buckets/vomebook/reader-assets-v2/resolve/' + path
+                original = f'https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/original.{original_ext}'
+                proxy = 'https://voiceofml-search.hf.space/api/reader-bucket-resource?' + urllib.parse.urlencode({'path': path})
+                requested = []
+
+                def serve_image(route):
+                    requested.append(route.request.url)
+                    route.fulfill(body=body, content_type=f'image/{fmt}', headers={'Access-Control-Allow-Origin': '*'})
+
+                self.page.route(proxy, serve_image)
+                if fmt == 'webp':
+                    self.page.add_init_script('''new MutationObserver(() => {
+                        const image = document.querySelector('img.reader-image');
+                        if (image && image.crossOrigin === null) image.crossOrigin = 'anonymous';
+                    }).observe(document, {subtree:true, childList:true});''')
+                self.open(self.reader_url('image', url=source, download=original))
+                image = self.page.locator('img.reader-image')
+                self.assertEqual(image.evaluate('img => [img.naturalWidth, img.naturalHeight]'), [4, 3])
+                self.assertEqual(image.get_attribute('src'), proxy)
+                self.assertTrue(requested)
+                self.assertEqual(set(requested), {proxy})
+                if fmt == 'webp':
+                    image.evaluate('image => image.decode()')
+                    self.assertEqual(image.evaluate('''image => {
+                        const ctx = document.createElement('canvas').getContext('2d');
+                        ctx.drawImage(image, 0, 0);
+                        return [ctx.getImageData(0, 0, 1, 1).data[3], ctx.getImageData(1, 0, 1, 1).data[3]];
+                    }'''), [0, 255])
+                download = urllib.parse.urlsplit(self.page.locator('#download').get_attribute('href'))
+                self.assertEqual(urllib.parse.parse_qs(download.query)['link'], [original])
+                self.page.unroute(proxy)
+
+    def test_missing_standalone_avif_falls_back_to_original(self):
+        path = 'pages/image/png/' + 'a' * 64 + '/document.avif'
+        source = 'https://voiceofml-search.hf.space/api/reader-bucket-resource?' + urllib.parse.urlencode({'path': path})
+        original = 'https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/original.png'
+        self.page.route('**/api/reader-resolve?**', lambda route: route.fulfill(
+            json=dict(url=source, download=original, extension='image', original_extension='png')))
+        self.page.route(source, lambda route: route.fulfill(status=404, body='missing'))
+        self.serve(support.PNG_BYTES, 'image/png')
+        self.open(self.origin+'/static/reader.html?id=0ym7e7wbcxau0&ext=image')
+        image = self.page.locator('img.reader-image')
+        self.assertEqual(image.evaluate('img => img.naturalWidth'), 1)
+        self.assertEqual(urllib.parse.parse_qs(urllib.parse.urlsplit(image.get_attribute('src')).query)['url'], [original])
+
+    def test_tiff_opening_waits_for_manifest_format_and_respects_saved_page(self):
+        for fmt, saved, save_data, valid in (('webp', False, False, True), ('webp', False, False, False),
+                                             ('webp', False, True, True), ('webp', True, False, True),
+                                             ('avif', False, False, True), ('avif', True, False, True)):
+            with self.subTest(format=fmt, saved=saved, save_data=save_data, valid=valid):
                 page = self.context.new_page()
                 try:
-                    self._check_tiff_opening_overlap(page, saved, save_data, valid)
+                    self._check_tiff_opening(page, fmt, saved, save_data, valid)
                 finally:
                     page.close()
 
-    def _check_tiff_opening_overlap(self, page, saved, save_data, valid):
-        prefix = 'pages/image/tiff/' + hashlib.sha256(str((saved, save_data, valid)).encode()).hexdigest() + '/'
+    def _check_tiff_opening(self, page, fmt, saved, save_data, valid):
+        prefix = 'pages/image/tiff/' + hashlib.sha256(str((fmt, saved, save_data, valid)).encode()).hexdigest() + '/'
         source = 'https://voiceofml-search.hf.space/api/reader-bucket-resource?' + urllib.parse.urlencode({
             'path': prefix + 'page-manifest.json'})
-        data = support.IMAGE_FIXTURES['webp'][1]
+        count = 2 if saved or fmt == 'avif' else 1
+        # Give each AVIF distinct pins with a valid trailing free-space box.
+        bodies = {f'pages/page-{index:06}.{fmt}': (
+            AVIF_BYTES + (8 + index).to_bytes(4, 'big') + b'free' + bytes(index)
+            if fmt == 'avif' else support.IMAGE_FIXTURES['webp'][1]) for index in range(1, count + 1)}
         store = support.STORE_SCRIPT.replace('new Promise((resolve) => setTimeout(() => resolve(null), 300))',
             'Promise.resolve({page: 2, pageOffset: 0, zoom: 1})' if saved else 'Promise.resolve(null)')
         page.route('**/static/reader/core/reader-store.js', lambda route: route.fulfill(
@@ -478,39 +543,62 @@ class ReaderRefactorTest(unittest.TestCase):
         manifests, images = [], []
 
         def asset(route):
-            path = urllib.parse.parse_qs(urllib.parse.urlsplit(route.request.url).query)['path'][0]
+            query = urllib.parse.parse_qs(urllib.parse.urlsplit(route.request.url).query)
+            path = query['path'][0]
             if path.endswith('/page-manifest.json'):
                 manifests.append(route)
             else:
-                images.append(path)
-                route.fulfill(content_type='image/webp', body=data)
+                images.append((path, route.request.resource_type))
+                data = bodies.get(path.removeprefix(prefix)) if path.startswith(prefix) else None
+                if data is None:
+                    return route.fulfill(status=404, body='wrong image path')
+                expected = {'path': [path]}
+                if fmt == 'avif':
+                    expected.update(sha256=[hashlib.sha256(data).hexdigest()], bytes=[str(len(data))])
+                if query != expected:
+                    return route.fulfill(status=400, body='wrong route parameters')
+                route.fulfill(content_type=f'image/{fmt}', body=data)
 
         page.route('**/api/reader-bucket-resource?**', asset)
         page.goto(self.reader_url('image-pages', url=source), wait_until='domcontentloaded')
         page.wait_for_function('() => window.__storeStartedAt !== undefined')
-        if not save_data and not saved:
-            page.wait_for_function('() => performance.getEntriesByType("resource").some(r => r.initiatorType === "img" && r.name.includes("page-000001.webp"))')
-            self.assertEqual(images, [prefix + 'pages/page-000001.webp'])
-        else:
-            # Flush the settled lookup before confirming it did not request page one.
-            page.evaluate('() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))')
-            self.assertEqual(images, [])
+        # Flush settled restoration. The suffix is not known until the manifest arrives.
+        page.evaluate('() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))')
+        self.assertEqual(images, [])
         self.assertEqual(page.locator('.reader-page').count(), 0)
         self.assertEqual(len(manifests), 1)
-        count = 2 if saved else 1
-        manifests.pop().fulfill(json=dict(version=1, kind='image-page-stream', page_count=count,
-                                        pages=[{} for _ in range(count)] if valid else []))
+        if fmt == 'avif':
+            manifest = dict(image_format='avif', pages=[
+                dict(path=path, bytes=len(data), sha256=hashlib.sha256(data).hexdigest())
+                for path, data in bodies.items()])
+        else:
+            manifest = dict(pages=[{} for _ in range(count)] if valid else [])
+            if save_data:
+                manifest['image_format'] = 'webp'  # Explicit WebP also uses the legacy loader.
+        manifests.pop().fulfill(json=dict(version=1, kind='image-page-stream', page_count=count, **manifest))
         if not valid:
             page.locator('.reader-error').wait_for()
             self.assertEqual(page.locator('.reader-page').count(), 0)
+            self.assertEqual(images, [])
             return
-        page.locator(f'.reader-page[data-page="{count}"] img.ready').wait_for(state='visible')
-        self.assertEqual(page.locator('#page-number').input_value(), str(count))
-        self.assertEqual(images.count(prefix + f'pages/page-{count:06}.webp'), 1)
-        if saved:
-            self.assertTrue(images[0].endswith('page-000002.webp'))
+        initial = count if saved else 1
+        opening = page.locator(f'.reader-page[data-page="{initial}"] img.ready')
+        opening.wait_for(state='visible')
+        if fmt == 'avif':
+            self.assertTrue(opening.get_attribute('src').startswith('blob:'))
+        self.assertEqual(page.locator('#page-number').input_value(), str(initial))
+        resource_type = 'fetch' if fmt == 'avif' else 'image'
+        self.assertEqual(images[0], (prefix + f'pages/page-{initial:06}.{fmt}', resource_type))
+        self.assertEqual(images.count(images[0]), 1)
+        if fmt == 'avif' and not saved:
+            page.locator('#page-number').fill('2')
+            page.locator('#page-number').dispatch_event('change')
+            second = page.locator('.reader-page[data-page="2"] img.ready')
+            second.wait_for(state='visible')
+            self.assertEqual(second.evaluate('img => [img.naturalWidth, img.naturalHeight]'), [4, 3])
+            self.assertEqual(set(images), {(prefix + f'pages/page-{index:06}.avif', 'fetch') for index in (1, 2)})
 
-    def test_disposal_while_tiff_manifest_is_pending_releases_preloaded_image(self):
+    def test_disposal_while_tiff_opening_page_is_pending_releases_preloaded_image(self):
         prefix = 'pages/image/tiff/' + 'c' * 64 + '/'
         source = 'https://voiceofml-search.hf.space/api/reader-bucket-resource?' + urllib.parse.urlencode({
             'path': prefix + 'page-manifest.json'})
@@ -527,16 +615,25 @@ class ReaderRefactorTest(unittest.TestCase):
             content_type='text/javascript', body=support.STORE_SCRIPT.replace(
                 'new Promise((resolve) => setTimeout(() => resolve(null), 300))', 'Promise.resolve(null)')))
         held = []
-        self.page.route('**/api/reader-bucket-resource?**', lambda route: held.append(route))
+
+        def asset(route):
+            if 'page-manifest.json' in route.request.url:
+                route.fulfill(json=dict(version=1, kind='image-page-stream', page_count=1, pages=[{}]))
+            else:
+                held.append(route)
+
+        self.page.route('**/api/reader-bucket-resource?**', asset)
         self.page.goto(self.reader_url('image-pages', url=source), wait_until='domcontentloaded')
         self.page.wait_for_function('() => window.__openingImages?.some(image => image.src.includes("page-000001.webp"))')
         self.assertTrue(self.page.evaluate('''() => {
           const image = window.__openingImages.find(item => item.src.includes('page-000001.webp'));
           window.dispatchEvent(new Event('voice-reader-dispose'));
-          return !image.hasAttribute('src') && !image.isConnected;
+          return !image.hasAttribute('src');
         }'''))
-        self.assertEqual(self.page.locator('.reader-page').count(), 0)
-        self.assertTrue(any('page-manifest.json' in route.request.url for route in held))
+        self.assertEqual(self.page.locator('html').get_attribute('data-reader-phase'), 'disposed')
+        self.assertEqual(len(held), 1)
+        self.assertIn('page-000001.webp', held[0].request.url)
+        held[0].abort()
 
     def test_tiff_first_page_renders_before_remaining_shell_batches_finish(self):
         prefix = 'pages/image/tiff/' + 'a' * 64 + '/'
@@ -562,8 +659,7 @@ class ReaderRefactorTest(unittest.TestCase):
                 await new Promise(resolve=>{window.__releaseImageShells=resolve;});
             '''+anchor))
         self.page.route('**/static/reader/pdf/reader-pdf-page-window.mjs', hold_shells)
-        # Disable the independent low-priority image preload; measure the real
-        # image demand/reveal path, not a speculative duplicate request.
+        # Save-Data still allows the validated opening page to render early.
         self.page.add_init_script('''
           Object.defineProperty(navigator,'connection',{value:{saveData:true}});
           const parse = JSON.parse, stringify = JSON.stringify;
@@ -724,7 +820,7 @@ class ReaderRefactorTest(unittest.TestCase):
                     if path == manifest_path:
                         if fault != 'manifest':
                             return route.fulfill(json=manifest)
-                        # Keep the 404 pending until the empty history lookup can trigger a preload.
+                        # Exercise a missing manifest after the history lookup has settled.
                         self.page.wait_for_function('() => window.__imageRecoveryLookedUp === true')
                     return route.fulfill(status=404, body='missing')
 
@@ -739,6 +835,70 @@ class ReaderRefactorTest(unittest.TestCase):
                 self.page.unroute('**/api/reader-bucket-resource?**')
                 self.assertEqual(set(requested), {manifest_path, page_path} if fault == 'page' else {manifest_path})
         self.assertEqual(len(originals), 5)
+
+    def test_invalid_avif_manifest_or_page_bytes_fall_back_to_original(self):
+        prefix = 'pages/image/png/' + 'a' * 64 + '/'
+        manifest_path, relative = prefix + 'page-manifest.json', 'pages/page-000001.avif'
+        source = 'https://voiceofml-search.hf.space/api/reader-bucket-resource?' + urllib.parse.urlencode({'path': manifest_path})
+        original = 'https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/original.png'
+        resolved = dict(url=source, download=original, extension='image-pages', original_extension='png')
+        self.page.route('**/api/reader-resolve?**', lambda route: route.fulfill(json=resolved))
+        self.serve(support.PNG_BYTES, 'image/png')
+        self.page.route('**/static/reader/core/reader-store.js', lambda route: route.fulfill(
+            content_type='text/javascript', body=support.STORE_SCRIPT.replace(
+                'new Promise((resolve) => setTimeout(() => resolve(null), 300))', 'Promise.resolve(null)')))
+        transport_faults = ('short-body', 'long-body', 'wrong-digest', 'wrong-mime', 'partial', 'wrong-image', 'decode')
+        for fault in ('format', 'foreign-path', 'absolute-path', 'wrong-number', 'wrong-suffix',
+                      'missing-digest', 'string-size', 'size-limit', *transport_faults):
+            with self.subTest(fault=fault):
+                body = (support.PNG_BYTES if fault == 'wrong-image' else
+                        AVIF_BYTES[:32] if fault == 'decode' else AVIF_BYTES)
+                entry = dict(path=relative, bytes=len(body), sha256=hashlib.sha256(body).hexdigest())
+                manifest = dict(version=1, kind='image-page-stream', page_count=1, image_format='avif', pages=[entry])
+                if fault == 'format':
+                    manifest['image_format'] = None
+                elif fault == 'foreign-path':
+                    entry['path'] = '../' + relative
+                elif fault == 'absolute-path':
+                    entry['path'] = prefix + relative
+                elif fault == 'wrong-number':
+                    entry['path'] = 'pages/page-000002.avif'
+                elif fault == 'wrong-suffix':
+                    entry['path'] = 'pages/page-000001.webp'
+                elif fault == 'missing-digest':
+                    del entry['sha256']
+                elif fault == 'string-size':
+                    entry['bytes'] = str(len(body))
+                elif fault == 'size-limit':
+                    entry['bytes'] = 64 * 1024 * 1024 + 1
+                elif fault == 'short-body':
+                    body = body[:-1]
+                elif fault == 'long-body':
+                    body += b'\x00'
+                elif fault == 'wrong-digest':
+                    entry['sha256'] = 'b' * 64
+                requested = []
+
+                def asset(route):
+                    path = urllib.parse.parse_qs(urllib.parse.urlsplit(route.request.url).query)['path'][0]
+                    requested.append(path)
+                    if path == manifest_path:
+                        route.fulfill(json=manifest)
+                    else:
+                        route.fulfill(body=body, content_type='image/webp' if fault == 'wrong-mime' else 'image/avif',
+                                      status=206 if fault == 'partial' else 200)
+
+                self.page.route('**/api/reader-bucket-resource?**', asset)
+                self.open(self.origin+'/static/reader.html?id=0ym7e7wbcxau0&ext=image-pages')
+                self.assertTrue(self.page.locator('img.reader-image').evaluate('img => img.naturalWidth > 0'))
+                self.assertEqual(self.page.locator('.reader-page').count(), 0)
+                self.assertEqual(self.page.locator('#content').get_attribute('data-mode'), 'image')
+                expected = {manifest_path}
+                if fault in transport_faults:
+                    expected.add(prefix + relative)
+                self.assertEqual(set(requested), expected)
+                self.page.evaluate('window.dispatchEvent(new Event("voice-reader-dispose"))')
+                self.page.unroute('**/api/reader-bucket-resource?**')
 
     def test_classic_engine_failure_timeout_and_disposal_release_scripts(self):
         self.page.add_init_script('''const timer = window.setTimeout.bind(window);

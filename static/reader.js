@@ -490,7 +490,6 @@ const readerContext = {
   get pdfSurfacePixels() { return pdfSurfacePixels; }, set pdfSurfacePixels(value) { pdfSurfacePixels = value; },
   get placeReadingProgress() { return placeReadingProgress; }, set placeReadingProgress(value) { placeReadingProgress = value; },
   get prefetchPdfBookSearch() { return prefetchPdfBookSearch; }, set prefetchPdfBookSearch(value) { prefetchPdfBookSearch = value; },
-  get preloadPdfFirstPage() { return preloadPdfFirstPage; }, set preloadPdfFirstPage(value) { preloadPdfFirstPage = value; },
   get prepareHtmlDocument() { return prepareHtmlDocument; }, set prepareHtmlDocument(value) { prepareHtmlDocument = value; },
   get preparePdfWorker() { return preparePdfWorker; }, set preparePdfWorker(value) { preparePdfWorker = value; },
   get preparePdfWorkerAttempt() { return preparePdfWorkerAttempt; }, set preparePdfWorkerAttempt(value) { preparePdfWorkerAttempt = value; },
@@ -594,7 +593,7 @@ let {
 } = createReaderDocumentLoader(readerContext);
 
 let {
-  preloadPdfFirstPage, pdfManifestSource, pdfPageEntry, appendShellsBatched,
+  pdfManifestSource, pdfPageEntry, appendShellsBatched,
   pdfSelectionIntersects, correctPdfCrossPageSelection, createPdfShellWindow,
   loadPdfOutline, seedPdfPageGeometry, renderPdfPages, renderImagePages, renderPdf
 } = createReaderPdfPageWindow(readerContext);

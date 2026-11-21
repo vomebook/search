@@ -266,6 +266,41 @@ assert.strictEqual(assets.imagePageSource('https://voiceofml-search.hf.space/api
   encodeURIComponent(imageBucket), 'https://site.test', 'https://site.test').pageUrl(2),
   pageProxy.href.replace('https://api.test', 'https://voiceofml-search.hf.space'))
 assert.throws(() => imageSource.pageUrl(0), /PDF_PAGE_INVALID/)
+assert.throws(() => imageSource.pageUrl(2, 'png'), /PDF_ASSET_INVALID/)
+const avifPage = imageBucket.replace('page-manifest.json', 'pages/page-000002.avif')
+assert.strictEqual(new URL(imageSource.pageUrl(2, 'avif')).searchParams.get('path'), avifPage)
+assert.throws(() => imageSource.assetUrl(avifPage.replace('c'.repeat(64), 'd'.repeat(64))), /PDF_ASSET_INVALID/)
+assert.throws(() => imageSource.assetUrl(imageBucket.replace('page-manifest.json', 'document.avif')), /PDF_ASSET_INVALID/)
+const readerAssetsBucket = 'vomebook/reader-assets-v2'
+const imageAsset = {s: 2, m: 'i', b: readerAssetsBucket}
+const imageRoot = imageBucket.replace('page-manifest.json', '')
+for (const [path, extension] of [
+  [imageBucket, 'image-pages'], [imageRoot + 'document.avif', 'image'], [imageRoot + 'document.webp', 'image'],
+  [imageRoot.replace('/tiff/', '/gif/') + 'document.webp', 'image']
+]) {
+  const fields = assets.assetFields({...imageAsset, p: path}, '/api/reader-bucket-resource')
+  assert.strictEqual(fields.ReaderExtension, extension)
+  assert.strictEqual(fields.ReaderLink, '/api/reader-bucket-resource?path=' + encodeURIComponent(path))
+}
+const avifDocument = imageRoot + 'document.avif'
+assert.ok(assets.isBucketPath(avifDocument, true, readerAssetsBucket))
+for (const wrongBucket of ['vomebook/pdf-pages-v2', 'vomebook/other']) {
+  assert.strictEqual(assets.isBucketPath(avifDocument, true, wrongBucket), false)
+  assert.strictEqual(assets.assetFields({...imageAsset, p: avifDocument, b: wrongBucket}, '/api/reader-bucket-resource'), null)
+}
+assert.strictEqual(assets.assetFields({...imageAsset, p: avifDocument, m: 'h'}, '/api/reader-bucket-resource'), null)
+assert.strictEqual(assets.assetFields({...imageAsset, p: avifPage}, '/api/reader-bucket-resource'), null)
+for (const path of [avifPage, assetRoot + 'b'.repeat(16) + '/pages/page-000002.avif', assetRoot + 'document.avif',
+  imageRoot + 'thumbnail.avif', imageRoot + 'document.AVIF',
+  imageRoot + 'document.avif?x=1', imageRoot + 'document.avif/next', imageRoot + 'document.gif',
+  imageRoot.replace('/tiff/', '/png/') + 'document.gif', imageRoot.replace('/tiff/', '/gif/') + 'document.png',
+  imageRoot.replace('/tiff/', '/pdf/') + 'document.avif', imageRoot.replace('c'.repeat(64), 'abc') + 'document.avif']) {
+  assert.strictEqual(assets.isBucketPath(path, true, readerAssetsBucket), false, path)
+  assert.strictEqual(assets.isBucketPath(path, true, 'vomebook/pdf-pages-v2'), false, path)
+}
+for (const path of [imageRoot + 'pages/page-2.avif', imageRoot + 'pages/page-000000.avif',
+  imageRoot + 'pages/page-000002.avif.exe', imageRoot + 'pages/../pages/page-000002.avif'])
+  assert.throws(() => imageSource.assetUrl(path), /PDF_ASSET_INVALID/)
 assert.ok(assets.pdfPageSource('https://api.test/api/reader-bucket-resource?path=' + encodeURIComponent(bucket), 'https://site.test', 'https://api.test'))
 for (const url of [
   'https://evil.test/buckets/vomebook/pdf-pages-v2/resolve/' + bucket,

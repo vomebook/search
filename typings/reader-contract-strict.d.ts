@@ -19,7 +19,7 @@ export interface ContractRoot {
 export interface PageSource {
   root: string;
   assetUrl(relativePath: string): string;
-  pageUrl?: (page: number) => string;
+  pageUrl?: (page: number, format?: 'webp' | 'avif') => string;
 }
 export interface Asset {
   s?: number; m?: string; p?: string; o?: string; b?: string; ob?: string;

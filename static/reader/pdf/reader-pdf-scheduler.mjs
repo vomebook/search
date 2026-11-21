@@ -43,7 +43,10 @@ export function createReaderPdfScheduler(readerContext) {
 
   function canPrefetchPdfImages() {
     const connection = navigator.connection;
-    return !connection?.saveData && !/** @type {(string | undefined)[]} */ (["slow-2g", "2g"]).includes(connection?.effectiveType);
+    // Detached <img> prefetches bypass byte verification. AVIF is loaded only
+    // through the bounded page renderer (including its nearby-page queue).
+    return readerContext.pdfPageManifest?.codec !== "avif" && !connection?.saveData &&
+      !/** @type {(string | undefined)[]} */ (["slow-2g", "2g"]).includes(connection?.effectiveType);
   }
 
   /** @param {import('../../../typings/reader-pdf-scheduler-strict').PrefetchRecord | null} record */

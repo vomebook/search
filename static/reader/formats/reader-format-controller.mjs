@@ -55,24 +55,6 @@ export function createReaderFormatController(readerContext) {
     }
   }
 
-  function openImagePages() {
-    const manifest = readerContext.fetchReaderResponse();
-    const generation = readerContext.readerRuntime.currentGeneration("navigation");
-    // The trusted source determines the first WebP URL; the manifest still
-    // determines whether any image can be displayed. Don't speculate while a
-    // saved position is unknown, or if its lookup failed.
-    void readerContext.readerRestorationPromise?.then(entry => {
-      if (entry !== null || readerContext.restorationFailed ||
-          !readerContext.isReaderGenerationCurrent("navigation", generation)) return;
-      // If we can recover with the original, only request converted pages
-      // after the manifest validates. Keep the overlap for other sources.
-      if (originalImageFallbackExtension(readerContext.resolvedReaderData?.original_extension) &&
-          readerContext.validSource(readerContext.downloadUrl)) return;
-      return readerContext.preloadPdfFirstPage(1, generation);
-    }).catch(() => {});
-    return manifest;
-  }
-
   function registerReaderFormatAdapters() {
     /** @template T @param {() => T | PromiseLike<T>} open @param {(value: Awaited<T>) => unknown} render */
     function pair(open, render) {
@@ -80,7 +62,7 @@ export function createReaderFormatController(readerContext) {
     }
     const formats = {
       "pdf-pages": pair(() => readerContext.fetchReaderResponse(), readerContext.renderPdfPages),
-      "image-pages": pair(openImagePages, readerContext.renderImagePages),
+      "image-pages": pair(() => readerContext.fetchReaderResponse(), readerContext.renderImagePages),
       pdf: pair(() => {
         if (readerContext.extension !== "djvu") return readerContext.loadPdfDocument();
         readerContext.releasePdfWorker?.();

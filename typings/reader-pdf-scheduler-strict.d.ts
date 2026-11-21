@@ -24,7 +24,7 @@ export interface SchedulerContext {
   PDF_MANIFEST_PREFETCH_CONCURRENCY: number; PDF_MANIFEST_PREFETCH_MAX_PAGES: number; PDF_MANIFEST_PREFETCH_LIMIT: number;
   pdfManifestPrefetchActive: Set<PrefetchRecord>; pdfManifestPrefetches: Map<string, PrefetchRecord>;
   pdfManifestPrefetchTimer: number; pdfManifestPrefetchNext: number; pdfManifestPrefetchOrigin: number; pdfManifestPrefetchCount: number; pdfManifestPrefetchWrapped: boolean;
-  pdfManifestShells: PdfShell[]; pdfPageManifest: { pageUrl(page: number): string } | null;
+  pdfManifestShells: PdfShell[]; pdfPageManifest: { pageUrl(page: number): string; codec?: string } | null;
   pdfActiveRenders: number; pdfRenderWaiters: RenderWaiter[];
   pdfActiveTextLoads: number; pdfActiveSearchTextLoads: number; pdfTextWaiters: TextWaiter[];
   pdfTextContentPromises: Map<number, { request: TextRequest }>;

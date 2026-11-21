@@ -18,7 +18,12 @@ export interface PdfShell extends HTMLElement {
   _pdfImageEvictedAt?: { page: number; zoom: number; direction: number; budget: number; width: number; height: number };
 }
 export interface PdfViewport { width: number; height: number }
-export interface PdfPageManifest { pageUrl(page: number): string; pageCodec?: (page: number) => string; codec: string }
+export interface PdfPageManifest {
+  pageUrl(page: number): string;
+  pageCodec?: (page: number) => string;
+  codec: string;
+  avifPages?: import('./reader-page-window-strict').ImagePageIntegrity[] | undefined;
+}
 export interface PdfPage extends TextPdfPage {
   getViewport(options: { scale: number }): PdfViewport;
   render(options: { canvasContext: CanvasRenderingContext2D | null; viewport: PdfViewport; readerPriority: number; transform: number[] | null }): PdfRenderTask;
@@ -28,6 +33,8 @@ export interface PdfRendererContext {
   viewport: HTMLElement;
   content: HTMLElement;
   PDF_PREFETCH_MARGIN: number;
+  READER_PROXY_TIMEOUT_MS: number;
+  fetchWithReaderTimeout(url: string, timeout: number, options: RequestInit): Promise<Response>;
   readerAbortController: AbortController;
   capability: { mode?: string | null };
   pdfActiveRenders: number;

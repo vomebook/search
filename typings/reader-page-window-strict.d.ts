@@ -65,12 +65,14 @@ export type DirectDjvuDocument = Omit<PdfPreviewDocument, 'getPageIndex'> & Djvu
 export interface PageWindowSource {
   root: string;
   codec?: string;
-  pageUrl?(page: number): string;
+  pageUrl?(page: number, format?: 'webp' | 'avif'): string;
   pageCodec?(page: number): string;
   assetUrl(path: string): string;
 }
+export interface ImagePageIntegrity { bytes: number; sha256: string }
 export interface PageWindowManifest extends PageWindowSource {
   pageUrl(page: number): string;
+  avifPages?: ImagePageIntegrity[] | undefined;
   codec: string;
   pageCount: number;
   sourceFormat?: string;
@@ -109,7 +111,7 @@ export interface PageWindowContext {
   pdfShellLayoutReady: Promise<boolean> | null;
   pdfShellWindow: PageWindowHandle | null; pdfShellsReady: Promise<void>; pdfUserHasScrolled: boolean; pageNavigationLockUntil: number;
   getInitialReaderRestoration(): Promise<unknown>; initialReaderPage(total: number): number;
-  pdfManifestSource(): PageWindowSource | null; preloadPdfFirstPage(total: number, generation?: number): Promise<void>;
+  pdfManifestSource(): PageWindowSource | null;
   awaitReader<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T>;
   waitForReader(ms?: number, animationFrame?: boolean): Promise<void>;
   assertReaderActive(): void; readerAbortError(): Error; trackReaderResource(callback: () => void): () => void;

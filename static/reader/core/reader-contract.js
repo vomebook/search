@@ -273,6 +273,9 @@
   const bucketPathPattern = new RegExp(`^${assetRoot}${assetVersion}(?:${assetPages}|${assetOcr})$`);
   const v2ObjectPathPattern = new RegExp(`^${assetRoot}${assetVersion}(?:${assetPages}|${assetOcr})$`);
   const staticBucketPathPattern = new RegExp(`^(?:${assetRoot}(?:[0-9a-f]{16}/)?(?:[a-z0-9-]+/)?(?:document\\.(?:html|txt|md|webp|jpg|jpeg|png|gif|bmp|swf)|audio\\.(?:mp3|wav|m4a|flac|mpga)|video\\.(?:mp4|mov))|documents/(?:text|web|spreadsheet|office|pdf)/[a-z0-9_-]+/[0-9a-f]{64}/document\\.(?:txt|md|html|pdf|vcf|ini)|media/(?:audio|video|swf)/[a-z0-9_-]+/[0-9a-f]{64}/(?:audio\\.[a-z0-9]+|video\\.[a-z0-9]+|document\\.swf)|pages/image/(?:jpg|jpeg|png|bmp|tif|tiff|webp|gif)/[0-9a-f]{64}/(?:document\\.webp|page-manifest\\.json|pages/page-[0-9]{6}\\.webp)|derived/[A-Za-z0-9._-]+/[a-z0-9]{32}/document\\.pdf|chapters/ebook/(?:epub|mobi|azw3|fb2|chm)/[0-9a-f]{64}/[0-9a-f]{16}/(?:chapter-manifest\\.json|epub-search-index\\.json\\.gz))$`);
+  const imageRoot = String.raw`pages/image/(?:jpg|jpeg|png|bmp|tif|tiff|webp|gif)/[0-9a-f]{64}/`;
+  const imageAvifDocumentPathPattern = new RegExp(`^${imageRoot}document\\.avif$`);
+  const imageAvifPagePathPattern = new RegExp(`^${imageRoot}pages/page-(?!000000)[0-9]{6}\\.avif$`);
   const versionedBucketPathPattern = new RegExp(`^${assetRoot}[0-9a-f]{16}/(?:${assetPages}|${assetOcr})$`);
   /** @type {Readonly<Record<string, string>>} */
   const assetModes = Object.freeze({
@@ -289,7 +292,8 @@
 
   /** @param {string} path @param {boolean} [versioned] @param {string} [bucket] */
   function isBucketPath(path, versioned = false, bucket = "vomebook/pdf-pages-v2") {
-    if (bucket === "vomebook/reader-assets-v2") return staticBucketPathPattern.test(path) || v2ChapterPathPattern.test(path) || v2ObjectPathPattern.test(path);
+    if (bucket === "vomebook/reader-assets-v2") return staticBucketPathPattern.test(path) || v2ChapterPathPattern.test(path) ||
+      v2ObjectPathPattern.test(path) || imageAvifDocumentPathPattern.test(path);
     if (bucket !== "vomebook/pdf-pages-v2") return false;
     return /^objects\/([0-9a-f]{2})\/\1[0-9a-f]{62}\/[0-9a-f]{16}\/document\.djvu$/.test(path) ||
       /^objects\/[0-9a-f]{2}\/[0-9a-f]{64}\/[0-9a-f]{16}\/document\.pdf$/.test(path) ||
@@ -326,16 +330,20 @@
       if (!["page-manifest.json", "ocr-manifest.json", "reading-manifest.json"].includes(filename) ||
           !path.endsWith(`/${filename}`)) return null;
       const rootPath = path.slice(0, -filename.length - 1);
+      const imagePages = bucketName === "vomebook/reader-assets-v2" && filename === "page-manifest.json";
       /** @type {import('../../../typings/reader-contract-strict').PageSource} */
       const source = {
         root: rootPath,
         assetUrl(relativePath) {
-          if (!isBucketPath(relativePath, true, bucketName) ||
-              !relativePath.startsWith(rootPath.split("/").slice(0, 3).join("/") + "/"))
+          // AVIF pages are not standalone sources. Only an image stream can
+          // derive these paths; the renderer supplies the required proxy pins.
+          const allowedPath = isBucketPath(relativePath, true, bucketName) ||
+            (imagePages && imageAvifPagePathPattern.test(relativePath));
+          const prefix = imagePages ? `${rootPath}/pages/` : rootPath.split("/").slice(0, 3).join("/") + "/";
+          if (!allowedPath || !relativePath.startsWith(prefix))
             throw new Error("PDF_ASSET_INVALID");
-          // Page images are assigned directly to Image.src (both preload and
-          // rendering). Derive their proxy URL here, not a raw Bucket URL.
-          const imagePages = bucketName === "vomebook/reader-assets-v2" && filename === "page-manifest.json";
+          // Image streams always fetch through the proxy, even with a raw
+          // bucket manifest URL.
           const target = directBucket && imagePages
             ? new URL("/api/reader-bucket-resource", bucketOrigin) : new URL(url.href);
           if (bucket || imagePages) target.searchParams.set("path", relativePath);
@@ -343,11 +351,12 @@
           return target.href;
         }
       };
-      if (bucketName === "vomebook/reader-assets-v2" && filename === "page-manifest.json") {
-        source.pageUrl = (page) => {
+      if (imagePages) {
+        source.pageUrl = (page, format = "webp") => {
           if (!Number.isInteger(page) || page < 1 || page > 999999)
             throw new Error("PDF_PAGE_INVALID");
-          const filename = `pages/page-${String(page).padStart(6, "0")}.webp`;
+          if (format !== "webp" && format !== "avif") throw new Error("PDF_ASSET_INVALID");
+          const filename = `pages/page-${String(page).padStart(6, "0")}.${format}`;
           return source.assetUrl(`${rootPath}/${filename}`);
         };
       }
@@ -384,6 +393,8 @@
     }
     const bucketName = String(asset?.b || "vomebook/reader-assets-v2");
     const bucket = isBucketPath(path, true, bucketName);
+    const avif = imageAvifDocumentPathPattern.test(path);
+    if (avif && (asset?.m !== "i" || asset.c)) return null;
     const chapterBucket = asset?.cb === "vomebook/reader-assets-v2" &&
       (ebookBucketPathPattern.test(String(asset?.c || "")) || v2ChapterPathPattern.test(String(asset?.c || "")));
     if (
@@ -401,7 +412,7 @@
     const extension =
       asset.m === "p" && /\/(?:page|reading)-manifest\.json$/.test(path)
         ? "pdf-pages"
-        : asset.m === "i" && path.endsWith("document.webp")
+        : asset.m === "i" && (path.endsWith("document.webp") || avif)
           ? "image"
           : asset.m === "i" && path.endsWith("page-manifest.json")
             ? "image-pages"

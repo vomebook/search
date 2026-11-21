@@ -73,7 +73,7 @@ assert.match(reader, /queuePdfManifestPrefetch\(\)/)
 const pdfPageRenderMatch = reader.match(/function renderPdfImageShell\(shell, force = false, priority = false\) \{[\s\S]*?\n\}(?=(?:\s|\/\*[\s\S]*?\*\/|\/\/[^\r\n]*)+function renderPdfShell\()/)
 assert.ok(pdfPageRenderMatch, 'PDF image renderer boundary before renderPdfShell')
 const pdfPageRender = pdfPageRenderMatch[0]
-assert.match(pdfPageRender, /const\s+target\s*=\s*(?:\/\*[\s\S]*?\*\/\s*)*(?:pdfPageManifest|\(\s*pdfPageManifest\s*\))\s*\.\s*pageUrl\(\s*entry\.page\s*\)/)
+assert.match(pdfPageRender, /const manifest = \/\*[^\n]*\*\/ \(pdfPageManifest\);\s+const target = manifest\.pageUrl\(entry\.page\);/)
 assert.match(pdfPageRender, /capability\?\.mode !== "image-pages"/)
 assert.doesNotMatch(pdfPageRender, /pdfV3Repository\.preview|entry\.j|entry\.w/)
 assert.doesNotMatch(reader, /renderHybridPdfCanvas|startPdfHybridDocument|leavePdfHybridMode/)
@@ -195,8 +195,6 @@ assert.strictEqual(JSON.stringify(runtimeMatrix.unsupported), JSON.stringify({ t
 // Evaluate the owning registry with identifiable loaders/renderers, so comments or
 // dead dispatch functions cannot satisfy the format wiring contract.
 const registry = reader.match(/function\s+registerReaderFormatAdapters\s*\(\)\s*\{[\s\S]*?\n\}/)
-const imageOpen = reader.match(/function openImagePages\(\) \{[\s\S]*?\n\}/)
-assert.ok(imageOpen, 'image manifest opening helper')
 assert.ok(registry, 'format adapter registry')
 const expected = {
   image: ['loadImageDocument', 'renderImageDocument'],
@@ -206,10 +204,8 @@ const expected = {
 }
 const registered = new Map(), calls = []
 const registryContext = { extension: 'pdf', formatAdapters: { register: (mode, adapter) => registered.set(mode, adapter) } }
-for (const name of [...new Set(Object.values(expected).flat()), 'loadPdfDocument', 'renderPdf', 'preloadPdfFirstPage', 'fetchReaderResponse', 'renderPdfPages', 'renderImagePages', 'loadMediaDocument', 'renderMedia', 'restoreFormat', 'disposeFormatResources']) registryContext[name] = (...args) => calls.push([name, ...args])
-vm.runInNewContext(imageOpen[0] + '\n' + registry[0] + '; registerReaderFormatAdapters();', {
-  ...registryContext, readerRestorationPromise: null, readerRuntime: {currentGeneration: () => 1}
-})
+for (const name of [...new Set(Object.values(expected).flat()), 'loadPdfDocument', 'renderPdf', 'fetchReaderResponse', 'renderPdfPages', 'renderImagePages', 'loadMediaDocument', 'renderMedia', 'restoreFormat', 'disposeFormatResources']) registryContext[name] = (...args) => calls.push([name, ...args])
+vm.runInNewContext(registry[0] + '; registerReaderFormatAdapters();', registryContext)
 assert.deepStrictEqual([...registered.keys()].sort(), [...Object.keys(expected), 'pdf', 'pdf-pages', 'image-pages', 'audio', 'video'].sort())
 registered.get('pdf').open()
 assert.deepStrictEqual(calls.splice(0), [['loadPdfDocument']], 'ordinary PDF uses PDF.js loader')
@@ -229,7 +225,7 @@ registered.get('pdf-pages').open()
 assert.deepStrictEqual(calls.splice(0), [['fetchReaderResponse']])
 const imageWindow = fs.readFileSync(path.join(root, 'static/reader/pdf/reader-pdf-page-window.mjs'), 'utf8')
   .replace(/^\s*\/\/.*$/gm, '')
-assertCode(imageWindow, 'const initialPage = readerContext.initialReaderPage(totalPages); if (ownsOpeningPosition()) { startOpeningImage(initialPage, source.pageUrl(initialPage));')
+assertCode(imageWindow, 'const initialPage = readerContext.initialReaderPage(totalPages); if (codec === "webp" && ownsOpeningPosition()) { startOpeningImage(initialPage, pageUrl(initialPage));')
 registered.get('pdf-pages').render(preparedDocument)
 assert.deepStrictEqual(calls.splice(0), [['renderPdfPages', preparedDocument]])
 registered.get('image-pages').open()

@@ -233,6 +233,53 @@ export function createReaderPdfRenderer(readerContext) {
     }
   }
 
+  /** @param {Uint8Array} bytes */
+  function hasAvifBrand(bytes) {
+    if (bytes.byteLength < 16) return false;
+    const header = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    const size = header.getUint32(0);
+    if (header.getUint32(4) !== 0x66747970 /* ftyp */ || size < 16 || size > bytes.byteLength || size % 4)
+      return false;
+    const avif = 0x61766966;
+    if (header.getUint32(8) === avif) return true;
+    // Skip minor_version; only major_brand and compatible_brands identify the format.
+    for (let offset = 16; offset < size; offset += 4)
+      if (header.getUint32(offset) === avif) return true;
+    return false;
+  }
+
+  /** @param {HTMLImageElement} image @param {string} url @param {AbortSignal} signal
+   * @param {import('../../../typings/reader-page-window-strict').ImagePageIntegrity} expected */
+  async function loadVerifiedAvifPage(image, url, signal, expected) {
+    const target = new URL(url);
+    target.searchParams.set("sha256", expected.sha256);
+    target.searchParams.set("bytes", String(expected.bytes));
+    // The exact proxy route rejects partial and conditional requests. Reuse
+    // fresh immutable responses without sending validators for stale entries.
+    const response = await readerContext.fetchWithReaderTimeout(target.href, readerContext.READER_PROXY_TIMEOUT_MS,
+      { signal, priority: image.fetchPriority, cache: "force-cache", redirect: "error" });
+    if (response.status !== 200 || response.headers.get("Content-Range") ||
+        response.headers.get("Content-Type") !== "image/avif") {
+      void response.body?.cancel().catch(() => {});
+      throw new Error(response.ok ? "IMAGE_PAGE_RESPONSE_INVALID" : `HTTP ${response.status}`);
+    }
+    const bytes = await VoiceOfMLReaderSecurity.readBytes(response, expected.bytes);
+    if (bytes.byteLength !== expected.bytes) throw new Error("IMAGE_PAGE_SIZE_MISMATCH");
+    if (!hasAvifBrand(bytes)) throw new Error("IMAGE_PAGE_FORMAT_MISMATCH");
+    signal.throwIfAborted();
+    const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", bytes));
+    if (Array.from(digest, byte => byte.toString(16).padStart(2, "0")).join("") !== expected.sha256)
+      throw new Error("IMAGE_PAGE_DIGEST_MISMATCH");
+    signal.throwIfAborted();
+    readerContext.assertReaderActive();
+    const blobUrl = URL.createObjectURL(new Blob([bytes], { type: "image/avif" }));
+    try {
+      await readerContext.imageLoader.load(image, blobUrl, signal);
+    } finally {
+      URL.revokeObjectURL(blobUrl);
+    }
+  }
+
   /** @param {import('../../../typings/reader-pdf-renderer-strict').PdfShell} shell @param {boolean} [force] @param {boolean | number} [priority] */
   function renderPdfImageShell(shell, force = false, priority = false) {
     if (!shell) return Promise.reject(new Error("PDF page shell missing"));
@@ -270,13 +317,14 @@ export function createReaderPdfRenderer(readerContext) {
         shell._renderActivePriority = String(priority);
         const entry = readerContext.pdfPageEntry(Number(shell.dataset.page));
         if (!entry) throw new Error("PDF page entry missing");
-        const target = /** @type {import('../../../typings/reader-pdf-renderer-strict').PdfPageManifest} */ (readerContext.pdfPageManifest).pageUrl(entry.page);
-        const progressive = (/** @type {import('../../../typings/reader-pdf-renderer-strict').PdfPageManifest} */ (readerContext.pdfPageManifest).pageCodec?.(entry.page) || /** @type {import('../../../typings/reader-pdf-renderer-strict').PdfPageManifest} */ (readerContext.pdfPageManifest).codec) === "jxl";
+        const manifest = /** @type {import('../../../typings/reader-pdf-renderer-strict').PdfPageManifest} */ (readerContext.pdfPageManifest);
+        const target = manifest.pageUrl(entry.page);
+        const progressive = (manifest.pageCodec?.(entry.page) || manifest.codec) === "jxl";
         let loadText = null;
         let image = shell.querySelector("img");
         const pageState = shell.querySelector(".reader-page-state");
         if (!image) {
-          image = readerContext.takePdfManifestPrefetch(target) || new Image();
+          image = (manifest.codec === "avif" ? null : readerContext.takePdfManifestPrefetch(target)) || new Image();
           image.alt = `第 ${entry.page} 页`;
           image.decoding = "async";
           shell.appendChild(image);
@@ -286,7 +334,11 @@ export function createReaderPdfRenderer(readerContext) {
         if (priority >= 2 && readerContext.ocrManifestUrl && !/** @type {Navigator & {connection?: {saveData?: boolean}}} */ (navigator).connection?.saveData)
           loadText = readerContext.renderPdfOcrText(shell);
         loadText?.catch(() => {});
-        await readerContext.imageLoader.load(image, target, renderController.signal);
+        if (manifest.codec === "avif") {
+          const integrity = manifest.avifPages?.[entry.page - 1];
+          if (!integrity) throw new Error("IMAGE_MANIFEST_INVALID");
+          await loadVerifiedAvifPage(image, target, renderController.signal, integrity);
+        } else await readerContext.imageLoader.load(image, target, renderController.signal);
         readerContext.assertReaderActive();
         // Reveal only a fully decoded page, never one painting from the top.
         if (!progressive) await decodePdfImage(image, renderController.signal);

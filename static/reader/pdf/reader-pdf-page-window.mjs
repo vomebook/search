@@ -2,24 +2,6 @@ import { pdfTextRunCaret } from "./reader-pdf-text.js";
 
 /** @param {import('../../../typings/reader-page-window-strict').PageWindowContext} readerContext */
 export function createReaderPdfPageWindow(readerContext) {
-  /** @param {number} total @param {number} [generation] */
-  async function preloadPdfFirstPage(total, generation) {
-    if (readerContext.capability.mode !== "image-pages" || navigator.connection?.saveData) return;
-    await readerContext.getInitialReaderRestoration();
-    // Once verified, the opening window owns the request, even if history
-    // resolves late and the speculative callback wakes up after handoff.
-    if (readerContext.capability.mode !== "image-pages" || readerContext.readerAbortController.signal.aborted ||
-        readerContext.pdfPageManifest ||
-        (generation !== undefined && !readerContext.isReaderGenerationCurrent("navigation", generation))) return;
-    try {
-      const source = readerContext.pdfManifestSource();
-      if (!source?.pageUrl) return;
-      if (["jxl", "png", "mixed"].includes(source.codec || "")) return;
-      const page = readerContext.initialReaderPage(total);
-      startOpeningImage(page, source.pageUrl(page));
-    } catch (_) {}
-  }
-
   /** @param {number} page @param {string} target */
   function startOpeningImage(page, target) {
     const url = new URL(target, location.href).href;
@@ -525,8 +507,9 @@ export function createReaderPdfPageWindow(readerContext) {
    * @param {number} totalPages
    * @param {{seedRatio: number}} book
    * @param {import('../../../typings/reader-security-strict').ValidatedPdfPageManifest['toc']} [toc]
+   * @param {import('../../../typings/reader-page-window-strict').ImagePageIntegrity[]} [avifPages]
    */
-  async function renderImagePageWindow(totalPages, book, toc) {
+  async function renderImagePageWindow(totalPages, book, toc, avifPages) {
     const openingNavigation = readerContext.readerRuntime.currentGeneration("navigation");
     const layout = Promise.withResolvers();
     readerContext.pdfShellLayoutReady = layout.promise;
@@ -536,7 +519,7 @@ export function createReaderPdfPageWindow(readerContext) {
         () => {
           readerContext.pdfShellLayoutReady = null;
           layout.resolve(true);
-        });
+        }, avifPages);
     } finally {
       readerContext.pdfShellLayoutReady = null;
       layout.resolve(false);
@@ -545,12 +528,17 @@ export function createReaderPdfPageWindow(readerContext) {
 
   /** @param {number} totalPages @param {{seedRatio: number}} book
    * @param {import('../../../typings/reader-security-strict').ValidatedPdfPageManifest['toc']} toc
-   * @param {() => boolean} ownsOpeningPosition @param {() => void} publishLayout */
-  async function mountImagePageWindow(totalPages, book, toc, ownsOpeningPosition, publishLayout) {
+   * @param {() => boolean} ownsOpeningPosition @param {() => void} publishLayout
+   * @param {import('../../../typings/reader-page-window-strict').ImagePageIntegrity[]} [avifPages] */
+  async function mountImagePageWindow(totalPages, book, toc, ownsOpeningPosition, publishLayout, avifPages) {
     readerContext.assertReaderActive();
     const source = readerContext.pdfManifestSource();
     if (!source?.pageUrl) throw new Error("PDF_MANIFEST_INVALID");
-    readerContext.pdfPageManifest = { ...source, pageUrl: source.pageUrl, pageCount: totalPages, codec: "webp", sourceFormat: "image" };
+    const codec = avifPages ? "avif" : "webp";
+    const sourcePageUrl = source.pageUrl;
+    const pageUrl = (/** @type {number} */ page) => sourcePageUrl(page, codec);
+    if (avifPages) pageUrl(1); // Reject unsupported roots before publishing navigation.
+    readerContext.pdfPageManifest = { ...source, pageUrl, avifPages, pageCount: totalPages, codec, sourceFormat: "image" };
     readerContext.updateDocumentState({ pageCount: totalPages });
     readerContext.pageInput.max = String(totalPages);
     /** @type {HTMLElement} */ (document.querySelector("#page-total")).textContent = `/ ${totalPages}`;
@@ -558,11 +546,10 @@ export function createReaderPdfPageWindow(readerContext) {
     await readerContext.getInitialReaderRestoration();
     readerContext.assertReaderActive();
     const initialPage = readerContext.initialReaderPage(totalPages);
-    // The manifest has validated and this is the image we intend to display,
-    // even on Save-Data. Start its bytes before building the shell window or
-    // waiting for the saved page's batch. The renderer still owns the reveal.
-    if (ownsOpeningPosition()) {
-      startOpeningImage(initialPage, source.pageUrl(initialPage));
+    // Start the validated opening WebP early, even on Save-Data. AVIF goes
+    // through the bounded renderer so that no unchecked bytes reach an <img>.
+    if (codec === "webp" && ownsOpeningPosition()) {
+      startOpeningImage(initialPage, pageUrl(initialPage));
       // Let the browser process the src update before synchronous shell work.
       await Promise.resolve();
       readerContext.assertReaderActive();
@@ -750,7 +737,8 @@ export function createReaderPdfPageWindow(readerContext) {
   async function renderImagePages(prepared) {
     const response = await prepared;
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    /** @type {{version: number, kind: string, page_count: number, pages: unknown[]} | null} */
+    /** @type {{version: number, kind: string, image_format?: unknown, page_count: number,
+     *   pages: ({path?: unknown, bytes?: unknown, sha256?: unknown} | null)[]} | null} */
     const manifest = JSON.parse(
       await VoiceOfMLReaderSecurity.readText(response, VoiceOfMLReaderSecurity.LIMITS.manifestBytes)
     );
@@ -761,10 +749,20 @@ export function createReaderPdfPageWindow(readerContext) {
       throw new Error("IMAGE_MANIFEST_INVALID");
     if (manifest.page_count > VoiceOfMLReaderSecurity.LIMITS.pdfPages)
       throw Object.assign(new Error("READER_RESOURCE_LIMIT"), { code: "READER_RESOURCE_LIMIT" });
-    // Page URLs come from the source contract, not the unused entry metadata.
-    // Apply the byte limit to the wire body, not a larger reserialized copy.
+    if (manifest.image_format !== undefined && manifest.image_format !== "webp" && manifest.image_format !== "avif")
+      throw new Error("IMAGE_MANIFEST_INVALID");
+    // Legacy WebP entries never supplied the URL. Require exact ordinal paths
+    // and integrity pins for AVIF, but still derive the URL from the trusted root.
+    const avifPages = manifest.image_format === "avif" ? manifest.pages.map((entry, index) => {
+      const path = `pages/page-${String(index + 1).padStart(6, "0")}.avif`;
+      if (entry?.path !== path || typeof entry.bytes !== "number" || !Number.isSafeInteger(entry.bytes) ||
+          entry.bytes < 1 || entry.bytes > VoiceOfMLReaderSecurity.LIMITS.imagePageBytes ||
+          typeof entry.sha256 !== "string" || !/^[0-9a-f]{64}$/.test(entry.sha256))
+        throw new Error("IMAGE_MANIFEST_INVALID");
+      return { bytes: entry.bytes, sha256: entry.sha256 };
+    }) : undefined;
     pdfPagesBook = { seedRatio: 0 };
-    return renderImagePageWindow(manifest.page_count, pdfPagesBook);
+    return renderImagePageWindow(manifest.page_count, pdfPagesBook, undefined, avifPages);
   }
 
   /** @typedef {import('../../../typings/reader-page-window-strict').PdfPreviewDocument | import('../../../typings/reader-page-window-strict').DirectDjvuDocument} VerifiedPdf */
@@ -1494,7 +1492,6 @@ export function createReaderPdfPageWindow(readerContext) {
   }
 
   return {
-    preloadPdfFirstPage,
     pdfManifestSource,
     pdfPageEntry,
     appendShellsBatched,
