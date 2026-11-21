@@ -167,7 +167,10 @@ export function createReaderProgress(readerContext) {
         const matched = bookmark && currentEntry(/** @type {import('../../../typings/reader-progress-strict').ProgressState} */ (bookmark));
         if (matched) return matched;
       }
-      return currentEntry(/** @type {import('../../../typings/reader-progress-strict').ProgressState | null} */ (await VoiceOfMLReaderStore.get(readerContext.sourceUrl)));
+      const history = await VoiceOfMLReaderStore.get(readerContext.sourceUrl);
+      // A stale chapter position does not make a previously opened book unread.
+      readerContext.readerHasHistory = !!history;
+      return currentEntry(/** @type {import('../../../typings/reader-progress-strict').ProgressState | null} */ (history));
     } catch (_) {
       readerContext.restorationFailed = true;
       return null;

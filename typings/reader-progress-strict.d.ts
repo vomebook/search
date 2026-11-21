@@ -30,7 +30,7 @@ export interface ProgressContext {
   lastSavedProgress: string; progressSaveChain: Promise<void>;
   readerContentReady: boolean; navigationState: { tocEntries: unknown[]; currentChapterIndex: number };
   progressTools: HTMLElement; capability: { mode?: string | null | undefined }; chapterManifestUrl: string | null;
-  params: URLSearchParams; restorationFailed: boolean;
+  params: URLSearchParams; restorationFailed: boolean; readerHasHistory: boolean;
   readerRestorationPromise: Promise<ProgressState | null> | null; readerRestorationLoaded: boolean;
   readerRestorationEntry: ProgressState | null; awaitReader<T>(promise: Promise<T>): Promise<T>;
   waitForReader(delay?: number): Promise<void>; bookmarkRibbon: HTMLElement;

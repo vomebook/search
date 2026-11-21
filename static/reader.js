@@ -305,6 +305,7 @@ const readerContext = {
   get readerResources() { return readerResources; },
   get readerRestorationEntry() { return readerRestorationEntry; }, set readerRestorationEntry(value) { readerRestorationEntry = value; },
   get readerRestorationLoaded() { return readerRestorationLoaded; }, set readerRestorationLoaded(value) { readerRestorationLoaded = value; },
+  get readerHasHistory() { return readerHasHistory; }, set readerHasHistory(value) { readerHasHistory = value; },
   get readerRestorationPromise() { return readerRestorationPromise; }, set readerRestorationPromise(value) { readerRestorationPromise = value; },
   get readerRuntime() { return readerRuntime; },
   get readerSourcePromise() { return readerSourcePromise; }, set readerSourcePromise(value) { readerSourcePromise = value; },
@@ -751,6 +752,7 @@ let readerRestorationPromise = null;
 /** @type {import('../typings/reader-progress-strict').ProgressState | null} */
 let readerRestorationEntry = null;
 let readerRestorationLoaded = false;
+let readerHasHistory = false;
 let downloadFeedbackTimer = 0;
 
 readerBindings.bindDownloadAction();

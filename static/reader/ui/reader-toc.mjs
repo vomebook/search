@@ -271,6 +271,7 @@ export function createReaderToc(readerContext) {
   // Opening the Reader must not pop the directory for a trivial one (a cover, a
   // preface, a single chapter); the panel stays one tap away in the toolbar.
   const TOC_HINT_MIN_ENTRIES = 3;
+  const TOC_HINT_HISTORY_WAIT_MS = 150; // Same budget as startup's restoration grace period.
   // A one- or two-entry directory (a cover, a preface) is not worth opening the
   // panel for; the reader opens on the content and the panel stays one tap away.
   const tocHintHasEnoughEntries = () =>
@@ -280,21 +281,31 @@ export function createReaderToc(readerContext) {
     tocHintTimer = 0;
     tocHintPending = false;
   };
-  const finishTocHint = () => {
-    tocHintTimer = 0;
-    if (readerContext.readerLifecycle.disposed || readerContext.readerAbortController.signal.aborted || !tocHintPending) return;
-    tocHintPending = false;
-    if (!tocHintHasEnoughEntries() ||
-        readerContext.panelState.open || readerContext.readerPanelInteractionSerial > 0 ||
-        readerContext.readerUiHistoryState !== "base") {
-      tocHintShown = true;
-      return;
-    }
+  /** @param {boolean} unread */
+  const finishTocHint = (unread) => {
+    if (!tocHintPending) return;
+    cancelTocHint();
+    if (readerContext.readerLifecycle.disposed || readerContext.readerAbortController.signal.aborted) return;
     tocHintShown = true;
+    if (!unread || !tocHintHasEnoughEntries() ||
+        readerContext.panelState.open || readerContext.readerPanelInteractionSerial > 0 ||
+        readerContext.readerUiHistoryState !== "base") return;
+    let key = "";
+    try {
+      const { downloadUrl, sourceUrl, chapterManifestUrl } = readerContext;
+      // Resolved links can point at converted assets. Use the original catalog
+      // URL, when known, so old/current IDs and direct links share a reminder.
+      const source = downloadUrl.startsWith("https://huggingface.co/datasets/VoiceOfML/")
+        ? downloadUrl : sourceUrl || chapterManifestUrl;
+      if (source) key = `reader-toc-hint:v1:${VoiceOfMLReader.shortSourceId(source)}`;
+      if (key && localStorage.getItem(key) === "1") return;
+    } catch (_) { /* Storage unavailable: keep the in-page reminder. */ }
     // Keep the directory open using the normal panel owner: toolbar, Escape,
     // system Back and aria-expanded must all agree with the visible drawer.
     readerContext.setReaderPanelOpen(true);
     readerContext.selectPanel("toc");
+    // An interaction that preempted the hint above does not count as showing it.
+    try { if (key) localStorage.setItem(key, "1"); } catch (_) { /* Best effort. */ }
   };
   /** @type {(() => void) | null} */
   let phaseCleanup = null;
@@ -314,9 +325,17 @@ export function createReaderToc(readerContext) {
     if (tocHintShown || tocHintPending || !tocHintHasEnoughEntries()) return;
     ensureTocHintPhaseListener();
     tocHintPending = true;
-    // Do not wait for the overall Reader phase: TOC availability itself is the
-    // useful signal, and the hint should be visible near the opening moment.
-    tocHintTimer = setTimeout(finishTocHint, 0);
+    // Reuse the startup read, not restoration completion or the Reader phase.
+    // If history is still unknown at the deadline, leave the drawer closed
+    // without consuming the hint; never pop it later when the read settles.
+    const restoration = readerContext.readerRestorationPromise;
+    tocHintTimer = setTimeout(() => finishTocHint(!restoration), restoration ? TOC_HINT_HISTORY_WAIT_MS : 0);
+    void restoration?.then(entry => {
+      if (!tocHintPending) return;
+      clearTimeout(tocHintTimer);
+      const unread = !entry && !readerContext.readerHasHistory && !readerContext.restorationFailed;
+      tocHintTimer = setTimeout(() => finishTocHint(unread), 0);
+    }, () => finishTocHint(false));
   }
 
   /** @param {import('../../../typings/reader-toc-strict').TocEntry[] | null | undefined} entries */

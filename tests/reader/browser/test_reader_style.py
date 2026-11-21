@@ -383,6 +383,109 @@ class ReaderStyleTests(unittest.TestCase):
                 self.assertEqual(svg.evaluate("e => getComputedStyle(e).filter"), "none")
                 self.assertEqual([node.bounding_box() for node in (chapter, text, svg)], initial)
 
+    def test_reviewed_rtf_report_reflows_without_changing_chapter_text(self):
+        bundle = ('399230332a4298771620cb84c9499d5f9d5ea5dab1cd0c843fcc1b6b9c43c52d/'
+                  'a3f30ce1631e2b90')
+        cover = '<html><body><p>Cover</p></body></html>'
+        # Keep the exact export's prefixed XHTML and leading full-width spaces.
+        report = '''<html:html xmlns:html="http://www.w3.org/1999/xhtml">
+          <html:head><html:title>Unknown</html:title></html:head><html:body class="calibre">
+          <html:p class="block_">圾癣应哆间揭</html:p>
+          <html:h1 class="block_1" id="toc_id_1"><html:span class="calibre1">　　白区党目前的中心任务</html:span></html:h1>
+          <html:p class="block_2"><html:span class="calibre1">　　　　　　（一九三七年六月六日洛甫同志在白区党代表会议上报告之一部）</html:span></html:p>
+          <html:h2 class="block_3" id="toc_id_2"><html:span class="calibre1">　　（一）民族统一战线中的几个问题</html:span></html:h2>
+          <html:p class="block_2" id="prose"><html:span class="calibre1">　　正文保留缩进。</html:span></html:p>
+          <html:h2 class="block_5" id="toc_id_3"><html:b>　　</html:b><html:b>（二）另一节</html:b></html:h2>
+          <html:p style="height: 1500px">End</html:p></html:body></html:html>'''
+        manifest = {'version': 1, 'kind': 'epub-chapters', 'chapters': [
+            {'index': i, 'path': f'chapters/chapter-{i:04d}.xhtml', 'bytes': len(body.encode())}
+            for i, body in enumerate((cover, report), 1)
+        ], 'toc': [
+            {'title': '白区党目前的中心任务', 'chapter': 2, 'depth': 0, 'fragment': 'toc_id_1'},
+            {'title': '第一节', 'chapter': 2, 'depth': 1, 'fragment': 'toc_id_2'},
+        ]}
+
+        def serve(route):
+            path = urllib.parse.parse_qs(urllib.parse.urlsplit(route.request.url).query)['path'][0]
+            if path.endswith('/chapter-manifest.json'):
+                route.fulfill(json=manifest)
+            else:
+                body = cover if path.endswith('/chapter-0001.xhtml') else report
+                route.fulfill(content_type='application/xhtml+xml', body=body)
+
+        self.page.route('**/api/reader-bucket-resource**', serve)
+        self.page.emulate_media(reduced_motion='reduce')
+        baseline = None
+        for current in ('a' * 64 + '/a3f30ce1631e2b90', bundle):
+            source = ('https://voiceofml-search.hf.space/api/reader-bucket-resource?path=chapters/ebook/epub/'
+                      + current + '/chapter-manifest.json')
+            params = urllib.parse.urlencode(dict(url=source, ext='epub-chapters'))
+            self.page.goto(f'{self.origin}/search/static/reader.html?{params}')
+            article = self.page.locator('.reader-epub-chapter[data-chapter="2"]')
+            article.wait_for()
+            text_snapshot = article.evaluate('''async article => {
+                const {chapterTextMap} = await import(new URL('reader/search/reader-chapter-search.mjs', location.href));
+                return [article.textContent, chapterTextMap([article._chapterSearchHead, article]).text];
+            }''')
+            lead = article.locator('h1 + p')
+            if current != bundle:
+                baseline = text_snapshot
+                self.assertTrue(article.locator('p.block_').is_visible())
+                self.assertNotEqual(lead.evaluate('n => getComputedStyle(n).textAlign'), 'center')
+                continue
+            self.assertEqual(text_snapshot, baseline)
+            self.assertTrue(article.locator('p.block_').is_hidden())
+            self.assertEqual(self.page.locator('.reader-epub-chapter[data-chapter="1"]').inner_text(), 'Cover')
+            self.page.locator('#history').click()
+            self.page.get_by_role('link', name='白区党目前的中心任务', exact=True).click()
+            self.page.wait_for_function('''() => Math.abs(document.querySelector('#toc_id_1').getBoundingClientRect().top -
+                document.querySelector('#viewport').getBoundingClientRect().top) < 3''')
+            for width, zoom in ((1440, 100), (390, 100), (320, 150)):
+                with self.subTest(width=width, zoom=zoom):
+                    self.page.set_viewport_size({'width': width, 'height': 844})
+                    self.page.locator('#zoom').fill(str(zoom))
+                    self.page.locator('#zoom').dispatch_event('change')
+                    metrics = article.evaluate('''article => {
+                        const font = node => parseFloat(getComputedStyle(node).fontSize);
+                        const measure = node => {
+                            const box = node.getBoundingClientRect();
+                            const range = document.createRange();
+                            const walker = document.createTreeWalker(node, NodeFilter.SHOW_TEXT);
+                            const lines = [];
+                            while (walker.nextNode()) {
+                                range.selectNodeContents(walker.currentNode);
+                                lines.push(...[...range.getClientRects()].filter(rect => rect.width > 0));
+                            }
+                            return {size: font(node), align: getComputedStyle(node).textAlign,
+                                fits: lines.every(r => r.left >= box.left - 1 && r.right <= box.right + 1),
+                                centered: lines.every(r => Math.abs(r.left + r.right - box.left - box.right) < 2),
+                                lines: new Set(lines.map(r => r.top)).size};
+                        };
+                        return {base: font(article), overflow: article.scrollWidth - article.clientWidth,
+                            title: measure(article.querySelector('h1')),
+                            lead: measure(article.querySelector('h1 + p')),
+                            subheadings: [...article.querySelectorAll('h2')].map(measure),
+                            prose: measure(article.querySelector('#prose'))};
+                    }''')
+                    base = metrics['base']
+                    self.assertAlmostEqual(base, (17 if width > 600 else 14) * zoom / 100, delta=0.05)
+                    self.assertLessEqual(metrics['overflow'], 1)
+                    for name, ratio in (('title', 1.83333), ('lead', 1)):
+                        line = metrics[name]
+                        self.assertAlmostEqual(line['size'], base * ratio, delta=0.05)
+                        self.assertEqual(line['align'], 'center')
+                        self.assertTrue(line['fits'] and line['centered'] and line['lines'], line)
+                    if width == 1440:
+                        self.assertEqual(metrics['lead']['lines'], 1, metrics)
+                    elif zoom > 100:
+                        self.assertGreater(metrics['lead']['lines'], 1, metrics)
+                    for line in metrics['subheadings']:
+                        self.assertAlmostEqual(line['size'], base * 1.41667, delta=0.05)
+                        self.assertEqual(line['align'], 'left')
+                        self.assertTrue(line['fits'], line)
+                    self.assertEqual(metrics['prose']['size'], base)
+                    self.assertTrue(article.locator('#prose').inner_text().startswith('　　'))
+
     def test_numeric_controls_keep_keyboard_focus_without_default_outline_in_both_themes(self):
         self.page.locator(".page-controls").evaluate("element => element.hidden = false")
         for theme in ("dark", "light"):

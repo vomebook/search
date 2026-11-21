@@ -3319,6 +3319,22 @@ class ReaderRefactorTest(unittest.TestCase):
             for selector in ('#pre', '.reader-ebook-table-scroll'):
                 self.assertTrue(frame.locator(selector).evaluate('n => n.scrollWidth > n.clientWidth'))
 
+    def test_html_table_illustration_does_not_push_article_past_the_viewport(self):
+        self.page.set_viewport_size({'width': 390, 'height': 844})
+        dot = ('data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8'
+               '/x8AAwMB/6XWbqkAAAAASUVORK5CYII=')
+        self.serve(f'''<table id="story"><tr><td><img src="{dot}" width="620" height="20">
+          <p id="story-text">{'正文可以完整阅读。' * 20}</p></td></tr></table>
+          <table id="data" style="min-width:620px"><tr><th>栏目</th><th>数值</th></tr><tr><td>A</td><td>42</td></tr></table>''',
+                   'text/html')
+        self.open(self.reader_url('html'))
+        document = self.page.frame_locator('.html-frame')
+        story = document.locator('#story')
+        self.assertTrue(story.evaluate('n => n.parentElement.scrollWidth <= n.parentElement.clientWidth + 1'))
+        self.assertTrue(story.locator('img').evaluate('n => n.getBoundingClientRect().width <= 390'))
+        self.assertTrue(document.locator('#data').evaluate('n => n.parentElement.scrollWidth > n.parentElement.clientWidth'))
+        self.assertEqual(document.locator('#data th').count(), 2)
+
     def test_legacy_html_widget_text_is_removed_without_dropping_article_content(self):
         path = 'documents/web/htm/' + 'a' * 64 + '/document.html'
         source = 'https://voiceofml-search.hf.space/api/reader-bucket-resource?path=' + urllib.parse.quote(path, safe='')
@@ -3329,6 +3345,9 @@ class ReaderRefactorTest(unittest.TestCase):
           <div id='share'>var jiathis_config = {data_track_clickback:'true'};</div>
           <p>做因果界定。</p>$(function(){ $("#js_newstext img").Resize({box:"#js_newstext"}); });
           <div id='login'>$(function(){ $('#loginform').submit(function(e){ return false; }); });</div>
+          <div id='window-boot'>window.siteMode = 'archive'; var _gaq = []; _gaq.push('start');</div>
+          <div id='js-comment'>function popup(url) { window.open(url); } // archived script --&gt;</div>
+          <div id='js-ready'>jQuery(document).ready(function(){ const box = document.getElementById('main'); });</div>
           <a href='#note'>查看</a><pre id='note'>document.write("code example");</pre>"""
         self.page.route('https://voiceofml-search.hf.space/api/reader-bucket-resource**',
                         lambda route: route.fulfill(content_type='text/html', body=html))
@@ -3341,7 +3360,7 @@ class ReaderRefactorTest(unittest.TestCase):
                 self.assertIn('做因果界定。', frame.locator('body').inner_text())
                 self.assertEqual(frame.locator('a').get_attribute('href'), '#note')
                 self.assertIn('document.write', frame.locator('pre').inner_text())
-                for selector in ('#share', '#login', '.account'):
+                for selector in ('#share', '#login', '.account', '#window-boot', '#js-comment', '#js-ready'):
                     self.assertEqual(not frame.locator(selector).inner_text(), converted)
                 self.assertEqual('Resize(' not in frame.locator('body').inner_text(), converted)
                 if converted:

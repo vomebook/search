@@ -14,6 +14,8 @@ from urllib.parse import unquote, urlencode
 from tests.reader.browser import test_reader_pdf_followup as support
 
 BODY = '<p style="height:1400px">正文</p>'
+CHAPTER_SOURCE = ('https://voiceofml-search.hf.space/api/reader-bucket-resource?path=chapters/ebook/epub/'
+                  + 'a' * 64 + '/1234567890abcdef/chapter-manifest.json')
 
 
 def chapter_manifest(count, fragments=False):
@@ -79,10 +81,8 @@ class TocNavigationTests(unittest.TestCase):
         self.page.route("**/api/reader-bucket-resource**", resource)
         if before_open:
             before_open()
-        source = ("https://voiceofml-search.hf.space/api/reader-bucket-resource?path=chapters/ebook/epub/"
-                  + "a" * 64 + "/1234567890abcdef/chapter-manifest.json")
         self.page.goto(self.origin + support.PREFIX + "/static/reader.html?" +
-                       urlencode(dict(url=source, ext="epub-chapters")), wait_until="domcontentloaded")
+                       urlencode(dict(url=CHAPTER_SOURCE, ext="epub-chapters")), wait_until="domcontentloaded")
         self.page.wait_for_function("()=>document.documentElement.dataset.readerPhase==='ready'")
         self.page.wait_for_function(
             f"()=>document.querySelectorAll('#toc-list .toc-item').length>={min_rows}")
@@ -1320,6 +1320,118 @@ class TocNavigationTests(unittest.TestCase):
                          "re-assertion must not pull a reader who scrolled away back")
 
     # ---- opening hint ----
+
+    def test_directory_hint_is_once_per_document_across_reopens(self):
+        source = 'https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/toc-once.html'
+        converted = ('https://voiceofml-search.hf.space/api/reader-bucket-resource?path='
+                     'documents/web/html/' + 'a' * 64 + '/document.html')
+        html = ''.join(f'<h1>第{i}章</h1>{BODY}' for i in range(1, 5))
+        # Exercise reminder persistence independently of ordinary progress saves.
+        self.context.route('**/static/reader/core/reader-store.js*', lambda route: route.fulfill(
+            content_type='text/javascript', body='''window.VoiceOfMLReaderStore={
+              get:async()=>null,put:async()=>{},list:async()=>[]};'''))
+        self.page.unroute('**/api/reader-content**')
+        self.context.route('**/api/reader-content**', lambda route: route.fulfill(content_type='text/html', body=html))
+        self.context.route('**/api/reader-bucket-resource**', lambda route: route.fulfill(content_type='text/html', body=html))
+        self.context.route('**/api/reader-resolve?id=0123456789abc', lambda route: route.fulfill(
+            json=dict(url=converted, download=source.replace('toc-once', 'toc%2Donce'), extension='html'),
+            headers={'Access-Control-Allow-Origin': '*'}))
+        base = self.origin + support.PREFIX + '/static/reader.html?'
+
+        def open_document(page, **params):
+            page.goto(base + urlencode(dict(ext='html', **params)))
+            page.wait_for_function("""()=>document.documentElement.dataset.readerPhase==='ready' &&
+                document.querySelectorAll('#toc-list .toc-item').length===4""")
+            # Allow the deferred hint (including a possible unwanted drawer open) to run.
+            page.evaluate('()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))')
+            return page.locator('#history').get_attribute('aria-expanded')
+
+        self.assertEqual(open_document(self.page, url=source), 'true')
+        self.assertEqual(self.page.locator('#toc-tab').get_attribute('aria-selected'), 'true')
+        self.page.keyboard.press('Escape')
+        self.assertFalse(self.panel_open())
+        self.page.close()
+
+        reopened = self.context.new_page()
+        reopened.on('pageerror', lambda error: self.errors.append(str(error)))
+        self.assertEqual(open_document(reopened, url=source), 'false')
+        self.assertEqual(open_document(reopened, id='0123456789abc'), 'false', 'resolved alias reopened the hint')
+        reopened.locator('#history').press('Enter')
+        self.assertTrue(reopened.get_by_role('link', name='第1章').is_visible())
+        self.assertEqual(reopened.evaluate('document.activeElement.id'), 'toc-tab')
+        self.assertEqual(open_document(reopened, url=source.replace('toc-once', 'another-book')), 'true')
+
+    def test_directory_hint_skips_existing_history_even_with_stale_chapter_position(self):
+        # Seed real history before any Reader document (and its reminder) opens.
+        static = self.origin + support.PREFIX + '/static/'
+        self.page.goto(static + 'reader.css')
+        self.page.add_script_tag(url=static + 'reader/core/reader-store.js')
+        self.page.evaluate("""source => VoiceOfMLReaderStore.put({
+          url:source, chapterIndex:4, chapterOffset:0,
+          chapterManifest:source.replace('1234567890abcdef', 'fedcba0987654321')
+        })""", CHAPTER_SOURCE)
+        self.open_chapters(6)
+        self.page.evaluate('()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))')
+        self.assertFalse(self.panel_open())
+        self.assertEqual(self.landed_chapter(), 1, 'the stale position was not restored')
+        self.page.locator('#history').press('Enter')
+        self.assertTrue(self.page.get_by_role('link', name='第1章').is_visible())
+
+    def test_directory_hint_does_not_open_after_history_wait_expires(self):
+        self.page.route('**/static/reader/core/reader-store.js*', lambda route: route.fulfill(
+            content_type='text/javascript', body='''window.VoiceOfMLReaderStore={
+              get:()=>new Promise(resolve=>{window.__releaseHistory=()=>resolve(null);}),
+              put:async()=>{window.__savedNewHistory=true;},list:async()=>[]};'''))
+        self.open_chapters(6)
+        # Ready must not depend on the history read. Leave it unresolved past the TOC deadline.
+        self.page.wait_for_timeout(250)
+        self.assertFalse(self.panel_open())
+        self.page.evaluate('window.__releaseHistory()')
+        self.page.wait_for_function('()=>window.__savedNewHistory === true')
+        self.assertFalse(self.panel_open(), 'a late result must not pop the directory')
+        self.page.unroute('**/static/reader/core/reader-store.js*')
+        self.page.reload()
+        self.page.wait_for_function("()=>document.querySelector('#history').getAttribute('aria-expanded')==='true'")
+
+    def test_directory_hint_preempted_by_drawer_interaction_is_not_consumed(self):
+        # Isolate the one-time marker: no new history may suppress the retry.
+        self.page.route('**/static/reader/core/reader-store.js*', lambda route: route.fulfill(
+            content_type='text/javascript', body='''window.VoiceOfMLReaderStore={
+              get:async()=>null,put:async()=>{},list:async()=>[]};'''))
+        engine = support.ENGINE.replace('getOutline:async()=>null', '''getOutline:()=>new Promise(resolve=>{
+          window.__releaseOutline=()=>resolve([0,1,2,3].map(page=>({title:`Chapter ${page+1}`,dest:[page]})));
+        })''')
+        self.page.unroute('**/static/vendor/pdf.min.*.mjs')
+        self.page.route('**/static/vendor/pdf.min.*.mjs', lambda route: route.fulfill(
+            content_type='text/javascript', body=engine))
+        support.PdfFollowupTests.open(self)
+        self.page.wait_for_function('()=>!!window.__releaseOutline')
+        self.page.locator('#history').click()
+        self.page.locator('#history-close').click()
+        self.page.locator('#page-number').focus()
+        self.page.evaluate('window.__releaseOutline()')
+        self.page.locator('#toc-list .toc-item').nth(3).wait_for(state='attached')
+        self.page.evaluate('()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))')
+        self.assertFalse(self.panel_open())
+        self.assertEqual(self.page.evaluate('document.activeElement.id'), 'page-number')
+
+        self.page.reload()
+        self.page.wait_for_function("()=>document.documentElement.dataset.readerPhase==='ready' && !!window.__releaseOutline")
+        self.page.locator('#page-number').focus()
+        self.page.evaluate('window.__releaseOutline()')
+        self.page.wait_for_function("()=>document.querySelector('#history').getAttribute('aria-expanded')==='true'")
+        self.assertEqual(self.page.evaluate('document.activeElement.id'), 'page-number')
+
+    def test_directory_hint_survives_unavailable_storage(self):
+        self.page.add_init_script("""Object.defineProperty(window, 'localStorage', {
+            get: () => { throw new DOMException('Storage disabled', 'SecurityError'); }
+        });""")
+        self.open_chapters(6)
+        self.page.wait_for_function("()=>document.querySelector('#history').getAttribute('aria-expanded')==='true'")
+        self.page.locator('#history-close').click()
+        self.assertFalse(self.panel_open())
+        self.page.locator('#history').press('Enter')
+        self.assertTrue(self.page.get_by_role('link', name='第1章').is_visible())
 
     def test_directory_hint_opens_for_more_than_three_entries(self):
         self.open_chapters(6)

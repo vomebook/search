@@ -32,7 +32,12 @@ body :where(:not(pre,pre *,code,code *,.reader-ebook-table-scroll *)){
 @supports not (text-wrap-mode:wrap){
   body :where(:not(pre,pre *,code,code *,.reader-ebook-table-scroll *)){white-space:normal!important}
 }
-body :is(img,video):not(.reader-ebook-table-scroll *){max-inline-size:100%!important;block-size:auto!important}
+/* Legacy article layout tables may be sized by a single large illustration.
+   Cap media to the reading column even in a scrollable table, while keeping
+   multi-column data and preformatted text horizontally scrollable. */
+body :is(img,video){max-inline-size:100%!important;block-size:auto!important}
+.reader-ebook-table-scroll{container-type:inline-size}
+@supports (width:1cqi){.reader-ebook-table-scroll :is(img,video){max-inline-size:min(100%,100cqi)!important}}
 body :is(pre,.reader-ebook-table-scroll){box-sizing:border-box!important;max-inline-size:100%!important;overflow-x:auto!important}
 body a{color:var(--link)}
 @media (prefers-contrast:more){:root{--paper:#fff;--ink:#111}:root[data-reader-theme="dark"]{--paper:#101214;--ink:#fff}}

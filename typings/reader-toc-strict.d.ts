@@ -53,11 +53,16 @@ export interface TocContext {
   highlightPanelItem(row: HTMLElement, query: string): void;
   readerLifecycle: { disposed: boolean };
   readerAbortController: AbortController;
+  readerRestorationPromise: Promise<object | null> | null;
+  readerHasHistory: boolean;
+  restorationFailed: boolean;
   panelState: { open: boolean };
   readerPanelInteractionSerial: number;
   readerUiHistoryState: string;
   selectPanel(name: string): void;
   cleanTocLabel(value: unknown): string;
+  sourceUrl: string;
+  downloadUrl: string;
   chapterManifestUrl: string | null;
   TOC_VIRTUALIZATION_THRESHOLD: number;
   renderVirtualToc(): void;

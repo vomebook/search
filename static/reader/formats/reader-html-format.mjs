@@ -524,6 +524,16 @@ export function createReaderHtmlFormat(readerContext) {
       if (/^\s*ArticleContent\.innerHTML\s*=\s*ArticleContent\.innerHTML\.replace\(/.test(block.firstChild?.nodeValue || "") &&
           /document\.write\(keywordscode\);\s*\}\s*$/.test(block.lastChild?.nodeValue || "")) block.remove();
     }
+    // A mail widget can split one script across the surrounding text and a
+    // parsed anchor. Remove the pair only if it is entirely generated markup.
+    for (const link of root.querySelectorAll("a")) {
+      const previous = link.previousSibling;
+      if (previous?.nodeType === Node.TEXT_NODE && /^\s*function SendMail\(\w+\)\s*\{\s*var \w+;\s*\w+\s*=\s*"\s*$/.test(previous.nodeValue || "") &&
+          /^\s*"\s*\+\s*\w+\s*\+\s*"[^\r\n]*;\s*document\.write\(\w+\);\s*\}\s*SendMail\(["'][^"'\r\n]*["']\);\s*$/.test(link.textContent || "")) {
+        previous.nodeValue = "";
+        link.remove();
+      }
+    }
     const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
     while (walker.nextNode()) {
       const node = /** @type {Text} */ (walker.currentNode);
@@ -532,13 +542,21 @@ export function createReaderHtmlFormat(readerContext) {
       if (!value) continue;
       // Match executable-shaped blocks with browser APIs, not isolated words
       // such as 'function' or 'document' in article prose. Never evaluate text.
-      const browserApi = /(?:\b(?:document\s*\.\s*(?:write|createElement|getElementById|location|body)|window\s*\.\s*(?:scroll|open|location)|setInterval\s*\(|UserBar\s*\.\s*(?:init|showMsg)\s*\(|PostEditor\s*\.\s*is_login\s*=)|\$\s*\(\s*["'])/;
-      const start = /^(?:\$?\s*\(\s*function\s*\(|(?:async\s+)?function\s+[\w$]+\s*\(|(?:var|let|const)\s+[\w$]+\s*=|if\s*\([^\r\n]*?\)\s*\{|document\s*\.\s*(?:write|getElementById)\s*\(|login_str\s*=|UserBar\.showMsg\s*\()/;
-      const end = /(?:[;})]|\+\+|--)(?:\s*\/\*[^\r\n]*?\*\/)?$/;
+      const browserApi = /(?:\b(?:document\s*\.\s*(?:write|createElement|getElementById|getElementsByTagName|location|body|cookie|domain|execCommand)|window\s*\.\s*[\w$]+|set(?:Interval|Timeout)\s*\(|UserBar\s*\.\s*(?:init|showMsg)\s*\(|PostEditor\s*\.\s*(?:init\(|is_login\s*=))|(?:\$|jQuery)\s*\(\s*(?:["']|document\b|window\b))/;
+      const start = /^(?:(?:[!~+]|\$?\s*\()\s*function\s*\(|(?:async\s+)?function\s+[\w$]+\s*\(|(?:var|let|const)\s+[\w$]+\s*=|(?:if\s*\([^\r\n]*?\)|try)\s*\{|(?:document|window)\s*\.\s*[\w$]+\s*[=(]|(?:\$|jQuery)\s*\(\s*(?:["']|document\b|window\b)|login_str\s*=|UserBar\.showMsg\s*\()/;
       const codeStart = value.replace(/^(?:\/\*[^\r\n]*?\*\/\s*|\/\/[^\r\n]*[\r\n]+\s*)+/, "");
-      const shareConfig = /^(?:var|let|const)\s+jiathis_config\s*=\s*\{\s*data_track_clickback\s*:\s*(?:["'](?:true|false)["']|true|false)\s*\};?$/;
-      const legacyComment = /^function CheckPl\(obj\)\s*\{[\s\S]*?\}$/.test(value) && node.parentElement?.id === "tosaypl";
-      if ((start.test(codeStart) && end.test(value) && browserApi.test(codeStart)) || shareConfig.test(value) || legacyComment) {
+      const ready = codeStart.replace(/^uaredirect\(["'][^"'\r\n]*["']\);\s*(?=\$\(document\)\.ready\()/, "").trimEnd();
+      // Legacy script wrappers also leave trailing line comments or HTML comment closers.
+      const codeEnd = codeStart.replace(/(?:\s*\/\*[^\r\n]*?\*\/|[\t ]+\/\/[^\r\n]*|[\r\n]\s*\/\/[^\r\n]*|\s*-->)\s*$/, "").trimEnd();
+      const end = /(?:[;})]|\+\+|--)$/;
+      const shareConfig = /^var\s+jiathis_config\s*=\s*\{\s*data_track_clickback\s*:\s*(?:["'](?:true|false)["']|true|false)(?:\s*,\s*summary\s*:\s*["'][^"'\r\n]*["']\s*,\s*ralateuid\s*:\s*\{\s*(?:\w+|["']\w+["'])\s*:\s*["'][^"'\r\n]*["']\s*\})?(?:\s*,\s*(?:shortUrl|hideMore)\s*:\s*(?:true|false)){0,2}\s*\};?$/.test(codeStart);
+      const siteBoot = /^showTips\(["']btnTips["']\);\s*if\(!islogin\(\)\)\s*\{\s*document\.getElementById\([^\r\n]+?\}\s*showGuanli\(["']\d+["']\);$/.test(codeStart);
+      const avatar = /^changeavatar\(["'][^"'\r\n]*["'],\s*document\.getElementById\(["']avatarimg\d+["']\)\);$/.test(codeStart);
+      const escapedAd = /^<script\s+type=["']text\/javascript["']\s*>\s*ac_as_id\s*=\s*\d+;[\s\S]*?<\/script>\s*<script\b[^>]*\bsrc=["'][^"']+["'][^>]*><\/script>\s*<img\b[^>]*\bwidth=["']0["'][^>]*>\s*$/i.test(codeStart);
+      const commentForm = /^function CheckPl\(\w+\)\s*\{[\s\S]*?\breturn (?:true|false);\s*\}$/.test(codeStart);
+      // Require a script-shaped boundary and browser operations, not just
+      // syntax density, to avoid eating body prose which mentions JavaScript.
+      if ((start.test(ready) && end.test(codeEnd) && browserApi.test(ready)) || shareConfig || commentForm || avatar || escapedAd || siteBoot) {
         node.data = "";
         continue;
       }
