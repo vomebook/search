@@ -14,6 +14,14 @@ class ImagePageFirstViewTests(unittest.TestCase):
     reader_url = fixtures.ReaderRefactorTest.reader_url
 
     def test_verified_first_image_starts_before_unrelated_shell_construction(self):
+        self.assert_verified_first_image_starts_before_unrelated_shell_construction(253)
+
+    def test_verified_first_image_starts_before_unrelated_window_construction(self):
+        self.assert_verified_first_image_starts_before_unrelated_shell_construction(257)
+
+    def assert_verified_first_image_starts_before_unrelated_shell_construction(self, count):
+        # Use a fresh browser context per page-count boundary so requests from
+        # the previous book cannot satisfy or invalidate the held-manifest test.
         prefix = 'pages/image/tiff/' + 'b' * 64 + '/'
         source = 'https://voiceofml-search.hf.space/api/reader-bucket-resource?' + urlencode({
             'path': prefix + 'page-manifest.json'})
@@ -51,27 +59,24 @@ class ImagePageFirstViewTests(unittest.TestCase):
                               headers={'Timing-Allow-Origin': '*'})
 
         self.page.route('**/api/reader-bucket-resource?**', resource)
-        for count in (253, 257):
-            with self.subTest(count=count):
-                requests.clear()
-                self.page.goto(self.reader_url('image-pages', url=source), wait_until='domcontentloaded')
-                self.page.wait_for_function('() => window.__storeStartedAt !== undefined')
-                self.page.evaluate('() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))')
-                self.assertEqual(len(manifests), 1)
-                self.assertEqual(requests, [])
-                self.assertFalse(self.page.evaluate('!!window.openingImage'))
-                manifests.pop().fulfill(json=dict(version=1, kind='image-page-stream', page_count=count, pages=[{}] * count))
-                image = self.page.locator('.reader-page[data-page="1"] img.ready')
-                image.wait_for(state='visible')
-                ordered = self.page.evaluate('''() => {
-                  const request = performance.getEntriesByName(window.openingImage.src, 'resource')[0];
-                  return {request: request?.startTime, shells: window.unrelatedShellStart};
-                }''')
-                self.assertLessEqual(ordered['request'], ordered['shells'], ordered)
-                self.assertEqual(self.page.evaluate('window.openingImageTotal'), f'/ {count}')
-                self.assertTrue(image.evaluate('img => img === window.openingImage && img.complete && img.naturalWidth > 0'))
-                self.page.locator('html[data-reader-phase="ready"]').wait_for(state='attached')
-                self.assertEqual(requests.count(prefix + 'pages/page-000001.webp'), 1)
+        self.page.goto(self.reader_url('image-pages', url=source), wait_until='domcontentloaded')
+        self.page.wait_for_function('() => window.__storeStartedAt !== undefined')
+        self.page.evaluate('() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))')
+        self.assertEqual(len(manifests), 1)
+        self.assertEqual(requests, [])
+        self.assertFalse(self.page.evaluate('!!window.openingImage'))
+        manifests.pop().fulfill(json=dict(version=1, kind='image-page-stream', page_count=count, pages=[{}] * count))
+        image = self.page.locator('.reader-page[data-page="1"] img.ready')
+        image.wait_for(state='visible')
+        ordered = self.page.evaluate('''() => {
+          const request = performance.getEntriesByName(window.openingImage.src, 'resource')[0];
+          return {request: request?.startTime, shells: window.unrelatedShellStart};
+        }''')
+        self.assertLessEqual(ordered['request'], ordered['shells'], ordered)
+        self.assertEqual(self.page.evaluate('window.openingImageTotal'), f'/ {count}')
+        self.assertTrue(image.evaluate('img => img === window.openingImage && img.complete && img.naturalWidth > 0'))
+        self.page.locator('html[data-reader-phase="ready"]').wait_for(state='attached')
+        self.assertEqual(requests.count(prefix + 'pages/page-000001.webp'), 1)
 
     def open_with_held_trailing_shells(self, fail_saved=False, saved=120):
         prefix = 'pages/image/tiff/' + 'a' * 64 + '/'
