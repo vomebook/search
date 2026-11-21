@@ -1200,13 +1200,18 @@ class PdfFirstPageTests(unittest.TestCase):
             context=self.browser.new_context(service_workers="block");self.addCleanup(context.close)
             page=context.new_page()
             page.route('**/static/reader/core/reader-store.js',lambda route:route.fulfill(content_type='text/javascript',body='''
-              window.VoiceOfMLReaderStore={get:()=>new Promise(()=>{}),put:async()=>{},list:async()=>[],
+              window.__historyWrites=0;
+              window.VoiceOfMLReaderStore={get:()=>new Promise(()=>{}),put:async()=>{window.__historyWrites++;},list:async()=>[],
                 listBookmarks:async()=>[],listAllBookmarks:async()=>[],removeBookmark:async()=>{}};
             '''))
             self.open(page,source)
             page.locator('.reader-page[data-page="1"] canvas.ready').wait_for(timeout=15000)
             self.assertEqual(page.locator('.reader-pdf-opening').count(),0)
-            self.assertNotEqual(page.locator('html').get_attribute('data-reader-phase'),'ready')
+            page.locator('html[data-reader-phase="ready"]').wait_for()
+            field=page.locator('#page-number');field.fill('2');field.press('Enter')
+            page.locator('.reader-page[data-page="2"] canvas.ready').wait_for(timeout=15000)
+            page.evaluate("dispatchEvent(new Event('pagehide'))")
+            self.assertEqual(page.evaluate('window.__historyWrites'),0)
 
     def test_scroll_is_preserved_when_preview_becomes_full_reader(self):
         with range_source(sparse_pdf()) as (source,state,_lock):

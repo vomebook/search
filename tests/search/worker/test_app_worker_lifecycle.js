@@ -307,7 +307,7 @@ test('client registration and host boundary preserve raw and composed Worker URL
   for (const path of ['static/sw.js', 'static/reader-resources.js', 'scripts/build/check_reader_release.mjs']) {
     assert.ok(fs.readFileSync(path, 'utf8').includes(modulePath), path);
   }
-  assert.match(source, /new Worker\("static\/search\/index-worker\.js"\)/);
+  assert.match(source, /new Worker\("\/search\/static\/search\/index-worker\.js"\)/);
   assert.match(source, /getCorpusClient\(\)\.expireRequests\(\)/);
   assert.doesNotMatch(source, /corpusWorkerPending|corpusWorkerEpoch|corpusWorkerRequestId/);
   const client = fs.readFileSync('static/' + modulePath, 'utf8');

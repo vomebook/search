@@ -132,6 +132,7 @@ test('host release is synchronous and disposal reentry keeps the newer reader', 
       unmount(){onUnmount?.();return {isConnected:true,focus(){focuses++;}};},remember(){},
       accepts:event=>!!host.overlay && event.origin===location.origin && event.source===host.overlay.contentWindow};
     const deps = {hashRoute,position,createNavigation:()=>navigation,getViewKey:()=> 'view',
+      currentParams:()=>new URLSearchParams('q=opening'),
       captureScroll:()=>null,saveSnapshot:()=>null,restoreScroll:()=>restores++,
       openOverlay:(...args)=>host.openReaderOverlay(...args),closeOverlay:(...args)=>host.closeReaderOverlay(...args),
       reconcile:()=>host.reconcileSearchDestination(),routeChanged:()=>false,applyTheme(){throw Error('unexpected theme');}};

@@ -130,7 +130,9 @@ test('request gates, validation failures and stale completion preserve pending c
 test('host keeps prefetch failures bounded and generation changes invalidate even prefetch', async () => {
   const window = {key: 'query', total: 1000, query: {pageSize: 1}, controller: new AbortController(), pages: new Set(), failures: new Map()};
   let error = new Error('temporary'), renders = 0, statuses = 0;
+  const cache = new Map([['old-page', {}]]), stale = new Map([['query', {}]]);
   const c = fixture(['loadResultWindowPage'], {resultWindow: window, positionRestore: null,
+    searchResponseStore: {cache}, resultSnapshots: {remove: key => stale.delete(key)}, STATE: {_pageCache: {1:[{}]} },
     resultWindowCurrent: () => true, requestResultWindowPage: async () => {throw error;},
     updateResultWindowStatus() {statuses++;}, scheduleVirtualRender() {renders++;},
     DOM: {resultsList: {querySelectorAll: () => []}}, VSCROLL: {}});
@@ -140,6 +142,8 @@ test('host keeps prefetch failures bounded and generation changes invalidate eve
   error = new Error('RESTORE_PAGE_CHANGED');
   assert.equal(await c.loadResultWindowPage(66, true), false);
   assert.equal(window.invalid, true); assert.equal(window.failures.get(66), error);
+  assert.equal(cache.size, 0); assert.equal(stale.size, 0);
+  assert.equal(Object.keys(c.STATE._pageCache).length, 0);
   assert.equal(statuses, 1); assert.equal(renders, 1);
 });
 
@@ -158,13 +162,14 @@ function documentFixture() {
   return {createElement: element, getElementById: id => elements.find(node => node.id === id)};
 }
 
-test('status action reads the current window and placeholders retain loading, retry and invalid markup', () => {
+test('status action reads the current window and placeholders retain loading, retry and invalid markup', async () => {
   const document = documentFixture(), host = document.createElement('div'), loaded = [];
   let restarted = 0;
   const c = fixture(['updateResultWindowStatus', 'createResultWindowPlaceholder'], {document,
     DOM: {resultsContainer: {parentElement: host}}, resultWindow: null,
     STATE: {pageSize: 100}, VSCROLL: {contentVersion: 9, heights: [72], estimatedHeight: 60},
-    restartResultWindow() {restarted++;}, loadResultWindowPage(page) {loaded.push(page);}});
+    restartResultWindow() {restarted++;}, resultWindowCurrent: () => true,
+    async loadResultWindowPage(page) {loaded.push(page); return true;}});
   c.updateResultWindowStatus(); assert.equal(host.children.length, 0);
   const loading = c.createResultWindowPlaceholder(0);
   assert.equal(loading.style.height, '72px'); assert.equal(loading.dataset.contentVersion, '9');
@@ -175,7 +180,8 @@ test('status action reads the current window and placeholders retain loading, re
   const failed = c.createResultWindowPlaceholder(100);
   assert.equal(failed.style.height, '60px'); assert.equal(failed.dataset.index, '100');
   assert.equal(failed.children[0].dataset.windowPage, '2'); assert.equal(failed.children[0].textContent, '加载失败，点击重试');
-  c.resultWindow = {failures: new Map([[3, new Error()]])}; button.onclick();
+  c.resultWindow = {failures: new Map([[3, new Error()]]), pending: new Map()}; button.onclick();
+  await new Promise(resolve => setImmediate(resolve));
   assert.deepEqual(loaded, [3]); assert.equal(status.hidden, true);
   c.resultWindow.invalid = true; c.updateResultWindowStatus(); button.onclick();
   assert.equal(restarted, 1); assert.equal(status.querySelector('span').textContent, '搜索数据已更新');

@@ -50,7 +50,12 @@ test('PDF range dependencies are built before the network consumer and pinned fo
       }
       writeFileSync(join(output,'index.html'),'<html></html>');
       writeFileSync(join(assets,'reader.html'),'<html></html>');
-      writeFileSync(join(output,'sw.js'),'const CACHE_VERSION = "development"; const CURRENT_HASHED_ASSETS = [];');
+      writeFileSync(join(output,'sw.js'), [
+        'const CACHE_VERSION = "development";',
+        'const CURRENT_HASHED_ASSETS = [];',
+        'const READER_SHELL_INTEGRITY = "development";',
+        'const SEARCH_SHELL_INTEGRITY = "development";'
+      ].join('\n'));
       const script=resolve(root,'scripts/build/build_static_assets.mjs');
       const run=spawnSync(process.execPath,[script],{
         cwd:work,env:{...process.env,STATIC_OUTPUT_DIR:output},encoding:'utf8',timeout:15000
@@ -68,6 +73,10 @@ test('PDF range dependencies are built before the network consumer and pinned fo
       assert.doesNotMatch(expression,/\.engineAssets\(|\?reader-v1/,'build must inline the suffix-free warming call');
       assert.ok(expression.includes('djvuSelectedAssets'),'build must preserve runtime architecture choice');
       const sw=readFileSync(join(output,'sw.js'),'utf8');
+      for (const [name, file] of [['READER',join(assets,'reader.html')], ['SEARCH',join(output,'index.html')]]) {
+        const integrity = 'sha256-' + createHash('sha256').update(readFileSync(file)).digest('base64');
+        assert.ok(sw.includes(`${name}_SHELL_INTEGRITY="${integrity}"`));
+      }
       assert.doesNotMatch(sw,/\/vendor\/(?:zip|LICENSE_zipjs)\./,'obsolete zip.js must not enter the release cache inventory');
       const inventory=built('reader-resources.js');
       const worker=built('reader/pdf/reader-djvu-engine-worker.mjs');

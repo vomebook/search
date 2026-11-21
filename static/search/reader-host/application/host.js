@@ -6,6 +6,8 @@
     /** @type {HTMLIFrameElement | null} */
     let overlay = null;
     let revision = 0, closing = false, uiState = "base";
+    /** @type {URLSearchParams | null} */
+    let openedSearchParams = null;
     /** @type {ReaderHostSnapshot | null} */
     let snapshot = null;
     const keys = Object.freeze([
@@ -54,6 +56,7 @@
       revision++;
       closing = false;
       uiState = "base";
+      openedSearchParams = null;
       overlay = null;
       const returnFocus = navigation.unmount();
       if (overlay) return true;
@@ -77,6 +80,7 @@
     function openReaderOverlay(url, addHistory = true) {
       if (deps.hashRoute) addHistory = addHistory !== false;
       const owner = ++revision;
+      const params = addHistory ? deps.currentParams() : null;
       if (addHistory && !position.scroll) {
         const saved = deps.captureScroll();
         position.setScroll(saved);
@@ -88,6 +92,7 @@
       if (!overlay) return;
       uiState = "base";
       closing = false;
+      openedSearchParams = params;
       if (addHistory) navigation.remember(url, /** @type {object} */ (position.scroll));
     }
     function reconcileSearchDestination() {
@@ -170,8 +175,8 @@
         const target = new URL(/** @type {string} */ (message.url), location.origin);
         if (target.origin !== location.origin || (deps.hashRoute ? target.pathname !== "/search/" : target.pathname.split("/").filter(Boolean).length !== 1)) return;
         const prior = navigation.searchLocation();
-        const params = !prior ? deps.currentParams() : deps.hashRoute
-          ? new URLSearchParams(prior.hash.split("?", 2)[1] || "") : prior.searchParams;
+        const params = openedSearchParams || (!prior ? deps.currentParams() : deps.hashRoute
+          ? new URLSearchParams(prior.hash.split("?", 2)[1] || "") : prior.searchParams);
         history.replaceState(null, "", navigation.mergeSearchParams(target, params, { hashRoute: deps.hashRoute, keys }).href);
         deps.reconcile();
       } catch (_) {}

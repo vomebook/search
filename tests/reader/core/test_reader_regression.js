@@ -429,6 +429,7 @@ require('node:test')('Markdown restores saved positions without overriding expli
       }) },
       readerRuntime: { currentGeneration: () => 1 }, isReaderGenerationCurrent: () => true, beginReaderNavigation: () => 1,
       resolveReaderSource: async () => {}, measurePdf: promise => promise, awaitReader: promise => promise, assertReaderActive() {},
+      waitForReader: () => new Promise(() => {}),
       syncCapabilityControls() {}, setReaderStage() {}, validSource: url => url === sourceUrl,
       downloadButton: {}, readerDownloadUrl: () => sourceUrl, applyReaderMetadata() {},
       formatAdapters: { activate() {}, active: { open() {}, render() {}, restore: (entry, generation) => context.restoreFormat('markdown', entry, generation) } },

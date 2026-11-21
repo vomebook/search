@@ -21,6 +21,9 @@ const CACHE_VERSION = 'development';
 const CACHE_NAME = CACHE_PREFIX + CACHE_VERSION;
 const CURRENT_HASHED_ASSETS = [];
 const READER_SHELL_INTEGRITY = "development";
+const SEARCH_SHELL_INTEGRITY = "development";
+const CORPUS_INTEGRITY = "development";
+const PDF_SUPPORT_INTEGRITY = {};
 const READER_SHELL_ASSETS = readerPrecacheResources.shellAssets("${base}static/");
 const PRECACHE_URLS = [
   "${base}static/${bundledHost}",
@@ -36,6 +39,7 @@ const optional = {
   "manifest.json": '{"name":"Search"}',
   "data/generation-manifest.json": '{"generation":"first"}',
   "data/reader_assets.json.gz": "tiny binary fixture\0",
+  "data/search_data.json.gz": "fixed corpus fixture\0",
   "data/initial/manifest.json": '{"urls":[]}',
   "data/initial/global.json": '{"records":[]}',
   "data/sidebar/manifest.json": '{"urls":[]}',
@@ -103,6 +107,12 @@ function build(overrides = {}, { extras = true, reverse = false, minify = false,
     assert.doesNotMatch(stamped, /CURRENT_HASHED_ASSETS\s*=\s*\[\]/);
     const shellDigest = createHash("sha256").update(readFileSync(join(output, reader))).digest("base64");
     assert.ok(stamped.includes(`READER_SHELL_INTEGRITY="sha256-${shellDigest}"`));
+    const searchDigest = createHash("sha256").update(readFileSync(join(output, "index.html"))).digest("base64");
+    assert.ok(stamped.includes(`SEARCH_SHELL_INTEGRITY="sha256-${searchDigest}"`));
+    if (extras) {
+      const corpusDigest = createHash("sha256").update(readFileSync(join(output, "data/search_data.json.gz"))).digest("base64");
+      assert.ok(stamped.includes(`CORPUS_INTEGRITY="sha256-${corpusDigest}"`));
+    }
     const shell = JSON.parse(stamped.match(/\bREADER_SHELL_ASSETS\s*=\s*(\[[^\]]*\])/)[1]);
     assert.deepEqual(shell, [base + "static/reader.html", base + "static/" + readerContract.replace(".js", "." +
       createHash("sha256").update("self.reader = 1;").digest("hex").slice(0, 12) + ".js")]);
