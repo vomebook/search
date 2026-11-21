@@ -55,15 +55,28 @@ const measurements = new WeakMap();
 function normalizeBox(value) {
   return Math.max(0, Math.min(1, Number(value) || 0));
 }
-/** @param {CanvasRenderingContext2D | null} context @param {string} text @param {string} family @param {number} targetWidth */
-function measureRunScale(context, text, family, targetWidth) {
+/** @typedef {{family: string | null, widths: Map<string, number>}} RunMeasurements */
+/** @param {CanvasRenderingContext2D | null} context @param {string} text @param {string} family @param {number} targetWidth
+ * @param {RunMeasurements | null} session */
+function measureRunScale(context, text, family, targetWidth, session) {
   if (!context) return 1;
-  context.font = `100px ${family}`;
-  const measured = context.measureText(text).width / 100;
+  // A text layer is built synchronously. Share widths within a run of the
+  // same font, but never retain them across pages or font-load events.
+  if (!session || session.family !== family) {
+    context.font = `100px ${family}`;
+    if (session) { session.family = family; session.widths.clear(); }
+  }
+  const widths = session && text.length <= 80 ? session.widths : null;
+  let measured = widths?.get(text);
+  if (measured === undefined) {
+    measured = context.measureText(text).width / 100;
+    if (widths && widths.size < 128) widths.set(text, measured);
+  }
   return measured > 0 && targetWidth > 0 ? targetWidth / measured : 1;
 }
-/** @param {HTMLElement} layer @param {string} text @param {number} x @param {number} y @param {number} height @param {number} width @param {string} family */
-function positionedRun(layer, text, x, y, height, width, family, angle = 0, vertical = false) {
+/** @param {HTMLElement} layer @param {string} text @param {number} x @param {number} y @param {number} height @param {number} width @param {string} family
+ * @param {RunMeasurements | null} [session] */
+function positionedRun(layer, text, x, y, height, width, family, angle = 0, vertical = false, session = null) {
   const box = layer.ownerDocument.createElement("span");
   box.className = "reader-pdf-text-position reader-pdf-text-block";
   box.style.left = `${x * 100}%`;
@@ -86,7 +99,7 @@ function positionedRun(layer, text, x, y, height, width, family, angle = 0, vert
     run._readerVerticalAdvance = width / height;
     if (width > 0 && measured) run.style.transform = `scaleY(${width / (height * measured)})`;
   } else {
-    const scaleX = measureRunScale(context, text, family, width / height);
+    const scaleX = measureRunScale(context, text, family, width / height, session);
     run.style.setProperty("--reader-pdf-run-scale-x", String(scaleX));
     run.style.transform = "scaleX(var(--reader-pdf-run-scale-x))";
   }
@@ -98,6 +111,7 @@ function positionedRun(layer, text, x, y, height, width, family, angle = 0, vert
 export function populatePdfTextLayer(layer, items, viewport, styles = {}) {
   const fragment = layer.ownerDocument.createDocumentFragment();
   const w = Math.max(1, viewport.width), h = Math.max(1, viewport.height);
+  const session = items.length >= 32 ? {family: null, widths: new Map()} : null;
   for (const item of items) {
     if (typeof item.str !== "string") continue;
     if (item.str) {
@@ -119,7 +133,7 @@ export function populatePdfTextLayer(layer, items, viewport, styles = {}) {
         const x = vertical ? pointX - height / 2 : pointX + ascent * Math.sin(angle);
         const y = vertical ? pointY : pointY - ascent * Math.cos(angle);
         fragment.appendChild(positionedRun(layer, item.str, x / w, y / h, height / w,
-          (vertical ? item.height : item.width) * scale / w, family, angle, vertical));
+          (vertical ? item.height : item.width) * scale / w, family, angle, vertical, session));
       } else {
         // Text without coordinates remains accessible, but never forms a visible
         // second text panel beneath the page image.

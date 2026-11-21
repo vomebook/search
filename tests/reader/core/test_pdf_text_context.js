@@ -58,3 +58,18 @@ for (const [textItem, view] of [
   assert.deepEqual(layer.children.map(child => child.textContent), ['test', '\n']);
   assert.strictEqual(layer.children[0].className, 'reader-pdf-text-run');
 }
+
+// Repeated short runs can share a font measurement, never their positions or
+// target widths. Font switches and later layer construction measure afresh.
+{
+  let count = 0;
+  const context = { measureText() { count++; return { width: this.font.includes('mono') ? 100 : 200 }; } };
+  const layer = makeLayer(context), styles = { f: { fontFamily: 'serif' }, g: { fontFamily: 'monospace' } };
+  const rows = Array.from({ length: 40 }, (_, i) => ({ ...item, fontName: i < 20 ? 'f' : 'g', width: i % 2 ? 40 : 30 }));
+  pdf.populatePdfTextLayer(layer, rows, viewport, styles);
+  assert.strictEqual(count, 2);
+  assert.deepStrictEqual(layer.children.map(box => Number(Number(box.children[0].style['--reader-pdf-run-scale-x']).toFixed(12))),
+    rows.map(row => row.width / (row.fontName === 'f' ? 20 : 10)));
+  pdf.populatePdfTextLayer(layer, rows, viewport, styles);
+  assert.strictEqual(count, 4);
+}
