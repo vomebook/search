@@ -160,6 +160,17 @@ test('Reader overlay retains the saved anchor and missing anchor uses the nearby
   assert.equal(missing.events.includes('apply'), false); assert.equal(missing.events.filter(event => event[0] === 'toast').length, 1);
 });
 
+test('preview keeps a user-moved hole instead of a vanished saved anchor', async () => {
+  const f = fixture();
+  f.c.captureReaderReturnScroll = () => ({index: 11, offset: 17});
+  await f.run(f.make(null, {...position, anchorId: 'gone'}), {});
+  assert.equal(f.c.snapshot.scroll.index, 11);
+  assert.equal(f.c.snapshot.scroll.offset, 17);
+  assert.equal(f.events.includes('apply'), true);
+  assert.equal(f.events.includes('restore'), false);
+  assert.equal(f.events.some(event => event[0] === 'toast'), false);
+});
+
 test('synchronous prologue retains ordering, duplicate handling and abort reentry ownership', () => {
   const f = fixture();
   const active = f.make(); f.c.positionRestore = active;

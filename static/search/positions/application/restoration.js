@@ -57,8 +57,10 @@
             if (!task.ready.has(page) && data.resultBackend === task.backend && data.generation === lookup.generation && data.total === total) task.ready.set(page, data);
           }
           const latest = task.preview ? host.capturePreviewAnchor() : null;
-          // An unloaded slot still anchors the viewport, but has no ID to relocate.
-          const geometry = latest && !latest.anchorId ? latest : null;
+          // Preserve geometry when the reader moved into a hole; a missing ID
+          // at the untouched saved location still uses the nearby fallback.
+          const geometry = latest && !latest.anchorId &&
+            (latest.index !== task.position.index || latest.offset !== task.position.offset) ? latest : null;
           if (latest) {
             const { anchorId } = latest;
             if (anchorId && anchorId !== position.anchorId) {
