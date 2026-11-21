@@ -1,5 +1,11 @@
-"""Exercise the actual IndexedDB session adapter in Chromium."""
+"""Exercise IndexedDB sessions and filter result snapshots in Chromium."""
+import mimetypes
+import os
+from pathlib import Path
 import unittest
+from urllib.parse import urlsplit
+
+from playwright.sync_api import sync_playwright
 
 from tests.reader.browser import test_reader_pdf_followup as support
 
@@ -217,6 +223,81 @@ class SearchSessionBrowserTests(unittest.TestCase):
         }""")
         self.assertFalse(result["restored"])
         self.assertNotIn("voiceofml-search-state", result["databases"])
+
+
+class FilterSnapshotBrowserTests(unittest.TestCase):
+    def test_mirror_toggle_does_not_restore_pdf_for_txt_filter(self):
+        root = Path(__file__).resolve().parents[3]
+        origin = 'https://search-fixture.test'
+        prefix = '/search'
+        entry = '/search/#/?q=ownership&local=0'
+        requests = []
+        inventory = [{'name': ext, 'count': 1} for ext in ('pdf', 'txt')]
+        rows = [dict(Repo='VoiceOfML/Test', File='ownership', Extension=ext, Folder=[], Size=1)
+                for ext in ('pdf', 'txt')]
+
+        def fulfill(route):
+            url = urlsplit(route.request.url)
+            path = url.path
+            if path == '/api/search' and route.request.method == 'POST':
+                body = route.request.post_data_json
+                extensions = body.get('extensions', [])
+                requests.append(extensions)
+                results = [row for row in rows if not extensions or row['Extension'] in extensions]
+                route.fulfill(json=dict(results=results, total=len(results), page=1, page_size=body['page_size']),
+                              headers={'Access-Control-Allow-Origin': '*'})
+            elif path == '/api/search' and route.request.method == 'OPTIONS':
+                route.fulfill(status=204, headers={'Access-Control-Allow-Origin': '*',
+                                                  'Access-Control-Allow-Headers': 'content-type'})
+            elif path.startswith('/api/'):
+                data = {'/api/extensions': inventory, '/api/repos': [],
+                        '/api/bootstrap': {'repos': [], 'extensions': inventory}}
+                route.fulfill(json=data.get(path, {}), headers={'Access-Control-Allow-Origin': '*'})
+            elif url.hostname == 'search-fixture.test' and path == prefix + '/':
+                route.fulfill(path=root / 'static/index.html', content_type='text/html')
+            elif url.hostname == 'search-fixture.test' and path.startswith(prefix + '/static/'):
+                asset = root / path.removeprefix(prefix).lstrip('/')
+                if asset.is_file():
+                    route.fulfill(path=asset, content_type=mimetypes.guess_type(asset)[0])
+                else:
+                    route.fulfill(status=404)
+            else:
+                route.abort()
+
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.launch(executable_path=os.getenv('CHROMIUM_PATH'),
+                args=['--disable-background-networking', '--host-resolver-rules=MAP * ~NOTFOUND'])
+            context = browser.new_context(service_workers='block', viewport={'width': 1280, 'height': 800})
+            context.route('**/*', fulfill)
+            page = context.new_page()
+            errors = []
+            page.on('pageerror', lambda error: errors.append(str(error)))
+            page.add_init_script("Object.defineProperty(navigator, 'onLine', {get: () => true});")
+            page.goto(origin + entry, wait_until='domcontentloaded')
+            txt = page.locator('#filter-ext-list input[value="txt"]')
+            txt.wait_for(state='attached', timeout=5000)
+            pdf_row = page.locator('.result-item[aria-label="ownership.pdf"]')
+            pdf_copy = pdf_row.locator('[data-action="copy"]')
+            self.assertIn('hf-mirror.com', pdf_copy.get_attribute('data-link', timeout=5000))
+
+            page.clock.install()
+            page.clock.pause_at(page.evaluate('Date.now() + 100'))
+            txt.evaluate('input => input.click()')
+            self.assertTrue(page.evaluate('filterSearchTimer !== null'))
+            page.locator('#mirror-links-toggle').evaluate('input => input.click()')
+            self.assertEqual(urlsplit(pdf_copy.get_attribute('data-link')).hostname, 'huggingface.co')
+            self.assertEqual(requests, [[]])
+
+            page.clock.run_for(200)
+            page.clock.resume()
+            page.wait_for_function('filterSearchTimer === null && !STATE.isLoading', timeout=5000)
+            self.assertEqual(
+                (page.locator('.result-item').evaluate_all('rows => rows.map(row => row.ariaLabel)'), requests),
+                (['ownership.txt'], [[], ['txt']]),
+            )
+            self.assertEqual(errors, [])
+            context.close()
+            browser.close()
 
 
 if __name__ == "__main__":

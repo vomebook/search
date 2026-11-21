@@ -239,6 +239,71 @@ class ReaderAccessibilityTests(unittest.TestCase):
         self.page.wait_for_function("()=>!document.querySelector('#bookmarks-list .panel-item')")
         self.assertEqual(self.page.evaluate('document.activeElement.id'), 'bookmarks-all')
 
+    def test_pending_bookmark_delete_survives_switch_to_all_bookmarks(self):
+        self.open_book('txt', 'A document\n' * 200)
+        self.page.evaluate('''async () => {
+          const url = new URL(location.href).searchParams.get('url');
+          await VoiceOfMLReaderStore.putBookmark({id:'one', url, label:'Remove me', title:'This book'});
+          await VoiceOfMLReaderStore.putBookmark({id:'two', url:url+'/other', label:'Keep me', title:'Other book'});
+          const store = VoiceOfMLReaderStore;
+          window.VoiceOfMLReaderStore = {...store, async removeBookmark(id) {
+            await new Promise(resolve => { window.releaseBookmarkDelete = resolve; });
+            await store.removeBookmark(id);
+            window.bookmarkDeleteCompleted = true;
+          }};
+        }''')
+        self.page.locator('#history').press('Enter')
+        self.page.locator('#bookmarks-tab').press('Enter')
+        self.page.get_by_role('button', name='删除书签：Remove me', exact=True).click()
+        self.page.wait_for_function('() => typeof window.releaseBookmarkDelete === "function"')
+        toggle = self.page.locator('#bookmarks-all')
+        toggle.click()
+        self.page.get_by_role('button', name='Other book · Keep me', exact=True).wait_for()
+        self.page.evaluate('window.releaseBookmarkDelete()')
+        self.page.wait_for_function('() => window.bookmarkDeleteCompleted === true')
+        self.page.locator('#bookmarks-list [data-bookmark-id="one"]').wait_for(state='detached', timeout=2500)
+        self.assertTrue(self.page.get_by_role('button', name='Other book · Keep me', exact=True).is_visible())
+        self.assertTrue(toggle.evaluate('node => node === document.activeElement'))
+
+    def check_stale_bookmark_save(self, reject):
+        self.open_book('txt', 'A document\n' * 200)
+        self.page.evaluate('''reject => {
+          const store = VoiceOfMLReaderStore;
+          window.VoiceOfMLReaderStore = {...store, async putBookmark(entry) {
+            await new Promise(resolve => { window.releaseBookmarkSave = resolve; });
+            if (reject) throw new Error('Delayed save failure');
+            await store.putBookmark(entry);
+          }};
+        }''', reject)
+        ribbon = self.page.locator('#bookmark-ribbon')
+        label = self.page.locator('#bookmark-label')
+        ribbon.click()
+        label.fill('First bookmark')
+        self.page.locator('#bookmark-add').click()
+        self.page.wait_for_function('() => typeof window.releaseBookmarkSave === "function"')
+        self.page.locator('#bookmark-cancel').click()
+        ribbon.click()
+        label.fill('Second draft')
+        prompt = self.page.locator('#bookmark-prompt').text_content()
+        self.page.evaluate('window.releaseBookmarkSave()')
+        # Wait for a real write on success. On rejection, let the rejected
+        # promise and the original save handler drain before inspecting UI.
+        if not reject:
+            self.page.wait_for_function('''async () => (await VoiceOfMLReaderStore.listAllBookmarks())
+              .some(entry => entry.label === 'First bookmark')''')
+        self.page.evaluate('() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))')
+        self.assertTrue(self.page.get_by_role('dialog').is_visible())
+        self.assertEqual(self.page.locator('#bookmark-prompt').text_content(), prompt)
+        self.assertEqual(label.input_value(), 'Second draft')
+        self.assertTrue(label.evaluate('node => node === document.activeElement'))
+        self.assertTrue(self.page.locator('#bookmark-add').is_enabled())
+
+    def test_stale_bookmark_save_does_not_close_new_editor(self):
+        self.check_stale_bookmark_save(reject=False)
+
+    def test_stale_bookmark_save_error_does_not_change_new_editor(self):
+        self.check_stale_bookmark_save(reject=True)
+
     def test_failure_is_announced_without_stealing_keyboard_focus(self):
         self.open_book('unsupported', 'not supported')
         self.assertEqual(self.page.get_by_role('alert').count(), 1)

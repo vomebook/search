@@ -539,6 +539,8 @@ export function createReaderBindings(readerContext) {
     /** @type {Element} */ (document.querySelector("#bookmark-add")).addEventListener("click", async (event) => {
       const button = /** @type {HTMLButtonElement} */ (event.currentTarget),
         editing = readerContext.panelState.editingBookmark;
+      const saveGeneration = readerContext.nextReaderGeneration("bookmark-dialog");
+      const ownsDialog = () => readerContext.isReaderGenerationCurrent("bookmark-dialog", saveGeneration);
       const snapshot = readerContext.pendingBookmarkSnapshot || editing || readerContext.captureBookmarkSnapshot();
       const label = readerContext.bookmarkLabelInput.value.trim() || snapshot.label,
         excerpt = readerContext.bookmarkExcerptInput.value.trim();
@@ -559,6 +561,7 @@ export function createReaderBindings(readerContext) {
                 createdAt: Date.now()
               }
         );
+        if (!ownsDialog()) return;
         const invoker = readerContext.bookmarkInvoker;
         readerContext.closeBookmarkPopover();
         if (!/** @type {HTMLElement} */ (document.querySelector("#bookmarks-panel")).hidden) {
@@ -571,9 +574,10 @@ export function createReaderBindings(readerContext) {
             ).focus();
         }
       } catch (_) {
-        /** @type {Element} */ (document.querySelector("#bookmark-prompt")).textContent = "书签保存失败，请重试。";
+        if (ownsDialog())
+          /** @type {Element} */ (document.querySelector("#bookmark-prompt")).textContent = "书签保存失败，请重试。";
       } finally {
-        button.disabled = false;
+        if (ownsDialog()) button.disabled = false;
       }
     });
     readerContext.bookmarkPopover.addEventListener("keydown", (event) => {

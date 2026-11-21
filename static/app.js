@@ -3087,9 +3087,14 @@ function renderSearchPage(append) {
 }
 
 function renderResults(animate = false) {
-  pendingResultEntrance = false;
   if (!positionRestore && STATE._loadedPage >= 1) rememberDisplayedSearchView();
   activateSearchView();
+  redrawResults(animate);
+}
+
+// Presentation changes must not assign the pending search key to existing rows.
+function redrawResults(animate = false) {
+  pendingResultEntrance = false;
   clearResultsSkeleton();
   if (STATE.results.length === 0) {
     DOM.resultsList.innerHTML = "";
@@ -4165,7 +4170,7 @@ async function init() {
     STATE.useMirrorLinks = DOM.mirrorLinksToggle.checked;
     syncStateToURL();
     clearResultTemplateCache();
-    if (STATE.results.length > 0) renderResults();
+    if (STATE.results.length > 0) redrawResults();
   });
   getResultInteractions().installSelection();
   DOM.hamburgerBtn.addEventListener("click", toggleLeftSidebar);

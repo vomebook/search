@@ -4,6 +4,7 @@ import { PDF_ADAPTIVE_CHUNK_BYTES, PDF_LARGE_FLAT_CHUNK_BYTES, PDF_DEFAULT_CHUNK
   from "./reader-pdf-range-hints.mjs";
 
 export const PDF_METADATA_RANGE_CONCURRENCY = 24;
+const PDF_WHOLE_BODY_TIMEOUT_MS = 120000;
 const PDF_LARGE_FLAT_BATCH_DELAY_MS = 12;
 const PDF_LARGE_FLAT_GAP_BUDGET = PDF_LARGE_FLAT_CHUNK_BYTES * 3;
 
@@ -62,16 +63,26 @@ async function readPdfRange(options, begin, end, {signal, readBytes, limit, rang
       cached = rangeCache?.get(key, begin, Math.min(end, expected.total), {total:expected.total, etag:expected.etag});
   } catch (_) { /* Cache allocation failure must retain normal network reading. */ }
   if (cached && expected) return {bytes:cached, total:expected.total, etag:expected.etag};
+  const wholeOwner = !expected && !partialOnly ? new AbortController() : null;
+  const active = wholeOwner ? AbortSignal.any([signal, wholeOwner.signal]) : signal;
   const response = await fetch(options.url, {
-    headers: {Range: `bytes=${begin}-${end-1}`}, signal, credentials:"same-origin"
+    headers: {Range: `bytes=${begin}-${end-1}`}, signal:active, credentials:"same-origin"
   });
   const invalid = () => new Error("PDF_RANGE_INVALID");
   try {
     if (!response.ok) throw Object.assign(new Error(`server response (${response.status})`), {status:response.status});
     if (!expected && response.status === 200) {
-      if (partialOnly) { await response.body?.cancel(); return null; }
-      const bytes = await readBytes(response, limit);
-      return {bytes, complete:true};
+      if (!wholeOwner) { await response.body?.cancel(); return null; }
+      // The fetch policy hands off a 200 at headers. Native PDF staging can
+      // await this body before the Reader's document timer has even started.
+      const timer = setTimeout(() => wholeOwner.abort(new DOMException("PDF whole body timed out", "TimeoutError")),
+        PDF_WHOLE_BODY_TIMEOUT_MS);
+      try {
+        active.throwIfAborted();
+        const bytes = await abortable(readBytes(response, limit), active);
+        active.throwIfAborted();
+        return {bytes, complete:true};
+      } finally { clearTimeout(timer); }
     }
     const match = /^bytes (\d+)-(\d+)\/(\d+)$/.exec(response.headers.get("Content-Range") || "");
     if (response.status !== 206 || !match) throw invalid();
@@ -95,7 +106,9 @@ async function readPdfRange(options, begin, end, {signal, readBytes, limit, rang
     catch (_) { /* Retaining an optional copy must never fail the document. */ }
     return {bytes, total, etag, complete:bytes.byteLength === total};
   } catch (error) {
-    await response.body?.cancel().catch(() => {});
+    const cancelled = response.body?.cancel().catch(() => {});
+    // A failed whole-body read must settle without waiting for stream cleanup.
+    if (!wholeOwner || response.status !== 200) await cancelled;
     throw error;
   }
 }

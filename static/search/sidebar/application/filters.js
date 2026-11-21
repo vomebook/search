@@ -10,6 +10,9 @@ async function renderFilters(routeId) {
   if (deps.readView().mode === "global") {
     deps.elements.repoSection.style.display = "";
     await renderRepoFilter(routeId);
+    // A suspended global render must not overwrite a newer folder view.
+    if (token !== filterRenderToken || (routeId && routeId !== deps.readView().routeId) ||
+        deps.readView().mode !== "global") return;
   } else {
     deps.elements.repoSection.style.display = "none";
   }

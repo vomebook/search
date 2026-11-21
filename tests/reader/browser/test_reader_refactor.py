@@ -3093,6 +3093,33 @@ class ReaderRefactorTest(unittest.TestCase):
         self.assertEqual(result, {"policy": True, "violations": ["img-src"]})
         self.assertNotIn("https://img.remote.test/a.png", remote)
 
+    def test_offline_html_relative_same_document_links_jump_without_navigation(self):
+        self.serve('''<!doctype html><body>
+            <a id="relative" href="./report.html#methods">Methods (relative)</a>
+            <a id="fragment" href="#methods">Methods</a>
+            <a id="other-file" href="./appendix.html#methods">Appendix</a>
+            <a id="same-name" href="../report.html#methods">Other report</a>
+            <a id="other-query" href="./report.html?edition=2#methods">Other edition</a>
+            <p style="height: 1800px">Introduction</p>
+            <h2 id="methods">Methods</h2><p style="height: 1200px">Details</p>
+            </body>''', "text/html")
+        self.open(self.reader_url("html", "books/report"))
+        frame = self.page.locator("iframe.html-frame").element_handle().content_frame()
+        history_length = self.page.evaluate("history.length")
+        reader_url = self.page.url
+        for link_id in ("other-file", "same-name", "other-query"):
+            self.assertIsNone(frame.locator(f"#{link_id}").get_attribute("href"), link_id)
+        for link_id in ("relative", "fragment"):
+            with self.subTest(link=link_id):
+                frame.evaluate("scrollTo(0, 0)")
+                link = frame.locator(f"#{link_id}")
+                self.assertEqual(link.get_attribute("href"), "#methods")
+                link.click()
+                frame.wait_for_function("Math.abs(document.querySelector('#methods').getBoundingClientRect().top) < 2")
+                self.assertEqual(frame.url, "about:srcdoc")
+                self.assertEqual(self.page.url, reader_url)
+                self.assertEqual(self.page.evaluate("history.length"), history_length)
+
     def frame_host_reader(self, overlay=False, cross_origin=False):
         # The Reader must decide by its real host whether parent messages are handled.
         reader = self.reader_url(name="framed", path="Test/docs")

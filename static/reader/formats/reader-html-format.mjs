@@ -518,7 +518,33 @@ export function createReaderHtmlFormat(readerContext) {
   function sanitizeOfflineHtml(text) {
     // A global ALLOWED_URI_REGEXP would also strip every non-allow-listed plain
     // attribute (colspan/rowspan/width), so scope the inline-image rule to URLs.
-    DOMPurify.addHook("uponSanitizeAttribute", restrictOfflineUrlAttribute);
+    // Use the original document URL, not the proxy, srcdoc, or a supplied <base>.
+    /** @type {URL | null} */
+    let base = null;
+    try {
+      const original = new URL(readerContext.downloadUrl || readerContext.sourceUrl);
+      if (/^https?:$/.test(original.protocol) && !original.username && !original.password) {
+        original.hash = "";
+        base = original;
+      }
+    } catch (_) {}
+    /** @param {Element} node @param {{attrName: string, attrValue: string, keepAttr: boolean}} data */
+    const restrict = (node, data) => {
+      if (base && data.attrName === "href" && node.localName === "a") {
+        const value = data.attrValue, hashIndex = value.indexOf("#");
+        if (hashIndex > 0 && !/^(?:[a-z][a-z0-9+.-]*:|\/\/)/i.test(value) &&
+            !/[\u0000-\u001f\u007f-\u009f\\]/.test(value)) {
+          try {
+            const target = new URL(value, base);
+            target.hash = "";
+            // Compare the full URL, including the query, before keeping only the fragment.
+            if (target.href === base.href) data.attrValue = value.slice(hashIndex);
+          } catch (_) {}
+        }
+      }
+      restrictOfflineUrlAttribute(node, data);
+    };
+    DOMPurify.addHook("uponSanitizeAttribute", restrict);
     let clean;
     try {
       clean = DOMPurify.sanitize(text, {
@@ -529,7 +555,7 @@ export function createReaderHtmlFormat(readerContext) {
         FORBID_ATTR: ["action", "formaction", "srcdoc"]
       });
     } finally {
-      DOMPurify.removeHook("uponSanitizeAttribute", restrictOfflineUrlAttribute);
+      DOMPurify.removeHook("uponSanitizeAttribute", restrict);
     }
     const template = document.createElement("template");
     template.content.appendChild(clean);

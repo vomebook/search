@@ -190,6 +190,11 @@ export function createReaderBookmarks(readerContext) {
         remove.setAttribute("aria-label", `删除书签：${open.textContent}`);
         remove.addEventListener("click", async () => {
           await VoiceOfMLReaderStore.removeBookmark(entry.id);
+          if (!readerContext.isReaderGenerationCurrent("bookmarks", generation)) {
+            // A scope switch or remote refresh can replace this row with a stale copy.
+            await renderBookmarks();
+            return;
+          }
           const restoreFocus = row.contains(document.activeElement);
           const next = row.nextElementSibling?.querySelector("button") || row.previousElementSibling?.querySelector("button") ||
             readerContext.bookmarksAllButton;
@@ -282,6 +287,7 @@ export function createReaderBookmarks(readerContext) {
   function openBookmarkPopover(invoker = readerContext.bookmarkRibbon, entry = null) {
     if (!entry && readerContext.pdfDocument?._pdfInfo?.readerPageCountPending) return;
     if (!readerContext.bookmarkPopover.hidden) return;
+    readerContext.nextReaderGeneration("bookmark-dialog");
     readerContext.bookmarkInvoker = invoker;
     readerContext.pendingBookmarkSnapshot = entry ? null : readerContext.captureBookmarkSnapshot();
     readerContext.updatePanelState({ editingBookmark: entry ? { ...entry } : null });
@@ -291,7 +297,9 @@ export function createReaderBookmarks(readerContext) {
       : `在${snapshot.label}添加书签？`;
     readerContext.bookmarkLabelInput.value = snapshot.label || "";
     readerContext.bookmarkExcerptInput.value = typeof snapshot.excerpt === "string" ? snapshot.excerpt : "";
-    /** @type {HTMLElement} */ (document.querySelector("#bookmark-add")).textContent = entry ? "保存书签" : "添加书签";
+    const save = /** @type {HTMLButtonElement} */ (document.querySelector("#bookmark-add"));
+    save.textContent = entry ? "保存书签" : "添加书签";
+    save.disabled = false;
     readerContext.bookmarkPopover.hidden = false;
     invoker.setAttribute("aria-expanded", "true");
     invoker.setAttribute("aria-controls", readerContext.bookmarkPopover.id);
@@ -300,6 +308,7 @@ export function createReaderBookmarks(readerContext) {
   }
 
   function closeBookmarkPopover() {
+    readerContext.nextReaderGeneration("bookmark-dialog");
     readerContext.pendingBookmarkSnapshot = null;
     readerContext.updatePanelState({ editingBookmark: null });
     readerContext.bookmarkPopover.hidden = true;

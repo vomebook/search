@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import {mock} from 'node:test';
-import {createPdfFetchPolicy} from '../../../static/reader/pdf/reader-pdf-network.mjs';
+import {createPdfFetchPolicy, preparePdfInitialRange} from '../../../static/reader/pdf/reader-pdf-network.mjs';
 
 // Local transport fixture only: no upstream connection is made.
 globalThis.location = {href:'https://reader.test/'};
@@ -57,6 +57,58 @@ async function checkAdmissionDeadline(options,init,deadline) {
 }
 
 try {
+  // Native PDF staging awaits the bootstrap before the outer Reader timer
+  // exists. When the first Range gets a 200, the policy hands off the body.
+  for (const scenario of ['stall','close','complete']) await withClock(async advance=>{
+    const owner=new AbortController(), requests=[];
+    const closeReason=new DOMException('caller closed','AbortError'), bodyDeadline=120000;
+    let body, upstream, waitingForMore=false, outcome;
+    globalThis.fetch=async (_input,init)=>{
+      requests.push(new Headers(init.headers).get('Range'));
+      upstream=init.signal;
+      return new Response(new ReadableStream({
+        start(controller){
+          body=controller;
+          controller.enqueue(bytes.slice(0,2));
+          upstream.addEventListener('abort',()=>controller.error(upstream.reason),{once:true});
+        },
+        pull(){waitingForMore=true;}
+      },{highWaterMark:0}),{status:200});
+    };
+    const policy=createPdfFetchPolicy(opts);policy.add(['/a.pdf']);
+    try {
+      const url=new URL('/a.pdf',globalThis.location.href).href;
+      void preparePdfInitialRange({url,rangeChunkSize:2},{signal:owner.signal,limit:64,rangeCache:null,
+        readBytes:async response=>new Uint8Array(await response.arrayBuffer())})
+        .then(first=>{outcome={first};},error=>{outcome={error};});
+      await advance(0);
+      assert.deepEqual(requests,['bytes=0-1']);
+      assert.equal(waitingForMore,true,'the body has already delivered bytes and is waiting for more');
+      await advance(scenario==='close' ? 1 : bodyDeadline-1);
+      assert.equal(outcome,undefined,'the bootstrap must not settle early or publish a prefix');
+      assert.equal(upstream.aborted,false);
+      if (scenario==='stall') {
+        await advance(1);
+        assert.equal(outcome?.error?.name,'TimeoutError','the 200 body must time out before the outer Reader timer starts');
+        assert.equal(upstream.aborted,true);
+        assert.equal(upstream.reason,outcome.error);
+        assert.equal(owner.signal.aborted,false);
+      } else if (scenario==='close') {
+        owner.abort(closeReason);
+        await advance(0);
+        assert.equal(outcome?.error,closeReason);
+        assert.equal(upstream.reason,closeReason);
+      } else {
+        body.enqueue(bytes.slice(2));body.close();
+        await advance(0);
+        assert.equal(outcome?.first?.complete,true);
+        assert.deepEqual(outcome.first.bytes,bytes);
+        await advance(1);
+        assert.equal(upstream.aborted,false,'completion clears the body deadline');
+      }
+      assert.deepEqual(requests,['bytes=0-1'],'the bootstrap needs no second request');
+    } finally {owner.abort(closeReason);policy.dispose();}
+  });
   // A genuine 429 triggers one bounded retry after the shared pause, then a
   // correctly versioned body is delivered without reopening the document.
   {

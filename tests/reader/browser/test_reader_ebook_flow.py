@@ -8,6 +8,75 @@ class EbookFlowTests(unittest.TestCase):
     setUpClass = classmethod(support.PdfFollowupTests.setUpClass.__func__)
     setUp = support.PdfFollowupTests.setUp
 
+    def open_with_saved_chapter(self, index, manifest_revision, bookmark=False):
+        source = 'https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/restore.epub'
+        endpoint = 'https://voiceofml-search.hf.space/api/reader-bucket-resource?'
+        path = 'chapters/ebook/epub/' + 'a' * 64 + '/1234567890abcdef/chapter-manifest.json'
+        manifest_url = endpoint + 'path=' + path
+        manifest = {'version': 1, 'kind': 'epub-chapters', 'chapters': [
+            {'index': i, 'path': f'chapters/chapter-{i:04d}.xhtml'} for i in (1, 2)
+        ]}
+        self.page.route('**/api/reader-bucket-resource**', lambda route: route.fulfill(json=manifest)
+            if 'chapter-manifest.json' in route.request.url else route.fulfill(
+                content_type='text/html', body='<h1>Chapter</h1><p style="height:1600px">Text</p>'))
+        reader_url = self.origin + support.PREFIX + '/static/reader.html'
+        self.page.goto(reader_url)
+        entry = {'url': source, 'chapterIndex': index, 'chapterOffset': 180}
+        if manifest_revision == 'old':
+            entry['chapterManifest'] = endpoint + urlencode({'path': path.replace('1234567890abcdef', '0123456789abcdef')})
+        elif manifest_revision == 'current':
+            # Same object as the current URL, but with an encoded path query value.
+            entry['chapterManifest'] = endpoint + urlencode({'path': path})
+        params = dict(url=source, ext='epub-chapters', chapter_manifest=manifest_url)
+        if bookmark:
+            entry['id'] = 'chapter-regression'
+            params.update(bookmark=entry['id'], bookmark_source=source)
+        self.page.evaluate('entry => entry.id ? VoiceOfMLReaderStore.putBookmark(entry) : VoiceOfMLReaderStore.put(entry)', entry)
+        self.page.goto(reader_url + '?' + urlencode(params))
+        self.page.wait_for_function("()=>document.documentElement.dataset.readerPhase==='ready' || "
+                                    "document.querySelector('.reader-error')")
+        self.assertEqual(self.page.locator('html').get_attribute('data-reader-phase'), 'ready',
+                         self.page.locator('.reader-error').all_text_contents())
+        self.page.unroute('**/api/reader-bucket-resource**')
+        return self.page.evaluate('__ebook.captureChapter()')
+
+    def test_obsolete_chapter_progress_does_not_block_opening(self):
+        self.expose()
+        for index, revision in [(9, 'old'), (9, 'current'), (9, None), (2, 'old')]:
+            with self.subTest(index=index, revision=revision):
+                self.assertEqual(self.open_with_saved_chapter(index, revision)['chapterIndex'], 1)
+
+    def test_matching_chapter_positions_keep_their_offset(self):
+        self.expose()
+        for revision, bookmark in [(None, False), ('current', True)]:
+            with self.subTest(revision=revision, bookmark=bookmark):
+                position = self.open_with_saved_chapter(2, revision, bookmark)
+                self.assertEqual(position['chapterIndex'], 2)
+                self.assertAlmostEqual(position['chapterOffset'], 180, delta=2)
+
+    def test_legacy_v5_bookmark_requires_exact_manifest(self):
+        self.page.goto(self.origin + support.PREFIX + '/static/reader.html')
+        self.assertEqual(self.page.evaluate('''async () => {
+          const {createReaderChapterFormat} = await import('./reader/formats/reader-chapter-format.mjs');
+          const {createReaderProgress, matchesChapterManifest} = await import('./reader/ui/reader-progress.mjs');
+          const manifest = 'https://example.test/book-epub-chapters-v5/chapter-manifest.json';
+          const url = 'https://example.test/book.epub', params = new URLSearchParams({bookmark:'v5', bookmark_source:url});
+          let loads = 0;
+          const context = {sourceUrl:url, chapterManifestUrl:manifest, capability:{mode:'epub-chapters'}, params,
+            chapterManifestLoader:Object.assign(async () => { loads++; return null; }, {count:2}),
+            isReaderGenerationCurrent:() => true, trustedReaderAssetManifestUrl:() => null};
+          const {restoreChapterPosition} = createReaderChapterFormat(context);
+          const {loadReaderRestoration} = createReaderProgress(context);
+          const rows = [];
+          for (const saved of [undefined, '', manifest + '?ignored=1', manifest]) {
+            const bookmark = {id:'v5', url, chapterIndex:2, chapterManifest:saved};
+            await VoiceOfMLReaderStore.putBookmark(bookmark);
+            rows.push([!!(await loadReaderRestoration()), await restoreChapterPosition(bookmark, 0), loads]);
+          }
+          // Not an admitted shape today; an absent object path is never an identity match.
+          return [rows, matchesChapterManifest('old', 'new', url => 'https://example.test/' + url)];
+        }'''), [[[False, False, 0], [False, False, 0], [False, False, 0], [True, False, 1]], False])
+
     def test_successful_toc_jump_owns_open_before_old_chapter_fails(self):
         source = ('https://voiceofml-search.hf.space/api/reader-bucket-resource?path=chapters/ebook/epub/'
                   + 'a' * 64 + '/1234567890abcdef/chapter-manifest.json')

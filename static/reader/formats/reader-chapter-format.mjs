@@ -1,4 +1,5 @@
 import { EBOOK_LAYOUT_STYLE, wrapEbookTables } from "../ui/reader-document-styles.mjs";
+import { chapterIndexInRange, matchesChapterManifest } from "../ui/reader-progress.mjs";
 
 // The current MOBI chapter manifest for this five-volume edition contains
 // cross-volume sidebar targets that point back into volume 1. Its own verified
@@ -747,10 +748,9 @@ export function createReaderChapterFormat(readerContext) {
     readerContext.chapterManifestLoader = chapterManifestLoader;
     setChapterToc();
     await readerContext.getInitialReaderRestoration();
-    const savedChapter = Number(readerContext.readerRestorationEntry?.chapterIndex) - 1;
-    const initialChapter = Number.isInteger(savedChapter)
-      ? Math.max(0, Math.min(manifest.chapters.length - 1, savedChapter))
-      : 0;
+    const savedChapter = readerContext.readerRestorationEntry?.chapterIndex;
+    const hasSavedChapter = chapterIndexInRange(savedChapter, manifest.chapters.length);
+    const initialChapter = hasSavedChapter ? savedChapter - 1 : 0;
     const initial = /** @type {import("../../../typings/reader-chapter-format-strict").Chapter} */ (manifest.chapters[initialChapter]);
     chapterFocusIndex = initial.index;
     if (initialChapter > 0) ensureSentinel(/** @type {import("../../../typings/reader-chapter-format-strict").Chapter} */ (manifest.chapters[initialChapter - 1]), true);
@@ -764,7 +764,7 @@ export function createReaderChapterFormat(readerContext) {
       chapterScheduler.prefetch(chapterPrefetchIndices());
       await readerContext.awaitReader(Promise.race([firstChapter, openingLanding.promise]));
     } catch (error) {
-      if (readerContext.readerRestorationEntry?.chapterIndex == null) throw error;
+      if (!hasSavedChapter) throw error;
       throw Object.assign(new Error("阅读位置恢复失败，原进度已保留，请重试加载。", { cause: error }), {
         code: "READER_RESTORE"
       });
@@ -806,13 +806,11 @@ export function createReaderChapterFormat(readerContext) {
   /** @param {import("../../../typings/reader-progress-strict").ProgressState} entry @param {number} generation
    * @param {number} [progressFraction] A transient slider target, never stored in a bookmark or history entry. */
   async function restoreChapterPosition(entry, generation, progressFraction) {
-    if (
-      /-epub-chapters-v5\//.test(readerContext.chapterManifestUrl || readerContext.sourceUrl) &&
-      entry.chapterManifest !== (readerContext.chapterManifestUrl || readerContext.sourceUrl)
-    ) return false;
     const loader = readerContext.chapterManifestLoader;
-    if (!loader || entry.chapterIndex === undefined || !Number.isInteger(entry.chapterIndex) ||
-        !readerContext.isReaderGenerationCurrent("navigation", generation)) return false;
+    if (!loader || !chapterIndexInRange(entry.chapterIndex, loader.count) ||
+        !readerContext.isReaderGenerationCurrent("navigation", generation) ||
+        !matchesChapterManifest(entry.chapterManifest, readerContext.chapterManifestUrl || readerContext.sourceUrl,
+          readerContext.trustedReaderAssetManifestUrl)) return false;
     const chapter = await loader(entry.chapterIndex);
     if (!chapter?.isConnected || !readerContext.isReaderGenerationCurrent("navigation", generation)) return false;
     const viewport = readerContext.viewport, last = entry.chapterIndex === loader.count;

@@ -1,4 +1,24 @@
-/** @param {import('../../../typings/reader-progress-strict').ProgressContext} readerContext */
+/** @param {number | undefined} index @param {number} count @returns {index is number} */
+export function chapterIndexInRange(index, count) {
+  return index !== undefined && Number.isInteger(index) && index >= 1 && index <= count;
+}
+
+/** @param {string | undefined} saved @param {string} current
+ * @param {(url: string) => string | null} trustedManifestUrl */
+export function matchesChapterManifest(saved, current, trustedManifestUrl) {
+  if (saved === current) return true;
+  // Legacy v5 required an exact identity, including for direct bookmark restores.
+  if (/-epub-chapters-v5\//.test(current)) return false;
+  // Otherwise older positions can still restore if their chapter is in range.
+  if (typeof saved !== "string" || !saved) return true;
+  const previous = trustedManifestUrl(saved), active = trustedManifestUrl(current);
+  // The trusted resolver fixes the bucket and endpoint. Compare non-empty object
+  // paths, including the version, without mistaking URL spelling for a revision.
+  const savedPath = previous && new URL(previous).searchParams.get("path");
+  return !!savedPath && !!active && savedPath === new URL(active).searchParams.get("path");
+}
+
+/** @param {import('../../../typings/reader-progress-strict').ProgressContext & Pick<import('../../../typings/reader-chapter-format-strict').ChapterFormatContext, 'trustedReaderAssetManifestUrl'>} readerContext */
 export function createReaderProgress(readerContext) {
   function scheduleSave() {
     if (readerContext.readerLifecycle.disposed || readerContext.readerAbortController.signal.aborted) return;
@@ -128,8 +148,8 @@ export function createReaderProgress(readerContext) {
     const currentEntry = (entry) => {
       if (
         readerContext.capability.mode === "epub-chapters" &&
-        /-epub-chapters-v5\//.test(readerContext.chapterManifestUrl || readerContext.sourceUrl) &&
-        entry?.chapterManifest !== (readerContext.chapterManifestUrl || readerContext.sourceUrl)
+        entry && !matchesChapterManifest(entry.chapterManifest, readerContext.chapterManifestUrl || readerContext.sourceUrl,
+          readerContext.trustedReaderAssetManifestUrl)
       ) return null;
       return entry;
     };
@@ -312,6 +332,10 @@ export function createReaderProgress(readerContext) {
   /** @param {import('../../../typings/reader-progress-strict').ProgressState | null} entry
    * @param {number} generation */
   async function applyInitialRestoration(entry, generation) {
+    // Ignore stale indices, not failures to load a chapter that still exists.
+    const loader = readerContext.chapterManifestLoader, index = entry?.chapterIndex;
+    if (readerContext.capability.mode === "epub-chapters" && loader && Number.isInteger(index) &&
+        !chapterIndexInRange(index, loader.count)) entry = null;
     readerContext.updateDocumentState({ restoredEntry: entry });
     // Startup already applied the current zoom. Reapplying an identical saved
     // value needlessly invalidates PDF canvases and lays out every format again.

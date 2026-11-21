@@ -1390,7 +1390,7 @@ function getDirectoryIndex(repo) {
     const node = /** @type {DirectoryNode} */ (nodes[path]);
     node.children.sort((a, b) => a.name.localeCompare(b.name));
     node.hasChildren = node.children.length > 0;
-    node.showSelfToggle = !!(node.path && node.hasDirectFiles && node.hasChildren);
+    node.showSelfToggle = node.hasDirectFiles && node.hasChildren;
   }
   const directory = { tree: root.count ? [root] : [], nodes, files: directFiles, canonicalPaths };
   // Unknown repositories do not consume cache capacity. Stored file indices are
@@ -1428,7 +1428,8 @@ async function dispatch(type, input, job) {
     return installCorpus(data, fingerprint, true);
   }
   if (type === "replace-corpus") return installCorpus(payload.data);
-  if (!records.length) throw protocolError("CORPUS_NOT_READY", "Search corpus is not ready");
+  // A successfully installed compact corpus can contain zero records.
+  if (generation === 0) throw protocolError("CORPUS_NOT_READY", "Search corpus is not ready");
   if (type === "metadata") return Object.assign({ generation }, metadata);
   if (type === "local-search") {
     // The protocol historically forwards raw options, including unusual values.

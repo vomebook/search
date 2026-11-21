@@ -1260,6 +1260,36 @@ test("injectable compact-v2 payload loads without network and returns bounded me
   assert.strictEqual(Object.prototype.hasOwnProperty.call(metadata, "txt"), false);
   assert.strictEqual(Object.prototype.hasOwnProperty.call(metadata, "records"), false);
 });
+test("empty compact v2 is a ready corpus with empty results", async () => {
+  const worker = gzipWorker();
+  const data = compact([]);
+  worker.context.fetch = async () => new Response(require('node:zlib').gzipSync(JSON.stringify(data)));
+  const initial = await worker.request("load-corpus", {url: "/empty-corpus"});
+  assert.strictEqual(initial.state, "corpus-ready");
+  assert.strictEqual(initial.count, 0);
+  assert.deepStrictEqual((await worker.request("local-search", {q: "alhpa"})).records, []);
+
+  const populated = await worker.request("replace-corpus", {data: compact(records)});
+  assert.strictEqual((await worker.request("local-search", {})).total, records.length);
+  const empty = await worker.request("replace-corpus", {data});
+  const {generation} = empty;
+  assert.strictEqual(empty.state, "corpus-ready");
+  assert.strictEqual(generation, populated.generation + 1);
+  assert.deepStrictEqual(await worker.request("metadata"), {
+    generation, count: 0, repos: [], extensions: [], extensionsByRepo: {},
+    reader: {available: false, count: 0, byRepo: {}},
+  });
+  const {snapshot_generation: stamp, ...page} = await worker.request("local-search", {
+    page: 2, pageSize: 4, anchorId: "Repo/A\0alpha guide.txt",
+  });
+  assert.match(stamp, /^worker:/);
+  assert.deepStrictEqual(page, {records: [], ids: [], total: 0, page: 2, pageSize: 4, generation, anchor_index: -1});
+  assert.deepStrictEqual(await worker.request("random-record"), {record: null, id: null, generation});
+  assert.deepStrictEqual(await worker.request("folder-tree", {repo: "Repo/A"}), {tree: [], generation});
+  assert.deepStrictEqual(await worker.request("folder-contents", {repo: "Repo/A"}), {
+    folders: [], files: [], current_path: "", generation,
+  });
+});
 test("invalid compact generation is rejected", async () => {
   const response = await makeWorker().send("replace-corpus", { data: { v: 1, records: [] } });
   assert.strictEqual(response.ok, false);
@@ -1761,7 +1791,7 @@ test("main-thread root select-all represents and persists direct root files with
   assert.match(treeSource, /if \(node\.hasDirectFiles\) selfPaths\.push\(node\.path\)/);
 });
 
-test("root folder selection includes direct files alongside child directories", async () => {
+test("root folder with direct files and children exposes the direct-files toggle", async () => {
   const rootRecords = [
     { Repo: "Repo/Tree", File: "root-file", Extension: "txt", Folder: [], Size: 1, HasTxt: true },
     { Repo: "Repo/Tree", File: "nested-file", Extension: "txt", Folder: ["child"], Size: 2, HasTxt: false },
@@ -1775,8 +1805,12 @@ test("root folder selection includes direct files alongside child directories", 
         name: "deep", path: "child/deep", children: [], count: 1,
         hasDirectFiles: true, hasChildren: false, showSelfToggle: false,
       }], count: 2, hasDirectFiles: true, hasChildren: true, showSelfToggle: true,
-    }], count: 3, isRoot: true, hasDirectFiles: true, hasChildren: true, showSelfToggle: false,
+    }], count: 3, isRoot: true, hasDirectFiles: true, hasChildren: true, showSelfToggle: true,
   });
+  const direct = await harness.worker.request("local-search", {
+    repos: ["Repo/Tree"], folderMatchMode: "mixed", folderSelfs: [""],
+  });
+  assert.deepStrictEqual(direct.records.map(record => record.File), ["root-file"]);
   assert.deepStrictEqual(await namesWithCorpus(rootRecords, { folders: [""], folderMatchMode: "prefix" }), ["root-file", "nested-file", "deep-file"]);
   assert.deepStrictEqual(await namesWithCorpus(rootRecords, { folders: ["child"], folderMatchMode: "prefix" }), ["nested-file", "deep-file"]);
   const mixed = await harness.worker.request("local-search", {
