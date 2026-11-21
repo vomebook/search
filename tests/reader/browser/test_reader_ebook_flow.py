@@ -136,6 +136,23 @@ class EbookFlowTests(unittest.TestCase):
           return [rows, matchesChapterManifest('old', 'new', url => 'https://example.test/' + url)];
         }'''), [[[False, False, 0], [False, False, 0], [False, False, 0], [True, False, 1]], False])
 
+    def test_stale_chapter_bookmark_falls_back_to_matching_history(self):
+        self.page.goto(self.origin + support.PREFIX + '/static/reader.html')
+        self.assertEqual(self.page.evaluate('''async () => {
+          const {createReaderProgress} = await import('./reader/ui/reader-progress.mjs');
+          const url='https://example.test/book.chm';
+          const current='https://example.test/v2/chapter-manifest.json';
+          const old='https://example.test/v1/chapter-manifest.json';
+          await VoiceOfMLReaderStore.put({url,chapterIndex:5,chapterOffset:180,chapterManifest:current});
+          await VoiceOfMLReaderStore.putBookmark({url,id:'old',chapterIndex:7,chapterManifest:old});
+          const context={sourceUrl:url,chapterManifestUrl:current,capability:{mode:'epub-chapters'},
+            params:new URLSearchParams({bookmark:'old',bookmark_source:url}),
+            trustedReaderAssetManifestUrl: value => value};
+          const entry=await createReaderProgress(context).loadReaderRestoration();
+          return [entry?.chapterIndex,entry?.chapterOffset,entry?.chapterManifest,
+            (await VoiceOfMLReaderStore.listBookmarks(url)).length];
+        }'''), [5, 180, 'https://example.test/v2/chapter-manifest.json', 1])
+
     def test_successful_toc_jump_owns_open_before_old_chapter_fails(self):
         source = ('https://voiceofml-search.hf.space/api/reader-bucket-resource?path=chapters/ebook/epub/'
                   + 'a' * 64 + '/1234567890abcdef/chapter-manifest.json')
@@ -390,9 +407,10 @@ class EbookFlowTests(unittest.TestCase):
                 f'<p id="chm-page-{count + 2}"></p><a name="chm-page-{count + 2}"></a>' +
                 '<p style="height:1800px">End</p></body></html>')
         manifest = {'version': 1, 'kind': 'epub-chapters', 'chapters': [
-            {'index': 1, 'path': 'chapters/chapter-0001.xhtml', 'source_path': 'chm-fallback.html',
+            {'index': 1, 'path': 'chapters/chapter-0001.xhtml', 'source_path': 'nested/chm-fallback.html',
              'bytes': len(body)}], 'toc': [
-            {'title': label, 'chapter': 1, 'depth': 0, 'fragment': ''}
+            {'title': label, 'chapter': 1, 'depth': 0, 'fragment': {
+                'Section 1': 'stale-anchor', 'Section 2': 'chm-page-3'}.get(label, '')}
             for label in [f'Section {i}' for i in range(1, count + 1)] + ['Ambiguous', 'Duplicate anchor']]}
         self.expose()
         self.page.route('**/api/reader-bucket-resource**', lambda route: route.fulfill(json=manifest)
@@ -415,6 +433,7 @@ class EbookFlowTests(unittest.TestCase):
         self.assertTrue(self.page.get_by_role('heading', name='Opening CHM').is_visible())
         scans = self.page.evaluate('__chmAnchorScans.slice()')
         expected = [[f'chm-page-{i}', f'chm-page-{i}'] for i in range(1, count + 1)] + [['', '1']] * 2
+        expected[1] = ['chm-page-3', 'chm-page-3']  # Working explicit target beats the label match.
         self.assertEqual(self.page.evaluate('''() => __ebook.toc().map(({fragment, target}) =>
             [fragment, target?.isConnected && (target.id || target.getAttribute('name') || target.dataset.chapter)])
         '''), expected)
@@ -759,6 +778,36 @@ class EbookFlowTests(unittest.TestCase):
           return entry && {chapterIndex:entry.chapterIndex, chapterOffset:entry.chapterOffset,
                            chapterManifest:entry.chapterManifest};
         }'''), self.page.evaluate('__ebook.captureChapter()'))
+
+    def test_chapter_history_captures_the_virtual_placeholder_under_the_marker(self):
+        self.open_converted_progress([{'bytes':100}, {'bytes':100}], height=lambda _: 1300)
+        state = self.page.evaluate('''async () => {
+          const article = document.querySelector('.reader-epub-chapter[data-chapter="1"]');
+          const next = document.querySelector('.epub-frame > [data-chapter="2"]');
+          const frame = article.parentElement, viewport = document.querySelector('#viewport');
+          const row = document.createElement('button');
+          row.className = 'reader-chapter-sentinel reader-chapter-placeholder';
+          row.dataset.chapter = '1'; row.style.height = `${article.getBoundingClientRect().height}px`;
+          article.replaceWith(row);
+          if (next && next.tagName !== 'ARTICLE') {
+            const second=document.createElement('article');
+            second.className='reader-epub-chapter'; second.dataset.chapter='2';
+            second.style.height='1300px'; next.replaceWith(second);
+          }
+          if (!next) {
+            const second=document.createElement('article');
+            second.className='reader-epub-chapter'; second.dataset.chapter='2';
+            second.style.height='1300px'; frame.appendChild(second);
+          }
+          viewport.scrollTop += row.getBoundingClientRect().top - viewport.getBoundingClientRect().top + 90;
+          const position = __ebook.captureChapter();
+          await __ebook.save();
+          const entry = await VoiceOfMLReaderStore.get(position.chapterManifest);
+          return [position.chapterIndex, position.chapterOffset, entry?.chapterIndex];
+        }''')
+        self.assertEqual(state[0], 1)
+        self.assertGreaterEqual(state[1], 80)
+        self.assertEqual(state[2], 1)
 
     def test_converted_progress_falls_back_and_ignores_superseded_seek(self):
         metadata = [{'bytes': 100} for _ in range(30)]

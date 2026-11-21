@@ -85,6 +85,10 @@
     // player on the search page; reopening the same book without a target reuses it.
     /** @type {{frame: HTMLIFrameElement; bar: HTMLDivElement; focus: HTMLElement | null | undefined; key: string; timer: number} | null} */
     let parked = null;
+    /** @type {WeakMap<HTMLIFrameElement, number>} */
+    const speechDeadline = new WeakMap();
+    /** @param {HTMLIFrameElement} target */
+    const awaitingSpeech = target => (speechDeadline.get(target) || 0) > Date.now();
     const sessionKey = "reader-navigation-current";
     /** @param {string} raw */
     function bookKey(raw) {
@@ -138,6 +142,7 @@
     /** @param {HTMLIFrameElement} target @param {HTMLElement | null | undefined} [focus] @param {number} [restartBy] */
     function park(target, focus, restartBy = 0) {
       disposeParked();
+      if (restartBy) speechDeadline.set(target, restartBy);
       target.classList.add("reader-overlay-parked");
       target.setAttribute("inert", "");
       target.setAttribute("aria-hidden", "true");
@@ -172,18 +177,17 @@
       });
       stop.setAttribute("aria-label", "停止朗读并关闭阅读器");
       bar.append(label, back, play, stop);
-      let started = !restartBy;
       const sync = () => {
         const state = speech(target);
         if (!state?.active) {
-          if (!started && Date.now() < restartBy) {
+          if (awaitingSpeech(target)) {
             label.textContent = "正在恢复朗读…";
             return;
           }
           if (parked?.frame === target) disposeParked();
           return;
         }
-        started = true;
+        speechDeadline.delete(target);
         const title = inFrame(target, "#speech-title")?.textContent?.trim() || "朗读";
         const status = inFrame(target, "#speech-status")?.textContent?.trim() || "";
         label.textContent = status ? `${title} · ${status}` : title;
@@ -352,7 +356,7 @@
         unmount(true);
         if (revision !== owner) return frame;
       }
-      if (parked && !speech(parked.frame)?.active) disposeParked();
+      if (parked && !speech(parked.frame)?.active && !awaitingSpeech(parked.frame)) disposeParked();
       if (revision !== owner) return frame;
       searchTitle = document.title;
       titleDismissed = false;
@@ -470,7 +474,13 @@
       searchTitle = null;
       titleMount = null;
       const target = frame;
-      const keep = keepSpeech && !target.classList.contains("reader-overlay-pending") && speech(target)?.active;
+      const keep = keepSpeech && !target.classList.contains("reader-overlay-pending") &&
+        (speech(target)?.active || awaitingSpeech(target));
+      try {
+        // Capture synchronously before the iframe or its write queue vanishes.
+        // Dispatch on the child but let the surviving search store own the put.
+        target.contentWindow?.dispatchEvent(new CustomEvent("voice-reader-capture-progress", { detail: persistProgress }));
+      } catch (_) {}
       // Release ownership before lifecycle callbacks can synchronously reenter.
       frame = null;
       opening?.remove();

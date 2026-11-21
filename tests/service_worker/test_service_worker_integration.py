@@ -133,14 +133,24 @@ class ServiceWorkerIntegrationTest(unittest.TestCase):
         reader_shell = '/search/static/reader.html'
         html = self.origin_path('static/reader.html').read_bytes()
         integrity = 'sha256-' + base64.b64encode(hashlib.sha256(html).digest()).decode()
+        search_html = self.origin_path('static/index.html').read_bytes()
+        search_integrity = 'sha256-' + base64.b64encode(hashlib.sha256(search_html).digest()).decode()
+        wrong_search_integrity = 'sha256-' + base64.b64encode(hashlib.sha256(b'other release').digest()).decode()
         prefix = 'vomebook-search-'
         names = {version: prefix + version for version in ('browser-a', 'browser-b', 'browser-c')}
 
-        def serve_worker(version, hashed=False):
-            worker = source.replace('"development"', json.dumps(version))
+        def serve_worker(version, hashed=False, wrong_shell=False):
+            worker = source.replace('CACHE_VERSION = "development"',
+                                    f'CACHE_VERSION = {json.dumps(version)}')
             if hashed:
                 worker = worker.replace('READER_SHELL_INTEGRITY = "development"',
                                         f'READER_SHELL_INTEGRITY = {json.dumps(integrity)}')
+                worker = worker.replace('SEARCH_SHELL_INTEGRITY = "development"',
+                                        'SEARCH_SHELL_INTEGRITY = ' + json.dumps(
+                                            wrong_search_integrity if wrong_shell else search_integrity))
+                # This fixture serves unbundled modules, so retain the source
+                # dependency closure while testing the production SRI rules.
+                worker = worker.replace('if (READER_SHELL_INTEGRITY === "development") {', 'if (true) {', 1)
                 # Stamp the inventory before the worker constructs its Set,
                 # just as the production build does.
                 worker = worker.replace('const currentAssetPaths = new Set(CURRENT_HASHED_ASSETS);', '')
@@ -214,6 +224,13 @@ class ServiceWorkerIntegrationTest(unittest.TestCase):
 
         with self.server_state.lock:
             self.server_state.failures.pop(reader_shell)
+        # The server now returns HTTP 200 for every core URL, but the Search
+        # shell belongs to the wrong release and must not replace A.
+        serve_worker('browser-b', hashed=True, wrong_shell=True)
+        update('redundant')
+        self.assertNotIn(names['browser-b'], self.cache_urls())
+        self.assertEqual(state()['active'], names['browser-a'])
+        serve_worker('browser-b', hashed=True)
         update('activated')
         self.page.wait_for_function('navigator.serviceWorker.controller !== window.__previousController')
         self.assertEqual(state(), {'active': names['browser-b'], 'previous': names['browser-a'],

@@ -692,7 +692,24 @@ export function createReaderPdfPageWindow(readerContext) {
             // while unrelated shells are still mounting. Don't fail that view.
             await shellsReady.catch(() => {});
             readerContext.assertReaderActive();
-            if (ownsOpeningPosition()) throw error;
+            if (ownsOpeningPosition()) {
+              // A speculative first image was not the saved page if history
+              // missed the short opening window. Try the newly known target.
+              const history = readerContext.readerRestorationPromise;
+              const saved = history && await readerContext.awaitReader(Promise.race([
+                history, readerContext.waitForReader(150).then(() => null)
+              ]));
+              readerContext.assertReaderActive();
+              if (ownsOpeningPosition()) {
+                const page = Number(saved?.page);
+                if (!Number.isInteger(page) || page < 1 || page > totalPages || page === initialPage) throw error;
+                const fallback = readerContext.pdfShellWindow?.ensure(page) ||
+                  readerContext.content.querySelector(`.reader-page[data-page="${page}"]`);
+                if (!fallback) throw error;
+                try { await drawOpeningImagePage(fallback, ownsOpeningPosition); }
+                catch (failure) { if (ownsOpeningPosition()) throw failure; }
+              }
+            }
           }
           if (mounted) {
             await shellsReady;
@@ -772,10 +789,12 @@ export function createReaderPdfPageWindow(readerContext) {
       // Until validation succeeds neither navigation nor history receives an
       // untrusted count. The preview uses the original page and renderer.
       const navigation = readerContext.readerRuntime.currentGeneration("navigation");
-      const saved = readerContext.readerRestorationPromise
-        ? await readerContext.awaitReader(readerContext.readerRestorationPromise) : null;
-      const savedPage = Number(saved?.page);
-      const canPreview = !saved || (savedPage === 1 && Number(saved?.pageOffset || 0) === 0 && !saved?.id);
+      const history = readerContext.readerRestorationPromise;
+      const known = history ? await readerContext.awaitReader(Promise.race([
+        history.then(saved => ({ saved })), readerContext.waitForReader(150).then(() => null)
+      ])) : { saved: null };
+      const saved = known?.saved, savedPage = Number(saved?.page);
+      const canPreview = !!known && (!saved || (savedPage === 1 && Number(saved?.pageOffset || 0) === 0 && !saved?.id));
       const lifetime = new AbortController();
       let preservePreview = false;
       const untrackPreview = readerContext.trackReaderResource(() => {
@@ -1233,8 +1252,14 @@ export function createReaderPdfPageWindow(readerContext) {
     // Navigation can wait for shell lookup without waiting for a canvas draw.
     const layout = Promise.withResolvers();
     readerContext.pdfShellLayoutReady = layout.promise;
+    const opening = readerContext.readerRuntime.currentGeneration("navigation");
+    const superseded = /** @type {PromiseWithResolvers<null>} */ (Promise.withResolvers());
+    const onNavigation = () => {
+      if (!readerContext.isReaderGenerationCurrent("navigation", opening)) superseded.resolve(null);
+    };
+    window.addEventListener("voice-reader-navigation-changed", onNavigation);
     try {
-      await renderVerifiedPdf(pdf, previewShell, previewAnchor, previewPages, previewPadding, () => {
+      await renderVerifiedPdf(pdf, previewShell, previewAnchor, previewPages, previewPadding, superseded.promise, () => {
         readerContext.pdfShellLayoutReady = null;
         layout.resolve(true);
       });
@@ -1245,6 +1270,7 @@ export function createReaderPdfPageWindow(readerContext) {
         throw new Error("PDF 页面加载中断，请重试。", { cause: error });
       throw error;
     } finally {
+      window.removeEventListener("voice-reader-navigation-changed", onNavigation);
       readerContext.pdfShellLayoutReady = null;
       layout.resolve(false);
     }
@@ -1255,8 +1281,9 @@ export function createReaderPdfPageWindow(readerContext) {
    * @param {PreviewAnchor | null} previewAnchor
    * @param {Map<number, import('../../../typings/reader-page-window-strict').WindowShell>} previewPages
    * @param {HTMLDivElement | null} previewPadding
+   * @param {Promise<null>} superseded
    * @param {() => void} publishLayout */
-  async function renderVerifiedPdf(pdf, previewShell, previewAnchor, previewPages, previewPadding, publishLayout) {
+  async function renderVerifiedPdf(pdf, previewShell, previewAnchor, previewPages, previewPadding, superseded, publishLayout) {
     const openingNavigation = readerContext.readerRuntime.currentGeneration("navigation");
     const ownsOpeningPosition = () => readerContext.isReaderGenerationCurrent("navigation", openingNavigation);
     readerContext.pdfDocument = pdf;
@@ -1281,9 +1308,14 @@ export function createReaderPdfPageWindow(readerContext) {
     await readerContext.getInitialReaderRestoration();
     const initialPage = previewAnchor?.page || readerContext.initialReaderPage(pdf.numPages);
     let initialRenderGate = true;
-    const firstPage = await readerContext.measurePdf(readerContext.awaitReader(pdf.getPage(initialPage)), "page", initialPage);
+    const firstPage = ownsOpeningPosition() ? await Promise.race([
+      readerContext.measurePdf(readerContext.awaitReader(pdf.getPage(initialPage)), "page", initialPage).catch(error => {
+        if (!ownsOpeningPosition()) return null;
+        throw error;
+      }), superseded
+    ]) : null;
     readerContext.assertReaderActive();
-    const firstViewport = firstPage.getViewport({ scale: 1 });
+    const firstViewport = firstPage?.getViewport({ scale: 1 }) || { width: 612, height: 792 };
     const observer = new IntersectionObserver(
       (entries) =>
         entries.forEach((entry) => {
@@ -1412,14 +1444,14 @@ export function createReaderPdfPageWindow(readerContext) {
       const shouldDraw = ownsOpeningPosition();
       if (!previewShell && shouldDraw) readerContext.viewport.scrollTop = readerContext.readerPageScrollTop(targetShell);
       try {
-        if (shouldDraw) await readerContext.renderPdfShell(targetShell, false, true);
+        if (shouldDraw) await Promise.race([readerContext.renderPdfShell(targetShell, false, true), superseded]);
       } catch (error) {
         // New visible demand can preempt the first draw, and a virtual-window
         // jump can evict its shell entirely. Neither is a document failure.
         const shell = /** @type {import('../../../typings/reader-page-window-strict').WindowShell} */ (targetShell);
         const cancelled = shell._pdfRenderCancelled || !shell.isConnected;
-        if (readerContext.readerAbortController.signal.aborted || !cancelled ||
-            /** @type {{name?: string} | null} */ (error)?.name !== "AbortError") throw error;
+        if (readerContext.readerAbortController.signal.aborted || (ownsOpeningPosition() && (!cancelled ||
+            /** @type {{name?: string} | null} */ (error)?.name !== "AbortError"))) throw error;
       }
       readerContext.markReaderContentReady();
       if (!previewShell && !drawWhileBatching && targetShell.isConnected && ownsOpeningPosition())

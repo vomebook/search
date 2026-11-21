@@ -4,7 +4,8 @@
   /** @param {SearchPositionRestoreInput} input */
   function createTask({ key, position, previous, backend }) {
     const pinned = backend ?? previous?.backend;
-    const reusable = previous?.backend === pinned ? previous : null;
+    const reusable = previous?.backend === pinned && previous?.key === key &&
+      previous?.position.anchorId === position.anchorId ? previous : null;
     return /** @type {SearchPositionRestoreTask} */ ({ key, controller: new AbortController(),
       position: { ...position }, backend: pinned,
       lookup: reusable?.lookup, ready: reusable?.ready || new Map(), page: 0, results: [] });
@@ -64,13 +65,15 @@
           if (latest) {
             const { anchorId } = latest;
             if (anchorId && anchorId !== position.anchorId) {
-              position = {...position, index: latest.index, offset: latest.offset, anchorId};
+              position = task.position = {...position, index: latest.index, offset: latest.offset, anchorId};
               const available = [...task.ready.values()].some(data => data.results.some(item => host.stableId(item) === anchorId));
               if (!available) { task.lookup = null; task.ready.clear(); continue; }
-            } else if (anchorId) position = {...position, offset: latest.offset};
+            } else if (anchorId) position = task.position = {...position, offset: latest.offset};
           }
           // Empty slots reserve scroll geometry only; visible slots are fetched on demand.
-          const page = Math.min(lastPage, Math.max(position.loadedPage, targetPage + 1));
+          let lastReady = 1;
+          for (const ready of task.ready.keys()) lastReady = Math.max(lastReady, ready);
+          const page = Math.min(lastPage, Math.max(position.loadedPage, targetPage + 1, lastReady));
           const results = new Array(Math.min(total, page * query.pageSize));
           let found = -1;
           for (const [number, data] of task.ready) data.results.forEach((record, offset) => {
@@ -84,7 +87,7 @@
             window: { generation: lookup.generation, pages: [...task.ready.keys()], count: [...task.ready.values()].reduce((sum, data) => sum + data.results.length, 0) },
             estimatedHeight: host.estimatedHeight(), heightCache: [], heightRecords: [],
             scroll: { index: geometry ? Math.min(geometry.index, Math.max(0, total - 1)) : found < 0 ? index : found,
-              offset: geometry?.offset ?? position.offset, viewKey: key }, savedAt: Date.now() };
+              offset: total ? geometry?.offset ?? position.offset : 0, viewKey: key }, savedAt: Date.now() };
           host.release();
           if (task.preview && (geometry || found === position.index)) host.applyPreview(snapshot);
           else {

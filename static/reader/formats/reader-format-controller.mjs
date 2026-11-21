@@ -210,30 +210,53 @@ export function createReaderFormatController(readerContext) {
       }
       readerContext.assertReaderActive();
       readerContext.markReaderContentReady();
-      const restored = await readerContext.awaitReader(restorationPromise);
-      // Capture the match before restoration consumes the bookmark parameters.
-      const explicitBookmark = readerContext.capability.mode === "markdown" && restored?.id &&
-        restored.id === readerContext.params.get("bookmark") && restored.url === readerContext.params.get("bookmark_source");
-      if (!pagedImageFallback) await readerContext.applyInitialRestoration(restored, generation);
-      readerContext.assertReaderActive();
-      // A Markdown anchor overrides ordinary progress, but not a matched bookmark.
-      if (readerContext.capability.mode === "markdown" && !explicitBookmark && location.hash &&
-          readerContext.isReaderGenerationCurrent("navigation", generation)) {
-        try {
-          const id = decodeURIComponent(location.hash.slice(1));
-          const article = readerContext.content.querySelector(".reader-markdown");
-          const target = [...(article?.querySelectorAll("[id], [name]") || [])]
-            .find(element => element.id === id || element.getAttribute("name") === id);
-          target?.scrollIntoView({ block: "start" });
-        } catch (_) {}
-      }
+      const lookup = restorationPromise.then(entry => ({ entry }));
+      const history = pagedImageFallback ? null : await readerContext.awaitReader(Promise.race([
+        lookup, readerContext.waitForReader(150).then(() => null)
+      ]));
+      /** @param {Awaited<typeof restorationPromise>} restored */
+      const restore = async restored => {
+        // Capture the match before restoration consumes the bookmark parameters.
+        const explicitBookmark = readerContext.capability.mode === "markdown" && restored?.id && restored.id === readerContext.params.get("bookmark") &&
+          restored.url === readerContext.params.get("bookmark_source");
+        await readerContext.applyInitialRestoration(restored, generation);
+        readerContext.assertReaderActive();
+        // A Markdown anchor overrides ordinary progress, but not a matched bookmark.
+        if (readerContext.capability.mode === "markdown" && !explicitBookmark && location.hash &&
+            readerContext.isReaderGenerationCurrent("navigation", generation)) {
+          try {
+            const id = decodeURIComponent(location.hash.slice(1));
+            const article = readerContext.content.querySelector(".reader-markdown");
+            const target = [...(article?.querySelectorAll("[id], [name]") || [])]
+              .find(element => element.id === id || element.getAttribute("name") === id);
+            target?.scrollIntoView({ block: "start" });
+          } catch (_) {}
+        }
+      };
+      if (history) await restore(history.entry);
       if (!readerContext.setReaderPhase("ready")) return;
-      readerContext.updateDocumentState({ restorationReady: !readerContext.restorationFailed && !pagedImageFallback });
-      readerContext.syncHeadingLocation();
+      const enableSaving = () => {
+        readerContext.updateDocumentState({ restorationReady: !readerContext.restorationFailed });
+        readerContext.syncHeadingLocation();
+        readerContext.updateProgressTools();
+        readerContext.scheduleSave();
+      };
+      if (history) enableSaving();
+      else if (pagedImageFallback) readerContext.updateDocumentState({ restorationReady: false });
+      else {
+        // Keep the UI usable even if IndexedDB never responds. The old
+        // position is protected until the read is known to have succeeded.
+        void readerContext.awaitReader(lookup).then(async ({ entry }) => {
+          await restore(entry);
+          enableSaving();
+        }).catch(error => {
+          if (!readerContext.readerAbortController.signal.aborted)
+            readerContext.reportNavigationError(error, generation);
+        });
+      }
       readerContext.schedulePdfBookSearchPrefetch();
       readerContext.updateProgressTools();
       if (readerContext.fullSearchInput.value.trim()) readerContext.runFullSearch();
-      readerContext.scheduleSave();
     } catch (error) {
       const detail = error !== null && (typeof error === "object" || typeof error === "function") ? error : null;
       if (readerContext.readerAbortController.signal.aborted || (detail && "name" in detail && detail.name === "AbortError")) return;

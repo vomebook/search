@@ -20,6 +20,7 @@ export function matchesChapterManifest(saved, current, trustedManifestUrl) {
 
 /** @param {import('../../../typings/reader-progress-strict').ProgressContext & Pick<import('../../../typings/reader-chapter-format-strict').ChapterFormatContext, 'trustedReaderAssetManifestUrl'>} readerContext */
 export function createReaderProgress(readerContext) {
+  const readerDocumentUrl = typeof location === "undefined" ? null : location.href;
   function scheduleSave() {
     if (readerContext.readerLifecycle.disposed || readerContext.readerAbortController.signal.aborted) return;
     const now = performance.now();
@@ -135,7 +136,11 @@ export function createReaderProgress(readerContext) {
   }
 
   function currentReaderUrl() {
-    const url = new URL(location.href);
+    const current = new URL(location.href);
+    const opened = new URL(readerDocumentUrl || current.href);
+    // Native Back may already expose the search URL while the Reader document
+    // still owns pagehide and progress/speech handoff.
+    const url = current.pathname === opened.pathname ? current : opened;
     for (const key of ["return", "nav", "bookmark", "bookmark_source"]) url.searchParams.delete(key);
     // History and bookmarks already store the position; the opening anchor may be stale.
     if (readerContext.capability.mode === "markdown") url.hash = "";
@@ -159,7 +164,8 @@ export function createReaderProgress(readerContext) {
       if (bookmarkId && bookmarkSource === readerContext.sourceUrl) {
         const entries = await VoiceOfMLReaderStore.listBookmarks(readerContext.sourceUrl);
         const bookmark = entries.find((entry) => entry.id === bookmarkId && entry.url === readerContext.sourceUrl);
-        if (bookmark) return currentEntry(/** @type {import('../../../typings/reader-progress-strict').ProgressState} */ (bookmark));
+        const matched = bookmark && currentEntry(/** @type {import('../../../typings/reader-progress-strict').ProgressState} */ (bookmark));
+        if (matched) return matched;
       }
       return currentEntry(/** @type {import('../../../typings/reader-progress-strict').ProgressState | null} */ (await VoiceOfMLReaderStore.get(readerContext.sourceUrl)));
     } catch (_) {

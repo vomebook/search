@@ -514,15 +514,20 @@ export function createReaderSpeech(readerContext, loadPlayer, handoffPayload) {
     try {
       if (readerContext.isReaderOverlayFrame?.()) return; // The search page keeps that one alive.
       const state = speech()?.state?.();
+      const readerUrl = readerContext.currentReaderUrl?.() || new URL(location.href);
       const owner = state?.adapter;
-      // The Reader's disposal may stop the player first; `interrupted` keeps that case.
-      if (!(state?.playing || state?.interrupted) || typeof owner?.partAt !== "function" || !Number.isInteger(state.position)) return;
-      const part = owner.partAt(/** @type {number} */ (state.position));
-      if (!part) return;
-      if (state.settings?.deadline && state.settings.deadline <= Date.now()) return;
-      const value = JSON.stringify({ readerUrl: location.href, unit: part.unit,
-        offset: Math.max(0, Math.min(part.raw.length, /** @type {number} */ (state.position) - part.start)),
-        settings: state.settings, at: Date.now() });
+      if (!state || (state.settings?.deadline && state.settings.deadline <= Date.now())) return;
+      let target;
+      if (state.pending) target = { pending: true };
+      else {
+        // Disposal may stop the player first; `interrupted` keeps that case.
+        if (!(state.playing || state.interrupted) || typeof owner?.partAt !== "function" || !Number.isInteger(state.position)) return;
+        const part = owner.partAt(/** @type {number} */ (state.position));
+        if (!part) return;
+        target = { unit: part.unit,
+          offset: Math.max(0, Math.min(part.raw.length, /** @type {number} */ (state.position) - part.start)) };
+      }
+      const value = JSON.stringify({ readerUrl: readerUrl.href, ...target, settings: state.settings, at: Date.now() });
       sessionStorage.setItem(HANDOFF_KEY, value);
       // A Reader opened as the first page later reaches a search document that
       // was never loaded in this tab; sessionStorage is still shared there, but
@@ -665,8 +670,15 @@ export function createReaderSpeech(readerContext, loadPlayer, handoffPayload) {
     if (!hasText()) return;
     const info = source();
     if (!info || info.units <= info.first) return;
-    if (needsProbe()) { offerSource = info; offer(info); }
-    else publish(createAdapter(info, info.units > 1 ? Math.max(info.first, (topPosition()?.unit ?? info.first) - 1) : info.first));
+    if (resume && !("pending" in resume) && resume.unit >= info.first && resume.unit < info.units && resume.offset >= 0) {
+      // Unlike an ordinary passive probe, an explicit handoff already owns a
+      // text position. It may be far away from the currently visible page.
+      publish(createAdapter(info, resume.unit));
+    } else {
+      if (resume && !("pending" in resume)) resume = null;
+      if (needsProbe()) { offerSource = info; offer(info); }
+      else publish(createAdapter(info, info.units > 1 ? Math.max(info.first, (topPosition()?.unit ?? info.first) - 1) : info.first));
+    }
     /** @param {EventTarget | null | undefined} target @param {string} type @param {EventListener} handler @param {AddEventListenerOptions} [options] */
     const listen = (target, type, handler, options) => {
       if (!target) return;

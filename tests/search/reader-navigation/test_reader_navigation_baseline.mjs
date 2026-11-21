@@ -14,7 +14,8 @@ const readerPath = '/search/static/reader.html';
 
 function fixture(readerDestination = readerPath, document = {readyState: 'loading', addEventListener() {}}, options) {
   const data = new Map();
-  const calls = [];
+  const calls = [], ticks = [];
+  let now = 1000;
   const storage = {
     getItem(key) { return data.has(key) ? data.get(key) : null; },
     setItem(key, value) { data.set(key, String(value)); },
@@ -33,9 +34,10 @@ function fixture(readerDestination = readerPath, document = {readyState: 'loadin
   const context = vm.createContext({self: root, window: root, document, sessionStorage: storage,
     localStorage: storage, location, URL, URLSearchParams,
     crypto, history, console, HTMLElement: ShellElement, Event, CustomEvent,
-    setInterval: () => 1, clearInterval() {}});
+    Date: {now: () => now}, setInterval: fn => ticks.push(fn), clearInterval() {}});
   vm.runInContext(source, context, {filename});
-  return {nav: root.VoiceOfMLReaderNavigation.createNavigation(readerDestination, options), data, storage, crypto, calls, context, location};
+  return {nav: root.VoiceOfMLReaderNavigation.createNavigation(readerDestination, options), data, storage, crypto, calls, context, location,
+    tick(ms) {now += ms; ticks.at(-1)?.();}};
 }
 
 const json = value => JSON.parse(JSON.stringify(value));
@@ -84,7 +86,7 @@ class ShellElement extends EventTarget {
 }
 
 function shellFixture(destination = readerPath, options) {
-  const document = {readyState: 'loading', title: 'Search', addEventListener() {}};
+  const document = Object.assign(new EventTarget(), {readyState: 'loading', title: 'Search'});
   document.createElement = tag => new ShellElement(document, tag);
   document.body = document.createElement('body');
   const input = document.createElement('input');
@@ -201,6 +203,57 @@ test('mini-player resumes the live Reader even when its iframe src contains open
     assert.equal(nav.backgroundReader, null);
     assert.equal(mini(), undefined);
     nav.unmount(false);
+  }
+});
+
+test('pending background handoff survives opening another book and reopening the same frame', () => {
+  const {nav, storage, document, mini, tick} = shellFixture();
+  const url = nav.parse(readerPath + '?id=book');
+  storage.setItem('reader-speech-handoff', JSON.stringify({readerUrl:url.href,pending:true,at:1000}));
+  document.dispatchEvent(new Event('DOMContentLoaded'));
+  const pending = nav.backgroundReader;
+  assert.ok(pending);
+  assert.match(mini().children[0].textContent, /正在恢复朗读/);
+  const other = nav.mount(nav.parse(readerPath + '?id=other'));
+  assert.notEqual(other, pending);
+  assert.equal(nav.backgroundReader, pending);
+  nav.unmount(false);
+  assert.equal(nav.mount(url), pending);
+  nav.unmount();
+  assert.equal(nav.backgroundReader, pending);
+  tick(1000);
+  assert.equal(nav.backgroundReader, pending);
+  tick(300000);
+  assert.equal(nav.backgroundReader, null);
+});
+
+test('handoff accepts an exact cursor and can be dismissed while still starting', () => {
+  const {nav, storage, document, mini} = shellFixture();
+  const url = nav.parse(readerPath + '?id=old&nav=private&return=%2Fsearch%2F');
+  storage.setItem('reader-speech-handoff', JSON.stringify({readerUrl:url.href,unit:17,offset:22,at:1000}));
+  document.dispatchEvent(new Event('DOMContentLoaded'));
+  const frame = nav.backgroundReader;
+  assert.ok(frame);
+  assert.equal(new URL(frame.src).searchParams.has('nav'), false);
+  assert.ok(frame.name.startsWith('reader-speech-resume:'));
+  assert.deepEqual(JSON.parse(frame.name.slice('reader-speech-resume:'.length)), {unit:17,offset:22});
+  mini().children.at(-1).dispatchEvent(new Event('click'));
+  assert.equal(nav.backgroundReader, null);
+  assert.equal(frame.parent, null);
+});
+
+test('handoff ignores expired and foreign navigation targets', () => {
+  for (const target of [
+    {readerUrl:origin+readerPath,at:-300000},
+    {readerUrl:'https://other.example'+readerPath,at:1000},
+    {readerUrl:origin+readerPath,at:1000,settings:{deadline:999}},
+  ]) {
+    const {nav, storage, document, mini} = shellFixture();
+    storage.setItem('reader-speech-handoff',JSON.stringify(target));
+    document.dispatchEvent(new Event('DOMContentLoaded'));
+    assert.equal(nav.backgroundReader,null);
+    assert.equal(mini(),undefined);
+    assert.equal(storage.getItem('reader-speech-handoff'),null);
   }
 });
 

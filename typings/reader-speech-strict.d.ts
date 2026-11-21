@@ -15,6 +15,7 @@ export interface SpeechContext {
   pdfTextContent(items: TextItem[]): string;
   goToPage(page: number): unknown; pageAtMarker(): HTMLElement | null;
   isReaderOverlayFrame(): boolean;
+  currentReaderUrl?: () => URL;
   readerRuntime: { events: { on(name: string, handler: (detail: unknown, type: string) => void): () => void } };
 }
 export interface SpeechSource {
@@ -40,6 +41,6 @@ export interface SpeechAdapter {
 export interface SpeechPlayer {
   previewLoaded(value: { id: string; title: string; adapter: SpeechAdapter; host: HTMLElement; tools: Element | null; buttonClass: string }): void;
   previewClosed(): void; readFrom(offset: number | StartLocator, options?: ReadOptions): void; stop?(): void; viewChanged?(): void;
-  state?(): { playing?: boolean; interrupted?: boolean; active?: boolean; position: number | null; settings?: PlaybackSettings;
+  state?(): { playing?: boolean; interrupted?: boolean; active?: boolean; pending?: boolean; position: number | null; settings?: PlaybackSettings;
     adapter?: { partAt?: (offset: number) => Part | null } | null } | null;
 }

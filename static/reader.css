@@ -1470,6 +1470,10 @@ body {
   .reader-toolbar :is(#page-number, #zoom):focus-visible {
     outline: none;
   }
+  .reader-toolbar .compact-input:has(:is(#page-number, #zoom):focus-visible) {
+    outline: 2px solid var(--reader-focus-color);
+    outline-offset: -2px;
+  }
 }
 @media (prefers-reduced-motion: reduce) {
   .reader-panel,

@@ -391,11 +391,11 @@ class ReaderStyleTests(unittest.TestCase):
             for selector in ("#page-number", "#zoom"):
                 control = self.page.locator(selector)
                 control.focus()
-                style = control.evaluate("""element => ({
-                    visible: element.matches(':focus-visible'),
-                    width: parseFloat(getComputedStyle(element).outlineWidth),
-                    style: getComputedStyle(element).outlineStyle
-                })""")
+                style = control.evaluate("""element => {
+                    const style = getComputedStyle(element.closest('.compact-input'));
+                    return {visible: element.matches(':focus-visible'),
+                            width: parseFloat(style.outlineWidth), style: style.outlineStyle};
+                }""")
                 self.assertTrue(style["visible"])
                 self.assertGreaterEqual(style["width"], 2)
                 self.assertEqual(style["style"], "solid")
@@ -539,7 +539,8 @@ class ReaderStyleTests(unittest.TestCase):
                     focus = actions.locator(selector).evaluate('''node => {
                       const box = node.getBoundingClientRect();
                       const strip = node.closest('.reader-actions').getBoundingClientRect();
-                      return {focused: node.matches(':focus-visible'), outline: getComputedStyle(node).outlineStyle,
+                      const focusTarget = node.matches('#zoom, #page-number') ? node.closest('.compact-input') : node;
+                      return {focused: node.matches(':focus-visible'), outline: getComputedStyle(focusTarget).outlineStyle,
                         left: box.left - strip.left, right: strip.right - box.right};
                     }''')
                     self.assertTrue(focus['focused'], (selector, focus))

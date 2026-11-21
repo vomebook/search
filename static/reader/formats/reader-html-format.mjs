@@ -743,17 +743,26 @@ export function createReaderHtmlFormat(readerContext) {
 
   /** @param {Uint8Array} bytes @param {string} [hint] */
   function detectHtmlEncoding(bytes, hint = "") {
+    if (bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf) return "utf-8";
+    if (bytes[0] === 0xff && bytes[1] === 0xfe) return "utf-16le";
+    if (bytes[0] === 0xfe && bytes[1] === 0xff) return "utf-16be";
     const probe = String.fromCharCode(...bytes.subarray(0, 8192));
-    const match = probe.match(/charset\s*=\s*["']?\s*([a-z0-9._:-]+)/i);
-    if (match?.[1]) {
-      const label =
-        { gb2312: "gb18030", "gb-2312": "gb18030", gbk: "gb18030", "x-gbk": "gb18030" }[
-          match[1].toLowerCase()
-        ] || match[1];
-      try {
-        new TextDecoder(label);
-        return label;
-      } catch (_) {}
+    if (/<meta\b/i.test(probe)) {
+      // Parse only the bounded probe in inert template contents. Comments,
+      // ordinary attributes and raw script/style text are not declarations.
+      const template = document.createElement("template");
+      template.innerHTML = probe;
+      for (const meta of template.content.querySelectorAll("meta")) {
+        if (meta.namespaceURI !== "http://www.w3.org/1999/xhtml") continue;
+        const declared = meta.getAttribute("charset") ||
+          (meta.getAttribute("http-equiv")?.trim().toLowerCase() === "content-type" &&
+            /(?:^|;)\s*charset\s*=\s*["']?\s*([a-z0-9._:-]+)/i.exec(meta.getAttribute("content") || "")?.[1]);
+        if (!declared) continue;
+        const value = declared.trim().toLowerCase();
+        try {
+          return new TextDecoder(/^(?:gb2312|gb-2312|gbk|x-gbk)$/.test(value) ? "gb18030" : value).encoding;
+        } catch (_) {}
+      }
     }
     return readerContext.detectTextEncoding(bytes, hint);
   }

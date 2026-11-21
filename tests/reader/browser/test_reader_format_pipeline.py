@@ -117,6 +117,47 @@ class ReaderFormatPipelineTests(unittest.TestCase):
                 finally:
                     self.page.unroute('**/api/reader-content**', serve)
 
+    def test_html_bom_and_actual_meta_override_stale_charset_text(self):
+        prefix = ('<!doctype html><!-- <meta charset="utf-8"> -->'
+                  '<script>const ignored = \'<meta charset="utf-8">\';</script>')
+        body = '<body><h1>正文没有乱码</h1></body>'
+        documents = [
+            b'\xef\xbb\xbf' + ('<meta charset="gbk">' + body).encode(),
+            (prefix + '<meta charset="gbk">' + body).encode('gb18030'),
+            (prefix + '<meta content="text/html; charset=gbk" http-equiv="Content-Type">' + body).encode('gb18030'),
+        ]
+        for payload in documents:
+            def serve(route):
+                route.fulfill(content_type='text/html', body=payload, headers={'Access-Control-Allow-Origin': '*'})
+            self.page.route('**/api/reader-content**', serve)
+            try:
+                self.page.goto(self.origin + support.PREFIX + '/static/reader.html?' + urlencode(dict(
+                    url='https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/legacy.html', ext='html')))
+                self.page.locator('html[data-reader-phase="ready"]').wait_for()
+                self.assertEqual(self.page.frame_locator('.html-frame').locator('h1').text_content(), '正文没有乱码')
+            finally:
+                self.page.unroute('**/api/reader-content**', serve)
+
+    def test_pending_history_leaves_reader_ready_without_overwriting_history(self):
+        self.page.route('**/static/reader/core/reader-store.js*', lambda route: route.fulfill(
+            content_type='text/javascript', body='''
+              window.__savedProgress=[];
+              window.VoiceOfMLReaderStore={
+                get:()=>new Promise(resolve=>{window.__finishHistory=resolve;}),
+                put:async value=>{window.__savedProgress.push(value);},
+                list:async()=>[],listBookmarks:async()=>[],listAllBookmarks:async()=>[]
+              };'''))
+        self.page.route('**/api/reader-content**', lambda route: route.fulfill(
+            content_type='text/plain', body='Readable text\n' * 2000, headers={'Access-Control-Allow-Origin': '*'}))
+        self.page.goto(self.origin + support.PREFIX + '/static/reader.html?' + urlencode(dict(
+            url='https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/pending.txt', ext='txt')))
+        self.page.locator('html[data-reader-phase="ready"]').wait_for(timeout=3000)
+        self.assertEqual(self.page.evaluate('__savedProgress.length'), 0)
+        self.page.locator('#viewport').evaluate('node=>{node.dispatchEvent(new WheelEvent("wheel", {deltaY: 120}));node.scrollTop=960;}')
+        self.page.evaluate('window.__finishHistory({scrollTop:20, zoom:100})')
+        self.page.wait_for_function('()=>__savedProgress.length>0')
+        self.assertGreater(self.page.evaluate('__savedProgress.at(-1).scrollTop'), 500)
+
     def test_repeated_inline_styles_keep_exact_sanitized_html(self):
         safe = 'color: #222; padding: 4px 8px'
         remote = 'https://style.reader-fixture.test/asset.png'

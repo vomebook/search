@@ -4,6 +4,10 @@ const CACHE_PREFIX = "vomebook-search-";
 const CACHE_VERSION = "development"; // Replaced with a content digest by the static build.
 const CACHE_NAME = CACHE_PREFIX + CACHE_VERSION;
 const READER_SHELL_INTEGRITY = "development"; // Stamped from the rewritten Reader HTML.
+const SEARCH_SHELL_INTEGRITY = "development"; // Installation only; online navigation stays network first.
+const CORPUS_INTEGRITY = "development";
+/** @type {Record<string, string>} */
+const PDF_SUPPORT_INTEGRITY = {}; // Pinned support files keep their public URLs.
 /** @type {string[]} */
 const CURRENT_HASHED_ASSETS = []; // Filled by the static build.
 const currentAssetPaths = new Set(CURRENT_HASHED_ASSETS);
@@ -104,6 +108,26 @@ async function previousAsset(url) {
     }
     return undefined;
   } catch (_) { return undefined; }
+}
+/** @param {string} path */
+function reusableIntegrity(path) {
+  if (path === "/search/data/search_data.json.gz" && CORPUS_INTEGRITY !== "development") return CORPUS_INTEGRITY;
+  return PDF_SUPPORT_INTEGRITY[path];
+}
+/** @param {string | undefined} previous */
+async function reuseCurrentBytes(previous) {
+  if (!previous || !self.crypto?.subtle) return;
+  const from = await caches.open(previous), to = await caches.open(CACHE_NAME);
+  for (const key of await from.keys()) {
+    const url = new URL(key.url), expected = reusableIntegrity(url.pathname);
+    if (!expected || url.origin !== self.location.origin || url.search) continue;
+    const response = await from.match(key);
+    if (!response?.ok || response.status === 206) continue;
+    const bytes = await response.arrayBuffer();
+    const digest = await self.crypto.subtle.digest("SHA-256", bytes);
+    if (expected === "sha256-" + btoa(String.fromCharCode(...new Uint8Array(digest))))
+      await to.put(key, new Response(bytes, { headers: response.headers, status: response.status, statusText: response.statusText }));
+  }
 }
 /** @param {string} name @param {(url: URL) => boolean} shouldDelete @returns {Promise<void>} */
 async function pruneGeneration(name, shouldDelete) {
@@ -244,6 +268,12 @@ if (READER_SHELL_INTEGRITY === "development") {
     ...readerPrecacheResources.readerComponentFiles.map(file => "/search/static/" + file));
 }
 for (const url of READER_SHELL_ASSETS) if (!PRECACHE_URLS.includes(url)) PRECACHE_URLS.push(url);
+// Keep the chapter search graph across updates without warming or importing
+// these lazy modules when a document opens.
+if (READER_SHELL_INTEGRITY !== "development") for (const url of READER_RUNTIME_PATHS) {
+  if (/\/reader\/search\/(?:workers\/)?reader-chapter-search(?:[.-]).*\.mjs$/.test(url) && !PRECACHE_URLS.includes(url))
+    PRECACHE_URLS.push(url);
+}
 
 readerWorkerScope.addEventListener("install", (event) => {
   event.waitUntil((async () => {
@@ -254,7 +284,10 @@ readerWorkerScope.addEventListener("install", (event) => {
       // Rollback to a retained cache still refreshes the complete core atomically.
       if (!existed || (state && state.active !== CACHE_NAME)) {
         const cache = await caches.open(CACHE_NAME);
-        await cache.addAll(PRECACHE_URLS.map(revalidatedRequest));
+        const entries = PRECACHE_URLS.map(revalidatedRequest);
+        if (SEARCH_SHELL_INTEGRITY !== "development")
+          entries[PRECACHE_URLS.indexOf("/search/")] = new Request("/search/", { cache: "no-cache", integrity: SEARCH_SHELL_INTEGRITY });
+        await cache.addAll(entries);
       }
     } catch (error) {
       // A failed candidate must not leave a cache that looks like a release.
@@ -279,6 +312,7 @@ readerWorkerScope.addEventListener("activate", (event) => {
     await (await caches.open(METADATA_CACHE)).put(ACTIVE_KEY,
       new Response(JSON.stringify({ active: CACHE_NAME, previous: history[0] || null, history })));
     if (names.includes(CACHE_NAME)) await pruneGeneration(CACHE_NAME, url => isRemovedReaderAsset(url.pathname)).catch(() => {});
+    await reuseCurrentBytes(history[0]).catch(() => {});
     // Only immutable, eligible assets may remain as fallbacks. Do not prune
     // unknown serving generations during metadata recovery.
     if (state) for (const name of history) await pruneGeneration(name, url => !isImmutableURL(url)).catch(() => {});

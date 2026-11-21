@@ -365,18 +365,26 @@ export function createReaderChapterFormat(readerContext) {
     };
     /** @param {string | null} value */
     const normalizeTocLabel = value => String(value || "").replace(/\s+/gu, "").toLowerCase();
-    // Old merged CHM bundles can lose the TOC fragment while retaining the
-    // original, functioning book-internal link. Accept only a unique exact
-    // label that points to an existing generated page in the same chapter.
+    // Old merged CHM bundles can contain missing or stale TOC fragments.
+    // Repair only a unique exact label pointing to an unambiguous generated
+    // page in the same chapter, and never replace a working explicit anchor.
     /** @param {HTMLElement} article @param {ChapterTocEntry[]} entries */
     const repairMergedChmToc = (article, entries) => {
-      const missing = entries.filter(entry => !entry.fragment && normalizeTocLabel(entry.label));
-      if (!missing.length) return;
-      const wanted = new Set(missing.map(entry => normalizeTocLabel(entry.label)));
+      if (!entries.length) return;
       const idCounts = new Map();
       for (const node of article.querySelectorAll("[id], [name]"))
         for (const id of new Set([node.id, node.getAttribute("name")]))
           if (id) idCounts.set(id, (idCounts.get(id) || 0) + 1);
+      const missing = entries.filter(entry => {
+        if (!normalizeTocLabel(entry.label)) return false;
+        const fragment = decodeChapterFragment(entry.fragment);
+        if (!fragment) return true;
+        if (fragment === article.id || idCounts.has(fragment)) return false;
+        // Keep parity with the selector fallback for CSS-escaped edge cases.
+        return !/[\u0000\uD800-\uDFFF]/u.test(fragment) || !chapterTarget(article, fragment);
+      });
+      if (!missing.length) return;
+      const wanted = new Set(missing.map(entry => normalizeTocLabel(entry.label)));
       const targets = new Map();
       for (const link of article.querySelectorAll('a[href^="#chm-page-"]')) {
         const label = normalizeTocLabel(link.textContent);
@@ -395,8 +403,6 @@ export function createReaderChapterFormat(readerContext) {
         if (idCounts.get(fragment) === 1) entry.fragment = fragment;
       }
     };
-    const mergedChmToc = manifest.chapters.some(chapter =>
-      "source_path" in chapter && chapter.source_path === "chm-fallback.html");
     // Only the normalized array produced for this manifest has stable chapter
     // membership. Keep the scan for replacements and don't retain old arrays.
     /** @type {WeakMap<unknown[], Map<number, ChapterTocEntry[]>>} */
@@ -513,7 +519,8 @@ export function createReaderChapterFormat(readerContext) {
           retainedBytes.set(chapter.index, bytes.byteLength);
           inserted = true;
           const toc = chapterTocEntries(chapter.index);
-          if (mergedChmToc) repairMergedChmToc(article, toc);
+          if ("source_path" in chapter && /(?:^|\/)chm-fallback\.html$/.test(String(chapter.source_path)))
+            repairMergedChmToc(article, toc);
           bindChapterTocTargets(article, toc);
           const next = chapterAt(chapter.index + 1);
           if (next) ensureSentinel(next);
@@ -803,7 +810,7 @@ export function createReaderChapterFormat(readerContext) {
     chapterManifestLoader.count = manifest.chapters.length;
     chapterManifestLoader.progressTarget = progress.locate;
     chapterManifestLoader.progressFraction = () => {
-      const current = readChapterPosition(true);
+      const current = readChapterPosition();
       if (!current) return 0;
       const end = viewport.scrollHeight - viewport.clientHeight;
       const atEnd = end === 0 ? isProgressEnd() : viewport.scrollTop > 0 && end - viewport.scrollTop <= 1;
@@ -851,12 +858,13 @@ export function createReaderChapterFormat(readerContext) {
     readerContext.status.textContent = `EPUB · ${manifest.chapters.length} 章`;
   }
 
-  /** @param {boolean} [includePlaceholders] */
-  function readChapterPosition(includePlaceholders = false) {
+  function readChapterPosition() {
     if (readerContext.capability.mode !== "epub-chapters") return null;
     const marker = readerContext.viewport.getBoundingClientRect().top + markerInset;
-    const chapters = /** @type {NodeListOf<HTMLElement>} */ (readerContext.content.querySelectorAll(includePlaceholders
-      ? ".epub-frame > :is(.reader-epub-chapter, .reader-chapter-placeholder)" : ".reader-epub-chapter"));
+    // A trimmed row retains the measured height of its original chapter.
+    // Count it for snapshots as well as the slider, but not unloaded sentinels.
+    const chapters = /** @type {NodeListOf<HTMLElement>} */ (readerContext.content.querySelectorAll(
+      ".epub-frame > :is(.reader-epub-chapter, .reader-chapter-placeholder)"));
     let chapter = null, rect = null;
     for (const node of chapters) {
       chapter = node;

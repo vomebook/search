@@ -47,6 +47,8 @@ export interface ReaderFormatControllerContext {
   params: URLSearchParams;
   loadReaderRestoration(): Promise<import('./reader-progress-strict').ProgressState | null>; readerRestorationPromise: Promise<unknown> | null;
   awaitReader<T>(value: T | PromiseLike<T>): Promise<Awaited<T>>;
+  waitForReader(ms: number): Promise<void>;
+  reportNavigationError(error: unknown, generation: number): void;
   applyInitialRestoration(entry: unknown, generation: number): Promise<unknown>;
   setReaderPhase(phase: string): boolean; updateDocumentState(state: { restorationReady?: boolean; page?: number; pageCount?: number }): void;
   restorationFailed: boolean; scheduleSave(): void; readerResources: Set<() => void>;

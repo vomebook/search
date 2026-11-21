@@ -278,7 +278,9 @@ test('a large single-chunk stream reuses the encoding sample and keeps every tex
     const response=responseChunks([chunk]);
     await f.context.renderPlainText(response);
     assert.equal(samples.length,1);
-    assert.ok(samples[0]===chunk,'single chunk must not be copied before detection');
+    assert.equal(samples[0].buffer,chunk.buffer,'single-chunk sample is still zero-copy');
+    assert.equal(samples[0].byteOffset,chunk.byteOffset);
+    assert.equal(samples[0].byteLength,65540,'large chunk must not extend the detection window');
     const root=f.context.content.children[0];
     assert.equal(root.textContent,value);
     assert.equal(root.dataset.textPreview,undefined);
@@ -289,6 +291,25 @@ test('a large single-chunk stream reuses the encoding sample and keeps every tex
       assert.ok(block.textContent.length<=32768);
       assert.ok(block.textContent.endsWith('\n'));
     }
+  } finally {f.restore();}
+});
+
+test('long ASCII preface does not force UTF-8 and encoding is independent of packet boundaries',async()=>{
+  const f=fixture();
+  try {
+    const lead='a'.repeat(70001)+'\n', expected=lead+'Привет, мир!';
+    const bytes=Uint8Array.from([...new TextEncoder().encode(lead),
+      207,240,232,226,229,242,44,32,236,232,240,33]);
+    f.context.documentState.title='Русский';
+    for (const cuts of [[], [65540], [1000,65539,70002,70003], [70008]]) {
+      f.context.content.children.length=0;
+      const chunks=[0,...cuts].map((start,i)=>bytes.subarray(start,cuts[i] ?? bytes.length));
+      await f.context.renderPlainText(responseChunks(chunks));
+      assert.equal(f.context.content.textContent,expected);
+    }
+    f.context.content.children.length=0;
+    await f.context.renderPlainText({headers:new Headers(),body:null,arrayBuffer:async()=>bytes.buffer});
+    assert.equal(f.context.content.textContent,expected);
   } finally {f.restore();}
 });
 

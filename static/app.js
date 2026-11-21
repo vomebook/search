@@ -1,6 +1,6 @@
 /// <reference path="../typings/search-app.d.ts" />
 
-const DATA_URL = "data/search_data.json.gz";
+const DATA_URL = "/search/data/search_data.json.gz";
 const API_BASE = "https://voiceofml-search.hf.space";
 const MIRROR_HOST = "hf-mirror.com";
 
@@ -743,7 +743,7 @@ function getCorpusClient() {
     protocol: WORKER_PROTOCOL_VERSION,
     requestTimeout: WORKER_REQUEST_TIMEOUT,
     loadTimeout: WORKER_LOAD_TIMEOUT,
-    createWorker: () => window.Worker ? new Worker("static/search/index-worker.js") : null,
+    createWorker: () => window.Worker ? new Worker("/search/static/search/index-worker.js") : null,
     corpusURL: () => new URL(DATA_URL, document.baseURI).href,
   });
 }
@@ -1714,9 +1714,10 @@ function updateSearchPositionControls() {
   if (DOM.cancelPositionBtn) DOM.cancelPositionBtn.hidden = true;
 }
 
-/** @param {boolean} [preserveQuery] */
-function cancelPendingSearchControls(preserveQuery = false) {
-  if (!preserveQuery) searchInputController?.cancelTimer();
+/** @param {boolean} [preserveDrafts] */
+function cancelPendingSearchControls(preserveDrafts = false) {
+  if (preserveDrafts) return;
+  searchInputController?.cancelTimer();
   if (filterSearchTimer !== null) clearTimeout(filterSearchTimer);
   if (sizeFilterTimer !== null) clearTimeout(sizeFilterTimer);
   filterSearchTimer = null;
@@ -2045,7 +2046,6 @@ function tryRestoreSearchPosition(key, options = {}) {
   const position = options.position || previous?.position || positionPersistence.getPosition(key);
   if (!validSearchPosition(position)) return false;
   searchIntentId++;
-  cancelPendingSearchControls();
   if (!options.position && positionRestore?.key === key && !positionRestore.failed) return true;
   if (!cancelActiveSearch()) return false;
   const owner = searchId;
@@ -2111,9 +2111,11 @@ function resultWindowCurrent(window) {
 
 function restartResultWindow() {
   const key = getSearchViewKey(), backend = resultWindow?.query.resultBackend;
-  saveSearchPosition();
+  const scroll = captureReaderReturnScroll();
+  const position = scroll && { version: 1, key, index: scroll.index, offset: Math.max(0, scroll.offset),
+    anchorId: getResultStableId(STATE.results[scroll.index]), loadedPage: Math.max(1, STATE._loadedPage), savedAt: Date.now() };
   resultSnapshots.remove(key);
-  tryRestoreSearchPosition(key, {backend});
+  tryRestoreSearchPosition(key, {position, backend, viewport: null});
 }
 
 function updateResultWindowStatus() {
@@ -2122,9 +2124,9 @@ function updateResultWindowStatus() {
     retry: () => {
       if (!resultWindow) return;
       if (resultWindow.invalid) return restartResultWindow();
-      const pages = [...resultWindow.failures.keys()];
-      resultWindow.failures.clear(); updateResultWindowStatus();
-      pages.forEach(page => loadResultWindowPage(page));
+      const window = resultWindow;
+      void VoiceOfMLResultWindowLoader.retryFailed(window,
+        () => resultWindowCurrent(window), page => loadResultWindowPage(page), updateResultWindowStatus);
     },
   });
 }
@@ -2253,7 +2255,12 @@ async function loadResultWindowPage(page, prefetch = false) {
       return false;
     }
     window.failures.set(page, error);
-    if (/** @type {{message?: string}} */ (error).message === "RESTORE_PAGE_CHANGED") window.invalid = true;
+    if (/** @type {{message?: string}} */ (error).message === "RESTORE_PAGE_CHANGED") {
+      window.invalid = true;
+      searchResponseStore.cache.clear();
+      resultSnapshots.remove(window.key);
+      STATE._pageCache = {};
+    }
     updateResultWindowStatus();
     DOM.resultsList.querySelectorAll(".result-window-placeholder").forEach(row => row.remove());
     VSCROLL.renderStart = -1; VSCROLL.renderEnd = -1;
@@ -2393,7 +2400,8 @@ function extendSearchSnapshotBudget(results, page) {
 function saveSearchViewSnapshot(key = displayedSearchView?.key) {
   const view = displayedSearchView;
   if (key === undefined) return null;
-  if ((view && view.key === key && view.window?.invalid) || resultSnapshots.snapshots.get(key)?.window?.invalid) {
+  if ((view && view.key === key && (view.window?.invalid || view.window?.preview)) ||
+      resultSnapshots.snapshots.get(key)?.window?.invalid) {
     // Keep the saved position for validation; stale rows must not replace it.
     resultSnapshots.remove(key);
     return null;

@@ -122,6 +122,7 @@ test("image fallback only accepts a string original extension", async () => {
       downloadButton: {}, documentState: { title: "book" }, readerDownloadUrl: () => "download",
       formatAdapters: { active: { open: async () => { throw error; } }, activate() {}, dispose() {} },
       readerResources: new Set(), loadReaderRestoration: async () => saved, awaitReader: promise => promise,
+      waitForReader: () => new Promise(() => {}),
       content: { replaceChildren() {} }, updateDocumentState(patch) { Object.assign(this.documentState, patch); },
       loadImageDocument: async () => "image", renderImageDocument: async () => { rendered = true; },
       markReaderContentReady() {},

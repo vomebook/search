@@ -54,7 +54,8 @@ interface VoiceOfMLWindowRequest extends Promise<VoiceOfMLSearchWindowPageData |
 interface VoiceOfMLResultWindow {
   key: string; query: VoiceOfMLSearchViewProjection; total: number; generation?: string | undefined;
   controller: AbortController; pending: Map<number, VoiceOfMLWindowRequest | Promise<VoiceOfMLSearchWindowPageData | null>>; failures: Map<number, unknown>;
-  invalid?: boolean | undefined; prefetched?: Map<number, VoiceOfMLSearchWindowPageData> | undefined;
+  invalid?: boolean | undefined; preview?: boolean; retrying?: boolean;
+  prefetched?: Map<number, VoiceOfMLSearchWindowPageData> | undefined;
   prefetchFailures?: Set<number> | undefined;
 }
 interface VoiceOfMLWindowRecoveryDependencies {
@@ -73,6 +74,7 @@ declare var VoiceOfMLResultWindowLoader: {
   waitForRecovery(signal: AbortSignal, delay: number, local: boolean | number | undefined): Promise<void>;
   fetchWithRecovery(deps: VoiceOfMLWindowRecoveryDependencies, query: VoiceOfMLSearchViewProjection, page: number, signal: AbortSignal, anchorId: string | undefined, demanded?: () => boolean): Promise<VoiceOfMLSearchWindowPageData>;
   requestPage(deps: VoiceOfMLWindowRequestDependencies, window: VoiceOfMLResultWindow, page: number, prefetch?: boolean): Promise<VoiceOfMLSearchWindowPageData | null | undefined> | undefined;
+  retryFailed(window: VoiceOfMLResultWindow, current: () => boolean, load: (page: number) => Promise<boolean>, update: () => void): Promise<void>;
 };
 interface VoiceOfMLWindowStatusOptions {
   window: {invalid?: boolean | undefined; failures: ReadonlyMap<number, unknown>} | null;

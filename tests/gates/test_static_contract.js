@@ -34,8 +34,9 @@ test("main thread retains stale-search and cancellation controls", () => {
   assert.match(app, /searchRequestId/);
   assert.match(app, /AbortController/);
 });
-test("Worker URL is static-root relative so the Pages build can hash it", () => {
-  assert.match(app, /new Worker\("static\/search\/index-worker\.js"\)/);
+test("Worker and corpus stay under the Pages root even while the Reader owns the URL", () => {
+  assert.match(app, /new Worker\("\/search\/static\/search\/index-worker\.js"\)/);
+  assert.match(app, /const DATA_URL = "\/search\/data\/search_data\.json\.gz"/);
 });
 test("section filter cancel buttons clear only their selected state", () => {
   for (const id of ["repo-filter-cancel", "folder-filter-cancel", "ext-filter-cancel"]) {

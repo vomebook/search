@@ -678,6 +678,16 @@ export function createReaderBindings(readerContext) {
     window.addEventListener("storage", (event) => {
       if (event.key === "theme" && event.newValue) readerContext.applyReaderTheme(event.newValue, false);
     });
+    window.addEventListener("voice-reader-capture-progress", event => {
+      if (!readerContext.isReaderOverlayFrame()) return;
+      const write = (/** @type {CustomEvent} */ (event)).detail;
+      if (typeof write !== "function") return;
+      const progress = readerContext.captureProgressEntry();
+      if (progress) {
+        readerContext.lastSavedProgress = JSON.stringify(progress);
+        write({ ...progress, closeTime: Date.now() });
+      }
+    });
     window.addEventListener("voice-reader-dispose", () => {
       readerContext.saveProgress();
       readerContext.disposeReader();

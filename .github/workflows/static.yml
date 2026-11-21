@@ -65,6 +65,7 @@ jobs:
       deployments: read
     outputs:
       artifact_id: ${{ steps.upload.outputs.artifact_id }}
+      artifact_attempt: ${{ steps.readback.outputs.artifact_attempt }}
       release: ${{ steps.readback.outputs.release }}
       reader_receipt: ${{ steps.readback.outputs.reader_receipt }}
       search_manifest_sha: ${{ steps.readback.outputs.search_manifest_sha }}
@@ -271,6 +272,7 @@ jobs:
           set -euo pipefail
           python3 -B scripts/ci/pages_artifact_proof.py verify-upload "$RUNNER_TEMP/uploaded-pages/artifact.tar" "$RUNNER_TEMP/pages-artifact-proof.json"
           python3 -B -m scripts.ci.pages_release export "$RUNNER_TEMP/uploaded-pages/artifact.tar"
+          printf 'artifact_attempt=%s\n' "$GITHUB_RUN_ATTEMPT" >> "$GITHUB_OUTPUT"
 
   deploy:
     needs: prepare
@@ -285,6 +287,18 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     runs-on: ubuntu-24.04
     steps:
+      - name: Require artifact from this exact run attempt
+        env:
+          ARTIFACT_ATTEMPT: ${{ needs.prepare.outputs.artifact_attempt }}
+        run: |
+          if [[ "$ARTIFACT_ATTEMPT" != "$GITHUB_RUN_ATTEMPT" ]]; then
+            if [[ -n "$READER_REFRESH_ID" ]]; then
+              echo '::error::This artifact belongs to a previous attempt. Dispatch a new Reader-only refresh.'
+            else
+              echo '::error::This artifact belongs to a previous attempt. Re-run all jobs, not only failed jobs.'
+            fi
+            exit 1
+          fi
       - name: Checkout dispatch workflow revision
         uses: actions/checkout@v7
         with:

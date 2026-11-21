@@ -147,6 +147,63 @@ class ImagePageFirstViewTests(unittest.TestCase):
         self.assertEqual(self.page.locator('#page-number').input_value(), '253')
         self.assertEqual(requests.count('page-000253.webp'), 1)
 
+    def test_last_mounted_image_page_waits_until_it_can_be_aligned(self):
+        self.open_with_held_trailing_shells()
+        final_mounted = self.page.locator('.reader-page').last
+        index = final_mounted.get_attribute('data-page')
+        self.assertLess(int(index), 253)
+        self.assertTrue(final_mounted.evaluate('''node => {
+          // Ensure the last mounted page leaves less than a viewport of
+          // scroll room (depends on screen height and original image ratio).
+          node.style.aspectRatio = 'auto'; node.style.height = '24px';
+          const view = document.querySelector('#viewport');
+          const top = view.scrollTop + node.getBoundingClientRect().top - view.getBoundingClientRect().top - view.clientTop;
+          return top > view.scrollHeight - view.clientHeight + 1;
+        }'''))
+        field = self.page.locator('#page-number')
+        field.fill(index)
+        field.press('Enter')
+        self.page.evaluate('window.releaseTrailingShells()')
+        self.page.locator('html[data-reader-phase="ready"]').wait_for()
+        self.page.wait_for_function('''index => {
+          const shell=document.querySelector(`.reader-page[data-page="${index}"]`);
+          return Math.abs(shell.getBoundingClientRect().top-document.querySelector('#viewport').getBoundingClientRect().top)<3;
+        }''', arg=index)
+        self.assertEqual(field.input_value(), index)
+
+    def test_speculative_first_page_failure_can_recover_late_saved_image(self):
+        prefix = 'pages/image/tiff/' + 'a' * 64 + '/'
+        source = 'https://voiceofml-search.hf.space/api/reader-bucket-resource?' + urlencode({
+            'path': prefix + 'page-manifest.json'})
+        held = []
+        def resource(route):
+            path = parse_qs(urlsplit(route.request.url).query)['path'][0]
+            if path.endswith('/page-manifest.json'):
+                route.fulfill(json=dict(version=1, kind='image-page-stream', page_count=3, pages=[{}] * 3))
+            elif path.endswith('/page-000001.webp'):
+                held.append(route)
+            else:
+                route.fulfill(content_type='image/webp', body=fixtures.support.IMAGE_FIXTURES['webp'][1])
+        self.page.route('**/api/reader-bucket-resource?**', resource)
+        self.page.route('**/static/reader/core/reader-store.js*', lambda route: route.fulfill(
+            content_type='text/javascript', body=fixtures.support.STORE_SCRIPT.replace(
+                'new Promise((resolve) => setTimeout(() => resolve(null), 300))',
+                'new Promise(resolve => {window.__finishHistory = resolve})')))
+        self.page.goto(self.reader_url('image-pages', url=source), wait_until='domcontentloaded')
+        self.page.locator('.reader-page[data-page="1"] img').wait_for(state='attached')
+        self.page.evaluate('window.__finishHistory({page:2,pageOffset:0,zoom:100})')
+        for route in held:
+            route.fulfill(status=404)
+        # Some Chromium image paths issue a separate retry after the first error.
+        self.page.unroute('**/api/reader-bucket-resource?**', resource)
+        self.page.route('**/api/reader-bucket-resource?**', lambda route: route.fulfill(status=404)
+                        if 'page-000001.webp' in route.request.url else route.fulfill(
+                            content_type='image/webp', body=fixtures.support.IMAGE_FIXTURES['webp'][1]))
+        self.page.locator('.reader-page[data-page="2"] img.ready').wait_for()
+        self.page.locator('html[data-reader-phase="ready"]').wait_for()
+        self.assertEqual(self.page.locator('#page-number').input_value(), '2')
+        self.assertEqual(self.page.locator('.reader-error').count(), 0)
+
     def test_failed_opening_image_does_not_replace_newer_page_while_batch_is_held(self):
         self.open_with_held_trailing_shells(fail_saved=True)
         # Wait for the actual failed draw to settle before changing ownership.

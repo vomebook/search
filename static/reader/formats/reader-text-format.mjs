@@ -11,7 +11,7 @@
  * @property {(cleanup: () => void) => () => void} trackReaderResource
  * @property {() => Error} readerAbortError
  * @property {<T>(promise: T | PromiseLike<T>) => Promise<Awaited<T>>} awaitReader
- * @property {(bytes: Uint8Array, hint?: string) => string} detectTextEncoding
+ * @property {(bytes: Uint8Array, hint?: string, leading?: boolean) => string} detectTextEncoding
  * @property {{title: string}} documentState
  * @property {ReaderTextRenderer} renderText
  */
@@ -60,7 +60,7 @@ export function createReaderTextFormat(readerContext) {
         }
       }
     };
-    const limit = VoiceOfMLReaderSecurity.LIMITS.documentBytes;
+    const limit = VoiceOfMLReaderSecurity.LIMITS.documentBytes, sampleLimit = 65540;
     VoiceOfMLReaderSecurity.assertResponseSize(response, limit);
     if (!response.body?.getReader) {
       const bytes = new Uint8Array(await response.arrayBuffer());
@@ -68,7 +68,17 @@ export function createReaderTextFormat(readerContext) {
         throw Object.assign(new Error("READER_RESOURCE_LIMIT"), { code: "READER_RESOURCE_LIMIT" });
       }
       readerContext.assertReaderActive();
-      const decoder = new TextDecoder(readerContext.detectTextEncoding(bytes, readerContext.documentState.title));
+      let start = 0;
+      if (bytes.length >= sampleLimit) {
+        let ascii = 0;
+        while (ascii < sampleLimit && (bytes[ascii] ?? 0) > 0 && (bytes[ascii] ?? 128) < 128) ascii++;
+        if (ascii === sampleLimit) {
+          start = ascii;
+          while (start < bytes.length && (bytes[start] ?? 128) < 128) start++;
+        }
+      }
+      const decoder = new TextDecoder(readerContext.detectTextEncoding(bytes.subarray(start, start + sampleLimit),
+        readerContext.documentState.title, start === 0));
       await appendDecoded(decoder.decode(bytes), decoder.encoding);
       return;
     }
@@ -81,6 +91,7 @@ export function createReaderTextFormat(readerContext) {
     });
     let length = 0,
       sampleLength = 0,
+      committedAscii = false,
       displayedSampleSize = 0,
       previewChunkIndex = 0,
       previewChunkOffset = 0,
@@ -114,8 +125,7 @@ export function createReaderTextFormat(readerContext) {
       }
     };
     const startDecoder = async () => {
-      // A cache-backed or buffered response can deliver the entire book in
-      // one chunk. Use the same sample bytes without copying that chunk.
+      // Use the fixed sample bytes without copying a contiguous view.
       let sample = sampleChunks.length === 1 ? sampleChunks[0] : undefined;
       if (!sample) {
         sample = new Uint8Array(sampleLength);
@@ -125,7 +135,9 @@ export function createReaderTextFormat(readerContext) {
           offset += chunk.byteLength;
         }
       }
-      decoder = new TextDecoder(readerContext.detectTextEncoding(sample, readerContext.documentState.title));
+      const encoding = readerContext.detectTextEncoding(sample, readerContext.documentState.title, !committedAscii);
+      // Do not strip an internal UTF-8 BOM after an ASCII preface.
+      decoder = new TextDecoder(encoding, { ignoreBOM: committedAscii });
       clearUtf8Preview();
       if (decoder.encoding.startsWith("utf-16") && displayedSampleSize) {
         // A late NUL pattern can choose UTF-16 even after the ASCII preview
@@ -148,7 +160,26 @@ export function createReaderTextFormat(readerContext) {
         if (length > limit) {
           throw Object.assign(new Error("READER_RESOURCE_LIMIT"), { code: "READER_RESOURCE_LIMIT" });
         }
-        if (!decoder) {
+        for (let pending = value; pending.length;) {
+          if (decoder) {
+            const active = /** @type {TextDecoder} */ (/** @type {unknown} */ (decoder));
+            await appendDecoded(active.decode(pending, { stream: true }), active.encoding);
+            break;
+          }
+          // Pure ASCII cannot distinguish UTF-8 from a legacy code page.
+          // Render it as it arrives and start a fresh bounded sample at the
+          // first high byte, regardless of where the response is split.
+          if (committedAscii && asciiPreviewPossible) {
+            let skip = 0;
+            while (skip < pending.length && (pending[skip] ?? 128) < 128) skip++;
+            if (skip) await appendDecoded(previewDecoder.decode(pending.subarray(0, skip)));
+            if (skip === pending.length) break;
+            pending = pending.subarray(skip);
+            asciiPreviewPossible = false;
+          }
+          const take = Math.min(pending.length, sampleLimit - sampleLength);
+          const value = take === pending.length ? pending : pending.subarray(0, take);
+          pending = pending.subarray(take);
           sampleChunks.push(value);
           sampleLength += value.byteLength;
           for (let i = 0; i < value.byteLength && signature.length < 3; i++) signature.push(/** @type {number} */ (value[i]));
@@ -192,12 +223,15 @@ export function createReaderTextFormat(readerContext) {
               }
             }
           }
-          if (sampleLength < 65540) { showUtf8Preview(value); continue; }
+          if (sampleLength < sampleLimit) { showUtf8Preview(value); continue; }
+          if (!committedAscii && asciiPreviewPossible) {
+            committedAscii = true;
+            sampleChunks.length = 0;
+            sampleLength = displayedSampleSize = asciiPrefixLength = 0;
+            clearUtf8Preview();
+            continue;
+          }
           await startDecoder();
-        } else {
-          // This branch is reached only after the closure assigned a decoder;
-          // TypeScript does not track assignments made inside that closure.
-          await appendDecoded((/** @type {TextDecoder} */ (/** @type {unknown} */ (decoder))).decode(value, { stream: true }), (/** @type {TextDecoder} */ (/** @type {unknown} */ (decoder))).encoding);
         }
       }
       // If no decoder was selected during streaming, successful completion of
@@ -244,13 +278,15 @@ export function createReaderTextFormat(readerContext) {
     return Math.max(cjk, cyrillic) - controls * 20 - replacements * 40;
   }
 
-  /** @param {Uint8Array} bytes @param {string} [hint] */
-  function detectTextEncoding(bytes, hint = "") {
-    if (bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf) return "utf-8";
-    if (bytes[0] === 0xff && bytes[1] === 0xfe) return "utf-16le";
-    if (bytes[0] === 0xfe && bytes[1] === 0xff) return "utf-16be";
-    // Skip the indexed UTF-16 heuristic on the common NUL-free path.
-    const firstNull = bytes.indexOf(0);
+  /** @param {Uint8Array} bytes @param {string} [hint] @param {boolean} [leading] */
+  function detectTextEncoding(bytes, hint = "", leading = true) {
+    if (leading) {
+      if (bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf) return "utf-8";
+      if (bytes[0] === 0xff && bytes[1] === 0xfe) return "utf-16le";
+      if (bytes[0] === 0xfe && bytes[1] === 0xff) return "utf-16be";
+    }
+    // A late sample cannot reinterpret the committed ASCII prefix as UTF-16.
+    const firstNull = leading ? bytes.indexOf(0) : -1;
     if (firstNull !== -1) {
       let evenNulls = 0, oddNulls = 0;
       for (let index = firstNull; index < bytes.length; index++) {

@@ -160,6 +160,7 @@
         deps.applyTheme(message.theme);
         return;
       }
+      if (closing) return;
       if (message.type === "voice-reader-open") {
         try { overlay = navigation.replace(/** @type {string} */ (message.url), /** @type {object} */ (position.scroll)); } catch (_) {}
         return;
@@ -168,7 +169,10 @@
       try {
         const target = new URL(/** @type {string} */ (message.url), location.origin);
         if (target.origin !== location.origin || (deps.hashRoute ? target.pathname !== "/search/" : target.pathname.split("/").filter(Boolean).length !== 1)) return;
-        history.replaceState(null, "", merge(target).href);
+        const prior = navigation.searchLocation();
+        const params = !prior ? deps.currentParams() : deps.hashRoute
+          ? new URLSearchParams(prior.hash.split("?", 2)[1] || "") : prior.searchParams;
+        history.replaceState(null, "", navigation.mergeSearchParams(target, params, { hashRoute: deps.hashRoute, keys }).href);
         deps.reconcile();
       } catch (_) {}
     }

@@ -75,5 +75,24 @@
     return request;
   }
 
-  globalThis.VoiceOfMLResultWindowLoader = { waitForRecovery, fetchWithRecovery, requestPage };
+  /** @param {VoiceOfMLResultWindow} window @param {() => boolean} current
+   * @param {(page: number) => Promise<boolean>} load @param {() => void} update */
+  async function retryFailed(window, current, load, update) {
+    if (window.retrying) return;
+    window.retrying = true;
+    try {
+      for (const page of [...window.failures.keys()]) {
+        while (window.pending.size >= 3 && current() && !window.invalid)
+          await Promise.race([...window.pending.values()].map(request => request.catch(() => null)));
+        if (!current() || window.invalid) break;
+        if (!window.failures.delete(page)) continue;
+        await load(page);
+      }
+    } finally {
+      window.retrying = false;
+      if (current()) update();
+    }
+  }
+
+  globalThis.VoiceOfMLResultWindowLoader = { waitForRecovery, fetchWithRecovery, requestPage, retryFailed };
 })();

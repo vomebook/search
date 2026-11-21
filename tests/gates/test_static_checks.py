@@ -3655,7 +3655,7 @@ ctx.renderText(true, {response: new Response(), engines: Promise.resolve([])});
         original = local.read_text()
         for annotation in ('/** @param {ReaderTextContext} readerContext */', '/** @param {Response} response */',
                            '/** @param {string} value @param {string} [encoding] */',
-                           '/** @param {Uint8Array} bytes @param {string} [hint] */',
+                           '/** @param {Uint8Array} bytes @param {string} [hint] @param {boolean} [leading] */',
                            '/** @param {ReaderTextPrepared} prepared */',
                            '/** @param {ReaderMarkdownPrepared} prepared */'):
             with self.subTest(missing=annotation):

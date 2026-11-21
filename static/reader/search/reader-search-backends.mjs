@@ -31,6 +31,11 @@ export function createReaderSearchBackends(readerContext) {
       readerContext.chapterSearchModulePromise = import("/search/static/reader/search/reader-chapter-search.mjs").catch(
         (error) => {
           readerContext.chapterSearchModulePromise = null;
+          // An older Reader document may outlive its lazy module URL. Do not
+          // substitute a different build's module into this document.
+          const message = error instanceof Error ? error.message : String(error);
+          if (/failed to fetch dynamically imported module|importing a module script failed|error loading dynamically imported module/i.test(message))
+            throw new Error("全文搜索组件不可用。联网后请刷新阅读页，恢复阅读进度后重试。", { cause: error });
           throw error;
         }
       );

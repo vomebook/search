@@ -50,10 +50,25 @@ for (const filename of ["index.html", "static/reader.html", "sw.js"]) {
   if (filename === "sw.js") {
     content = content.replace(/CURRENT_HASHED_ASSETS\s*=\s*\[\]/,
       "CURRENT_HASHED_ASSETS=" + JSON.stringify([...replacements.values()].filter(url => url.startsWith("static/")).map(url => "/search/" + url).concat([...currentVendorAssets], resources.djvuDecoderAssets("/search/static/"), resources.ruffleAssets("/search/static/"))));
-    content = content.replace(/\bREADER_SHELL_INTEGRITY\s*=\s*(["'])development\1/, () => {
-      const digest = createHash("sha256").update(readFileSync(join(root, "static/reader.html"))).digest("base64");
-      return `READER_SHELL_INTEGRITY="sha256-${digest}"`;
-    });
+    for (const [constant, shell] of [["READER_SHELL_INTEGRITY", "static/reader.html"], ["SEARCH_SHELL_INTEGRITY", "index.html"]]) {
+      const marker = new RegExp(`\\b${constant}\\s*=\\s*(["'])development\\1`, "g");
+      if ([...content.matchAll(marker)].length !== 1) throw new Error(`Missing or duplicate ${constant} marker`);
+      const digest = createHash("sha256").update(readFileSync(join(root, shell))).digest("base64");
+      content = content.replace(marker, `${constant}="sha256-${digest}"`);
+    }
+    const integrity = path => "sha256-" + createHash("sha256").update(readFileSync(join(root, path))).digest("base64");
+    if (existsSync(join(root, "data/search_data.json.gz"))) {
+      content = content.replace(/\bCORPUS_INTEGRITY\s*=\s*"development"/,
+        `CORPUS_INTEGRITY=${JSON.stringify(integrity("data/search_data.json.gz"))}`);
+    }
+    const pdfSupport = Object.fromEntries(["cmaps", "standard_fonts", "wasm"].flatMap(dir => {
+      const parent = `static/vendor/${dir}`;
+      return !existsSync(join(root, parent)) ? [] : readdirSync(join(root, parent), { withFileTypes: true })
+        .filter(entry => entry.isFile()).map(({ name }) => `${parent}/${name}`).sort()
+        .map(path => [`/search/${path}`, integrity(path)]);
+    }));
+    content = content.replace(/\bPDF_SUPPORT_INTEGRITY\s*=\s*\{\}/,
+      `PDF_SUPPORT_INTEGRITY=${JSON.stringify(pdfSupport)}`);
   }
   writeFileSync(target, content);
 }

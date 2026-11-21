@@ -173,6 +173,24 @@ class ReaderReloadSearchDocumentCases:
         self.assertEqual(self.page.locator('iframe.reader-overlay').count(), 0)
         return reader_url
 
+    def test_native_back_from_reloaded_reader_hands_off_the_book_not_search(self):
+        reader_url = self.open_and_reload()
+        self.page.locator('[data-speech-toggle]').wait_for(timeout=10000)
+        # Seed the playback cursor without contacting a speech service.
+        self.page.evaluate('''() => {
+          const old = window.CCRDSpeech;
+          window.CCRDSpeech = {...old, state: () => ({playing:true, position:2,
+            adapter:{partAt:()=>({unit:0,start:0,raw:'Fixture sentence'})}})};
+          window.addEventListener('pagehide', () => {
+            sessionStorage.setItem('test-speech-handoff', sessionStorage.getItem('reader-speech-handoff'));
+          }, {once:true});
+        }''')
+        self.page.go_back(wait_until='domcontentloaded')
+        self.page.locator('.reader-speech-mini').wait_for()
+        handoff = self.page.evaluate("JSON.parse(sessionStorage.getItem('test-speech-handoff'))")
+        self.assertEqual(handoff['readerUrl'], reader_url)
+        self.assertEqual((handoff['unit'], handoff['offset']), (0, 2))
+
     def test_back_restores_search_focus_scroll_and_forward_book(self):
         self.page.locator('#search-input').focus()
         before = self.page.evaluate('''async () => {

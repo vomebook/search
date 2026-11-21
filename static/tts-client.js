@@ -1296,9 +1296,10 @@ if (typeof document !== "undefined") /** @type {Window & {CCRDSpeech?: unknown}}
     // scrolling the player cannot observe itself (e.g. inside an iframe).
     reveal: () => { returnView = null; return locateSource().then(updateLocate); },
     viewChanged,
-    state: () => ({ active: !!owner || pendingStart, playing: !!owner?.wantsPlay, adapter: owner?.snapshot.adapter || saved?.snapshot.adapter || null,
+    state: () => ({ active: !!owner || !!retryStart, pending: pendingStart,
+      playing: !!owner?.wantsPlay, adapter: owner?.snapshot.adapter || saved?.snapshot.adapter || null,
       position: owner ? owner.position : saved ? saved.position : null, interrupted: !owner && !!saved?.interrupted,
-      settings: owner ? playbackSettings() : saved?.settings }),
+      settings: owner || pendingStart ? playbackSettings() : saved?.settings }),
     stop: () => { stop("已停止", true); clearMark(); hide(); } };
   }
 })();

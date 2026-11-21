@@ -147,8 +147,26 @@ test('moving preview anchor outside ready pages restarts lookup without replacin
   await f.run(task, {});
   assert.equal(task.ready, buffer); assert.deepEqual(f.calls.filter(call => call.anchorId).map(call => call.anchorId), ['r4', 'r10']);
   assert.deepEqual([...buffer.keys()], [1, 5, 6]); assert.equal(f.c.snapshot.scroll.index, 10);
-  assert.equal(f.c.snapshot.scroll.offset, 23); assert.equal(task.position.anchorId, 'r4');
+  assert.equal(f.c.snapshot.scroll.offset, 23); assert.equal(task.position.anchorId, 'r10');
   assert.equal(f.events.filter(event => event === 'apply').length, 1);
+});
+
+test('a failed neighbor retry preserves the moved anchor and its offset', async () => {
+  const f = fixture(), original = f.c.fetchPositionPageWithRecovery;
+  f.c.STATE.results[10] = {id: 'r10'};
+  f.c.captureReaderReturnScroll = () => ({index:10, offset:23});
+  let fail = true;
+  f.c.fetchPositionPageWithRecovery = async (...args) => {
+    if (fail && args[1] === 6) throw new Error('temporarily unavailable');
+    return {...await original(...args), ...(args[3] === 'r10' ? {anchor_index:10} : {})};
+  };
+  const first = f.make(); await f.run(first, {});
+  assert.ok(first.failed); assert.equal(first.position.anchorId, 'r10');
+  fail = false; f.calls.length = 0;
+  const retry = f.make(first, first.position);
+  await f.run(retry, {});
+  assert.deepEqual(f.calls.map(call => call.number), [6]);
+  assert.equal(f.c.snapshot.scroll.index, 10); assert.equal(f.c.snapshot.scroll.offset, 23);
 });
 
 test('Reader overlay retains the saved anchor and missing anchor uses the nearby snapshot path', async () => {
@@ -174,13 +192,13 @@ test('preview keeps a user-moved hole instead of a vanished saved anchor', async
 test('synchronous prologue retains ordering, duplicate handling and abort reentry ownership', () => {
   const f = fixture();
   const active = f.make(); f.c.positionRestore = active;
-  assert.equal(f.c.tryRestoreSearchPosition(key), true); assert.deepEqual(f.events, ['controls']);
+  assert.equal(f.c.tryRestoreSearchPosition(key), true); assert.deepEqual(f.events, []);
   assert.equal(f.c.searchIntentId, 1);
   f.events.length = 0;
   const newer = f.make();
   active.controller.signal.addEventListener('abort', () => {f.c.searchId++; f.c.positionRestore = newer; f.c.STATE.isLoading = true;});
   assert.equal(f.c.tryRestoreSearchPosition(key, {position}), false);
-  assert.deepEqual(f.events.slice(0, 4), ['controls', 'active', 'clone', 'window']);
+  assert.deepEqual(f.events.slice(0, 3), ['active', 'clone', 'window']);
   assert.equal(f.c.positionEntryId, 1); assert.equal(f.c.positionRestore, newer);
   assert.equal(f.c.STATE.isLoading, true); assert.equal(f.events.includes('target'), false);
 });

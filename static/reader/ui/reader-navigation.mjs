@@ -3,7 +3,10 @@ export function createReaderNavigation(readerContext) {
   function beginReaderNavigation() {
     readerContext.cancelReaderDestinationHold?.();
     readerContext.chapterScrollAnchors.invalidate();
-    return readerContext.nextReaderGeneration("navigation");
+    const generation = readerContext.nextReaderGeneration("navigation");
+    if (readerContext.pdfShellLayoutReady || !readerContext.documentState.restorationReady)
+      window.dispatchEvent(new Event("voice-reader-navigation-changed"));
+    return generation;
   }
 
   function clearReturnNavigation() {
@@ -118,12 +121,12 @@ export function createReaderNavigation(readerContext) {
       ));
       let shell = findShell();
       const mode = readerContext.capability.mode;
-      // A mounted ordinary PDF page can still be too near the temporary end
-      // to scroll into position. Wait only for missing or unreachable targets.
-      const batchingPdf = mode === "pdf" && !readerContext.pdfShellWindow && !readerContext.documentState.restorationReady;
-      if ((batchingPdf && (!shell ||
-          readerContext.readerPageScrollTop(shell) > readerContext.viewport.scrollHeight - readerContext.viewport.clientHeight + 1)) ||
-          (!shell && (mode === "pdf-pages" || mode === "image-pages"))) {
+      // A mounted paged document can still be too near the temporary end to
+      // align. Wait for the remaining shells when they own that geometry.
+      const batching = !readerContext.pdfShellWindow && !readerContext.documentState.restorationReady &&
+        (mode === "pdf" || mode === "pdf-pages" || mode === "image-pages");
+      if (batching && (!shell ||
+          readerContext.readerPageScrollTop(shell) > readerContext.viewport.scrollHeight - readerContext.viewport.clientHeight + 1)) {
         await readerContext.pdfShellsReady;
         shell = findShell();
       }

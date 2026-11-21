@@ -73,6 +73,12 @@ function renderVisible() {
   const len = deps.hasWindow() ? deps.windowTotal() : items.length;
   ensureVirtualHeights(len);
   if (len === 0) {
+    if (VSCROLL.renderStart !== 0 || VSCROLL.renderEnd !== 0) {
+      // Validation can replace a nonempty preview in place. Reconcile the
+      // old rows and spacers rather than leaving clickable stale records.
+      reconcileVirtualRows(items, 0, 0, 0, 0, DOM.resultsContainer.clientHeight);
+      VSCROLL.renderStart = VSCROLL.renderEnd = 0;
+    }
     updateScrollTrack();
     return true;
   }

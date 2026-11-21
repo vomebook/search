@@ -41,15 +41,13 @@ class PdfHistoryRaceTests(unittest.TestCase):
                     def hold_geometry(route):
                         response = route.fetch()
                         script = response.text()
-                        anchor = 'const firstPage = await readerContext.measurePdf(readerContext.awaitReader(pdf.getPage(initialPage)), "page", initialPage);'
+                        anchor = 'readerContext.awaitReader(pdf.getPage(initialPage))'
                         self.assertEqual(script.count(anchor), 1)
-                        route.fulfill(response=response, body=script.replace(anchor, '''
-                          const firstPage = await readerContext.measurePdf(readerContext.awaitReader(
-                            pdf.getPage(initialPage).then(async result => {
-                              await new Promise(resolve => {window.__releaseGeometry = resolve;});
-                              return result;
-                            })), "page", initialPage);
-                        '''))
+                        route.fulfill(response=response, body=script.replace(anchor, '''readerContext.awaitReader(
+                          new Promise((resolve, reject) => {
+                            window.__releaseGeometry = () => resolve(pdf.getPage(initialPage));
+                            window.__rejectGeometry = () => reject(new Error('saved page is unavailable'));
+                          }))'''))
 
                     if hold_at == 'draw':
                         self.hold_first_draw(page, 190)
@@ -67,9 +65,10 @@ class PdfHistoryRaceTests(unittest.TestCase):
                         self.assertEqual(page.locator('.reader-page').count(), 0)
                     # Both numbers are entered while startup is held. Only the latest
                     # intent may land, and it must not be replaced by saved history.
-                    for target in (65, 12):
-                        page.locator('#page-number').fill(str(target))
-                        page.locator('#page-number').dispatch_event('change')
+                    if hold_at != 'dispose':
+                        for target in (65, 12):
+                            page.locator('#page-number').fill(str(target))
+                            page.locator('#page-number').dispatch_event('change')
                     if hold_at == 'dispose':
                         page.evaluate('dispatchEvent(new Event("voice-reader-dispose")); window.__releaseGeometry()')
                         page.wait_for_function("()=>document.documentElement.dataset.readerPhase==='disposed'")
@@ -77,11 +76,15 @@ class PdfHistoryRaceTests(unittest.TestCase):
                         self.assertEqual(page.locator('.reader-page').count(), 0)
                         self.assertFalse(page.evaluate('!!window.__savedPages'))
                     else:
-                        if hold_at == 'geometry':
-                            page.evaluate('window.__releaseGeometry()')
                         target = page.locator('.reader-page[data-page="12"]')
                         target.locator('canvas.ready').wait_for(timeout=10000)
                         page.wait_for_function("()=>document.documentElement.dataset.readerPhase==='ready'")
+                        if hold_at == 'geometry':
+                            # The newer page must work before the abandoned
+                            # request settles, and remain usable after its error.
+                            page.evaluate('window.__rejectGeometry()')
+                            page.evaluate('()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))')
+                            self.assertEqual(page.locator('html').get_attribute('data-reader-phase'), 'ready')
                         self.assertEqual(page.locator('#page-number').input_value(), '12')
                         self.assertEqual(page.locator('.reader-page[data-page="190"]').count(), 0)
                         offset = target.evaluate('node=>node.getBoundingClientRect().top-document.querySelector("#viewport").getBoundingClientRect().top')
@@ -596,7 +599,7 @@ class PdfHistoryRaceTests(unittest.TestCase):
                     page.locator('.reader-page[data-page="1"] canvas.ready').wait_for(timeout=12000)
                     self.assertFalse(any('reader-first-page=1' in url for url in workers), workers)
                     self.assertEqual(page.locator('.reader-pdf-opening').count(), 0)
-                    self.assertNotEqual(page.locator('html').get_attribute('data-reader-phase'), 'ready')
+                    page.locator('html[data-reader-phase="ready"]').wait_for(timeout=4000)
                     self.assertEqual(page.evaluate('window.__progressWrites'), 0)
                     page.evaluate('window.__finishHistory({page:12,pageCount:20,zoom:100})')
                     page.locator('.reader-page[data-page="12"] canvas.ready').wait_for(timeout=12000)
@@ -621,7 +624,7 @@ class PdfHistoryRaceTests(unittest.TestCase):
                 page.locator('.reader-page[data-page="1"] canvas.ready').wait_for(timeout=30000)
                 self.assertEqual(page.locator('.reader-page[data-preview-ready="1"]').count(), 0)
                 self.assertFalse(any('reader-first-page=1' in url for url in workers), workers)
-                self.assertNotEqual(page.locator('html').get_attribute('data-reader-phase'), 'ready')
+                page.locator('html[data-reader-phase="ready"]').wait_for(timeout=4000)
                 page.evaluate('window.__finishHistory(null)')
                 page.wait_for_function("()=>document.documentElement.dataset.readerPhase==='ready'", timeout=30000)
                 self.assertEqual(page.locator('#page-number').get_attribute('max'), '130')
