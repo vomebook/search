@@ -100,6 +100,41 @@ class RecentSearchPageTests(unittest.TestCase):
         self.fixture.wait_anchor(35050)
         self.assertNotIn(351, self.page.evaluate('windowCalls'))
 
+    def test_validation_keeps_scroll_in_unloaded_hole_beyond_saved_span(self):
+        self.page.evaluate("STATE.query='paging-other';doSearch()")
+        self.page.wait_for_function('!STATE.isLoading')
+        self.page.evaluate("resultSnapshots.snapshots.clear();windowTotal=100000;STATE.query='paging-original';doSearch(false,false,true)")
+        self.fixture.wait_anchor(49850)
+        self.fixture.persist_viewport()
+        self.flush()
+        self.begin_restore()
+
+        index = 75050  # Page 751, beyond the materialized span of the preview.
+        self.fixture.jump(index)
+        self.assertEqual(self.page.evaluate('''index=>({
+          index:findVirtualIndex(getResultScrollTop()),total:STATE.total,
+          beyondSpan:index>=STATE.results.length,calls:[...windowCalls]
+        })''', index), dict(index=index, total=100000, beyondSpan=True, calls=[1]))
+
+        # Hold the demanded page as well, so we check the handoff while the row is still a hole.
+        self.page.evaluate('windowStall=751;releaseWindow()')
+        self.page.wait_for_function('!positionRestore')
+        anchor = self.page.evaluate('''index=>({index:findVirtualIndex(getResultScrollTop()),
+          offset:getResultScrollTop()-getVirtualOffset(index),loaded:!!STATE.results[index],
+          generation:resultWindow.generation})''', index)
+        self.assertEqual(anchor['index'], index, anchor)
+        self.assertAlmostEqual(anchor['offset'], 11, delta=2)
+        self.assertFalse(anchor['loaded'])
+        self.assertEqual(anchor['generation'], 'one')
+
+        self.page.wait_for_function('windowCalls.includes(751)')
+        self.page.evaluate('windowStall=0;releaseWindow()')
+        self.fixture.wait_anchor(index)
+        self.assertEqual(self.page.evaluate('STATE.results[75050].ID'), '75050')
+        calls = self.page.evaluate('windowCalls')
+        self.assertEqual(calls.count(751), 1, calls)
+        self.assertLessEqual(set(calls), {1, 498, 499, 500, *range(746, 757)})
+
     def test_corrupt_persisted_page_falls_back_to_api_after_preview_jump(self):
         self.prepare_pages()
         self.begin_restore()

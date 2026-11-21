@@ -348,12 +348,15 @@ export function createReaderPdfRenderer(readerContext) {
     priority = readerContext.normalizePdfPriority(priority || readerContext.pdfPagePriority(shell));
     /** @type {import('../../../typings/reader-pdf-renderer-strict').PdfRenderTask | null} */
     let activeRendering = null;
-    shell._renderCancel = () => {
+    const cancel = () => {
       renderController.abort();
       activeRendering?.cancel?.();
     };
+    shell._renderCancel = cancel;
     const task = (async () => {
       let acquired = false;
+      /** @type {HTMLCanvasElement | null} */
+      let drawCanvas = null;
       try {
         await readerContext.measurePdf(readerContext.acquirePdfRenderSlot(priority, shell, renderController.signal), "queue", Number(shell.dataset.page));
         acquired = true;
@@ -391,9 +394,6 @@ export function createReaderPdfRenderer(readerContext) {
             canvas.setAttribute("aria-hidden", "true");
             shell.prepend(canvas);
           }
-          // Resizing clears a canvas; never expose it as complete until the
-          // replacement render has finished.
-          canvas.classList.remove("ready");
           const targetWidth = Math.ceil(viewport.width * outputScale), targetHeight = Math.ceil(viewport.height * outputScale);
           if (pdf.readerMaxCanvasPixels && targetWidth * targetHeight > pdf.readerMaxCanvasPixels) {
             if (!readerContext.isReaderGenerationCurrent("pdf", generation)) {
@@ -407,6 +407,9 @@ export function createReaderPdfRenderer(readerContext) {
           // previously available page needlessly slow when the user returns.
           if (Math.max(Number(priority), readerContext.pdfPagePriority(shell)) >= 2)
             readerContext.trimPdfSurfaces(shell, targetWidth * targetHeight);
+          // Resizing clears the frame; only now does this draw own the backing store.
+          drawCanvas = canvas;
+          canvas.classList.remove("ready");
           // Avoid a transient targetWidth × oldHeight backing allocation.
           if (canvas.width !== targetWidth || canvas.height !== targetHeight) {
             canvas.width = 0;
@@ -449,6 +452,12 @@ export function createReaderPdfRenderer(readerContext) {
         delete shell.dataset.renderRetries;
         delete shell.dataset.renderFailed;
       } catch (error) {
+        // Idle shells aren't eviction candidates. Release only the unpublished
+        // pixels this task allocated, before another draw can reuse the canvas.
+        if (drawCanvas && shell._renderCancel === cancel && !drawCanvas.classList.contains("ready") &&
+            (renderController.signal.aborted || readerContext.readerAbortController.signal.aborted ||
+             /** @type {{name?: string} | null} */ (error)?.name === "AbortError"))
+          drawCanvas.width = drawCanvas.height = 0;
         shell.dataset.renderState = "idle";
         throw error;
       } finally {
@@ -456,7 +465,7 @@ export function createReaderPdfRenderer(readerContext) {
       }
     })().finally(() => {
       if (shell._renderPromise === task) delete shell._renderPromise;
-      if (shell._renderCancel) delete shell._renderCancel;
+      if (shell._renderCancel === cancel) delete shell._renderCancel;
     });
     shell._renderPromise = task;
     return task;

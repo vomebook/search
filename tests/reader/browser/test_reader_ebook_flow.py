@@ -66,6 +66,53 @@ class EbookFlowTests(unittest.TestCase):
                 self.assertEqual(position['chapterIndex'], 2)
                 self.assertAlmostEqual(position['chapterOffset'], 180, delta=2)
 
+    def test_progress_end_before_manifest_keeps_saved_chapter_offset(self):
+        source = ('https://voiceofml-search.hf.space/api/reader-bucket-resource?path=chapters/ebook/epub/'
+                  + 'a' * 64 + '/1234567890abcdef/chapter-manifest.json')
+        manifest = {'version': 1, 'kind': 'epub-chapters', 'chapters': [
+            {'index': i, 'path': f'chapters/chapter-{i:04d}.xhtml', 'bytes': 100} for i in (1, 2, 3)
+        ]}
+        pending = []
+
+        def resource(route):
+            if 'chapter-manifest.json' in route.request.url:
+                pending.append(route)
+            else:
+                route.fulfill(content_type='text/html', body='<h1>Chapter</h1><p style="height:1600px">Text</p>')
+
+        self.expose()
+        self.page.route('**/api/reader-bucket-resource**', resource)
+        reader_url = self.origin + support.PREFIX + '/static/reader.html'
+        self.page.goto(reader_url)
+        self.page.evaluate('entry => VoiceOfMLReaderStore.put(entry)',
+                           dict(url=source, chapterManifest=source, chapterIndex=2, chapterOffset=180))
+        with self.page.expect_request('**/api/reader-bucket-resource**chapter-manifest.json'):
+            self.page.goto(reader_url + '?' + urlencode(dict(url=source, ext='epub-chapters')),
+                           wait_until='domcontentloaded')
+        self.page.wait_for_function("()=>document.documentElement.dataset.readerPhase==='prepare'")
+        panel = self.page.locator('#history')
+        if panel.get_attribute('aria-expanded') != 'true':
+            panel.click()
+        slider = self.page.get_by_role('slider', name='阅读进度')
+        slider.wait_for(state='visible')
+        was_disabled = slider.is_disabled()
+        slider.press('End')
+        # A direct caller must also leave the pending restoration alone.
+        accepted = self.page.evaluate('__ebook.progress(100)')
+        self.assertEqual(len(pending), 1)
+        pending[0].fulfill(json=manifest)
+
+        self.page.wait_for_function("()=>document.documentElement.dataset.readerPhase==='ready'")
+        position = self.page.evaluate('__ebook.captureChapter()')
+        self.assertEqual(position['chapterIndex'], 2)
+        self.assertAlmostEqual(position['chapterOffset'], 180, delta=2)
+        self.assertTrue(was_disabled)
+        self.assertFalse(accepted)
+
+        self.assertTrue(slider.is_enabled())
+        slider.press('End')
+        self.page.wait_for_function('()=>__ebook.percent()===100 && __ebook.captureChapter().chapterIndex===3')
+
     def test_legacy_v5_bookmark_requires_exact_manifest(self):
         self.page.goto(self.origin + support.PREFIX + '/static/reader.html')
         self.assertEqual(self.page.evaluate('''async () => {
@@ -458,21 +505,23 @@ class EbookFlowTests(unittest.TestCase):
         }''')
         self.assertEqual(result,[1,1])
 
-    def open_converted_progress(self, metadata, height=lambda i: 1200 + i * 30, hold=()):
+    def open_converted_progress(self, metadata, height=lambda i: 1200 + i * 30, hold=(), *,
+                                wait_for_ready=True, saved_chapter=None):
         source = ('https://voiceofml-search.hf.space/api/reader-bucket-resource?path=chapters/ebook/epub/'
                   + 'b' * 64 + '/1234567890abcdef/chapter-manifest.json')
         manifest = {'version': 1, 'kind': 'epub-chapters', 'chapters': [
             {'index': i, 'path': f'chapters/chapter-{i:04d}.xhtml', **fields}
             for i, fields in enumerate(metadata, 1)
         ]}
-        requested, held, released = [], {}, set()
+        requested, held, released = [], {}, {}
 
         def fulfill_chapter(route, index):
-            route.fulfill(content_type='text/html', body=(
+            status = released.get(index, 200)
+            route.fulfill(status=status, content_type='text/html', body=(
                 f'<h1>Chapter {index}</h1><p style="height:{height(index)}px">Body {index}</p>'))
 
-        def release(index):
-            released.add(index)
+        def release(index, status=200):
+            released[index] = status
             route = held.pop(index, None)
             if route:
                 fulfill_chapter(route, index)
@@ -490,10 +539,92 @@ class EbookFlowTests(unittest.TestCase):
 
         self.expose()
         self.page.route('**/api/reader-bucket-resource**', resource)
-        self.page.goto(self.origin + support.PREFIX + '/static/reader.html?' + urlencode(
-            dict(url=source, ext='epub-chapters')))
-        self.page.wait_for_function("()=>document.documentElement.dataset.readerPhase==='ready'")
+        reader_url = self.origin + support.PREFIX + '/static/reader.html'
+        if saved_chapter is not None:
+            self.page.goto(reader_url)
+            self.page.evaluate('entry => VoiceOfMLReaderStore.put(entry)', dict(
+                url=source, chapterManifest=source, chapterIndex=saved_chapter, chapterOffset=180))
+        self.page.goto(reader_url + '?' + urlencode(dict(url=source, ext='epub-chapters')),
+                       wait_until='domcontentloaded')
+        if wait_for_ready:
+            self.page.locator('html[data-reader-phase="ready"]').wait_for()
         return requested, release
+
+    def start_end_seek_during_opening(self, hold=(1, 20), saved_chapter=None):
+        requested, release = self.open_converted_progress(
+            [{'bytes': 100}] * 20, hold=hold, wait_for_ready=False, saved_chapter=saved_chapter)
+        self.page.locator('.reader-epub-chapter[data-chapter="3"]').wait_for(state='attached')
+        self.assertIn(saved_chapter or 1, requested)
+        self.assertEqual(self.page.locator('html').get_attribute('data-reader-phase'), 'prepare')
+        panel = self.page.locator('#history')
+        if panel.get_attribute('aria-expanded') != 'true':
+            panel.click()
+        slider = self.page.get_by_role('slider', name='阅读进度')
+        self.assertTrue(slider.is_enabled())
+        with self.page.expect_request(lambda request: 'chapter-0020.xhtml' in request.url):
+            slider.press('End')
+        return release
+
+    def assert_opening_end_landing(self):
+        self.assertTrue(self.page.evaluate('__ebook.seekTask()'))
+        self.assertEqual(self.page.evaluate('__ebook.captureChapter().chapterIndex'), 20)
+        self.assertEqual(self.page.evaluate('__ebook.percent()'), 100)
+
+    def test_end_seek_landing_survives_late_opening_chapter_404(self):
+        release = self.start_end_seek_during_opening()
+        release(20)
+        self.assert_opening_end_landing()
+        self.page.locator('html[data-reader-phase="ready"]').wait_for()
+        release(1, status=404)
+        self.page.locator('.reader-chapter-load-error[data-chapter="1"], .reader-error').first.wait_for(state='attached')
+        self.assertEqual(self.page.locator('html').get_attribute('data-reader-phase'), 'ready')
+        self.assertEqual(self.page.locator('.reader-error').count(), 0)
+        self.assert_opening_end_landing()
+
+    def test_opening_chapter_404_waits_for_pending_end_seek_to_land(self):
+        release = self.start_end_seek_during_opening()
+        release(1, status=404)
+        self.page.locator('.reader-chapter-load-error[data-chapter="1"]').wait_for(state='attached')
+        self.assertEqual(self.page.locator('html').get_attribute('data-reader-phase'), 'prepare')
+        release(20)
+        self.page.locator('html[data-reader-phase="ready"]').wait_for()
+        self.assert_opening_end_landing()
+        self.assertEqual(self.page.locator('.reader-error').count(), 0)
+
+    def test_failed_end_seek_does_not_hide_failed_saved_chapter_or_overwrite_progress(self):
+        release = self.start_end_seek_during_opening(hold=(2, 20), saved_chapter=2)
+        release(20, status=404)
+        self.assertFalse(self.page.evaluate('__ebook.seekTask()'))
+        self.assertEqual(self.page.locator('html').get_attribute('data-reader-phase'), 'prepare')
+        release(2, status=404)
+        self.page.locator('.reader-error').wait_for()
+        self.assertEqual(self.page.locator('#content').get_attribute('data-error-code'), 'READER_RESTORE')
+        self.assertEqual(self.page.evaluate('''async () => {
+          const {chapterIndex, chapterOffset} = await VoiceOfMLReaderStore.get(new URL(location.href).searchParams.get('url'));
+          return [chapterIndex, chapterOffset];
+        }'''), [2, 180])
+
+    def test_superseded_end_seek_cannot_keep_failed_opening_pending(self):
+        release = self.start_end_seek_during_opening(hold=(1, 16, 20))
+        release(1, status=404)
+        self.page.locator('.reader-chapter-load-error[data-chapter="1"]').wait_for(state='attached')
+        with self.page.expect_request(lambda request: 'chapter-0016.xhtml' in request.url):
+            self.assertTrue(self.page.evaluate('__ebook.progress(75)'))
+        release(16, status=404)
+        self.assertFalse(self.page.evaluate('__ebook.seekTask()'))
+        # The obsolete End request is still held, but it can no longer land.
+        self.page.locator('.reader-error').wait_for()
+        self.assertEqual(self.page.locator('#content').get_attribute('data-error-code'), 'READER_NETWORK')
+
+    def test_scroll_intent_cancels_pending_end_seek_without_rescuing_opening(self):
+        release = self.start_end_seek_during_opening()
+        release(1, status=404)
+        self.page.locator('.reader-chapter-load-error[data-chapter="1"]').wait_for(state='attached')
+        self.page.locator('#viewport').dispatch_event('wheel', {'deltaY': 120})
+        # No replacement chapter navigation starts; the abandoned seek must not block failure.
+        self.page.locator('.reader-error').wait_for()
+        self.assertFalse(self.page.evaluate('__ebook.seekTask()'))
+        self.assertEqual(self.page.locator('#content').get_attribute('data-error-code'), 'READER_NETWORK')
 
     def seek_converted(self, percent, chapter):
         self.assertTrue(self.page.evaluate('value=>{__ebook.progress(value);return __ebook.seekTask()}', percent))

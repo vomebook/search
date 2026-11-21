@@ -247,6 +247,8 @@ export function createReaderUi(readerContext) {
   /** @param {string} name */
   function selectPanel(name) {
     if (name === "media" && readerContext.mediaTab.hidden) name = "bookmarks";
+    if (readerContext.panelState.open && name !== readerContext.panelState.selected)
+      readerContext.readerPanelInteractionSerial++;
     readerContext.updatePanelState({ selected: name });
     if (readerContext.progressTools) readerContext.progressTools.hidden = !["toc", "media"].includes(name);
     for (const button of /** @type {NodeListOf<HTMLButtonElement>} */ (document.querySelectorAll(".reader-panel-tabs button"))) {

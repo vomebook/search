@@ -5,15 +5,15 @@ const path = require('node:path');
 const vm = require('node:vm');
 const cp = require('node:child_process');
 
-function harness(original = false) {
+function harness(original = false, globals = {}) {
   const root = path.join(__dirname, '../..');
   let source = original ? cp.execFileSync('git', ['-c', 'safe.directory=*', '-C', root, 'show', 'HEAD:static/tts-client.js'], { encoding: 'utf8' }) : fs.readFileSync(path.join(root, 'static/tts-client.js'), 'utf8');
   // Expose the real closures, without a second response implementation.
   source = source.replace('  controls();\n  // readFrom:', '  globalThis.__ttsTest = { accept, request };\n  controls();\n  // readFrom:');
   const elements = new Map();
-  const element = () => ({ value: 'off', hidden: false, textContent: '', classList: { toggle() {} }, setAttribute() {}, addEventListener() {}, querySelector() { return null; } });
-  const document = { body: element(), querySelector(selector) { if (!elements.has(selector)) elements.set(selector, element()); return elements.get(selector); }, addEventListener() {} };
-  const context = vm.createContext({ document, window: { addEventListener() {} }, navigator: {}, Intl, AbortController, setTimeout, clearTimeout, MutationObserver: class { observe() {} }, performance, console });
+  const element = (value = 'off') => ({ value, hidden: false, textContent: '', classList: { toggle() {} }, setAttribute() {}, addEventListener() {}, querySelector() { return null; }, append() {}, remove() {}, contains() { return false; } });
+  const document = { body: element(), querySelector(selector) { if (!elements.has(selector)) elements.set(selector, element({ '#speech-pitch': '0', '#speech-speed': '1' }[selector])); return elements.get(selector); }, addEventListener() {} };
+  const context = vm.createContext({ document, window: { addEventListener() {} }, navigator: {}, Intl, AbortController, setTimeout, clearTimeout, MutationObserver: class { observe() {} }, performance, console, ...globals });
   vm.runInContext(source, context);
   return context;
 }
@@ -69,4 +69,109 @@ test('HTTP error preserves server message, status, code and Retry-After', async 
   await assert.rejects(context.__ttsTest.request('/test', {}, { controllers: new Set() }), e => e.message === '稍后重试' && e.status === 429 && e.code === 'client_busy' && e.retryAfter === 7);
   context.fetch = async () => ({ ok: false, status: 502, headers: { get: () => null }, json: async () => { throw new SyntaxError('html'); } });
   await assert.rejects(context.__ttsTest.request('/test', {}, { controllers: new Set() }), e => e.message === '语音请求失败（502）' && e.status === 502);
+});
+
+const turn = () => new Promise(resolve => setImmediate(resolve));
+const audioResponse = (size = 12) => ({ ok: true, headers: { get: () => 'audio/mpeg' }, blob: async () => new Blob([new Uint8Array(size)]) });
+
+async function playingClips(t) {
+  t.mock.timers.enable({ apis: ['Date', 'setTimeout'] });
+  const players = [], requests = [];
+  const { data } = fixtures();
+  const url = index => `/tts/audio/${data.id}/parts/${index}.mp3`;
+  data.progress.parts = Array.from({ length: 4 }, (_, index) => ({ ...data.progress.parts[0], index, start: index * 2, end: (index + 1) * 2, audio_url: url(index) }));
+  data.progress.total_parts = data.progress.parts.length;
+  const context = harness(false, {
+    Date, performance: { now: () => Date.now() }, crypto,
+    URL: { createObjectURL: () => 'blob:cached', revokeObjectURL() {} },
+    Audio: class extends EventTarget {
+      constructor() { super(); players.push(this); }
+      paused = true;
+      getAttribute(name) { assert.equal(name, 'src'); return this.src || null; }
+      removeAttribute(name) { assert.equal(name, 'src'); delete this.src; }
+      load() { this.paused = true; }
+      play() { this.paused = false; return Promise.resolve(); }
+      pause() { this.paused = true; }
+    },
+    fetch: (address, { method, signal }) => {
+      if (method === 'POST') return Promise.resolve({ ok: true, json: async () => data });
+      if (method === 'DELETE') return Promise.resolve({ ok: true });
+      const part = data.progress.parts.find(part => address.endsWith(part.audio_url));
+      assert.ok(part, `unexpected fetch: ${address}`);
+      const pending = Promise.withResolvers();
+      requests.push({ index: part.index, ...pending });
+      signal.addEventListener('abort', () => pending.reject(signal.reason), { once: true });
+      return pending.promise;
+    }
+  });
+  const speech = context.window.CCRDSpeech;
+  t.after(() => speech.stop());
+  speech.previewLoaded({ id: 'document', adapter: { text: '甲。乙。丙。丁。', done: true }, tools: { querySelector: () => true } });
+  speech.readFrom(0, { exact: true });
+  await turn();
+  const [player] = players;
+  assert.ok(player.src?.endsWith(url(0)));
+  player.dispatchEvent(new Event('loadedmetadata'));
+  assert.equal(player.paused, false);
+  const indices = () => requests.map(request => request.index);
+  assert.deepEqual(indices(), [1, 2]); // Two held prefetches while clip 0 plays.
+  return { speech, player, requests, indices, url };
+}
+
+for (const [name, fail] of [
+  ['rejection', request => request.reject(new TypeError('offline'))],
+  ['HTTP error', request => request.resolve({ ok: false, status: 503 })],
+  ['non-audio response', request => request.resolve({ ok: true, headers: { get: () => 'text/html' } })],
+  ['body read failure', request => request.resolve({ ...audioResponse(), blob: async () => { throw new TypeError('offline'); } })],
+  ['wrong byte count', request => request.resolve(audioResponse(11))]
+]) {
+  test(`prefetch ${name} frees the slot without retrying or blocking foreground audio`, async t => {
+    const { speech, player, requests, indices, url } = await playingClips(t);
+    fail(requests[0]);
+    await turn();
+    assert.deepEqual(indices(), [1, 2, 3]); // The healthy lookahead can use the freed slot.
+    assert.equal(player.paused, false);
+    requests[1].resolve(audioResponse());
+    await turn();
+    assert.deepEqual(indices(), [1, 2, 3]); // Sibling completion must also respect cooldown.
+
+    player.dispatchEvent(new Event('ended'));
+    assert.ok(player.src.endsWith(url(1)), 'the missed clip uses its foreground URL during cooldown');
+    player.dispatchEvent(new Event('loadedmetadata'));
+    assert.equal(player.paused, false);
+    assert.equal(speech.state().position, 2);
+    assert.equal(speech.state().playing, true);
+    player.dispatchEvent(new Event('ended'));
+    assert.equal(player.src, 'blob:cached'); // Valid prefetched audio is still used.
+    assert.equal(speech.state().position, 4);
+  });
+}
+
+test('prefetch retries on the playback pump after the cooldown', async t => {
+  const { player, requests, indices } = await playingClips(t);
+  requests[0].reject(new TypeError('offline'));
+  requests[1].resolve(audioResponse());
+  await turn();
+  for (let i = 0; i < 3; i++) {
+    t.mock.timers.tick(600);
+    await turn();
+    assert.deepEqual(indices(), [1, 2, 3]);
+  }
+  t.mock.timers.tick(600);
+  await turn();
+  assert.deepEqual(indices(), [1, 2, 3, 1]);
+  requests[3].resolve(audioResponse());
+  await turn();
+  player.dispatchEvent(new Event('ended'));
+  assert.equal(player.src, 'blob:cached');
+});
+
+test('pausing aborts held prefetches without starting a cooldown', async t => {
+  const { speech, indices } = await playingClips(t);
+  speech.pause();
+  await turn();
+  assert.deepEqual(indices(), [1, 2]);
+  speech.readFrom(0, { exact: true });
+  await turn();
+  assert.deepEqual(indices(), [1, 2, 1, 2]);
 });

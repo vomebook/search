@@ -318,7 +318,11 @@ readerWorkerScope.addEventListener("fetch", (event) => {
   const immutable = /\.[0-9a-f]{12}\.(?:js|mjs|css)$/.test(url.pathname) || isDjvuDecoderAsset(url.href) || isRuffleAsset(url.href);
   // Assign order before any asynchronous work, using the actual normalized key.
   const mutableKey = new URL(typeof cacheKey === "string" ? cacheKey : cacheKey.url, self.location.origin).href;
-  const mutable = immutable ? null : mutableRequests.get(mutableKey) || { started: 0, committed: 0, pending: 0, writes: null, queued: null };
+  // Online navigations may see the next release before its worker activates.
+  // In a hashed build only precache owns the offline Search shell; development
+  // still refreshes its unversioned shell. Protect the key, not just navigations.
+  const precachedSearchShell = currentAssetPaths.size > 0 && mutableKey.replace(/#.*$/, "") === self.location.origin + "/search/";
+  const mutable = immutable || precachedSearchShell ? null : mutableRequests.get(mutableKey) || { started: 0, committed: 0, pending: 0, writes: null, queued: null };
   const sequence = mutable ? ++mutable.started : 0;
   if (mutable) {
     ++mutable.pending;
@@ -340,7 +344,7 @@ readerWorkerScope.addEventListener("fetch", (event) => {
     return previous;
   }).catch(() => undefined);
   const networkPromise = Promise.all([cachePromise, immutable ? cachedPromise : null]).then(([cache, cached]) => cached || fetch(revalidatedRequest(event.request)).then(response => {
-    if (cache && response.ok && response.status !== 206) {
+    if (cache && !precachedSearchShell && response.ok && response.status !== 206) {
       cacheWrite = mutable ? writeMutable(mutable, sequence, cache, cacheKey, response)
         : cache.put(cacheKey, response.clone()).then(() => pruneHashedAssets(cache)).catch(() => {});
     }

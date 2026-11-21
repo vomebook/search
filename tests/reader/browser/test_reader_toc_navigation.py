@@ -3,6 +3,9 @@
 Covers chapter bundles (`epub-chapters`): early and late entries, fragments inside
 large chapters, re-jumps after window trimming, rapid successive clicks, the
 virtualized directory and the opening hint. Also covers PDF and HTML navigation.
+
+Run the offline drawer race regressions from either repository root:
+    python -B -m unittest -v -k test_delayed_toc_row tests.reader.browser.test_reader_toc_navigation
 """
 import re
 import unittest
@@ -355,6 +358,72 @@ class TocNavigationTests(unittest.TestCase):
             except Exception: pass
         self.page.wait_for_function('()=>__toc.nav().currentChapterIndex===9')
         self.assertFalse(self.panel_open(),'late completion must not reopen the panel')
+
+    def click_delayed_toc_row(self):
+        held = []
+        target = '**/api/reader-bucket-resource?path=*chapter-0010.xhtml'
+
+        def delay_chapter():
+            self.page.route(target, lambda route: held.append(route))
+
+        # The row click, not ambient prefetch, must request the target chapter.
+        self.page.add_init_script("Object.defineProperty(document, 'hidden', {value:true})")
+        self.open_chapters(12, before_open=delay_chapter)
+        if not self.panel_open():
+            self.page.locator('#history').click()
+        self.page.locator('#toc-tab').click()
+        with self.page.expect_request(target):
+            self.page.locator('#toc-list [data-toc-index="9"] [role="link"]').click()
+        self.assertEqual(len(held), 1, 'target chapter request was not held')
+        self.assertIsNone(self.offset_of('.reader-epub-chapter[data-chapter="10"]'))
+        self.assertTrue(self.panel_open(), 'the drawer should remain open until the chapter lands')
+        return held[0]
+
+    def release_delayed_toc_row(self, route):
+        route.fulfill(content_type='text/html', body=chapter_body(10))
+        self.page.wait_for_function('()=>__toc.nav().currentChapterIndex===9')
+        self.assertEqual(self.landed_chapter(), 10)
+        self.assertEqual(self.page.locator('#toc-list [aria-current="location"]').get_attribute('title'), '第10章')
+
+    def test_delayed_toc_row_closes_untouched_drawer(self):
+        route = self.click_delayed_toc_row()
+        self.release_delayed_toc_row(route)
+        self.assertFalse(self.panel_open())
+        self.assertEqual(self.page.evaluate('document.activeElement.id'), 'history')
+
+    def test_delayed_toc_row_respects_reopened_drawer(self):
+        route = self.click_delayed_toc_row()
+        self.page.locator('#history-close').click()
+        self.assertFalse(self.panel_open())
+        self.page.locator('#history').click()
+        self.page.locator('#bookmarks-tab').click()
+        self.assertEqual(self.page.evaluate('document.activeElement.id'), 'bookmarks-tab')
+
+        self.release_delayed_toc_row(route)
+        self.assertEqual(self.page.evaluate('document.activeElement.id'), 'bookmarks-tab')
+        self.assertTrue(self.panel_open())
+        self.assertTrue(self.page.locator('#history-panel').evaluate(
+            "panel=>panel.classList.contains('is-open') && !panel.inert"))
+        self.assertEqual(self.page.locator('#bookmarks-tab').get_attribute('aria-selected'), 'true')
+        self.assertTrue(self.page.locator('#bookmarks-panel').is_visible())
+
+    def test_delayed_toc_row_respects_tab_switch_without_reopening(self):
+        route = self.click_delayed_toc_row()
+        self.page.locator('#bookmarks-tab').click()
+        self.page.locator('#toc-tab').click()
+
+        self.release_delayed_toc_row(route)
+        self.assertTrue(self.panel_open(), 'switching away and back relinquishes the old click’s close')
+        self.assertEqual(self.page.evaluate('document.activeElement.id'), 'toc-tab')
+
+    def test_delayed_toc_row_does_not_refocus_after_manual_close(self):
+        route = self.click_delayed_toc_row()
+        self.page.locator('#history-close').click()
+        self.page.locator('#viewport').focus()
+
+        self.release_delayed_toc_row(route)
+        self.assertFalse(self.panel_open())
+        self.assertEqual(self.page.evaluate('document.activeElement.id'), 'viewport')
 
     def test_rapid_chapter_switching_is_last_request_wins_and_keeps_panel(self):
         held=[]

@@ -123,6 +123,8 @@ function isChapterTocEntry(entry) {
 /** @param {import("../../../typings/reader-chapter-format-strict").ChapterFormatContext} readerContext */
 export function createReaderChapterFormat(readerContext) {
   const markerInset = 8;
+  /** @type {((generation: number) => ((landed: boolean) => void) | null) | null} */
+  let trackOpeningSeek = null;
   // Keep an explicit End seek at the bottom if late chapter content changes
   // the scroll range. For a book that fits, this also distinguishes End from Home.
   /** @type {{generation: number, limit: number} | null} */
@@ -157,8 +159,33 @@ export function createReaderChapterFormat(readerContext) {
     frame.appendChild(layoutStyle);
     const openingGeneration = readerContext.readerRuntime.currentGeneration("navigation");
     const openingLanding = Promise.withResolvers();
-    /** @type {Promise<unknown> | null} */
+    /** @type {Promise<void> | null} */
     let pendingOpeningJump = null;
+    /** @type {((landed: boolean) => void) | null} */
+    let finishPendingOpeningJump = null;
+    const cancelOpeningJump = () => finishPendingOpeningJump?.(false);
+    /** @param {number} generation */
+    function trackOpeningJump(generation) {
+      if (chapterWindowReady || !readerContext.isReaderGenerationCurrent("navigation", generation)) return null;
+      cancelOpeningJump();
+      const jump = Promise.withResolvers();
+      pendingOpeningJump = jump.promise;
+      const finish = (/** @type {boolean} */ landed) => {
+        if (pendingOpeningJump !== jump.promise) return;
+        pendingOpeningJump = null;
+        finishPendingOpeningJump = null;
+        stopWatching();
+        if (landed && readerContext.isReaderGenerationCurrent("navigation", generation)) openingLanding.resolve(undefined);
+        jump.resolve(undefined);
+      };
+      // A superseded jump can no longer land, even if its chapter is still loading.
+      const runtime = /** @type {ReaderRuntime} */ (readerContext.readerRuntime);
+      const stopWatching = runtime.events.on("generation", () => {
+        if (!readerContext.isReaderGenerationCurrent("navigation", generation)) finish(false);
+      });
+      finishPendingOpeningJump = finish;
+      return finish;
+    }
     readerContext.content.appendChild(frame);
     const loaded = new Set(), retainedBytes = new Map(),
       manifestBase = readerContext.trustedReaderAssetManifestUrl(readerContext.chapterManifestUrl || readerContext.sourceUrl);
@@ -288,6 +315,11 @@ export function createReaderChapterFormat(readerContext) {
       /** @type {IntersectionObserver} */ (previous ? chapterPreviousObserver : readerContext.chapterManifestObserver).observe(marker);
       return marker;
     };
+    /** @param {string} fragment */
+    const decodeChapterFragment = fragment => {
+      const id = fragment.replace(/^#/, "");
+      try { return decodeURIComponent(id); } catch (_) { return id; }
+    };
     /** @param {Element} article @param {string} fragment */
     const chapterTarget = (article, fragment) =>
       !fragment || article.id === fragment ? article :
@@ -296,13 +328,14 @@ export function createReaderChapterFormat(readerContext) {
     const bindChapterTocTargets = (article, entries) => {
       const batchThreshold = 16;
       if (entries.length < batchThreshold) {
-        for (const entry of entries) entry.target = chapterTarget(article, entry.fragment);
+        for (const entry of entries) entry.target = chapterTarget(article, decodeChapterFragment(entry.fragment));
         return;
       }
       /** @type {Map<string, Element | null>} */
       const targets = new Map();
-      for (const entry of entries) {
-        const { fragment } = entry;
+      const fragments = entries.map(entry => decodeChapterFragment(entry.fragment));
+      for (const [index, entry] of entries.entries()) {
+        const fragment = fragments[index] || "";
         if (!fragment || fragment === article.id) entry.target = article;
         // With /u, the surrogate range matches only unpaired code units.
         // Keep the selector path for these and NUL, which CSS may replace.
@@ -326,8 +359,8 @@ export function createReaderChapterFormat(readerContext) {
           if (!remaining) break;
         }
       }
-      for (const entry of entries) {
-        const target = targets.get(entry.fragment);
+      for (const [index, entry] of entries.entries()) {
+        const target = targets.get(fragments[index] || "");
         if (target !== undefined) entry.target = target;
       }
     };
@@ -509,8 +542,8 @@ export function createReaderChapterFormat(readerContext) {
     };
     /** @param {import("../../../typings/reader-chapter-format-strict").Chapter} chapter @param {number} generation @param {string | {fragment?: string}} destination */
     const activateChapter = async (chapter, generation, destination = "") => {
-      const openingJump = !chapterWindowReady ? Promise.withResolvers() : null;
-      if (openingJump) pendingOpeningJump = openingJump.promise;
+      const finishOpeningJump = trackOpeningJump(generation);
+      let landed = false;
       chapterFocusIndex = chapter.index;
       navigationProtectionCleanup?.();
       navigationTargetChapter = chapter.index;
@@ -520,10 +553,7 @@ export function createReaderChapterFormat(readerContext) {
         await fetchChapter(chapter, true, chapterWindowReady);
         if (!readerContext.isReaderGenerationCurrent("navigation", generation)) return false;
         const node = frame.querySelector(`.reader-epub-chapter[data-chapter="${chapter.index}"]`);
-        let id = (typeof destination === "string" ? destination : destination.fragment || "").replace(/^#/, "");
-        try {
-          id = decodeURIComponent(id);
-        } catch (_) {}
+        const id = decodeChapterFragment(typeof destination === "string" ? destination : destination.fragment || "");
         const anchor = chapterTarget(/** @type {Element} */ (node), id);
         if (!anchor) throw new Error("EPUB_MISSING_ANCHOR");
         readerContext.chapterScrollAnchors.invalidate();
@@ -553,13 +583,10 @@ export function createReaderChapterFormat(readerContext) {
         readerContext.syncHeadingLocation();
         readerContext.updateProgressTools();
         readerContext.scheduleSave();
-        openingLanding.resolve(undefined);
+        landed = true;
         return true;
       } finally {
-        if (openingJump) {
-          if (pendingOpeningJump === openingJump.promise) pendingOpeningJump = null;
-          openingJump.resolve(undefined);
-        }
+        finishOpeningJump?.(landed);
         chapterNavigating--;
         if (!landingProtected && navigationTargetChapter === chapter.index && !navigationProtectionCleanup)
           navigationTargetChapter = 0;
@@ -753,6 +780,8 @@ export function createReaderChapterFormat(readerContext) {
       chapterPreviousObserver?.disconnect();
       readerContext.chapterManifestObserver = null;
       readerContext.chapterManifestLoader = null;
+      trackOpeningSeek = null;
+      cancelOpeningJump();
       releaseProgressEnd();
       for (const bytes of retainedBytes.values()) chapterBudget.release(bytes);
       retainedBytes.clear();
@@ -784,6 +813,7 @@ export function createReaderChapterFormat(readerContext) {
       const fraction = span > 0 ? Math.max(0, Math.min(1, position.chapterOffset / span)) : 0;
       return progress.at(position.chapterIndex, fraction);
     };
+    trackOpeningSeek = trackOpeningJump;
     readerContext.chapterManifestLoader = chapterManifestLoader;
     setChapterToc();
     await readerContext.getInitialReaderRestoration();
@@ -809,6 +839,8 @@ export function createReaderChapterFormat(readerContext) {
       });
     }
     chapterWindowReady = true;
+    trackOpeningSeek = null;
+    cancelOpeningJump();
     if (readerContext.isReaderGenerationCurrent("navigation", openingGeneration)) readerContext.chapterScrollAnchors.invalidate();
     for (const article of frame.querySelectorAll(".reader-epub-chapter")) readerContext.chapterScrollAnchors.observe(article);
     scheduleChapterWindow();
@@ -850,26 +882,34 @@ export function createReaderChapterFormat(readerContext) {
         !readerContext.isReaderGenerationCurrent("navigation", generation) ||
         !matchesChapterManifest(entry.chapterManifest, readerContext.chapterManifestUrl || readerContext.sourceUrl,
           readerContext.trustedReaderAssetManifestUrl)) return false;
-    const chapter = await loader(entry.chapterIndex);
-    if (!chapter?.isConnected || !readerContext.isReaderGenerationCurrent("navigation", generation)) return false;
-    const viewport = readerContext.viewport, last = entry.chapterIndex === loader.count;
-    releaseProgressEnd();
-    if (progressFraction === 0 && entry.chapterIndex === 1) viewport.scrollTop = 0;
-    else if (progressFraction === 1 && last) {
-      const limit = viewport.scrollHeight - viewport.clientHeight;
-      progressEnd = { generation, limit };
-      viewport.scrollTop = limit;
-    } else {
-      const rect = chapter.getBoundingClientRect(), marker = viewport.getBoundingClientRect().top + markerInset;
-      const offset = progressFraction === undefined ? Number(entry.chapterOffset) || 0
-        : chapterProgressHeight(rect, marker, last) * progressFraction;
-      viewport.scrollTop += rect.top - marker + offset;
+    // Only a deliberate progress seek can replace the startup chapter, not saved-state restoration.
+    const finishOpeningJump = progressFraction === undefined ? null : trackOpeningSeek?.(generation);
+    let landed = false;
+    try {
+      const chapter = await loader(entry.chapterIndex);
+      if (!chapter?.isConnected || !readerContext.isReaderGenerationCurrent("navigation", generation)) return false;
+      const viewport = readerContext.viewport, last = entry.chapterIndex === loader.count;
+      releaseProgressEnd();
+      if (progressFraction === 0 && entry.chapterIndex === 1) viewport.scrollTop = 0;
+      else if (progressFraction === 1 && last) {
+        const limit = viewport.scrollHeight - viewport.clientHeight;
+        progressEnd = { generation, limit };
+        viewport.scrollTop = limit;
+      } else {
+        const rect = chapter.getBoundingClientRect(), marker = viewport.getBoundingClientRect().top + markerInset;
+        const offset = progressFraction === undefined ? Number(entry.chapterOffset) || 0
+          : chapterProgressHeight(rect, marker, last) * progressFraction;
+        viewport.scrollTop += rect.top - marker + offset;
+      }
+      readerContext.chapterScrollAnchors.remember();
+      readerContext.syncHeadingLocation();
+      readerContext.updateProgressTools();
+      readerContext.scheduleSave();
+      landed = true;
+      return true;
+    } finally {
+      finishOpeningJump?.(landed);
     }
-    readerContext.chapterScrollAnchors.remember();
-    readerContext.syncHeadingLocation();
-    readerContext.updateProgressTools();
-    readerContext.scheduleSave();
-    return true;
   }
 
   return {

@@ -160,6 +160,37 @@ class PositionControlTests(unittest.TestCase):
         self.assertEqual(self.page.evaluate('findVirtualIndex(getResultScrollTop())'), 0)
         self.assertTrue(self.page.locator('#return-to-position-btn').is_hidden())
 
+    def test_position_response_before_query_debounce_keeps_new_draft(self):
+        self.page.evaluate('blockPosition=true')
+        self.input_position(95001)
+        self.page.wait_for_function('!!window.releasePosition')
+        self.page.clock.install()
+        self.page.clock.pause_at(self.page.evaluate('Date.now() + 100'))
+        search_input = self.page.locator('#search-input')
+        search_input.fill('paging-latest')
+        # The completion should keep only the query debounce, not a pending size edit.
+        self.page.evaluate('''()=>{
+          DOM.filterMinSize.value='7';
+          DOM.filterMinSize.dispatchEvent(new Event('input',{bubbles:true}));
+        }''')
+        self.assertEqual(self.page.evaluate('[STATE.query, searchTimer !== null, sizeFilterTimer !== null]'),
+                         ['paging-ui', True, True])
+        self.page.clock.run_for(50)
+        self.page.evaluate('blockPosition=false;releasePosition()')
+        self.wait_position(95000)
+        self.assertEqual(self.page.evaluate('[DOM.searchInput.value, STATE.query, searchTimer !== null, sizeFilterTimer]'),
+                         ['paging-latest', 'paging-ui', True, None])
+
+        self.page.clock.run_for(49)
+        self.assertEqual(self.page.evaluate('STATE.query'), 'paging-ui')
+        self.page.clock.run_for(1)
+        self.assertEqual(self.page.evaluate('STATE.query'), 'paging-latest')
+        self.page.clock.resume()
+        self.page.wait_for_function('displayedSearchView?.key === getSearchViewKey()')
+        self.wait_position(0)
+        self.assertIsNone(self.page.evaluate('STATE.filterMinSize'))
+        self.assertTrue(self.page.locator('#return-to-position-btn').is_hidden())
+
     def test_normal_search_offers_fixed_position_and_scroll_dismisses_it(self):
         self.input_position(95001)
         self.wait_position(95000)

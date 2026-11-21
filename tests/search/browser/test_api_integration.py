@@ -721,6 +721,57 @@ class ApiIntegrationTest(unittest.TestCase):
         )
         self.assertEqual(reused, {'shared': True, 'firstTurn': [2], 'requested': [2, 3]})
 
+    def test_three_speculative_failures_do_not_block_foreground_page_two(self):
+        requested_pages = []
+        api_recovered = False
+
+        def paginated_search(route):
+            body = route.request.post_data_json
+            page, size = body["page"], body["page_size"]
+            requested_pages.append(page)
+            if page > 1 and not api_recovered:
+                route.fulfill(status=503, content_type="application/json", body='{"error":"test"}')
+                return
+            total = 3 * size + 1
+            rows = [result(f"book-{i}") for i in range((page - 1) * size, min(page * size, total))]
+            payload = {"page": page, "page_size": size, "total": total,
+                       "generation": "prefetch-recovery", "results": rows}
+            route.fulfill(status=200, content_type="application/json", body=json.dumps(payload))
+
+        # Hold the first speculative failure until startup metadata has settled;
+        # a successful catalog request can reset the circuit during startup.
+        self.page.add_init_script('''(() => {
+          const nativeFetch = window.fetch.bind(window);
+          const release = new Promise(resolve => { window.releasePrefetchFailures = resolve; });
+          window.fetch = async (input, options) => {
+            const response = await nativeFetch(input, options);
+            if (String(input).includes('/api/search') && response.status === 503) await release;
+            return response;
+          };
+        })()''')
+        self.page.route("**/api/search", paginated_search)
+        self.load("#/?q=prefetch-recovery&local=0")
+        self.page.wait_for_function("searchPrefetchAbortController?.active.has(2)")
+        self.page.wait_for_load_state("networkidle")
+        self.page.evaluate("window.releasePrefetchFailures()")
+        # All three lookahead requests must settle before the user scrolls.
+        self.page.wait_for_function("searchPrefetchAbortController?.attempted.has(4) && "
+                                    "searchPrefetchAbortController.active.size === 0 && !STATE.isLoading")
+        self.assertCountEqual(requested_pages, [1, 2, 3, 4])
+        self.assertEqual(self.page.evaluate("STATE._loadedPage"), 1)
+        self.assertEqual(self.page.evaluate("pagingController.readRecovery().failures"), 0)
+        circuit_after_prefetch = self.page.evaluate("[apiAvailable, apiFailureCount, apiProbeTimer]")
+
+        api_recovered = True
+        before = len(requested_pages)
+        self.page.evaluate("DOM.resultsContainer.scrollTop = DOM.resultsContainer.scrollHeight")
+        self.page.wait_for_function("!STATE.isLoading && (STATE._loadedPage === 2 || "
+                                    "pagingController.readRecovery().failures > 0)")
+        self.assertIn(2, requested_pages[before:], f"Circuit after prefetch: {circuit_after_prefetch}")
+        self.assertEqual(circuit_after_prefetch, [True, 0, None])
+        self.assertEqual(self.page.evaluate("STATE._resultBackend"), "api")
+        self.assertEqual(self.page.evaluate("STATE.results.map(row => row.File)"), [f"book-{i}" for i in range(200)])
+
     def test_three_failures_open_circuit_and_fast_probe_recovers(self):
         self.page.add_init_script(
             """(() => {

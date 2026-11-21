@@ -986,10 +986,9 @@ function prefetchSearchPages(base, template) {
     scheduleReady: page => scheduleBottomLoad(0, page),
     writeCached: (key, data) => setCachedSearchResponse(key, data, true),
     onFailure: error => {
-      // Generation changes are healthy API responses; foreground demand still
-      // chooses the backend, including a now-ready local Worker.
+      // Generation changes still indicate a healthy API response. Other
+      // speculative failures must not block foreground page requests.
       if (error.message === "RESTORE_PAGE_CHANGED") noteApiSuccess();
-      else noteSearchApiFailure(error);
     },
   });
   return prefetch.prefetch(base, template);
@@ -1927,7 +1926,7 @@ function showSavedSearchViewport(viewport, position, task) {
     scroll: {index: position.index, offset: position.offset, viewKey: position.key}, savedAt: Date.now() };
   task.preview = true;
   resultSnapshots.put(position.key, snapshot);
-  restoreSearchViewSnapshot(position.key, true, true);
+  restoreSearchViewSnapshot(position.key, true, { preserveRestore: true });
   resultSnapshots.remove(position.key);
   showPositionRestoreStatus("已恢复上次画面，正在核对结果…");
 }
@@ -2033,7 +2032,8 @@ const positionRestoration = VoiceOfMLPositionRestoration.create({
   release: () => { positionRestore = null; showPositionRestoreStatus(""); },
   applyPreview: snapshot => applyValidatedSearchViewport(snapshot),
   snapshots: resultSnapshots,
-  restoreSnapshot: key => restoreSearchViewSnapshot(key),
+  // Completing a position restore does not own query input typed while it was loading.
+  restoreSnapshot: key => restoreSearchViewSnapshot(key, true, { preserveQueryDraft: true }),
   completed: () => {},
   failed: message => { STATE.isLoading = false; showPositionRestoreStatus(message, true); },
   notify: message => showToast(message)
@@ -2063,8 +2063,8 @@ function tryRestoreSearchPosition(key, options = {}) {
 
 /** @param {SearchResultSnapshot} snapshot */
 function applyValidatedSearchViewport(snapshot) {
-  const anchor = captureReaderReturnScroll();
-  if (!anchor || !snapshot.window) return;
+  if (!snapshot.window) return;
+  const anchor = snapshot.scroll;
   const previous = STATE.results;
   // Preview selections belong to records, not to slots replaced by validation.
   /** @param {number} index */
@@ -2088,11 +2088,12 @@ function applyValidatedSearchViewport(snapshot) {
   STATE._resultBackend = snapshot.resultBackend || null;
   STATE.page = STATE._loadedPage = snapshot.loadedPage;
   STATE.hasMore = snapshot.hasMore; STATE.isLoading = false;
-  if (VSCROLL.heights.length > STATE.results.length) { VSCROLL.heights.length = STATE.results.length; VSCROLL.heightsDirty = true; }
-  ensureVirtualHeights(STATE.results.length);
+  // The height index covers the whole window, including unmaterialized slots.
+  if (VSCROLL.heights.length > snapshot.total) { VSCROLL.heights.length = snapshot.total; VSCROLL.heightsDirty = true; }
+  ensureVirtualHeights(snapshot.total);
   VSCROLL.measuredWindowKey = "";
   refreshVirtualAfterAppend(false);
-  setResultScrollTop(getVirtualOffset(Math.min(anchor.index, STATE.results.length - 1)) + anchor.offset);
+  setResultScrollTop(getVirtualOffset(anchor.index) + anchor.offset);
   VSCROLL.renderStart = -1; VSCROLL.renderEnd = -1;
   rememberDisplayedSearchView(); renderVisible(); updateSelectionUI(); updateStatusBar(); updateLoadInfo(); updatePagingStatus();
   positionPersistence.scheduleSave(saveSearchPosition);
@@ -2455,8 +2456,8 @@ function applySnapshotCloneHeights(task) {
   VSCROLL.lastScrollTop = getResultScrollTop();
 }
 
-/** @param {string} key @param {boolean} [restoreScroll] @param {boolean} [preserveRestore] */
-function restoreSearchViewSnapshot(key, restoreScroll = true, preserveRestore = false) {
+/** @param {string} key @param {boolean} [restoreScroll] @param {{preserveRestore?: boolean, preserveQueryDraft?: boolean}} [options] */
+function restoreSearchViewSnapshot(key, restoreScroll = true, { preserveRestore = false, preserveQueryDraft = false } = {}) {
   const snapshot = resultSnapshots.snapshots.get(key);
   if (snapshot?.window?.invalid) {
     resultSnapshots.remove(key);
@@ -2468,7 +2469,7 @@ function restoreSearchViewSnapshot(key, restoreScroll = true, preserveRestore = 
   const owner = searchId;
   if (!preserveRestore) cancelPositionRestore();
   if (owner !== searchId) return false;
-  if (!preserveRestore) cancelPendingSearchControls();
+  if (!preserveRestore) cancelPendingSearchControls(preserveQueryDraft);
   // Cloning preserves sparse slots and existing records without validating their fields.
   STATE.results = /** @type {(PagesSearchRecord | null | undefined)[]} */ (resultSnapshots.restoreResults(snapshot, key, STATE.pageSize, restoreScroll, preserveRestore));
   STATE.total = snapshot.total;

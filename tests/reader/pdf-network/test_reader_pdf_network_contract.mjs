@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import {createPdfFetchPolicy, openPdfRangeTask, preparePdfInitialRange}
   from '../../../static/reader/pdf/reader-pdf-network.mjs';
-import {createPdfRangeCache} from '../../../static/reader/pdf/reader-pdf-range-cache.mjs';
+import {createPdfRangeCache, sharedPdfRangeCache} from '../../../static/reader/pdf/reader-pdf-range-cache.mjs';
+import {runInNewContext} from 'node:vm';
 
 globalThis.location = {href:'https://reader.test/'};
 const originalFetch = globalThis.fetch;
@@ -643,32 +644,58 @@ try {
     const saved=Object.fromEntries(['window','parent','location'].map(name=>
       [name,Object.getOwnPropertyDescriptor(globalThis,name)]));
     const key=Symbol.for('voice-reader-pdf-ranges-v1');
+    const FirstOverlayBytes=runInNewContext('Uint8Array');
     try {
       for (const kind of ['overlay','unrelated','cross-origin','non-extensible']) {
-        const child=kind==='non-extensible'?Object.preventExtensions({}):{};
+        let child=kind==='non-extensible'?Object.preventExtensions({}):{};
         const parentWindow={location:{origin:'https://reader.test'},document:{
           querySelectorAll:()=>kind==='overlay'?[{contentWindow:child}]:[]}};
         if(kind==='cross-origin')Object.defineProperty(parentWindow,'location',{get(){throw new Error('cross-origin');}});
         globalThis.window=child;globalThis.parent=parentWindow;
         globalThis.location={href:'https://reader.test/',origin:'https://reader.test'};
-        const requests=[],data=Uint8Array.from({length:20},(_,i)=>i+1);
+        const overlay=kind==='overlay', requests=[];
+        const input=overlay?{...options,rangeChunkSize:262144}:options;
+        const data=overlay?new Uint8Array(8*1024*1024):Uint8Array.from({length:20},(_,i)=>i+1);
+        if(overlay) {
+          const kids=Array.from({length:128},(_,i)=>`${2+i*3} 0 R`).join(' ');
+          data.set(new TextEncoder().encode(`%PDF-1.7\n1 0 obj\n<< /Type /Pages /Count 128 /Kids [${kids}] >>\nendobj\n`));
+        }
         globalThis.fetch=async (_url,init)=>{
           const range=new Headers(init.headers).get('Range');requests.push(range);
           const [,begin,last]=/^bytes=(\d+)-(\d+)$/.exec(range).map(Number);
           return rangeResponse(data,begin,last+1);
         };
-        const load=()=>preparePdfInitialRange(options,{signal:new AbortController().signal,readBytes,limit:64});
-        const first=await load();await first.tail.promise;first.cancelInitial();await turn();
-        if(kind==='overlay') {
+        const load=(read=readBytes)=>preparePdfInitialRange(input,{signal:new AbortController().signal,readBytes:read,limit:data.length});
+        const first=await load(overlay?async response=>new FirstOverlayBytes(await response.arrayBuffer()):readBytes);
+        await first.tail.promise;first.cancelInitial();await turn();
+        if(overlay) {
           assert.ok(parentWindow[key]);assert.equal(child[key],undefined);
+          assert.ok(first.bytes instanceof FirstOverlayBytes);
+          globalThis.window=child={}; // Replace the overlay without replacing its parent's cache.
         } else {
           assert.equal(parentWindow[key],undefined);
           assert.equal(Boolean(child[key]),kind!=='non-extensible');
         }
         requests.length=0;
-        const second=await load();await second.tail.promise;second.cancelInitial();await turn();
+        const second=await load(), tail=await second.tail.promise;
+        second.cancelInitial();await turn();
         assert.equal(requests[0],kind==='non-extensible'?'bytes=0-3':'bytes=0-0',kind);
-        assert.deepEqual([...second.bytes],[1,2,3,4]);
+        assert.ok(second.bytes instanceof Uint8Array,`${kind}: the cached prefix must pass the reader's staging guard`);
+        assert.deepEqual(second.bytes.subarray(0,4),data.subarray(0,4));
+        if(overlay) {
+          assert.deepEqual(requests,['bytes=0-0'],'both the prefix and the tail come from the parent cache');
+          assert.equal(second.rangeChunkSize,16384,'the retained prefix still enables adaptive chunks');
+          assert.ok(tail.bytes instanceof Uint8Array);
+          const rangeCache=sharedPdfRangeCache(), current={etag:'"A"',total:data.length};
+          assert.equal(rangeCache.size,2);
+          assert.equal(rangeCache.byteLength,3*input.rangeChunkSize);
+          const copy=rangeCache.get(input.url,1,6,current);
+          assert.deepEqual(copy,data.subarray(1,6));
+          copy.fill(0);
+          structuredClone(copy,{transfer:[copy.buffer]});
+          assert.equal(copy.byteLength,0);
+          assert.deepEqual(rangeCache.get(input.url,1,6,current),data.subarray(1,6));
+        }
       }
     } finally {
       for(const [name,descriptor] of Object.entries(saved)) {

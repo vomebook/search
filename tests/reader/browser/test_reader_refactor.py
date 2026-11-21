@@ -1938,6 +1938,42 @@ class ReaderRefactorTest(unittest.TestCase):
         self.assertEqual(self.page.url, before)
         self.assertLess(abs(self.page.locator('.reader-epub-chapter[data-chapter="12"] #target').evaluate("node => node.getBoundingClientRect().top - document.querySelector('#viewport').getBoundingClientRect().top")), 5)
 
+    def test_encoded_toc_fragment_tracks_manual_scroll_and_navigates(self):
+        body = '<h2 id="plain">First section</h2>' + '<p>First section text</p>' * 80
+        body += '<h2 id="café">Encoded section</h2>' + '<p>Encoded section text</p>' * 80
+        manifest = {
+            'version': 1, 'kind': 'epub-chapters',
+            'chapters': [{'index': 1, 'path': 'chapters/chapter-0001.xhtml', 'bytes': len(body.encode())}],
+            'toc': [{'title': 'First section', 'chapter': 1, 'depth': 0, 'fragment': 'plain'},
+                    {'title': 'Encoded section', 'chapter': 1, 'depth': 0, 'fragment': 'caf%C3%A9'}],
+        }
+        base = 'chapters/ebook/epub/' + 'a' * 64 + '/' + 'b' * 16 + '/'
+        self.page.route('**/api/reader-bucket-resource**', lambda route: route.fulfill(json=manifest)
+                        if 'chapter-manifest.json' in route.request.url
+                        else route.fulfill(content_type='application/xhtml+xml', body=body))
+        url = 'https://voiceofml-search.hf.space/api/reader-bucket-resource?path=' + base + 'chapter-manifest.json'
+        self.page.emulate_media(reduced_motion='reduce')
+        self.open(self.reader_url('epub-chapters', url=url))
+        self.page.locator('#history').click()
+        current = self.page.locator('#toc-list [aria-current="location"]')
+        first = self.page.get_by_role('link', name='First section', exact=True)
+        encoded = self.page.get_by_role('link', name='Encoded section', exact=True)
+        self.page.locator('#viewport').evaluate("""node => {
+          const first = document.querySelector('#plain');
+          node.scrollTop += first.getBoundingClientRect().top - node.getBoundingClientRect().top + 20;
+        }""")
+        self.assertEqual(current.text_content(timeout=2500), 'First section')
+        self.page.locator('#viewport').evaluate("""node => {
+          const target = document.getElementById('café');
+          node.scrollTop += target.getBoundingClientRect().top - node.getBoundingClientRect().top + 20;
+        }""")
+        self.page.wait_for_function("() => document.querySelector('#toc-list [aria-current=location]')?.textContent === 'Encoded section'", timeout=2500)
+        first.click()
+        self.page.locator('#history').click()
+        encoded.click()
+        self.page.wait_for_function("""() => Math.abs(document.getElementById('café').getBoundingClientRect().top -
+            document.querySelector('#viewport').getBoundingClientRect().top) < 5""")
+
     def test_chapter_search_v2_bucket_index_keeps_checksum_retry_paging_and_highlight(self):
         documents, prefixes, requests = {}, {}, []
         for extension in ('epub', 'mobi', 'azw3', 'fb2'):

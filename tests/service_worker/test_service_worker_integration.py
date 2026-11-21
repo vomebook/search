@@ -141,8 +141,12 @@ class ServiceWorkerIntegrationTest(unittest.TestCase):
             if hashed:
                 worker = worker.replace('READER_SHELL_INTEGRITY = "development"',
                                         f'READER_SHELL_INTEGRITY = {json.dumps(integrity)}')
+                # Stamp the inventory before the worker constructs its Set,
+                # just as the production build does.
+                worker = worker.replace('const currentAssetPaths = new Set(CURRENT_HASHED_ASSETS);', '')
                 worker = worker.replace('readerWorkerScope.addEventListener("install"',
-                                        f'CURRENT_HASHED_ASSETS.push(...PRECACHE_URLS, {json.dumps(current_asset)});\n'
+                                        'const currentAssetPaths = new Set([...PRECACHE_URLS, '
+                                        + json.dumps(current_asset) + ']);\n'
                                         'readerWorkerScope.addEventListener("install"')
             with self.server_state.lock:
                 self.server_state.worker_source = worker

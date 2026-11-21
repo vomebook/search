@@ -53,11 +53,19 @@ function harness(options) {
       if (settings.openError) return Promise.reject(settings.openError);
       const values = store(name);
       const cache = {
-        addAll(urls) {
+        async addAll(urls) {
           operations.addAll.push(urls.slice());
-          if (settings.addAllError && operations.addAll.length === (settings.addAllFailureCall || 1)) return Promise.reject(settings.addAllError);
-          for (const url of urls) values.set(keyOf(url), response('precache:' + keyOf(url)));
-          return Promise.resolve();
+          if (settings.addAllError && operations.addAll.length === (settings.addAllFailureCall || 1)) throw settings.addAllError;
+          if (settings.precacheFetch) {
+            const entries = await Promise.all(urls.map(async url => {
+              const value = await settings.precacheFetch(url);
+              if (!value.ok) throw new Error(`Precache failed for ${keyOf(url)}: ${value.status}`);
+              return [keyOf(url), value];
+            }));
+            for (const [key, value] of entries) values.set(key, value);
+          } else {
+            for (const url of urls) values.set(keyOf(url), response('precache:' + keyOf(url)));
+          }
         },
         match(request, options) {
           if (settings.match) return settings.match(request, options, values);
@@ -1088,6 +1096,96 @@ test("activation selects the recorded active generation over a newer unactivated
   assert.deepStrictEqual(await generationState(next.stores), { active: cacheName(nextSource), previous: cacheName(activeSource), history: [cacheName(activeSource)] });
   assert.ok(!next.stores.has(cacheName(candidateSource)));
   assert.strictEqual((await dispatchFetch(next, 'https://example.test' + path)).body, 'actual active');
+});
+test("Pages can boot the serving Search generation offline while a new release installs", async () => {
+  const origin = 'https://example.test';
+  const release = (version, hash) => {
+    const app = `/search/static/app.${hash}.js`;
+    const worker = `/search/static/search/index-worker.${hash}.js`;
+    const text = generationSource(version, [app, worker])
+      .replace('"/search/static/app.js",', JSON.stringify(app) + ',')
+      .replace('"/search/static/search/index-worker.js",', JSON.stringify(worker) + ',');
+    return {version, app, worker, text, shell: `<script src="${app}"></script>`};
+  };
+  const a = release('shell-a', 'aaaaaaaaaaaa');
+  const b = release('shell-b', 'bbbbbbbbbbbb');
+  let published = a;
+  let offline = false;
+  async function serve(request) {
+    if (offline) throw new Error('offline');
+    const path = new URL(keyOf(request), origin).pathname;
+    if (path === '/search/' || path === '/search/index.html') return response(published.shell);
+    if (path === published.app) return response(`new Worker(${JSON.stringify(published.worker)});`);
+    if (path === published.worker) return response(`self.ready = ${JSON.stringify(published.version)};`);
+    if ([a.app, a.worker, b.app, b.worker].includes(path)) return response('gone', {ok: false, status: 404});
+    return response('precache:' + path);
+  }
+  async function boot(instance, navigation, expected) {
+    const shell = await dispatchFetch(instance, origin + navigation, 'navigate');
+    const load = async path => {
+      const asset = await dispatchFetch(instance, origin + path).catch(error => {
+        throw new Error(`Search startup could not load ${path}`, {cause: error});
+      });
+      assert.ok(asset.ok, `Search startup got HTTP ${asset.status} for ${path}`);
+      return asset;
+    };
+    const app = await load(/src="([^"]+)"/.exec(shell.body)[1]);
+    let workerPath;
+    vm.runInNewContext(app.body, {Worker: function(path) { workerPath = path; }});
+    const worker = await load(workerPath);
+    const self = {};
+    vm.runInNewContext(worker.body, {self});
+    await Promise.all(instance.operations.lifetimes);
+    assert.strictEqual(self.ready, expected);
+  }
+
+  const serving = harness({source: a.text, fetch: serve, precacheFetch: serve});
+  await lifecycle(serving.listeners.install);
+  await lifecycle(serving.listeners.activate);
+  published = b;
+  const heldWorker = deferred();
+  const candidate = harness({source: b.text, stores: serving.stores, fetch: serve,
+    precacheFetch: async request => {
+      if (keyOf(request) === b.worker) await heldWorker.promise;
+      return serve(request);
+    },
+  });
+  const installing = lifecycle(candidate.listeners.install);
+  try {
+    await flushPromises();
+    assert.strictEqual(candidate.operations.addAll.length, 1);
+    assert.strictEqual(candidate.operations.skipWaiting, 0);
+    assert.strictEqual((await generationState(serving.stores)).active, cacheName(a.text));
+    await boot(serving, '/search/index.html?q=online', b.version);
+    offline = true;
+    await boot(serving, '/search/?q=offline', a.version);
+  } finally {
+    offline = false;
+    heldWorker.resolve();
+    await installing;
+  }
+  await lifecycle(candidate.listeners.activate);
+  offline = true;
+  await boot(candidate, '/search/index.html?q=offline', b.version);
+});
+test("Pages only refreshes the canonical Search shell at runtime in development", async () => {
+  const key = '/search/';
+  for (const worker of [source, generationSource('shell-release', ['/search/static/app.aaaaaaaaaaaa.js'])]) {
+    const installed = response('installed shell');
+    const fresh = response('fresh shell');
+    const instance = harness({source: worker, cacheEntries: [[key, installed]], fetch: () => Promise.resolve(fresh)});
+    const url = 'https://example.test' + key;
+    assert.strictEqual(await dispatchFetch(instance, url, 'navigate'), fresh);
+    await Promise.all(instance.operations.lifetimes);
+    if (worker !== source) {
+      // A non-navigation fetch of the exact same key must not overwrite it either.
+      assert.strictEqual(await dispatchFetch(instance, url, 'cors'), installed);
+      await Promise.all(instance.operations.lifetimes);
+    }
+    const cached = await (await instance.caches.open(cacheName(worker))).match(key);
+    assert.strictEqual(cached.body, worker === source ? fresh.body : installed.body);
+    assert.deepStrictEqual(instance.operations.put, worker === source ? [key] : []);
+  }
 });
 test("rollback to an existing generation replaces previous metadata and reinstalls its core", async () => {
   const pathA = '/search/static/app.111111111111.js';

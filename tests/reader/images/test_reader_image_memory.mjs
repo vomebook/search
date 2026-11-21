@@ -4,6 +4,7 @@ import {fileURLToPath, pathToFileURL} from 'node:url';
 
 const root = path.resolve(process.argv[2] || path.join(path.dirname(fileURLToPath(import.meta.url)), '../../..'));
 const load = name => import(pathToFileURL(path.join(root, 'static/reader', name)).href);
+const {createReaderLifecycle} = await load('core/reader-lifecycle.mjs');
 const {createReaderPdfScheduler} = await load('pdf/reader-pdf-scheduler.mjs');
 const {createReaderPdfRenderer, pdfOutputScale} = await load('pdf/reader-pdf-renderer.mjs');
 
@@ -94,6 +95,104 @@ globalThis.matchMedia = () => ({matches: false});
   globalThis.matchMedia = () => ({matches: false});
   assert.equal(pdfOutputScale({width: 370, height: 520}), 2);
   window.devicePixelRatio = 1;
+}
+
+// Preempt a draw only after it has allocated pixels. The underlying engine
+// may acknowledge cancellation after the Reader has already reused the canvas.
+{
+  const tick = () => new Promise(resolve => setImmediate(resolve));
+  const makeShell = (page, top) => ({dataset: {page: String(page)}, clientWidth: 100, style: {}, isConnected: true,
+    getBoundingClientRect: () => ({top, bottom: top + 120}),
+    prepend(canvas) {this.canvas = canvas;},
+    querySelector(selector) {
+      if (selector === 'canvas' || (selector.includes('canvas.ready') && this.canvas?.classList.contains('ready')))
+        return this.canvas ?? null;
+      return null;
+    }});
+  const shown = makeShell(1, 0), speculative = makeShell(2, 900), destination = makeShell(3, 120);
+  const shells = [shown, speculative, destination], draws = new Map();
+  let pageRead = null;
+  const reader = {
+    capability: {mode: 'pdf'}, documentState: {page: 1}, PDF_PREFETCH_MARGIN: 2400,
+    readerAbortController: new AbortController(), readerResources: new Set(),
+    readerRuntime: {state: {lifecycle: {}}, currentGeneration: () => 1, isCurrent: () => true},
+    pdfActiveRenders: 0, pdfRenderWaiters: [], pdfManifestPrefetches: new Map(), pdfScrollDirection: 1,
+    viewport: {getBoundingClientRect: () => ({top: 0, bottom: 800})},
+    content: {querySelectorAll(selector) {
+      if (selector === '.reader-page') return shells;
+      if (selector.includes('[data-render-state')) return shells.filter(shell => shell.dataset.renderState === 'rendered');
+      return shells.flatMap(shell => shell.canvas ? [shell.canvas] : []);
+    }},
+    pageAtMarker: () => shown, pdfSelectionIntersects: () => false, domSearch: {pruneMarks() {}},
+    measurePdf: promise => promise, renderPdfText: async () => {},
+    pdfDocument: {async getPage(page) {
+      if (pageRead) await pageRead.promise;
+      return {
+        getViewport: ({scale}) => ({width: 100 * scale, height: 120 * scale}),
+        render({canvasContext: {canvas}}) {
+          const done = Promise.withResolvers();
+          const draw = {promise: done.promise, cancelled: false, cancel() {this.cancelled = true;},
+            finish() {assert.equal(this.cancelled, false); canvas.frame = this; done.resolve();},
+            acknowledgeCancel() {assert.equal(this.cancelled, true); done.reject(reader.readerAbortError());}};
+          draws.set(page, draw);
+          return draw;
+        }
+      };
+    }}
+  };
+  Object.assign(reader, createReaderLifecycle(reader), createReaderPdfScheduler(reader), createReaderPdfRenderer(reader));
+  globalThis.matchMedia = () => ({matches: true}); // one canvas draw slot
+  globalThis.document = {createElement(tag) {
+    assert.equal(tag, 'canvas');
+    const classes = new Set();
+    let width = 300, height = 150;
+    return {tagName: 'CANVAS', style: {}, setAttribute() {}, getContext() {return {canvas: this};},
+      classList: {add: value => classes.add(value), remove: value => classes.delete(value), contains: value => classes.has(value)},
+      get width() {return width;}, set width(value) {width = value; this.frame = null;},
+      get height() {return height;}, set height(value) {height = value; this.frame = null;}};
+  }};
+  try {
+    const first = reader.renderPdfInBackground(shown, false, 3);
+    await tick(); draws.get(1).finish(); await first;
+    const frame = shown.canvas.frame;
+    // A cancelled forced redraw waiting for getPage never owns the displayed frame.
+    pageRead = Promise.withResolvers();
+    const waiting = reader.renderPdfShell(shown, true, 3);
+    await tick(); shown._renderCancel();
+    await assert.rejects(waiting, {name: 'AbortError'});
+    pageRead.resolve(); pageRead = null;
+    assert.equal(shown.querySelector('canvas.ready')?.frame, frame, 'cancellation before allocation preserves the displayed frame');
+
+    const pending = reader.renderPdfInBackground(speculative, false, 1);
+    await tick();
+    const cancelled = draws.get(2), canvas = speculative.canvas;
+    assert.equal(reader.pdfSurfacePixels(canvas), 12000, 'held draw has allocated a valid canvas');
+    const demand = reader.renderPdfInBackground(destination, false, 3);
+    await assert.rejects(pending, {name: 'AbortError'});
+    assert.equal(cancelled.cancelled, true);
+    assert.equal(speculative.dataset.renderState, 'idle');
+    assert.deepEqual([canvas.width, canvas.height], [0, 0], 'preempted owner must release both backing dimensions');
+    await tick(); draws.get(3).finish(); await demand;
+    assert.equal(destination.querySelector('canvas.ready')?.frame, draws.get(3));
+    assert.equal(reader.pdfRetainedPixels(), 24000, 'only the two completed frames retain pixels');
+
+    const replacement = reader.renderPdfInBackground(speculative, false, 3);
+    await tick();
+    const current = draws.get(2);
+    assert.notEqual(current, cancelled);
+    assert.equal(speculative.canvas, canvas);
+    cancelled.acknowledgeCancel(); await tick();
+    assert.equal(reader.pdfSurfacePixels(canvas), 12000, 'late cancellation must not resize the replacement draw');
+    current.finish(); await replacement;
+    assert.equal(speculative.querySelector('canvas.ready')?.frame, current);
+    assert.equal(shown.querySelector('canvas.ready')?.frame, frame);
+    assert.equal(reader.pdfActiveRenders, 0);
+    assert.equal(reader.readerResources.size, 0);
+  } finally {
+    reader.stopReaderWork();
+    globalThis.matchMedia = () => ({matches: false});
+    delete globalThis.document;
+  }
 }
 
 function fixture() {
@@ -212,4 +311,4 @@ for (const change of ['page', 'zoom', 'direction', 'budget', 'viewport', 'explic
   value.reader.trimPdfSurfaces(null);
   assert.notEqual(value.shell.image, null, 'visible surfaces may exceed a soft pixel cap and are never dropped');
 }
-console.log('Image memory eviction suppresses static refetch loops, preserves selection/visible demand, and reopens on changed page/zoom/direction', root);
+console.log('PDF draw cancellation and image memory eviction preserve live surfaces and demand', root);

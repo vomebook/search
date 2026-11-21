@@ -435,6 +435,55 @@ try {
     const result=await (await fetch('/a.pdf',{headers:{Range:'bytes=0-3'}})).arrayBuffer();
     assert.deepEqual([...new Uint8Array(result)],[1,2,3,4]);assert.equal(calls,3);policy.dispose();
   }
+  // A body cancelled during replay admission must leave the shared queue
+  // without aborting the caller, delaying a sibling, or bypassing Retry-After.
+  for (const cancel of [true,false]) await withClock(async advance=>{
+    const replayRange='bytes=0-3', siblingRange='bytes=4-7';
+    const starts=[], owner=new AbortController();
+    let replayCalls=0;
+    globalThis.fetch=async (_input,init)=>{
+      const range=new Headers(init.headers).get('Range');
+      starts.push(range);
+      const replay=range===replayRange;
+      if (replay && ++replayCalls===2)
+        return new Response(null,{status:429,headers:{'Retry-After':'1'}});
+      return new Response(replay && replayCalls===1 ? bytes.slice(0,2) : bytes,
+        {status:206,headers:{...headers,'Content-Range':replay ? 'bytes 0-3/8' : 'bytes 4-7/8'}});
+    };
+    const policy=createPdfFetchPolicy({...opts,maxRateLimitDelayMs:2000});policy.add(['/a.pdf']);
+    const request=range=>fetch('/a.pdf',{headers:{Range:range},signal:owner.signal});
+    try {
+      const reader=(await request(replayRange)).body.getReader();
+      assert.deepEqual((await reader.read()).value,bytes.slice(0,2));
+      const remainder=reader.read();
+      void remainder.catch(()=>{});
+      await advance(0);
+      assert.equal(policy.queuedAdmissions,1,'the interrupted body is queued after its replay received 429');
+      const sibling=request(siblingRange).then(response=>response.arrayBuffer());
+      void sibling.catch(()=>{});
+      await advance(0);
+      assert.equal(policy.queuedAdmissions,2);
+      if (cancel) {
+        await reader.cancel();
+        assert.equal((await remainder).done,true);
+        assert.equal(owner.signal.aborted,false);
+        assert.equal(policy.queuedAdmissions,1,'body cancel removes only its own admission immediately');
+      }
+      await advance(999);
+      assert.deepEqual(starts,[replayRange,replayRange],'live requests still honor Retry-After');
+      await advance(1);
+      assert.deepEqual(starts,[replayRange,replayRange,cancel ? siblingRange : replayRange]);
+      await advance(opts.rateLimitSpacingMs);
+      assert.deepEqual(starts,[replayRange,replayRange,...(cancel ? [] : [replayRange]),siblingRange]);
+      assert.deepEqual(new Uint8Array(await sibling),bytes);
+      if (!cancel) {
+        assert.deepEqual((await remainder).value,bytes.slice(2));
+        assert.equal((await reader.read()).done,true);
+      }
+      reader.releaseLock();
+      assert.equal(policy.queuedAdmissions,0);
+    } finally {policy.dispose();}
+  });
   // The combination is still bounded: a second 429 may not trigger a fourth
   // request or return a partial body as a complete document.
   {

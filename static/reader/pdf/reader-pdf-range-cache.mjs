@@ -92,6 +92,19 @@ export function sharedPdfRangeCache() {
   try {
     if (!Object.prototype.hasOwnProperty.call(owner, key))
       Object.defineProperty(owner, key, {value:createPdfRangeCache()});
-    return /** @type {ReturnType<typeof createPdfRangeCache>} */ (Reflect.get(owner, key));
+    const cache = /** @type {ReturnType<typeof createPdfRangeCache>} */ (Reflect.get(owner, key));
+    return Object.freeze(/** @type {ReturnType<typeof createPdfRangeCache>} */ ({
+      version:cache.version,
+      get(url, begin, end, version) {
+        const bytes = cache.get(url, begin, end, version);
+        // The previous overlay's Uint8Array fails instanceof in this reader.
+        // Re-view the already isolated copy without copying its bytes again.
+        return !bytes || Object.prototype.isPrototypeOf.call(Uint8Array.prototype, bytes) ? bytes :
+          new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+      },
+      put:cache.put,
+      get byteLength() { return cache.byteLength; },
+      get size() { return cache.size; }
+    }));
   } catch (_) { return null; }
 }

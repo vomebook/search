@@ -757,7 +757,6 @@ export function createPdfFetchPolicy({idleMs = 15000, attemptMs = 45000,
     catch (_) { return nativeFetch.call(globalThis, input, init); }
     if (!documents.has(url)) return nativeFetch.call(globalThis, input, init);
     const callerSignal = init?.signal || (input instanceof Request ? input.signal : null);
-    const signal = callerSignal ? AbortSignal.any([callerSignal, controller.signal]) : controller.signal;
     const headers = new Headers(init?.headers || (input instanceof Request ? input.headers : undefined));
     const match = /^bytes=(\d+)-(\d+)$/.exec(headers.get("Range") || "");
     const method = (init?.method || (input instanceof Request ? input.method : "GET")).toUpperCase();
@@ -766,6 +765,12 @@ export function createPdfFetchPolicy({idleMs = 15000, attemptMs = 45000,
       .some(name=>headers.has(name));
     const eligible = method === "GET" && match && Number.isSafeInteger(start) && Number.isSafeInteger(end) &&
       start <= end && end - start < 2 * 1024 * 1024 && !conditional;
+    // Body cancellation must also stop replay admission, where the previous
+    // attempt has already finished and there is no active fetch to abort.
+    const bodyOwner = eligible ? new AbortController() : null;
+    const signals = callerSignal ? [callerSignal, controller.signal] : [controller.signal];
+    if (bodyOwner) signals.push(bodyOwner.signal);
+    const signal = signals.length === 1 ? controller.signal : AbortSignal.any(signals);
     const clearRatePriority = () => {
       if (!eligible) return;
       for (let index=ratePriorityRanges.length-1;index>=0;index--) {
@@ -932,12 +937,18 @@ export function createPdfFetchPolicy({idleMs = 15000, attemptMs = 45000,
                 error = new Error("PDF_RANGE_INVALID");finish(error);
               } catch(next) {error=next;finish(error);}
             }
+            if (stopped) return;
             if (!error) continue;
             stopped=true;signal.removeEventListener("abort",abort);control.error(error);return;
           }
         }
       },
-      cancel(reason) {stopped=true;signal.removeEventListener("abort",abort);finish(reason || new DOMException("PDF read cancelled","AbortError"));}
+      cancel(reason) {
+        stopped=true;signal.removeEventListener("abort",abort);
+        const error = reason || new DOMException("PDF read cancelled","AbortError");
+        finish(error);
+        bodyOwner?.abort(error);
+      }
     },{highWaterMark:0});
     const result = new Response(stream,{status:firstResponse.status,statusText:firstResponse.statusText,headers:firstResponse.headers});
     Object.defineProperty(result,"url",{value:firstResponse.url});

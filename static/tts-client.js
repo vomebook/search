@@ -368,6 +368,10 @@ if (typeof document !== "undefined") /** @type {Window & {CCRDSpeech?: unknown}}
   const CLIP_LIMIT = 48, CLIP_BYTES = 4 * 1024 * 1024, CLIP_AHEAD = 4, CLIP_LOADS = 2;
   /** @type {Map<string, SpeechClip>} */
   const clips = new Map();
+  // Speculation-only cooldowns: at most 64 part indices per live job, no audio or timers.
+  const CLIP_RETRY_MS = 2000;
+  /** @type {WeakMap<SpeechJob, number[]>} */
+  const clipRetryAt = new WeakMap();
   let clipBytes = 0, clipEpoch = 0, clipLoads = 0;
 
   /** @param {string} text */
@@ -414,19 +418,27 @@ if (typeof document !== "undefined") /** @type {Window & {CCRDSpeech?: unknown}}
   /** @param {SpeechOwner} value @param {SpeechJob} job @param {SpeechPart} part */
   function fetchClip(value, job, part) {
     const key = clipKey(value, job, part);
-    if (clips.has(key) || clipLoads >= CLIP_LOADS || !part.audio_url) return;
+    if (clips.has(key) || clipLoads >= CLIP_LOADS || !part.audio_url || (clipRetryAt.get(job)?.[part.index] ?? 0) > performance.now()) return;
     /** @type {SpeechClip} */
     const entry = { url: "", bytes: 0, controller: new AbortController() }, epoch = clipEpoch;
+    const miss = () => {
+      if (clips.get(key) !== entry) return; // Aborted or superseded preloads don't count.
+      // Both the completion refill and the playback pump honor this; advance still uses the audio URL.
+      const retryAt = clipRetryAt.get(job) || [];
+      retryAt[part.index] = performance.now() + CLIP_RETRY_MS;
+      clipRetryAt.set(job, retryAt);
+      clips.delete(key);
+    };
     clips.set(key, entry); clipLoads += 1;
     fetch(ORIGIN + part.audio_url, { credentials: "omit", signal: /** @type {AbortController} */ (entry.controller).signal })
       .then(response => response.ok && (response.headers.get("Content-Type") || "").startsWith("audio/mpeg") ? response.blob() : null)
       .then(blob => {
         if (epoch !== clipEpoch || clips.get(key) !== entry) return;
         entry.controller = null;
-        if (!blob || blob.size !== part.bytes) clips.delete(key);
+        if (!blob || blob.size !== part.bytes) miss();
         else storeClip(key, entry, blob);
       })
-      .catch(() => { if (clips.get(key) === entry) clips.delete(key); })
+      .catch(miss)
       .finally(() => {
         clipLoads -= 1;
         if (live(value) && value.wantsPlay && value.current) {

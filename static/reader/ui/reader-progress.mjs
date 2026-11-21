@@ -358,7 +358,8 @@ export function createReaderProgress(readerContext) {
 
   function updateProgressTools() {
     const mode = readerContext.capability.mode;
-    const disabled = (mode === "audio" || mode === "video" || !!readerContext.mediaElement) && !mediaSeekDuration();
+    const disabled = (mode === "epub-chapters" && !readerContext.chapterManifestLoader) ||
+      ((mode === "audio" || mode === "video" || !!readerContext.mediaElement) && !mediaSeekDuration());
     if (readerContext.progressRange.disabled !== disabled) readerContext.progressRange.disabled = disabled;
     if (readerContext.progressSeeking && !disabled) return;
     const percent = readerContext.readerProgressPercent(),
@@ -464,20 +465,23 @@ export function createReaderProgress(readerContext) {
     if (!Number.isFinite(numeric) || (media && !duration) ||
         (!media && (readerContext.capability.mode === "audio" || readerContext.capability.mode === "video"))) return false;
     const percent = Math.max(0, Math.min(100, numeric));
+    let target;
+    if (!media && readerContext.capability.mode === "epub-chapters") {
+      // A seek without a chapter target must not supersede initial restoration.
+      target = readerContext.chapterManifestLoader?.progressTarget(percent / 100);
+      if (!target) return false;
+    }
     if (!preserve || !readerContext.previousProgressState) readerContext.previousProgressState = readerContext.captureProgressState();
     const generation = readerContext.beginReaderNavigation();
     if (!readerContext.isReaderGenerationCurrent("navigation", generation)) return false;
     if (media) media.currentTime = (duration * percent) / 100;
-    else if (readerContext.capability.mode === "epub-chapters") {
-      const target = readerContext.chapterManifestLoader?.progressTarget(percent / 100);
-      if (target) {
-        readerContext.epubSeekPromise = readerContext.restoreChapterPosition({
-          chapterIndex: target.chapterIndex, chapterManifest: readerContext.chapterManifestUrl || readerContext.sourceUrl
-        }, generation, target.fraction).catch(error => {
-          readerContext.reportNavigationError(error, generation);
-          return false;
-        });
-      }
+    else if (target) {
+      readerContext.epubSeekPromise = readerContext.restoreChapterPosition({
+        chapterIndex: target.chapterIndex, chapterManifest: readerContext.chapterManifestUrl || readerContext.sourceUrl
+      }, generation, target.fraction).catch(error => {
+        readerContext.reportNavigationError(error, generation);
+        return false;
+      });
     } else if (readerContext.htmlFrame && readerContext.htmlFrame.contentWindow)
       readerContext.htmlFrame.contentWindow.scrollTo(
         0,

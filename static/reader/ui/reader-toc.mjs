@@ -160,6 +160,7 @@ export function createReaderToc(readerContext) {
     if (index < 0 || index >= readerContext.navigationState.tocEntries.length) return;
     const entry = tocEntries()[index];
     if (!entry || entry.group) return;
+    const panelSerial = readerContext.readerPanelInteractionSerial;
     const generation = readerContext.beginReaderNavigation();
     try {
       const activated = await entry.activate(generation);
@@ -167,7 +168,10 @@ export function createReaderToc(readerContext) {
       readerContext.updateNavigationState({ currentChapterIndex: index });
       readerContext.updateTocCurrentMark();
       readerContext.updateProgressTools();
-      if (closePanel) readerContext.setReaderPanelOpen(false, true);
+      // Landing still belongs to this navigation, but closing belongs to the
+      // drawer as it was when the row was activated.
+      if (closePanel && readerContext.panelState.open && panelSerial === readerContext.readerPanelInteractionSerial)
+        readerContext.setReaderPanelOpen(false, true);
     } catch (error) {
       readerContext.reportNavigationError(error, generation);
     }

@@ -57,6 +57,8 @@
             if (!task.ready.has(page) && data.resultBackend === task.backend && data.generation === lookup.generation && data.total === total) task.ready.set(page, data);
           }
           const latest = task.preview ? host.capturePreviewAnchor() : null;
+          // An unloaded slot still anchors the viewport, but has no ID to relocate.
+          const geometry = latest && !latest.anchorId ? latest : null;
           if (latest) {
             const { anchorId } = latest;
             if (anchorId && anchorId !== position.anchorId) {
@@ -79,16 +81,17 @@
             resultBackend: task.backend,
             window: { generation: lookup.generation, pages: [...task.ready.keys()], count: [...task.ready.values()].reduce((sum, data) => sum + data.results.length, 0) },
             estimatedHeight: host.estimatedHeight(), heightCache: [], heightRecords: [],
-            scroll: { index: found < 0 ? index : found, offset: position.offset, viewKey: key }, savedAt: Date.now() };
+            scroll: { index: geometry ? Math.min(geometry.index, Math.max(0, total - 1)) : found < 0 ? index : found,
+              offset: geometry?.offset ?? position.offset, viewKey: key }, savedAt: Date.now() };
           host.release();
-          if (task.preview && found === position.index) host.applyPreview(snapshot);
+          if (task.preview && (geometry || found === position.index)) host.applyPreview(snapshot);
           else {
             host.snapshots.putRestored(key, snapshot);
             host.restoreSnapshot(key);
           }
           host.completed();
           host.snapshots.trim();
-          if (found < 0 && position.anchorId) host.notify("搜索结果已变化，已恢复到原位置附近");
+          if (!geometry && found < 0 && position.anchorId) host.notify("搜索结果已变化，已恢复到原位置附近");
           return;
         }
       } catch (error) {
