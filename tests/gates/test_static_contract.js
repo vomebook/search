@@ -582,7 +582,7 @@ test("reader uses original files and lazy PDF canvas rendering", async () => {
   assert.match(resultInteractions, /const record = deps\.recordForRow\(actionBtn\.closest\("\.result-item"\)\)/);
   // tests/search/ui/result_interactions_contracts.mjs clicks the result and verifies that it refreshes and opens the current Reader link.
   assert.match(resultInteractions, /const readerLink = browserItem\.dataset\.readerUrl/);
-  assert.match(resultInteractions, /deps\.navigateToReader\(readerLink\)/);
+  assert.match(resultInteractions, /deps\.navigateToReader\(readerLink, true\)/);
   const navigation = fs.readFileSync('static/search/reader-host/application/navigation.js', 'utf8');
   assert.match(navigation, /url\.searchParams\.set\("return", returnUrl\)/);
   assert.match(navigation, /sessionStorage\.setItem\("reader-return:" \+ token/);

@@ -1224,6 +1224,38 @@ class BrowserBehaviorTest(unittest.TestCase):
         self.assertIn("sidebar=0", self.page.url)
         self.assertEqual(self.page_errors, [])
 
+    def test_mobile_reader_return_keeps_sidebar_directory_open(self):
+        self.context.close()
+        self.context = self.browser.new_context(viewport={"width": 390, "height": 844}, is_mobile=True, has_touch=True)
+        self.page = self.context.new_page()
+        self.page.on("pageerror", lambda error: self.page_errors.append(str(error)))
+        self.install_routes(self.page)
+        self.page.route("https://voiceofml-search.hf.space/api/reader-content**",
+                        lambda route: route.fulfill(content_type="text/plain", body="Reader navigation",
+                                                  headers={"Access-Control-Allow-Origin": "*"}))
+        self.load("#/VOMEBOOK?sidebar=0")
+        self.page.wait_for_function("STATE.isMobile && STATE.dataLoaded && STATE.mode === 'repo'")
+        self.page.locator("#hamburger-btn").tap()
+        self.page.evaluate("""() => {
+            getFolderContents = async () => ({folders: [], files: [{name: 'back', ext: 'txt', size: 1}]});
+            ROUTER.navigate('repo', 'VOMEBOOK', 'docs');
+        }""")
+        book = self.page.get_by_role("button", name="打开阅读器：back.txt", exact=True)
+        book.wait_for()
+        source = self.page.url
+        for exit_reader in (lambda reader: reader.locator("#back").tap(),
+                            lambda reader: self.page.evaluate("history.back()")):
+            book.tap()
+            reader = self.page.frame_locator("iframe.reader-overlay")
+            reader.locator(".reader-text").wait_for()
+            exit_reader(reader)
+            self.page.locator("iframe.reader-overlay").wait_for(state="detached")
+            self.assertEqual(self.page.url, source)
+            self.assertTrue(self.page.locator("#left-sidebar").evaluate("el => el.classList.contains('open') && !el.inert"))
+            self.assertEqual(self.page.evaluate("STATE.browserPath"), "docs")
+            self.assertTrue(book.evaluate("el => el === document.activeElement"))
+        self.assertEqual(self.page_errors, [])
+
     def test_mobile_sidebar_back_returns_by_directory_level(self):
         self.context.close()
         self.context = self.browser.new_context(viewport={"width": 390, "height": 844}, is_mobile=True)

@@ -37,7 +37,7 @@ interface VoiceOfMLResultInteractionDependencies {
   recordForRow(row: Element | null): VoiceOfMLResultRecord | undefined;
   freshReaderLink(record: VoiceOfMLResultRecord): string;
   downloadFile(filename: string, link: string, options?: {button: HTMLElement}): Promise<boolean>;
-  navigateToReader(url: string | undefined): void;
+  navigateToReader(url: string | undefined, fromSidebar?: boolean): void;
   navigateRepo(repo: string | null | undefined, path?: string | undefined): void;
   currentRepo(): string | null;
   buildSearchURLParams(options?: {displaySizes: boolean}): URLSearchParams;

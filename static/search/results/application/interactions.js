@@ -144,7 +144,7 @@
         }
         const readerLink = browserItem.dataset.readerUrl;
         if (readerLink) {
-          deps.navigateToReader(readerLink);
+          deps.navigateToReader(readerLink, true);
           return;
         }
         if (browserItem.dataset.link) {

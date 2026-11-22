@@ -306,8 +306,8 @@ function handleReaderMessage(event) {
   readerHost.handleReaderMessage(event);
 }
 /** @param {string} rawUrl @param {string} [returnUrl] */
-function navigateToReader(rawUrl, returnUrl) {
-  return readerHost.navigateToReader(rawUrl, returnUrl);
+function navigateToReader(rawUrl, returnUrl, fromSidebar = false) {
+  return readerHost.navigateToReader(rawUrl, returnUrl, fromSidebar);
 }
 function restoreReaderFromSession() {
   readerHost.restoreReaderFromSession();
@@ -4120,7 +4120,7 @@ function getResultInteractions() {
     freshReaderLink: record => getReaderLink(applyReaderAsset(
       record, record.Repo || "", buildRecordRelativePath(record), getRecordLink(record))),
     downloadFile: (filename, link, options) => downloadFile(filename, link, options),
-    navigateToReader: url => { if (url) navigateToReader(url); },
+    navigateToReader: (url, fromSidebar) => { if (url) navigateToReader(url, undefined, fromSidebar); },
     navigateRepo: (repo, ...path) => ROUTER.navigate("repo", repo, ...path),
     currentRepo: () => STATE.repo,
     buildSearchURLParams: options => buildSearchURLParams(options),

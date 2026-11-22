@@ -50,6 +50,6 @@ declare var VoiceOfMLReaderHost: { create(deps: ReaderHostDependencies): {
   closeReaderOverlay(focus?: boolean, scroll?: boolean): boolean;
   openReaderOverlay(url: URL, addHistory?: boolean): void; reconcileSearchDestination(): void;
   restoreReaderOverlay(state: {voiceReaderOverlay?: boolean; readerUrl?: string} | null): void;
-  handleReaderMessage(event: ReaderHostMessage): void; navigateToReader(raw: string, returnUrl?: string): boolean;
+  handleReaderMessage(event: ReaderHostMessage): void; navigateToReader(raw: string, returnUrl?: string, fromSidebar?: boolean): boolean;
   restoreReaderFromSession(): void;
 } };

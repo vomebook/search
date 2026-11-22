@@ -182,13 +182,14 @@
       } catch (_) {}
     }
     /** @param {string} rawUrl @param {string} [returnUrl] */
-    function navigateToReader(rawUrl, returnUrl) {
+    function navigateToReader(rawUrl, returnUrl, fromSidebar = false) {
       let target;
       try { target = navigation.parse(rawUrl); }
       catch (_) { return false; }
       const source = location.href;
       deps.prepareSearch();
-      deps.closeMobileSidebars();
+      // The iframe makes the search shell inert; keep the source drawer in the return route.
+      if (!fromSidebar) deps.closeMobileSidebars();
       // A captured source URL (e.g. from random discovery) still refers to this entry.
       const destination = returnUrl && returnUrl !== source ? returnUrl : location.href;
       const url = navigation.prepare(deps.syncFolder(target.href), deps.normalizeReturn(destination));
