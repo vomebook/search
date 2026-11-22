@@ -3338,8 +3338,11 @@ class ReaderRefactorTest(unittest.TestCase):
                 self.assertIn('空格。\n \n\n第二节 续读', rendered)
                 if self.page.locator('#history').get_attribute('aria-expanded') != 'true':
                     support.open_reader_panel(self.page)
-                self.page.locator('.toc-item', has_text='第二节 续读').click()
+                self.page.get_by_role('link', name='第二节 续读', exact=True).click()
                 self.assertEqual(root.locator('.reader-text-chapter-title').last.inner_text(), '第二节 续读')
+                # Landing closes the drawer asynchronously; don't reopen it
+                # while the same navigation still owns the close.
+                self.page.locator('#history-panel').wait_for(state='hidden')
                 self.search('行内   空格')
                 self.page.locator('.full-search-result').first.click()
                 self.assertEqual(root.locator('.full-search-highlight').inner_text(), '行内   空格')
