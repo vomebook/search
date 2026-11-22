@@ -130,7 +130,9 @@ test('displayed capture retains protected snapshots and rejects synchronous same
 
 test('restore selection discards invalid windows and prepares detached rows and page cache', () => {
   const {store,view,geometry} = fixture();
-  view.results = [{File:'old',Folder:['one']}, , {File:'third'}];
+  view.results = new Array(3);
+  view.results[0] = {File:'old',Folder:['one']};
+  view.results[2] = {File:'third'};
   view.total = 1000;
   view.loadedPage = 2;
   view.pageCache = {2:[{File:'cached',Folder:['two']}]};

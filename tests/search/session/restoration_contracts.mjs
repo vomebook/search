@@ -323,3 +323,19 @@ test('only an unpinned Worker lookup can fall back to API, and neighbors retain 
     }
   }
 });
+
+test('discarding an invalid displayed snapshot retains its backend for position lookup', async () => {
+  const f = fixture();
+  const restoreView = f.c.restoreSearchViewSnapshot;
+  const restore = vm.runInContext('(' + source.match(/^function restoreSearchViewSnapshot\([^]*?^}/m)[0] + ')',f.c);
+  assert.equal(f.c.restoreSearchViewSnapshot,restoreView);
+  const stored = {window:{invalid:true},resultBackend:'local'};
+  f.store.put(key,stored);
+  assert.equal(f.c.preferredPositionBackend({useLocalMode:false}),'api');
+  assert.equal(restore(key),true);
+  assert.equal(f.store.snapshots.has(key),false);
+  await flush();
+  assert.equal(f.calls.length,4);
+  assert.ok(f.calls.every(call=>call.query.resultBackend==='local'));
+  assert.equal(f.c.snapshot.resultBackend,'local');
+});
