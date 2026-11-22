@@ -1,4 +1,4 @@
-export const PDF_TEXT_STORE_LIMITS = Object.freeze({bytes:64*1024*1024, entries:4096, entryBytes:512*1024, ttl:30*86400000});
+const PDF_TEXT_STORE_LIMITS = Object.freeze({bytes:64*1024*1024, entries:4096, entryBytes:512*1024, ttl:30*86400000});
 /** @param {{source: string, version: string, pageCount: number, engine: string}} identity */
 export async function pdfTextStoreKey({source, version, pageCount, engine}) {
   if (!version || !source || !Number.isSafeInteger(pageCount) || pageCount < 1 || !globalThis.crypto?.subtle) return null;

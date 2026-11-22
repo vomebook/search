@@ -170,11 +170,8 @@ export function createReaderDomSearch({
       /** @type {Set<Node>} */
       const changedParents = new Set();
       for (const mark of fullSearchActiveMarks) {
-        if (mark.tagName === "MARK") {
-          if (mark.parentNode) changedParents.add(mark.parentNode);
-          mark.replaceWith(mark.textContent);
-        }
-        else mark.classList.remove("full-search-highlight");
+        if (mark.parentNode) changedParents.add(mark.parentNode);
+        mark.replaceWith(mark.textContent);
       }
       fullSearchActiveMarks = [];
       for (const parent of changedParents) parent.normalize();

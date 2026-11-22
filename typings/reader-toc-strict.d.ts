@@ -38,7 +38,6 @@ export interface TocContext {
   capability: { mode?: string | null };
   headingLocationCache: HeadingLocationCache | null;
   navigationState: { tocEntries: unknown[]; currentChapterIndex: number };
-  createHeadingLocationCache(root: HTMLElement, entries: TocEntry[]): HeadingLocationCache;
   updateNavigationState(patch: Partial<{ tocEntries: TocEntry[]; currentChapterIndex: number }>): unknown;
   updateTocCurrentMark(): void;
   beginReaderNavigation(): number;
@@ -49,7 +48,6 @@ export interface TocContext {
   navigateTocEntry(index: number): Promise<void>;
   tocVirtualState: TocVirtualState | null;
   TOC_VIRTUAL_ROW_HEIGHT: number;
-  createTocRow(entry: TocEntry, index: number): HTMLElement;
   highlightPanelItem(row: HTMLElement, query: string): void;
   readerLifecycle: { disposed: boolean };
   readerAbortController: AbortController;
@@ -60,12 +58,10 @@ export interface TocContext {
   readerPanelInteractionSerial: number;
   readerUiHistoryState: string;
   selectPanel(name: string): void;
-  cleanTocLabel(value: unknown): string;
   sourceUrl: string;
   downloadUrl: string;
   chapterManifestUrl: string | null;
   TOC_VIRTUALIZATION_THRESHOLD: number;
-  renderVirtualToc(): void;
   filterPanel(panel: Element | null, options: { resetScroll: boolean }): void;
   updateReadingProgressSummary(): void;
   placeReadingProgress(): void;

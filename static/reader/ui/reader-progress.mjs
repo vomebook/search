@@ -359,7 +359,7 @@ export function createReaderProgress(readerContext) {
     if (entry?.zoom && !hasHtmlZoomPreference && !readerContext.zoomChangedByUser && readerContext.isReaderGenerationCurrent("navigation", generation) &&
         VoiceOfMLReader.clampNumber(entry.zoom, 25, 400, 100) / 100 !== readerContext.documentState.zoom)
       readerContext.setZoom(entry.zoom, false);
-    await readerContext.restoreInitialPosition(entry, generation);
+    await restoreInitialPosition(entry, generation);
   }
 
   /** @param {number} [percent] */
@@ -564,7 +564,6 @@ export function createReaderProgress(readerContext) {
     syncCurrentPageFromMarker,
     scheduleMarkerSync,
     restoreFormat,
-    restoreInitialPosition,
     applyInitialRestoration,
     updateReadingProgressSummary,
     updateProgressTools,

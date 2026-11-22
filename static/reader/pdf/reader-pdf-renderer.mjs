@@ -540,7 +540,6 @@ export function createReaderPdfRenderer(readerContext) {
     pdfPrimarySource,
     renderPdfImageShell,
     renderPdfShell,
-    applyPdfShellGeometry,
-    pdfSurfaceFades
+    applyPdfShellGeometry
   };
 }

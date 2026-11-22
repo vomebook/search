@@ -2248,42 +2248,6 @@ class ReaderRefactorTest(unittest.TestCase):
                     self.page.wait_for_function("query => document.querySelector('mark.full-search-highlight')?.textContent === query", arg=query)
                     self.assertIn('&#0 &nbsp;', self.page.locator('.reader-epub-chapter').inner_text())
 
-    def test_legacy_rtf_chapter_hides_only_its_exported_prefix(self):
-        prefix = ('chapters/ebook/epub/'
-                  '399230332a4298771620cb84c9499d5f9d5ea5dab1cd0c843fcc1b6b9c43c52d/a3f30ce1631e2b90/')
-        other = 'chapters/ebook/epub/' + 'a' * 64 + '/' + 'b' * 16 + '/'
-        chapter = b'<html><body><p>Cover</p></body></html>'
-        body = ('<html><body><p class="block_">圾癣应哆间揭</p><h1 id="toc_id_1">正文标题</h1>'
-                '<p class="block_">保留正文</p></body></html>').encode()
-        manifest = {'version': 1, 'kind': 'epub-chapters', 'chapters': [
-            {'index': i, 'path': f'chapters/chapter-{i:04}.xhtml', 'bytes': len(payload),
-             'sha256': hashlib.sha256(payload).hexdigest()}
-            for i, payload in enumerate((chapter, body), 1)
-        ], 'toc': [{'title': '正文标题', 'depth': 0, 'chapter': 2, 'fragment': 'toc_id_1'}]}
-
-        def serve(route):
-            path = urllib.parse.parse_qs(urllib.parse.urlsplit(route.request.url).query)['path'][0]
-            if path.endswith('/chapter-manifest.json'):
-                route.fulfill(json=manifest)
-            elif path.endswith('/chapters/chapter-0001.xhtml'):
-                route.fulfill(content_type='application/xhtml+xml', body=chapter)
-            elif path.endswith('/chapters/chapter-0002.xhtml'):
-                route.fulfill(content_type='application/xhtml+xml', body=body)
-            else:
-                route.fulfill(status=404)
-
-        self.page.route('https://voiceofml-search.hf.space/api/reader-bucket-resource**', serve)
-        for bundle, hidden in [(prefix, True), (other, False)]:
-            source = ('https://voiceofml-search.hf.space/api/reader-bucket-resource?path=' +
-                      urllib.parse.quote(bundle + 'chapter-manifest.json', safe=''))
-            self.open(self.reader_url('epub-chapters', url=source))
-            support.open_reader_panel(self.page)
-            self.page.locator('.toc-item', has_text='正文标题').click()
-            article = self.page.locator('.reader-epub-chapter[data-chapter="2"]')
-            article.wait_for()
-            self.assertEqual(article.locator('p').first.is_hidden(), hidden)
-            self.assertIn('保留正文', article.inner_text())
-
     def test_bucket_chapter_stream_loads_manifest_chapter_and_resource(self):
         prefix = "chapters/ebook/epub/" + "c" * 64 + "/" + "b" * 16 + "/"
         chapter = '<html><body><h1>Bucket chapter</h1><img src="../resources/shared/cover.png"></body></html>'
@@ -3209,10 +3173,12 @@ class ReaderRefactorTest(unittest.TestCase):
     def test_html_preparation_reuses_sanitized_dom_without_changing_safe_output(self):
         def expose(route):
             response = route.fetch()
-            route.fulfill(response=response, body=response.text() + '''
-              window.__sanitizeHtml = sanitizeOfflineHtml;
-            ''')
-        self.page.route('**/static/reader.js*', expose)
+            script = response.text()
+            anchor = 'export function createReaderHtmlFormat(readerContext) {'
+            self.assertEqual(script.count(anchor), 1)
+            route.fulfill(response=response, body=script.replace(
+                anchor, anchor + '\nwindow.__sanitizeHtml = sanitizeOfflineHtml;'))
+        self.page.route('**/formats/reader-html-format.mjs*', expose)
         self.serve('<p>Ready</p>', 'text/html')
         self.open(self.reader_url('html'))
         result = self.page.evaluate(r'''() => {
@@ -3295,6 +3261,7 @@ class ReaderRefactorTest(unittest.TestCase):
         self.page.add_init_script('localStorage.setItem("theme", "light")')
         self.serve(("""<!doctype html><meta charset=gbk><article style='width:1200px'>
           <p id='indent' style='white-space:nowrap'>　　　首段<br>　　 　　　换行</p>
+          <p id='ordinary'>正文内　　　空格<kbd>　　　Ctrl</kbd></p>
           <p><a id='url' href='#target'>""" + "https://example.test/" + "segment" * 28 + """</a></p>
           <p id='transparent' style='color:transparent'>透明标记</p>
           <div style='background:rgba(255,255,255,.12)'><p id='translucent' style='color:white'>可读文字</p></div>
@@ -3303,6 +3270,7 @@ class ReaderRefactorTest(unittest.TestCase):
         self.open(self.reader_url('htm', 'old-prose'))
         frame = self.page.locator('.html-frame').element_handle().content_frame()
         self.assertEqual(frame.locator('#indent').text_content(), '　　首段　　换行')
+        self.assertEqual(frame.locator('#ordinary').text_content(), '正文内　　　空格　　　Ctrl')
         self.assertTrue(frame.locator('#pre').text_content().startswith('　　　'))
         self.assertEqual(frame.locator('#url').get_attribute('href'), '#target')
         self.assertEqual(frame.locator('#transparent').evaluate('n => getComputedStyle(n).color'), 'rgba(0, 0, 0, 0)')
@@ -3335,61 +3303,21 @@ class ReaderRefactorTest(unittest.TestCase):
         self.assertTrue(document.locator('#data').evaluate('n => n.parentElement.scrollWidth > n.parentElement.clientWidth'))
         self.assertEqual(document.locator('#data th').count(), 2)
 
-    def test_legacy_html_widget_text_is_removed_without_dropping_article_content(self):
-        path = 'documents/web/htm/' + 'a' * 64 + '/document.html'
-        source = 'https://voiceofml-search.hf.space/api/reader-bucket-resource?path=' + urllib.parse.quote(path, safe='')
-        html = """<p>正文里的 function 和 document.write 不应被删。</p>
-          <div class='account'>document.write('&lt;'+'/script&gt;');</div>
-          <div id='tosaypl'>function CheckPl(obj) { return true; }
-          <strong>网友评论</strong>document.write('&lt;'+'/script&gt;');$(function(){});</div>
-          <div id='share'>var jiathis_config = {data_track_clickback:'true'};</div>
-          <p>做因果界定。</p>$(function(){ $("#js_newstext img").Resize({box:"#js_newstext"}); });
-          <div id='login'>$(function(){ $('#loginform').submit(function(e){ return false; }); });</div>
-          <div id='window-boot'>window.siteMode = 'archive'; var _gaq = []; _gaq.push('start');</div>
-          <div id='js-comment'>function popup(url) { window.open(url); } // archived script --&gt;</div>
-          <div id='js-ready'>jQuery(document).ready(function(){ const box = document.getElementById('main'); });</div>
-          <a href='#note'>查看</a><pre id='note'>document.write("code example");</pre>"""
-        self.page.route('https://voiceofml-search.hf.space/api/reader-bucket-resource**',
-                        lambda route: route.fulfill(content_type='text/html', body=html))
-        self.serve(html, 'text/html')
-        for converted in (True, False):
-            with self.subTest(converted=converted):
-                self.open(self.reader_url('html', **({'url': source} if converted else {})))
-                frame = self.page.frame_locator('.html-frame')
-                self.assertIn('正文里的 function 和 document.write', frame.locator('body').inner_text())
-                self.assertIn('做因果界定。', frame.locator('body').inner_text())
-                self.assertEqual(frame.locator('a').get_attribute('href'), '#note')
-                self.assertIn('document.write', frame.locator('pre').inner_text())
-                for selector in ('#share', '#login', '.account', '#window-boot', '#js-comment', '#js-ready'):
-                    self.assertEqual(not frame.locator(selector).inner_text(), converted)
-                self.assertEqual('Resize(' not in frame.locator('body').inner_text(), converted)
-                if converted:
-                    self.assertEqual(frame.locator('#tosaypl').inner_text(), '网友评论')
-
-    def test_legacy_web_split_script_scaffold_keeps_adjacent_content(self):
+    def test_converted_web_keeps_literal_script_like_prose_but_drops_script_elements(self):
         path = 'documents/web/mht/' + 'b' * 64 + '/document.html'
         source = 'https://voiceofml-search.hf.space/api/reader-bucket-resource?path=' + urllib.parse.quote(path, safe='')
-        html = """//树形导航代码
-          var expandState = 0; function expand(){ document.write("<style></style>")
-          document.write("<table id='master'><tr><td>占位图"); document.write("</td></tr></table>");
-          var ie = document.all ? 1 : 0; submitForm.submit(); };
-          <p>正文保留</p>
-          var pkBaseURL = document.location; piwikTracker.trackPageView();
-          <div id='forum-shell'>var PageData = {curr_href: escape(window.location.href)};
-          PageData.user = {}; /**** End 初始化页面 ****/</div>
-          <div id='ArticleKeywordUrl'>ArticleContent.innerHTML = ArticleContent.innerHTML.replace("a","b");
-          var keywordscode="<b>假标签</b>"; document.write(keywordscode); }</div>
-          <table id='ordinary'><tr><td>保留表格</td></tr></table><footer>文后保留</footer>"""
+        prose = 'var example = document.getElementById("note");'
+        html = (f'<p id="note">{prose}</p><script>legacyPayload()</script>'
+                '<a href="#note">查看</a><table><tr><td>正文单元格</td></tr></table>')
         self.page.route('https://voiceofml-search.hf.space/api/reader-bucket-resource**',
                         lambda route: route.fulfill(content_type='text/html', body=html))
         self.open(self.reader_url('html', url=source))
         frame = self.page.frame_locator('.html-frame')
-        self.assertEqual(frame.locator('#master, #ArticleKeywordUrl').count(), 0)
-        text = frame.locator('body').inner_text()
-        for residue in ('expandState', 'submitForm', 'piwikTracker', 'PageData', 'document.write', '假标签'):
-            self.assertNotIn(residue, text)
-        for kept in ('正文保留', '保留表格', '文后保留'):
-            self.assertIn(kept, text)
+        self.assertEqual(frame.locator('#note').inner_text(), prose)
+        self.assertEqual(frame.locator('a').get_attribute('href'), '#note')
+        self.assertEqual(frame.locator('td').inner_text(), '正文单元格')
+        self.assertEqual(frame.locator('script').count(), 0)
+        self.assertNotIn('legacyPayload', frame.locator('body').inner_text())
 
     def test_legacy_txt_compacts_only_the_view(self):
         path = 'documents/text/txt/63fa4ecf73e28346a33704c8adbacebaec293f6f649d96590f066fd42187d97c/document.txt'

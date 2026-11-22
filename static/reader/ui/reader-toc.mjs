@@ -111,7 +111,7 @@ export function createReaderToc(readerContext) {
     if (mode !== "epub-chapters") {
       if (readerContext.headingLocationCache?.root !== root || readerContext.headingLocationCache?.entries !== readerContext.navigationState.tocEntries) {
         readerContext.headingLocationCache?.dispose();
-        readerContext.headingLocationCache = readerContext.createHeadingLocationCache(root, tocEntries());
+        readerContext.headingLocationCache = createHeadingLocationCache(root, tocEntries());
       }
       const current = readerContext.headingLocationCache.at(marker, readerContext.htmlFrame ? /** @type {Window} */ (readerContext.htmlFrame.contentWindow).scrollY : readerContext.viewport.scrollTop);
       if (current !== readerContext.navigationState.currentChapterIndex) {
@@ -252,7 +252,7 @@ export function createReaderToc(readerContext) {
       if (!entry) continue;
       let row = cache.rows.get(index);
       if (!row) {
-        row = readerContext.createTocRow(entry, index);
+        row = createTocRow(entry, index);
         row.classList.add("toc-virtual-row");
         if (state.query) readerContext.highlightPanelItem(/** @type {HTMLElement} */ (row.firstElementChild), state.query);
         cache.rows.set(index, row);
@@ -343,7 +343,7 @@ export function createReaderToc(readerContext) {
     const normalizedEntries = (entries || []).map((entry) => ({
       ...entry,
       href: String(entry.href || ""),
-      label: readerContext.cleanTocLabel(entry.label)
+      label: cleanTocLabel(entry.label)
     }));
     // Invalidate before publishing; event listeners may replace the entries.
     ownedTocEntries = normalizedEntries;
@@ -370,7 +370,7 @@ export function createReaderToc(readerContext) {
         if (frame) return;
         frame = requestAnimationFrame(() => {
           frame = 0;
-          readerContext.renderVirtualToc();
+          renderVirtualToc();
         });
       };
       panelView.addEventListener("scroll", onScroll, { passive: true });
@@ -380,16 +380,16 @@ export function createReaderToc(readerContext) {
         query: "",
         list,
         panelView,
-        render: readerContext.renderVirtualToc,
+        render: renderVirtualToc,
         destroy: () => {
           panelView.removeEventListener("scroll", onScroll);
           if (frame) cancelAnimationFrame(frame);
         }
       };
-      readerContext.renderVirtualToc();
+      renderVirtualToc();
     } else {
       for (const [index, entry] of normalizedEntries.entries())
-        list.appendChild(readerContext.createTocRow(entry, index));
+        list.appendChild(createTocRow(entry, index));
     }
     readerContext.filterPanel(document.querySelector('#toc-panel'), {resetScroll:false});
     readerContext.updateTocCurrentMark();
@@ -489,13 +489,9 @@ export function createReaderToc(readerContext) {
   return {
     updateNavigationState,
     headingTocEntries,
-    createHeadingLocationCache,
     syncHeadingLocation,
     navigateTocEntry,
-    createTocRow,
-    renderVirtualToc,
     setToc,
-    cleanTocLabel,
     updateTocCurrentMark,
     syncTocTab
   };

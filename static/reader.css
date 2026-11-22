@@ -1258,23 +1258,6 @@ body {
   min-height: 100%;
   background: #181b1e;
 }
-/* Reviewed RTF report: use the export's size ratios, not its fixed offsets. */
-.epub-frame > .reader-epub-chapter--rtf-report > h1.block_1,
-.epub-frame > .reader-epub-chapter--rtf-report > h1.block_1 + p.block_2 {
-  text-align: center;
-}
-.epub-frame > .reader-epub-chapter--rtf-report > h1.block_1 {
-  font-size: 1.83333em;
-  line-height: 1.5;
-}
-.epub-frame > .reader-epub-chapter--rtf-report > h2:is(.block_3, .block_5) {
-  font-size: 1.41667em;
-  line-height: 1.72;
-  text-align: left;
-}
-.epub-frame > .reader-epub-chapter--rtf-report > h2.block_5 {
-  font-weight: normal; /* The export uses bold runs inside these headings. */
-}
 /* Isolated HTML */
 .html-frame {
   display: block;

@@ -217,7 +217,7 @@ export function createReaderUi(readerContext) {
       panel.classList.add("is-open");
       readerContext.selectPanel(readerContext.panelState.selected === "full-search" ? "full-search" : readerContext.mediaElement ? "media" : "toc");
       readerContext.updateTocCurrentMark();
-      readerContext.notifyReaderUiState(readerContext.panelState.selected === "full-search" ? "full-search" : "panel");
+      notifyReaderUiState(readerContext.panelState.selected === "full-search" ? "full-search" : "panel");
       // Only an explicit keyboard/assistive activation moves focus. Automatic
       // directory discovery and ordinary pointer opening leave reading alone.
       if (focusPanel) /** @type {HTMLElement} */ (panel.querySelector('#full-search-view:not([hidden]) input') ||
@@ -230,7 +230,7 @@ export function createReaderUi(readerContext) {
     readerContext.panelAnimationTimer = setTimeout(() => {
       if (!panel.classList.contains("is-open")) panel.hidden = true;
     }, matchMedia("(prefers-reduced-motion: reduce)").matches ? 0 : 190);
-    readerContext.notifyReaderUiState("base");
+    notifyReaderUiState("base");
     if (restoreFocus || focusWasInside) /** @type {HTMLElement} */ (document.querySelector("#history")).focus({ preventScroll: true });
   }
 
@@ -275,8 +275,8 @@ export function createReaderUi(readerContext) {
     }
     for (const view of /** @type {NodeListOf<HTMLElement>} */ (document.querySelectorAll(".reader-panel-view")))
       view.hidden = view.dataset.panelView !== name;
-    if (name === "full-search") readerContext.notifyReaderUiState("full-search");
-    else if (readerContext.panelState.open) readerContext.notifyReaderUiState("panel");
+    if (name === "full-search") notifyReaderUiState("full-search");
+    else if (readerContext.panelState.open) notifyReaderUiState("panel");
     if (name === "bookmarks") readerContext.renderBookmarks();
     if (name === "history") readerContext.renderHistory();
     if (name === "media" && readerContext.mediaElement)
@@ -336,7 +336,6 @@ export function createReaderUi(readerContext) {
     emptyPanel,
     highlightPanelItem,
     filterPanel,
-    notifyReaderUiState,
     setReaderPanelOpen,
     setPanelSearchOpen,
     selectPanel,

@@ -45,27 +45,6 @@ export function applyReviewedTocCorrections(manifest, bytes, manifestUrl) {
   }).catch(() => manifest);
 }
 
-/** Reflow the reviewed RTF export's title and report note without deleting the
- * alignment spaces from the indexed text. The subheadings keep their short indent.
- * @param {HTMLElement} article @param {Element} title */
-function applyRtfReportLayout(article, title) {
-  const lead = title.nextElementSibling;
-  if (!title.matches("h1.block_1") || !lead?.matches("p.block_2") ||
-      !lead.nextElementSibling?.matches("h2.block_3#toc_id_2")) return;
-  const titleRun = title.querySelector(":scope > span.calibre1")?.firstChild;
-  const leadRun = lead.querySelector(":scope > span.calibre1")?.firstChild;
-  if (!(titleRun instanceof Text) || !/^\u3000{2}\S/u.test(titleRun.data) ||
-      !(leadRun instanceof Text) || !/^\u3000{6}（/u.test(leadRun.data)) return;
-  article.classList.add("reader-epub-chapter--rtf-report");
-  for (const run of [titleRun, leadRun]) {
-    run.splitText(run === titleRun ? 2 : 6);
-    const spacer = document.createElement("span");
-    spacer.hidden = true;
-    run.before(spacer);
-    spacer.appendChild(run);
-  }
-}
-
 /** @param {unknown} value @returns {value is {path: string, bytes: number, sha256: string, [key: string]: unknown}} */
 export function isChapterSearchIndex(value) {
   if (!value || typeof value !== "object") return false;
@@ -222,8 +201,6 @@ export function createReaderChapterFormat(readerContext) {
     let chapterPreviousObserver = null;
     const chapterBudget = VoiceOfMLReaderSecurity.createByteBudget();
     if (!manifestBase) throw new Error("EPUB_INVALID_MANIFEST_PATH");
-    const manifestLocation = new URL(manifestBase);
-    const manifestPath = manifestLocation.searchParams.get("path") || manifestLocation.pathname;
     const searchIndex = manifest.search_index;
     readerContext.chapterSearchConfiguration =
       isChapterSearchIndex(searchIndex)
@@ -522,19 +499,6 @@ export function createReaderChapterFormat(readerContext) {
             article.appendChild(document.importNode(child, true));
             if (++imported % 256 === 0 && imported < children.length && performance.now() >= deadline)
               await yieldIfNeeded(imported, children.length);
-          }
-          // Both catalog copies of this RTF use the same immutable chapter
-          // bundle. Its export lost the leading paragraph's invisibility.
-          if (chapter.index === 2 && manifestPath.endsWith(
-            "/399230332a4298771620cb84c9499d5f9d5ea5dab1cd0c843fcc1b6b9c43c52d/a3f30ce1631e2b90/chapter-manifest.json"
-          )) {
-            const first = article.firstElementChild;
-            const title = first?.nextElementSibling;
-            if (first?.matches("p.block_") && title?.matches("h1#toc_id_1") &&
-                first.textContent?.startsWith("圾癣应哆间揭")) {
-              first.setAttribute("hidden", "");
-              applyRtfReportLayout(article, title);
-            }
           }
           wrapEbookTables(article);
           const images = article.querySelectorAll("img");

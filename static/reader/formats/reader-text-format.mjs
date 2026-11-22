@@ -34,21 +34,29 @@ const vCardLabels = new Map([
 
 /** @param {string} text */
 function formatVCard(text) {
-  // This is a summary of one vCard 3.0, not a general-purpose contact decoder.
+  // Summarize one vCard 3.0 or 4.0. This is not a contact import or validator.
   const lines = text.replace(/\r?\n[ \t]/g, "").replace(/\r?\n$/, "").split(/\r?\n/);
-  if (lines[0]?.toUpperCase() !== "BEGIN:VCARD" || lines[1]?.toUpperCase() !== "VERSION:3.0" ||
-      lines.at(-1)?.toUpperCase() !== "END:VCARD") return null;
+  if (lines[0]?.toUpperCase() !== "BEGIN:VCARD" || lines.at(-1)?.toUpperCase() !== "END:VCARD") return null;
+  let version = "";
   const fields = [];
-  for (const line of lines.slice(2, -1)) {
-    // Parameters (including comma-separated TYPEs and quoted values) are
-    // metadata only. Never interpret a URL, attachment or transfer encoding.
-    const [, property, parameters, raw] = /^(?:[\da-z-]+\.)?([\da-z-]+)((?:;[\da-z-]+=(?:"[^"]*"|[^;":]+))*):([^\r\n]*)$/i.exec(line) || [];
+  for (let index = 1; index < lines.length - 1; index++) {
+    const line = lines[index] ?? "";
+    const versionValue = /^VERSION:([34]\.0)$/i.exec(line)?.[1];
+    if (versionValue) {
+      // vCard 4.0 requires VERSION immediately after BEGIN; 3.0 does not.
+      if (version || (versionValue === "4.0" && index !== 1)) return null;
+      version = versionValue;
+      continue;
+    }
+    // Parameters (including lists of quoted values) are metadata only.
+    // Never interpret a URI, attachment or transfer encoding.
+    const [, property, parameters, raw] = /^(?:[\da-z-]+\.)?([\da-z-]+)((?:;[\da-z-]+=(?:"[^"\r\n]*"|[^;:,"\r\n]*)(?:,(?:"[^"\r\n]*"|[^;:,"\r\n]*))*)*):([^\r\n]*)$/i.exec(line) || [];
     if (!property || raw === undefined) return null;
     const key = property.toUpperCase();
     if (key === "BEGIN" || key === "END" || key === "VERSION") return null;
     const label = vCardLabels.get(key);
     if (!label) continue;
-    if (parameters && /;encoding=/i.test(parameters)) return null;
+    if (parameters && /;(?:encoding|charset)=/i.test(parameters.replace(/"[^"]*"/g, ""))) return null;
     const structured = key === "ORG" || key === "ADR" || key === "N";
     const components = [];
     let start = 0, component = "";
@@ -66,7 +74,7 @@ function formatVCard(text) {
     if (value.trim()) fields.push({ key, text: `${label}：${value}` });
   }
   const hasFullName = fields.some(field => field.key === "FN");
-  if (!hasFullName && !fields.some(field => field.key === "N")) return null;
+  if (!version || (!hasFullName && (version === "4.0" || !fields.some(field => field.key === "N")))) return null;
   return fields.filter(field => !hasFullName || field.key !== "N").map(field => field.text).join("\n");
 }
 

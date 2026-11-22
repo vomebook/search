@@ -30,14 +30,7 @@ export function createReaderPdfPageWindow(readerContext) {
   /** @param {number} page */
   function pdfPageEntry(page) {
     if (!readerContext.pdfPageManifest || page < 1 || page > readerContext.pdfPageManifest.pageCount) return null;
-    const pageEntry = (
-      readerContext.pdfPageManifest.entries?.[page - 1] || {
-        page,
-        path: `${readerContext.pdfPageManifest.root}/pages/page-${String(page).padStart(6, "0")}.${readerContext.pdfPageManifest.pageCodec?.(page) || readerContext.pdfPageManifest.codec || "webp"}`
-      }
-    );
-    const ocrEntry = readerContext.pdfPageManifest.ocr?.[page - 1];
-    return ocrEntry ? { ...pageEntry, ...ocrEntry, page } : pageEntry;
+    return { page };
   }
 
   // Geometry state is shared by direct PDF and ordinary image-page formats.
@@ -538,7 +531,7 @@ export function createReaderPdfPageWindow(readerContext) {
     const sourcePageUrl = source.pageUrl;
     const pageUrl = (/** @type {number} */ page) => sourcePageUrl(page, codec);
     if (avifPages) pageUrl(1); // Reject unsupported roots before publishing navigation.
-    readerContext.pdfPageManifest = { ...source, pageUrl, avifPages, pageCount: totalPages, codec, sourceFormat: "image" };
+    readerContext.pdfPageManifest = { ...source, pageUrl, avifPages, pageCount: totalPages, codec };
     readerContext.updateDocumentState({ pageCount: totalPages });
     readerContext.pageInput.max = String(totalPages);
     /** @type {HTMLElement} */ (document.querySelector("#page-total")).textContent = `/ ${totalPages}`;

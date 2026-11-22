@@ -40,11 +40,9 @@ export function createReaderHtmlFormat(readerContext) {
     return doc;
   }
 
-  /** @param {Document} doc @param {{preserveEpubStyles?: boolean}} [options] */
-  function sanitizeReaderDocument(doc, { preserveEpubStyles = false } = {}) {
-    const blocked = preserveEpubStyles
-      ? "script,iframe,object,embed,base,form"
-      : "script,iframe,object,embed,base,form,link,style";
+  /** @param {Document} doc */
+  function sanitizeReaderDocument(doc) {
+    const blocked = "script,iframe,object,embed,base,form";
     for (const node of doc.querySelectorAll(blocked)) node.remove();
     // SMIL can retarget a link's href after sanitizing; drop animations that do.
     for (const node of doc.querySelectorAll("*")) {
@@ -52,16 +50,14 @@ export function createReaderHtmlFormat(readerContext) {
       const target = String(node.getAttribute("attributeName") || "").toLowerCase();
       if (/(?:^|:)href$/.test(target.trim()) || target.trim().startsWith("on")) node.remove();
     }
-    if (preserveEpubStyles) {
-      for (const link of doc.querySelectorAll("link")) {
-        const rel = (link.getAttribute("rel") || "").toLowerCase().split(/\s+/);
-        if (!rel.includes("stylesheet") || rel.includes("alternate") ||
-            !/^blob:/i.test(link.getAttribute("href") || ""))
-          link.remove();
-      }
-      for (const style of doc.querySelectorAll("style"))
-        style.textContent = sanitizeCssReferences(style.textContent || "");
+    for (const link of doc.querySelectorAll("link")) {
+      const rel = (link.getAttribute("rel") || "").toLowerCase().split(/\s+/);
+      if (!rel.includes("stylesheet") || rel.includes("alternate") ||
+          !/^blob:/i.test(link.getAttribute("href") || ""))
+        link.remove();
     }
+    for (const style of doc.querySelectorAll("style"))
+      style.textContent = sanitizeCssReferences(style.textContent || "");
     for (const element of doc.querySelectorAll("*"))
       for (const attribute of [...element.attributes]) {
         const name = attribute.name.toLowerCase(),
@@ -400,7 +396,7 @@ export function createReaderHtmlFormat(readerContext) {
 
   /** @param {Document} doc */
   function sanitizeEpubDocument(doc) {
-    return readerContext.sanitizeReaderDocument(readerContext.normalizeEpubDocument(doc), { preserveEpubStyles: true });
+    return sanitizeReaderDocument(normalizeEpubDocument(doc));
   }
 
   /** @param {string} text */
@@ -409,8 +405,8 @@ export function createReaderHtmlFormat(readerContext) {
     // of prefixed elements such as <html:meta/> (including the following title).
     const xml = new DOMParser().parseFromString(text, "application/xhtml+xml");
     if (!xml.querySelector("parsererror"))
-      text = new XMLSerializer().serializeToString(readerContext.normalizeEpubDocument(xml));
-    return readerContext.sanitizeEpubDocument(new DOMParser().parseFromString(text, "text/html"));
+      text = new XMLSerializer().serializeToString(normalizeEpubDocument(xml));
+    return sanitizeEpubDocument(new DOMParser().parseFromString(text, "text/html"));
   }
 
   /** @param {URL} url @param {URL | null} base */
@@ -496,73 +492,6 @@ export function createReaderHtmlFormat(readerContext) {
       const url = new URL(readerContext.sourceUrl, location.href);
       return url.searchParams.get("path") || url.pathname.replace(/^\//, "");
     } catch (_) { return ""; }
-  }
-
-  /** @param {DocumentFragment} root */
-  function removeLegacyWebScriptText(root) {
-    // Old web conversions stripped the tags but leaked their contents. This
-    // presentation pass is only for converted web assets, not raw books or code.
-    // Some literal document.write strings even became real nodes. Require both
-    // boundaries and the intervening scaffold before removing such a group.
-    const table = root.querySelector("table#master");
-    if (table?.parentNode === root && table.textContent?.includes("document.write(")) {
-      const opening = [];
-      const closing = table.nextSibling;
-      for (let node = table.previousSibling; node && opening.length < 8; node = node.previousSibling) {
-        if (node.nodeType !== Node.TEXT_NODE && (node.nodeName !== "STYLE" || node.textContent?.trim())) break;
-        opening.push(node);
-        if (node.nodeType === Node.TEXT_NODE && /^\s*\/\/[^\r\n]*\s+var\s+expandState\s*=/.test(node.nodeValue || "") &&
-            /document\.write\(\s*["']\s*$/.test(node.nodeValue || "") &&
-            closing?.nodeType === Node.TEXT_NODE && /^\s*["']\);\s*var\s+ie\s*=\s*document\.all\b/.test(closing.nodeValue || "") &&
-            /submitForm\.submit\(\);\s*\};\s*$/.test(closing.nodeValue || "")) {
-          for (const item of [...opening, table, closing]) root.removeChild(item);
-          break;
-        }
-      }
-    }
-    for (const block of root.querySelectorAll("#ArticleKeywordUrl")) {
-      if (/^\s*ArticleContent\.innerHTML\s*=\s*ArticleContent\.innerHTML\.replace\(/.test(block.firstChild?.nodeValue || "") &&
-          /document\.write\(keywordscode\);\s*\}\s*$/.test(block.lastChild?.nodeValue || "")) block.remove();
-    }
-    // A mail widget can split one script across the surrounding text and a
-    // parsed anchor. Remove the pair only if it is entirely generated markup.
-    for (const link of root.querySelectorAll("a")) {
-      const previous = link.previousSibling;
-      if (previous?.nodeType === Node.TEXT_NODE && /^\s*function SendMail\(\w+\)\s*\{\s*var \w+;\s*\w+\s*=\s*"\s*$/.test(previous.nodeValue || "") &&
-          /^\s*"\s*\+\s*\w+\s*\+\s*"[^\r\n]*;\s*document\.write\(\w+\);\s*\}\s*SendMail\(["'][^"'\r\n]*["']\);\s*$/.test(link.textContent || "")) {
-        previous.nodeValue = "";
-        link.remove();
-      }
-    }
-    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
-    while (walker.nextNode()) {
-      const node = /** @type {Text} */ (walker.currentNode);
-      if (node.length > 16384 || node.parentElement?.closest("pre,code,kbd,samp,style,textarea")) continue;
-      const value = node.data.trim();
-      if (!value) continue;
-      // Match executable-shaped blocks with browser APIs, not isolated words
-      // such as 'function' or 'document' in article prose. Never evaluate text.
-      const browserApi = /(?:\b(?:document\s*\.\s*(?:write|createElement|getElementById|getElementsByTagName|location|body|cookie|domain|execCommand)|window\s*\.\s*[\w$]+|set(?:Interval|Timeout)\s*\(|UserBar\s*\.\s*(?:init|showMsg)\s*\(|PostEditor\s*\.\s*(?:init\(|is_login\s*=))|(?:\$|jQuery)\s*\(\s*(?:["']|document\b|window\b))/;
-      const start = /^(?:(?:[!~+]|\$?\s*\()\s*function\s*\(|(?:async\s+)?function\s+[\w$]+\s*\(|(?:var|let|const)\s+[\w$]+\s*=|(?:if\s*\([^\r\n]*?\)|try)\s*\{|(?:document|window)\s*\.\s*[\w$]+\s*[=(]|(?:\$|jQuery)\s*\(\s*(?:["']|document\b|window\b)|login_str\s*=|UserBar\.showMsg\s*\()/;
-      const codeStart = value.replace(/^(?:\/\*[^\r\n]*?\*\/\s*|\/\/[^\r\n]*[\r\n]+\s*)+/, "");
-      const ready = codeStart.replace(/^uaredirect\(["'][^"'\r\n]*["']\);\s*(?=\$\(document\)\.ready\()/, "").trimEnd();
-      // Legacy script wrappers also leave trailing line comments or HTML comment closers.
-      const codeEnd = codeStart.replace(/(?:\s*\/\*[^\r\n]*?\*\/|[\t ]+\/\/[^\r\n]*|[\r\n]\s*\/\/[^\r\n]*|\s*-->)\s*$/, "").trimEnd();
-      const end = /(?:[;})]|\+\+|--)$/;
-      const shareConfig = /^var\s+jiathis_config\s*=\s*\{\s*data_track_clickback\s*:\s*(?:["'](?:true|false)["']|true|false)(?:\s*,\s*summary\s*:\s*["'][^"'\r\n]*["']\s*,\s*ralateuid\s*:\s*\{\s*(?:\w+|["']\w+["'])\s*:\s*["'][^"'\r\n]*["']\s*\})?(?:\s*,\s*(?:shortUrl|hideMore)\s*:\s*(?:true|false)){0,2}\s*\};?$/.test(codeStart);
-      const siteBoot = /^showTips\(["']btnTips["']\);\s*if\(!islogin\(\)\)\s*\{\s*document\.getElementById\([^\r\n]+?\}\s*showGuanli\(["']\d+["']\);$/.test(codeStart);
-      const avatar = /^changeavatar\(["'][^"'\r\n]*["'],\s*document\.getElementById\(["']avatarimg\d+["']\)\);$/.test(codeStart);
-      const escapedAd = /^<script\s+type=["']text\/javascript["']\s*>\s*ac_as_id\s*=\s*\d+;[\s\S]*?<\/script>\s*<script\b[^>]*\bsrc=["'][^"']+["'][^>]*><\/script>\s*<img\b[^>]*\bwidth=["']0["'][^>]*>\s*$/i.test(codeStart);
-      const commentForm = /^function CheckPl\(\w+\)\s*\{[\s\S]*?\breturn (?:true|false);\s*\}$/.test(codeStart);
-      // Require a script-shaped boundary and browser operations, not just
-      // syntax density, to avoid eating body prose which mentions JavaScript.
-      if ((start.test(ready) && end.test(codeEnd) && browserApi.test(ready)) || shareConfig || commentForm || avatar || escapedAd || siteBoot) {
-        node.data = "";
-        continue;
-      }
-      // Preserve the visible separator/prose before a known footer analytics tail.
-      node.data = node.data.replace(/(?<=^|\n)[\t ]*var _bdhmProtocol\s*=\s*\(\(["']https:["'][\s\S]*?document\.write\(unescape\([^\r\n]+\)\);[\t\r\n ]*$/, "");
-    }
   }
 
   /** @param {boolean} markdown @param {import('../../../typings/reader-html-format-strict').PreparedText} prepared */
@@ -652,9 +581,6 @@ export function createReaderHtmlFormat(readerContext) {
     }
     const template = document.createElement("template");
     template.content.appendChild(clean);
-    if (/^documents\/web\/(?:htm|html|mht|mhtml)\/[a-f0-9]{64}\/document\.html$/.test(readingAssetPath())) {
-      removeLegacyWebScriptText(template.content);
-    }
     /** @param {string | null} value */
     const stripUrls = (value) => sanitizeCssReferences(value, { strict: true });
     for (const style of template.content.querySelectorAll("style")) {
@@ -713,8 +639,8 @@ export function createReaderHtmlFormat(readerContext) {
 
   /** @param {string} text */
   function prepareHtmlDocument(text) {
-    const discourse = readerContext.buildDiscourseDocument(text);
-    const html = readerContext.sanitizeOfflineHtml(discourse || text);
+    const discourse = buildDiscourseDocument(text);
+    const html = sanitizeOfflineHtml(discourse || text);
     return {
       html,
       discourse: !!discourse,
@@ -742,9 +668,9 @@ export function createReaderHtmlFormat(readerContext) {
   /** @param {import('../../../typings/reader-html-format-strict').PreparedHtml} prepared */
   async function renderHtml(prepared) {
     const bytes = await readerContext.readPreparedBytes(prepared.response, prepared.engine);
-    const text = new TextDecoder(readerContext.detectHtmlEncoding(bytes, readerContext.documentState.title)).decode(bytes);
+    const text = new TextDecoder(detectHtmlEncoding(bytes, readerContext.documentState.title)).decode(bytes);
     readerContext.assertReaderActive();
-    const documentData = readerContext.prepareHtmlDocument(text);
+    const documentData = prepareHtmlDocument(text);
     const frame = document.createElement("iframe");
     readerContext.htmlFrame = frame;
     frame.className = "html-frame";
@@ -802,7 +728,7 @@ export function createReaderHtmlFormat(readerContext) {
             // loading indicator's space before charts have finished decoding.
             // The full startup/restore path still waits for stable geometry.
             readerContext.markReaderContentReady();
-            await readerContext.waitForSpreadsheetImages(frame);
+            await waitForSpreadsheetImages(frame);
           }
           readerContext.assertReaderActive();
           resolve();
@@ -823,7 +749,7 @@ export function createReaderHtmlFormat(readerContext) {
       deadline = setTimeout(() => { cleanup(); reject(new Error("HTML document initialization timeout")); }, 20000);
       frame.addEventListener("load", loaded);
     }));
-    frame.srcdoc = readerContext.buildHtmlFrameSource(documentData);
+    frame.srcdoc = buildHtmlFrameSource(documentData);
     readerContext.content.appendChild(frame);
     await frameLoaded;
     readerContext.markReaderContentReady();
@@ -841,7 +767,7 @@ export function createReaderHtmlFormat(readerContext) {
       const parent = node.parentElement;
       const value = node.nodeValue || "";
       const indent = /^[\t\r\n ]*(?:\u3000[ \t]*){3,}(?=\S)/.exec(value);
-      if (!indent || parent?.closest("pre,code,table,style,script")) continue;
+      if (!indent || parent?.closest("pre,code,kbd,samp,table,style,textarea")) continue;
       // Ascend through wrappers only while at their first visible child.
       let leading = false;
       for (let sibling = node; sibling.parentElement; sibling = sibling.parentElement) {
@@ -997,19 +923,10 @@ export function createReaderHtmlFormat(readerContext) {
   }
 
   return {
-    normalizeEpubDocument,
-    sanitizeReaderDocument,
-    sanitizeEpubDocument,
     sanitizeCssReferences,
     parseChapterDocument,
     renderText,
-    sanitizeOfflineHtml,
-    buildDiscourseDocument,
-    prepareHtmlDocument,
-    buildHtmlFrameSource,
-    waitForSpreadsheetImages,
     renderHtml,
-    detectHtmlEncoding,
     repairHtmlContrast
   };
 }

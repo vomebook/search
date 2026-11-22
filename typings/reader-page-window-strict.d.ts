@@ -75,9 +75,6 @@ export interface PageWindowManifest extends PageWindowSource {
   avifPages?: ImagePageIntegrity[] | undefined;
   codec: string;
   pageCount: number;
-  sourceFormat?: string;
-  entries?: {page: number; path: string}[];
-  ocr?: {page?: number; [key: string]: unknown}[];
 }
 export interface PageWindowRepository {
   read(ref: import('./reader-v3-strict').Resource): Promise<unknown>;

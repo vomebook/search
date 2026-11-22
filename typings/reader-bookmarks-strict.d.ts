@@ -14,7 +14,6 @@ export interface BookmarkContext {
   params: URLSearchParams; isReaderOverlayFrame(): boolean;
   capability: { mode?: string | null | undefined }; pageAtMarker(): (HTMLElement & { _bookmarkTextItems?: { y: number; text: string }[] }) | null;
   bookmarkRibbon: HTMLElement; viewport: HTMLElement; content: HTMLElement;
-  excerptFromCaret(doc: Document, root: Node, x: number, y: number): string;
   readerProgressPercent(): number; navigationState: { currentChapterIndex: number };
   beginReaderNavigation(): number; isReaderGenerationCurrent(kind: string, generation: number): boolean;
   waitForReader(delay: number, force: boolean): Promise<void>;
@@ -34,6 +33,5 @@ export interface BookmarkContext {
   bookmarkInvoker: HTMLElement | null; pendingBookmarkSnapshot: BookmarkSnapshot | null;
   captureBookmarkSnapshot(): BookmarkSnapshot; updatePanelState(update: { editingBookmark: StoredBookmark | null }): void;
   bookmarkLabelInput: HTMLInputElement; bookmarkExcerptInput: HTMLInputElement | HTMLTextAreaElement;
-  setBookmarkDialogModal(open: boolean): void;
   nextReaderGeneration(kind: string): number;
 }

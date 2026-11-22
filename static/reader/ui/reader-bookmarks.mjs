@@ -137,7 +137,7 @@ export function createReaderBookmarks(readerContext) {
     try {
       if (frame && frame.contentDocument && frame.contentDocument.body) {
         const rect = frame.getBoundingClientRect();
-        return readerContext.excerptFromCaret(
+        return excerptFromCaret(
           frame.contentDocument,
           frame.contentDocument.body,
           x - rect.left,
@@ -145,7 +145,7 @@ export function createReaderBookmarks(readerContext) {
         );
       }
     } catch (_) {}
-    const exact = readerContext.excerptFromCaret(document, readerContext.content, x, y);
+    const exact = excerptFromCaret(document, readerContext.content, x, y);
     if (exact) return exact;
     const text = readerContext.content.textContent.replace(/\s+/g, " ").trim(),
       start = Math.floor((text.length * readerContext.readerProgressPercent()) / 100);
@@ -304,7 +304,7 @@ export function createReaderBookmarks(readerContext) {
     invoker.setAttribute("aria-expanded", "true");
     invoker.setAttribute("aria-controls", readerContext.bookmarkPopover.id);
     readerContext.bookmarkLabelInput.focus();
-    readerContext.setBookmarkDialogModal(true);
+    setBookmarkDialogModal(true);
   }
 
   function closeBookmarkPopover() {
@@ -312,7 +312,7 @@ export function createReaderBookmarks(readerContext) {
     readerContext.pendingBookmarkSnapshot = null;
     readerContext.updatePanelState({ editingBookmark: null });
     readerContext.bookmarkPopover.hidden = true;
-    readerContext.setBookmarkDialogModal(false);
+    setBookmarkDialogModal(false);
     readerContext.bookmarkInvoker?.setAttribute("aria-expanded", "false");
     (readerContext.bookmarkInvoker?.isConnected ? readerContext.bookmarkInvoker : readerContext.bookmarkRibbon).focus({ preventScroll: true });
     readerContext.bookmarkInvoker = null;
@@ -320,11 +320,9 @@ export function createReaderBookmarks(readerContext) {
 
   return {
     consumeBookmarkHandoff,
-    excerptFromCaret,
     bookmarkExcerpt,
     renderBookmarks,
     captureBookmarkSnapshot,
-    setBookmarkDialogModal,
     openBookmarkPopover,
     closeBookmarkPopover
   };

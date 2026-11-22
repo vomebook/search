@@ -59,7 +59,6 @@ export interface ReaderUiContext {
   panelState: { selected: string; open: boolean };
   mediaElement: HTMLMediaElement | null;
   updateTocCurrentMark(): void;
-  notifyReaderUiState(state: string): void;
   filterPanel(view: HTMLElement, options?: { resetScroll?: boolean }): void;
   mediaTab: HTMLElement;
   updatePanelState(patch: ReaderUiPanelPatch): boolean;

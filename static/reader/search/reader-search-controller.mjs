@@ -477,7 +477,7 @@ export function createReaderSearchController({
     state.page = state.failedPage = state.pageLoader = null;
   }
   return Object.freeze({
-    state, elements: Object.freeze({ view, button, input, status, results, pagination, cancel, retry }),
-    render, updatePagination, applyChapterPage, loadPage, run, close, resetAvailability, resetBackendResults, activate, move, dispose
+    state, elements: Object.freeze({ view, button, input, status, results, cancel, retry }),
+    render, applyChapterPage, run, close, resetAvailability, resetBackendResults, activate, move, dispose
   });
 }

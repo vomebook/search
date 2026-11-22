@@ -31,7 +31,7 @@ export function validateResource(ref, source = "") {
   return ref;
 }
 /** @param {DatasetPrimary} ref @param {string} [sourceKey] @param {string} [sourceSha] @param {string} [expectedKind] */
-export function validateDatasetPrimary(ref, sourceKey, sourceSha, expectedKind) {
+function validateDatasetPrimary(ref, sourceKey, sourceSha, expectedKind) {
   const keys = ["kind", "repo", "path", "revision", "sha256", "bytes", "role"];
   if (!ref || typeof ref !== "object" || Array.isArray(ref) ||
       Object.keys(ref).length !== keys.length || keys.some(key => !Object.hasOwn(ref, key)) ||
@@ -47,7 +47,6 @@ export function validateDatasetPrimary(ref, sourceKey, sourceSha, expectedKind) 
       (sourceKey !== undefined && sourceKey !== ref.repo + "\0" + ref.path) ||
       (sourceSha !== undefined && sourceSha !== ref.sha256) ||
       (expectedKind !== undefined && !ref.path.toLowerCase().endsWith("." + expectedKind))) invalid();
-  return ref;
 }
 /** @param {DatasetPrimary} ref */
 export function datasetPrimaryUrl(ref) {

@@ -3,6 +3,17 @@ import { test } from 'node:test';
 import { createReaderPdfPageWindow } from '../../../static/reader/pdf/reader-pdf-page-window.mjs';
 import { createReaderProgress } from '../../../static/reader/ui/reader-progress.mjs';
 
+test('image page entries use the manifest bounds', () => {
+  const reader = {pdfPageManifest: null};
+  const {pdfPageEntry} = createReaderPdfPageWindow(reader);
+  assert.equal(pdfPageEntry(1), null);
+  reader.pdfPageManifest = {pageCount: 3};
+  assert.equal(pdfPageEntry(0), null);
+  assert.deepEqual(pdfPageEntry(1), {page: 1});
+  assert.deepEqual(pdfPageEntry(3), {page: 3});
+  assert.equal(pdfPageEntry(4), null);
+});
+
 test('outline traversal preserves order, depth and navigation', async () => {
   const calls = [];
   const reader = {

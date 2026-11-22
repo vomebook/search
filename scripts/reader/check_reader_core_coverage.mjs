@@ -28,6 +28,7 @@ const boundaryTests = [
   {file: "tests/reader/core/test_reader_source_boundary.mjs", names: [
     "download validates unknown JSON and preserves server messages",
     "download handles null, primitive and abort errors without losing cleanup",
+    "a derived text preview still downloads the original VCF with its exact filename",
     "normal and early resolution validate metadata while retaining extra fields",
     "non-record metadata is rejected before use in both resolution paths and application",
     "optional nulls and mixed folders survive resolution and application",

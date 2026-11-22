@@ -66,6 +66,28 @@ test("download validates unknown JSON and preserves server messages", async () =
   }
 });
 
+test("a derived text preview still downloads the original VCF with its exact filename", async () => {
+  const f = fixture();
+  const original = "https://example.test/original/address-book.vcf";
+  const filename = "Carnet Zoë.VCF";
+  Object.assign(f.context, {
+    extension: "txt", sourceUrl: "https://example.test/preview/document.txt", downloadUrl: original,
+    resolvedReaderData: { filename, original_extension: ".VCF" }, documentState: { title: "Preview.vcf" },
+    readerDownloadUrl: f.source.readerDownloadUrl
+  });
+  globalThis.fetch = async url => {
+    assert.equal(new URL(url, globalThis.location.href).searchParams.get("link"), original);
+    return { ok: true, json: async () => ({ ok: true }) };
+  };
+  await f.source.startReaderDownload(f.event);
+  assert.equal(f.frames.length, 1);
+  const download = new URL(f.frames[0].src, globalThis.location.href);
+  assert.equal(download.pathname, "/api/download");
+  assert.equal(download.searchParams.get("link"), original);
+  assert.equal(download.searchParams.get("file"), filename);
+  f.frames[0].onLoad();
+});
+
 test("download handles null, primitive and abort errors without losing cleanup", async () => {
   for (const [error, expected] of [[null, "下载失败，请重试"], ["failure", "下载失败，请重试"],
     [{ message: 42 }, "下载失败，请重试"],

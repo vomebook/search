@@ -10,21 +10,6 @@ export function createReaderPdfScheduler(readerContext) {
   const pdfPreviewActive = new Map();
   /** @type {import('../../../typings/reader-pdf-scheduler-strict').PreviewWaiter[]} */
   const pdfPreviewWaiters = [];
-  let pdfMotionAt = 0, pdfFastUntil = 0;
-
-  function notePdfViewportMotion() {
-    if (!readerContext.documentState.restorationReady || !/** @type {(string | null | undefined)[]} */ (["pdf", "pdf-pages"]).includes(readerContext.capability.mode)) return;
-    const distance = Math.abs(readerContext.viewport.scrollTop - readerContext.pdfLastScrollTop);
-    if (!distance) return;
-    const now = performance.now(), elapsed = pdfMotionAt ? now - pdfMotionAt : Infinity;
-    if (distance > readerContext.viewport.clientHeight * .75 || (elapsed < 160 && distance / Math.max(1, elapsed) > 4))
-      pdfFastUntil = now + 160;
-    pdfMotionAt = now;
-  }
-
-  function pdfScrollActivity(fastOnly = false) {
-    return performance.now() < (fastOnly ? pdfFastUntil : pdfMotionAt + 160);
-  }
 
   function pdfManifestPrefetchConcurrency() {
     const type = navigator.connection?.effectiveType;
@@ -389,10 +374,6 @@ export function createReaderPdfScheduler(readerContext) {
     scheduleVisiblePdfRenderReconciliation();
   }
 
-  function pdfPreviewLoads() {
-    return pdfPreviewActive.size;
-  }
-
   /** @param {boolean | number} [priority] @param {import('../../../typings/reader-pdf-scheduler-strict').PdfShell | null} [shell] @param {AbortSignal | null} [signal] */
   function acquirePdfRenderSlot(priority = false, shell = null, signal = null) {
     if (readerContext.readerAbortController.signal.aborted) return Promise.reject(readerContext.readerAbortError());
@@ -573,8 +554,6 @@ export function createReaderPdfScheduler(readerContext) {
   }
 
   return {
-    notePdfViewportMotion,
-    pdfScrollActivity,
     pdfManifestPrefetchConcurrency,
     pdfManifestPrefetchMaxPages,
     canPrefetchPdfImages,
@@ -597,7 +576,6 @@ export function createReaderPdfScheduler(readerContext) {
     releasePdfRenderSlot,
     acquirePdfPreviewSlot,
     releasePdfPreviewSlot,
-    pdfPreviewLoads,
     acquirePdfTextSlot,
     drainPdfTextWaiters,
     releasePdfTextSlot,

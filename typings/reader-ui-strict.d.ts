@@ -37,7 +37,6 @@ export interface NavigationContext {
   updateProgressTools(): void;
   scheduleSave(): void;
   handlePageNavigationFailure(error: unknown, generation: number): void;
-  notePdfViewportMotion?: () => void;
   pdfLastScrollTop: number;
   pdfScrollDirection: number;
   scheduleVisiblePdfRenderReconciliation?: (immediate: boolean) => void;

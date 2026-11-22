@@ -398,13 +398,13 @@ export function makeFirstPageWorkerSource(source) {
     });
     let readerInstallPrefix = null;
     function readerQueuePrefixInstall(installing) {
-      if (!installing?.length || pdfManager.readerValidationCommitted) return {refs:[],firstChanged:false};
+      if (!installing?.length || pdfManager.readerValidationCommitted) return {refs:[]};
       const previous = readerInstallPrefix;
       readerInstallPrefix = (async () => {
         if (previous) await previous;
         const map = new Map(installing.map((item,index) => [index,[item.dict,item.ref]]));
         await pdfManager.pdfDocument.readerInstallPageTree(map, true);
-        return {refs:installing.map(item => item.ref.toString()), firstChanged:false};
+        return {refs:installing.map(item => item.ref.toString())};
       })();
       return readerInstallPrefix;
     }

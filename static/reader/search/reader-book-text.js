@@ -166,16 +166,3 @@ export async function searchBookText(book, query, options = {}) {
   }
   return indexResult;
 }
-
-/** @template T @param {() => T | PromiseLike<T>} load */
-export function createBookTextCache(load) {
-  /** @type {T | null} */
-  let value = null;
-  /** @type {Promise<T> | null} */
-  let pending = null;
-  return { async get() {
-    if (value) return value;
-    if (!pending) pending = Promise.resolve().then(load).then(book => (value = book)).finally(() => { pending = null; });
-    return pending;
-  }, clear() { value = null; pending = null; } };
-}

@@ -45,7 +45,6 @@ export interface ProgressContext {
   consumeBookmarkHandoff(entry: ProgressState): void; reportNavigationError(error: unknown, generation: number): void;
   formatAdapters: { active: { restore(entry: ProgressState, generation: number): unknown } | null };
   zoomChangedByUser: boolean; setZoom(zoom: number, persist: boolean): void;
-  restoreInitialPosition(entry: ProgressState | null, generation: number): Promise<void>;
   readingProgressSummary: HTMLElement; readerProgressPercent(): number; progressSeeking: boolean;
   progressRange: HTMLInputElement; progressPercent: HTMLElement; adjacentTocIndex(direction: number): number;
   chapterPrev: HTMLButtonElement; chapterNext: HTMLButtonElement; progressUndo: HTMLElement;

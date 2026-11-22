@@ -74,21 +74,53 @@ test('original VCF gets a text-only summary through direct and derived text path
     ].join('\n'));
   }
   assert.deepEqual(requests,[]);
-  await f.context.renderPlainText(new Response('begin:vcard\nversion:3.0\nn:Example;Test;;;\nfn:  \nend:vcard'));
-  assert.equal(f.context.content.children.at(-1).textContent,'姓名：Example · Test');
+  await f.context.renderPlainText(new Response('begin:vcard\nn:Park;Min;;;\nfn:  \nversion:3.0\nend:vcard'));
+  assert.equal(f.context.content.children.at(-1).textContent,'姓名：Park · Min');
+});
+
+test('vCard 4.0 supports grouped fields, quoted parameter lists and literal URIs', async t => {
+  const f=fixture(); t.after(f.restore);
+  const fetch=t.mock.method(globalThis,'fetch',()=>{throw Error('unexpected fetch');});
+  Object.assign(f.context,{extension:'txt',resolvedReaderData:{original_extension:'.VCF',filename:'address-book.VCF'},
+    documentState:{title:'Different display name'}});
+  await f.context.renderPlainText(buffered([
+    'BEGIN:VCARD', 'VERSION:4.0', 'FN;LANGUAGE=fr:Zoë Martin',
+    'item2.TEL;TYPE="work","voice";VALUE=uri;PREF=1:tel:+1-202-555-0146;ext=7',
+    'ADR;TYPE=work;LABEL="Floor 2, East; Wing":;;14 Sample\\; Road;Montréal;;;Canada',
+    'NOTE;X-META="metadata;encoding=b":<b>literal</b>\\nSecond\\, line',
+    'PHOTO:data:image/png;base64,AA==', 'URL:https://example.invalid/contact', 'END:VCARD', ''
+  ].join('\r\n')));
+  const [root]=f.context.content.children, [block]=root.children;
+  assert.equal(block.tag,'pre');
+  assert.deepEqual(block.children.map(node=>node.nodeType),[3]);
+  assert.equal(root.textContent,[
+    '姓名：Zoë Martin','电话：tel:+1-202-555-0146;ext=7','地址：14 Sample; Road · Montréal · Canada',
+    '备注：<b>literal</b>','Second, line','网址：https://example.invalid/contact'
+  ].join('\n'));
+  assert.equal(fetch.mock.callCount(),0);
 });
 
 test('VCF fallback and non-VCF plain text preserve the original whitespace', async t => {
   const f=fixture(); t.after(f.restore);
   for (const value of [
-    '', vCard.trimEnd().replace('END:VCARD',''), vCard.replace('3.0','4.0'), vCard+vCard,
+    '', vCard.trimEnd().replace('END:VCARD',''), vCard+vCard,
+    vCard.replace('VERSION:3.0\r\n',''), vCard.replace('3.0','5.0'),
+    'BEGIN:VCARD\r\nVERSION:2.1\r\nN:Lee;Kai;;;\r\nFN;ENCODING=QUOTED-PRINTABLE:Kai=20Lee\r\nTEL;HOME:123\r\nEND:VCARD\r\n',
     vCard.replace('TITLE:Example role','not a field'), vCard.replace('TITLE:', 'TITLE;ENCODING=b:'),
-    'BEGIN:VCARD\nVERSION:3.0\nTEL:123\nEND:VCARD', ' \tfirst\r\n  second\r\n\r\n'
+    vCard.replace('3.0','4.0').replace('TITLE:', 'TITLE;ENCODING=b:'),
+    vCard.replace('FN:', 'FN;CHARSET=ISO-8859-1:'),
+    'BEGIN:VCARD\nVERSION:3.0\nTEL:123\nEND:VCARD',
+    'BEGIN:VCARD\nVERSION:4.0\nN:Lee;Kai;;;\nEND:VCARD',
+    'BEGIN:VCARD\nFN:Kai Lee\nVERSION:4.0\nEND:VCARD',
+    'BEGIN:VCARD\nVERSION:3.0\nVERSION:4.0\nFN:Kai Lee\nEND:VCARD',
+    ' \tfirst\r\n  second\r\n\r\n'
   ]) {
     f.context.content.children.length=0;
     f.context.extension='vcf';
     await f.context.renderPlainText(new Response(value));
     assert.equal(f.context.content.textContent,value);
+    assert.ok(f.context.content.children[0].children.every(block=>
+      block.tag==='pre' && block.children.every(node=>node.nodeType===3)));
   }
   for (const [extension,original_extension] of [['txt','txt'],['ini',null],['vcf','txt'],['txt','notvcf'],
     ['txt','vcf.exe'],['txt','vcf '],['txt',{toString(){throw Error('metadata must not be coerced');}}]]) {

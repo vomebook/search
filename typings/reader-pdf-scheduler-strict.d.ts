@@ -20,7 +20,7 @@ export interface SchedulerContext {
   capability: { mode?: string | null };
   viewport: HTMLElement;
   content: HTMLElement;
-  pdfLastScrollTop: number; pdfScrollDirection: number;
+  pdfScrollDirection: number;
   PDF_MANIFEST_PREFETCH_CONCURRENCY: number; PDF_MANIFEST_PREFETCH_MAX_PAGES: number; PDF_MANIFEST_PREFETCH_LIMIT: number;
   pdfManifestPrefetchActive: Set<PrefetchRecord>; pdfManifestPrefetches: Map<string, PrefetchRecord>;
   pdfManifestPrefetchTimer: number; pdfManifestPrefetchNext: number; pdfManifestPrefetchOrigin: number; pdfManifestPrefetchCount: number; pdfManifestPrefetchWrapped: boolean;
