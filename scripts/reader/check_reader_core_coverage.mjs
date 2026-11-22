@@ -27,6 +27,7 @@ const boundaryTests = [
     "dynamic lifecycle code remains uncoerced and is narrowed by the controller",
     "image fallback only accepts a string original extension"]},
   {file: "tests/reader/core/test_reader_source_boundary.mjs", names: [
+    "exact old Web Reader URLs resolve as original-source IDs",
     "download validates unknown JSON and preserves server messages",
     "download handles null, primitive and abort errors without losing cleanup",
     "a derived text preview still downloads the original VCF with its exact filename",

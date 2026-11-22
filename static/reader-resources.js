@@ -59,7 +59,7 @@
   });
   const readerComponentFiles = Object.freeze([
     "reader/ui/reader-document-styles.mjs",
-    "reader/core/reader-shared-content.mjs", "reader/core/reader-diagnostics.mjs", "reader/core/reader-lifecycle.mjs", "reader/core/reader-source.mjs", "reader/ui/reader-ui.mjs",
+    "reader/core/reader-shared-content.mjs", "reader/core/reader-diagnostics.mjs", "reader/core/reader-lifecycle.mjs", "reader/core/reader-source.mjs", "reader/core/reader-web-aliases.mjs", "reader/ui/reader-ui.mjs",
     "reader/ui/reader-toc.mjs", "reader/search/reader-search-backends.mjs", "reader/pdf/reader-pdf-scheduler.mjs", "reader/ui/reader-navigation.mjs",
     "reader/ui/reader-progress.mjs", "reader/ui/reader-bookmarks.mjs", "reader/formats/reader-media-format.mjs",
     "reader/core/reader-document-loader.mjs", "reader/pdf/reader-pdf-page-window.mjs", "reader/pdf/reader-pdf-text-runtime.mjs",

@@ -1,6 +1,7 @@
 import { createReaderDomSearch, fullSearchEscape, fullSearchSnippet, fullSearchPageOffset } from "./reader/search/reader-dom-search.mjs";
 import { createReaderSearchController } from "./reader/search/reader-search-controller.mjs";
 import { createReaderImageLoader } from "./reader/formats/reader-image-loader.mjs";
+import { readerWebAliasId } from "./reader/core/reader-web-aliases.mjs";
 import { chapterAnchorCandidates, createImageSettler } from "./reader/core/reader-shared-content.mjs";
 import "/search/static/reader-resources.js";
 import "/search/static/reader/core/reader-contract.js";
@@ -649,12 +650,13 @@ const stopWaitingForSpeech = readerRuntime.events.on("phase", detail => {
 // Folder returns use hash routes; explicit folder URLs take precedence over resolved metadata.
 
 const params = new URLSearchParams(location.search);
-const readerId = params.get("id") || "";
+const webAliasId = readerWebAliasId(params.get("url") || "");
+const readerId = webAliasId || params.get("id") || "";
 /** @type {Record<string, unknown> | null} */
 let localReaderData = null;
-const selectedSourceData = readerBindings.readSelectedSourceSession();
+const selectedSourceData = webAliasId ? null : readerBindings.readSelectedSourceSession();
 let sourceUrl = normalizeSourceUrl(
-  params.get("url") || (!readerId && typeof selectedSourceData?.url === "string" ? selectedSourceData.url : "")
+  webAliasId ? "" : params.get("url") || (!readerId && typeof selectedSourceData?.url === "string" ? selectedSourceData.url : "")
 );
 let contentUrl = readerContentUrl(sourceUrl);
 let downloadUrl =
@@ -672,7 +674,8 @@ let pdfFirstPagePreloadPage = 1;
 /** @type {import('../typings/reader-pdf-engine-strict').PdfWorker | null} */
 /** @type {(() => void) | null} */
 let releasePdfWorker = null;
-readerBindings.applySourceSessionAndCachedMetadata();
+// A retired link must resolve to the current asset, not a cached old hash.
+if (!webAliasId) readerBindings.applySourceSessionAndCachedMetadata();
 const readerLifecycle = readerRuntime.state.lifecycle;
 readerBindings.publishSourceAndSubscribeToStore();
 const content = /** @type {HTMLDivElement} */ (document.querySelector("#content"));

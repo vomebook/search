@@ -2,6 +2,18 @@
 import { test, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import { createReaderSource } from "../../../static/reader/core/reader-source.mjs";
+import { readerWebAliasId } from "../../../static/reader/core/reader-web-aliases.mjs";
+
+test("exact old Web Reader URLs resolve as original-source IDs", () => {
+  const path = "documents/web/mht/7d1b2ea8999ae052d537f9f92a28329d10ec3537ff9282222ac7c3485494b83b/document.html";
+  const proxy = `/api/reader-bucket-resource?path=${encodeURIComponent(path)}`;
+  const bucket = `https://huggingface.co/buckets/vomebook/reader-assets-v2/resolve/${path}`;
+  for (const url of [proxy, `https://voiceofml-search.hf.space${proxy}`, bucket, `${bucket}#note`])
+    assert.equal(readerWebAliasId(url), "28f50a563fl74");
+  for (const url of [bucket.replace("reader-assets-v2", "pdf-pages-v2"), `${proxy}&path=${encodeURIComponent(path)}`,
+    `https://example.invalid${proxy}`, bucket.replace("7d1b", "ad1b"), bucket.replace("document.html", "document-manifest.json")])
+    assert.equal(readerWebAliasId(url), "");
+});
 
 const saved = { fetch: globalThis.fetch, window: globalThis.window, document: globalThis.document,
   location: globalThis.location, security: globalThis.VoiceOfMLReaderSecurity, setTimeout: globalThis.setTimeout, Element: globalThis.Element };
