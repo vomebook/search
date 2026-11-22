@@ -14,7 +14,7 @@ interface SearchRecentPage extends VoiceOfMLSearchWindowPageData {
 }
 interface SearchPositionView {
   key: string; total: number; results: unknown[]; resultBackend?: SearchResultBackend | null | undefined;
-  window?: {generation?: string | undefined; total: number; pages: Set<number>} | null | undefined;
+  window?: {generation?: string | undefined; total: number; pages: ReadonlySet<number>} | null | undefined;
 }
 type SearchRecentPageExpected = VoiceOfMLSearchWindowExpected & {query: {pageSize: number; resultBackend?: SearchResultBackend | null | undefined}};
 interface SearchPositionGeometry {

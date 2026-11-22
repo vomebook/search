@@ -1,5 +1,5 @@
-// Owns recovery waits and the bounded sparse-page request lifecycle. The host
-// supplies transport, cache and current-window checks; it commits result pages.
+// Owns the displayed sparse window and its page lifecycle. The host supplies
+// transport, persistence and the presentation of accepted pages.
 (function () {
   /** @param {AbortSignal} signal @param {number} delay @param {boolean | number | undefined} local */
   function waitForRecovery(signal, delay, local) {
@@ -42,13 +42,13 @@
    * @param {number} page @param {boolean} prefetch */
   function requestPage(deps, window, page, prefetch = false) {
     if (window.prefetched?.has(page)) return Promise.resolve(window.prefetched.get(page));
-    if (window.pending.has(page)) {
-      const request = window.pending.get(page);
-      if (!prefetch && request && !("demanded" in request && request.demanded)) {
-        Object.assign(request, {demanded: true});
-        if ("diskWait" in request) request.diskWait?.abort();
+    const pending = window.pending.get(page);
+    if (pending) {
+      if (!prefetch && !("demanded" in pending && pending.demanded)) {
+        Object.assign(pending, {demanded: true});
+        if ("diskWait" in pending) pending.diskWait?.abort();
       }
-      return request;
+      return pending;
     }
     if (prefetch && window.prefetchFailures?.has(page)) return Promise.resolve(null);
     if (window.pending.size >= 3 || window.failures.has(page) || window.invalid) return Promise.resolve(null);
@@ -94,5 +94,174 @@
     }
   }
 
-  globalThis.VoiceOfMLResultWindowLoader = { waitForRecovery, fetchWithRecovery, requestPage, retryFailed };
+  /** @param {VoiceOfMLResultWindowHost} host */
+  function create(host) {
+    /** @type {VoiceOfMLManagedResultWindow | null} */
+    let current = null;
+
+    /** @param {VoiceOfMLResultWindow} owner */
+    const isCurrent = owner => owner === current && current.results === host.results() &&
+      owner.key === host.currentKey() && !owner.controller.signal.aborted;
+    const requestHost = { readRecent: host.readRecent, fetchPage: host.fetchPage, validate: host.validate,
+      scheduleRender: host.scheduleRender, isCurrent };
+
+    // The restoration owner clears both lifetimes before aborting either one.
+    function detach() {
+      const previous = current;
+      current = null;
+      return previous?.controller;
+    }
+
+    /** @param {VoiceOfMLWindowSavedState} saved @param {string} key @param {number} total @param {VoiceOfMLWindowQuery} query */
+    function open(saved, key, total, query) {
+      const previous = current;
+      const next = { ...saved, key, total, query, results: host.results(), pages: new Set(saved.pages),
+        pending: new Map(), failures: new Map(), controller: new AbortController() };
+      current = next;
+      previous?.controller.abort();
+      // Abort listeners may synchronously install another window. A route can
+      // also be transitioning, so the key check belongs at page admission.
+      return current === next && next.results === host.results();
+    }
+
+    /** @param {VoiceOfMLManagedResultWindow} owner @param {number} page */
+    function canRequest(owner, page) {
+      return isCurrent(owner) && !owner.invalid && !owner.pages.has(page) &&
+        page >= 1 && page <= Math.ceil(owner.total / owner.query.pageSize);
+    }
+
+    /** @param {VoiceOfMLManagedResultWindow} owner @param {number} page */
+    async function loadPreview(owner, page) {
+      if (!canRequest(owner, page) || !owner.generation || owner.pending.has(page) ||
+          owner.pending.size >= 3 || owner.missingPages?.has(page)) return;
+      const request = host.readRecent(owner.key, page, owner, 150, owner.controller.signal);
+      owner.pending.set(page, request);
+      try {
+        const data = await request;
+        if (!canRequest(owner, page) || !host.isPreview() || host.isDragging()) return;
+        if (!data) { (owner.missingPages ||= new Set()).add(page); return; }
+        const start = (page - 1) * owner.query.pageSize;
+        if (start + data.results.length > owner.results.length) return;
+        /** @type {number[]} */
+        const indices = [];
+        data.results.forEach((record, offset) => {
+          const index = start + offset;
+          if (owner.results[index]) return;
+          owner.results[index] = record;
+          indices.push(index);
+        });
+        owner.count += indices.length;
+        owner.pages.add(page);
+        host.accepted({ page, indices, pageSize: owner.query.pageSize, preview: data });
+      } finally {
+        owner.pending.delete(page);
+        if (isCurrent(owner)) host.scheduleRender();
+      }
+    }
+
+    /** @param {number} page @param {boolean} [prefetch] */
+    async function load(page, prefetch = false) {
+      const owner = current;
+      if (!owner || host.isRestoring() || !canRequest(owner, page)) return false;
+      /** @type {VoiceOfMLSearchWindowPageData | null | undefined} */
+      let data;
+      try {
+        data = await requestPage(requestHost, owner, page, prefetch);
+      } catch (error) {
+        if (!canRequest(owner, page)) return false;
+        const changed = error != null && Reflect.get(Object(error), "message") === "RESTORE_PAGE_CHANGED";
+        if (prefetch && !changed) {
+          const failures = owner.prefetchFailures ||= new Set();
+          failures.add(page);
+          for (const oldest of failures) { if (failures.size <= 64) break; failures.delete(oldest); }
+          return false;
+        }
+        owner.failures.set(page, error);
+        if (changed) owner.invalid = true;
+        host.failed(owner.key, changed);
+        return false;
+      }
+      if (!data || !canRequest(owner, page)) return false;
+      if (prefetch || host.isDragging()) {
+        const prefetched = owner.prefetched ||= new Map();
+        prefetched.set(page, data);
+        for (const oldest of prefetched.keys()) { if (prefetched.size <= 3) break; prefetched.delete(oldest); }
+        return true;
+      }
+      const start = (page - 1) * owner.query.pageSize;
+      /** @type {number[]} */
+      const indices = [];
+      data.results.forEach((record, offset) => {
+        const index = start + offset;
+        owner.results[index] = record;
+        indices.push(index);
+      });
+      owner.pages.add(page);
+      owner.prefetched?.delete(page);
+      owner.failures.delete(page);
+      owner.count += data.results.length;
+      host.accepted({page, indices, pageSize: owner.query.pageSize});
+      return true;
+    }
+
+    /** @param {number} start @param {number} end @param {number} visibleStart @param {number} visibleEnd @param {number} direction */
+    function demandRange(start, end, visibleStart, visibleEnd, direction) {
+      const owner = current;
+      if (!owner || !isCurrent(owner) || host.isDragging()) return;
+      const size = owner.query.pageSize;
+      const first = Math.floor(start / size) + 1, last = Math.ceil(end / size);
+      if (host.isRestoring()) {
+        if (host.isPreview()) for (let page = first; page <= last; page++) void loadPreview(owner, page);
+        return;
+      }
+      const visibleFirst = Math.floor(visibleStart / size) + 1;
+      const visibleLast = Math.floor(visibleEnd / size) + 1;
+      const pages = new Set();
+      // Demand the viewport before directional lookahead and remaining overscan.
+      for (let page = visibleFirst; page <= visibleLast; page++) pages.add(page);
+      for (let distance = 1; distance <= 4; distance++) pages.add(direction >= 0 ? visibleLast + distance : visibleFirst - distance);
+      for (let page = first; page <= last; page++) pages.add(page);
+      for (const page of pages) {
+        if (!isCurrent(owner)) break;
+        void load(page);
+      }
+    }
+
+    /** @param {number} index */
+    function prefetchAfter(index) {
+      const owner = current;
+      if (!owner) return;
+      const page = Math.floor(index / owner.query.pageSize) + 1;
+      for (let next = page + 1; next <= page + 2 && isCurrent(owner) && owner.pending.size < 2; next++) void load(next, true);
+    }
+
+    /** @param {number} start @param {number} end */
+    function clearRecoverable(start, end) {
+      const owner = current;
+      if (!owner || !isCurrent(owner) || owner.invalid) return false;
+      for (const [page, error] of owner.failures) {
+        if (page >= start && page <= end && host.isRecoverable(error)) owner.failures.delete(page);
+      }
+      owner.prefetchFailures?.clear();
+      return true;
+    }
+
+    /** @param {() => void} update */
+    function retry(update) {
+      const owner = current;
+      if (!owner || !isCurrent(owner) || owner.invalid) return undefined;
+      return retryFailed(owner, () => isCurrent(owner), page => isCurrent(owner) ? load(page) : Promise.resolve(false), update);
+    }
+
+    /** @param {number} page */
+    function retryPage(page) {
+      if (!current || !isCurrent(current) || current.invalid) return;
+      current.failures.delete(page);
+      void load(page);
+    }
+
+    return { get current() { return current; }, detach, open, load, demandRange, prefetchAfter, clearRecoverable, retry, retryPage };
+  }
+
+  globalThis.VoiceOfMLResultWindowLoader = { create, waitForRecovery, fetchWithRecovery, requestPage, retryFailed };
 })();

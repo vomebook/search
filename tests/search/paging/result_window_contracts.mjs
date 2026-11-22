@@ -86,12 +86,13 @@ test('a plain preview disk promise is reused and marked demanded', async () => {
   const disk = new Promise(done => { resolve = done; });
   const owner = new AbortController();
   const window = {key: 'query', query: {pageSize: 100}, pending: new Map([[2, disk]]), failures: new Map(), controller: owner};
-  const c = fixture(['requestResultWindowPage'], {
-    readRecentSearchPage: async () => null, resultWindowCurrent: () => true,
-    fetchPositionPageWithRecovery() { throw new Error('must reuse preview'); },
-    validatePositionWindowPage() {}, scheduleVirtualRender() {},
-  });
-  const returned = c.requestResultWindowPage(window, 2, false);
+  const c = fixture([]), deps = {
+    readRecent: async () => null, isCurrent: () => true,
+    fetchPage() { throw new Error('must reuse preview'); },
+    validate() {}, scheduleRender() {},
+  };
+  const requestPage = (window, page, prefetch) => c.VoiceOfMLResultWindowLoader.requestPage(deps, window, page, prefetch);
+  const returned = requestPage(window, 2, false);
   assert.strictEqual(returned, disk);
   assert.equal(disk.demanded, true);
   assert.equal(owner.signal.aborted, false);
@@ -105,46 +106,153 @@ test('request gates, validation failures and stale completion preserve pending c
   const owner = new AbortController(), data = {results: [], page: 2};
   let current = true, reads = 0, renders = 0, rejectValidation = false;
   const window = {key: 'query', query: {pageSize: 100}, pending: new Map(), failures: new Map(), controller: owner};
-  const c = fixture(['requestResultWindowPage'], {
-    readRecentSearchPage: async () => {reads++;return data;}, resultWindowCurrent: () => current,
-    fetchPositionPageWithRecovery() {assert.fail('cache hit must avoid transport');},
-    validatePositionWindowPage() {if (rejectValidation) throw new Error('RESTORE_PAGE_CHANGED');},
-    scheduleVirtualRender() {renders++;}});
+  const c = fixture([]), deps = {
+    readRecent: async () => {reads++;return data;}, isCurrent: () => current,
+    fetchPage() {assert.fail('cache hit must avoid transport');},
+    validate() {if (rejectValidation) throw new Error('RESTORE_PAGE_CHANGED');},
+    scheduleRender() {renders++;}};
+  const requestPage = (window, page, prefetch) => c.VoiceOfMLResultWindowLoader.requestPage(deps, window, page, prefetch);
   window.prefetched = new Map([[2, data]]);
-  assert.equal(await c.requestResultWindowPage(window, 2), data); assert.equal(reads, 0);
+  assert.equal(await requestPage(window, 2), data); assert.equal(reads, 0);
   window.prefetched.clear(); window.prefetchFailures = new Set([2]);
-  assert.equal(await c.requestResultWindowPage(window, 2, true), null); assert.equal(reads, 0);
-  assert.equal(await c.requestResultWindowPage(window, 2), data); assert.equal(reads, 1);
+  assert.equal(await requestPage(window, 2, true), null); assert.equal(reads, 0);
+  assert.equal(await requestPage(window, 2), data); assert.equal(reads, 1);
   for (const blocked of ['failure', 'invalid']) {
     window.failures.clear(); window.invalid = blocked === 'invalid';
     if (blocked === 'failure') window.failures.set(2, new Error());
-    assert.equal(await c.requestResultWindowPage(window, 2), null); assert.equal(reads, 1);
+    assert.equal(await requestPage(window, 2), null); assert.equal(reads, 1);
   }
   window.invalid = false; window.failures.clear(); rejectValidation = true;
-  await assert.rejects(c.requestResultWindowPage(window, 2), /RESTORE_PAGE_CHANGED/);
+  await assert.rejects(requestPage(window, 2), /RESTORE_PAGE_CHANGED/);
   assert.equal(window.pending.size, 0); assert.equal(renders, 2);
   current = false;
-  assert.equal(await c.requestResultWindowPage(window, 2), null);
+  assert.equal(await requestPage(window, 2), null);
   assert.equal(window.pending.size, 0); assert.equal(renders, 2);
 });
 
-test('host keeps prefetch failures bounded and generation changes invalidate even prefetch', async () => {
-  const window = {key: 'query', total: 1000, query: {pageSize: 1}, controller: new AbortController(), pages: new Set(), failures: new Map()};
+const flushWindow = () => new Promise(resolve => setImmediate(resolve));
+
+function managedFixture({readRecent = async () => null, fetchPage = async () => null, ...ports} = {}) {
+  const c = fixture([], ports), accepted = [], failed = [];
+  let key = 'query', results = new Array(1000), restoring = false, dragging = false;
+  const windows = c.VoiceOfMLResultWindowLoader.create({
+    currentKey: () => key, results: () => results, isRestoring: () => restoring,
+    isPreview: () => restoring, isDragging: () => dragging,
+    readRecent, fetchPage, validate: () => {}, scheduleRender: () => {}, isRecoverable: () => true,
+    accepted: event => accepted.push(event), failed: (key, changed) => failed.push({key, changed}), ...ports,
+  });
+  const open = (generation = 'A', pageSize = 1) => windows.open({generation, pages: [], count: 0, preview: restoring}, key, 1000, {pageSize});
+  return {c, windows, accepted, failed, open, get results() {return results;}, set results(value) {results = value;},
+    restore(value) {restoring = value;}, drag(value) {dragging = value;}, route(value) {key = value;}};
+}
+
+test('same-key replacement rejects late network responses and does not mutate the new rows', async () => {
+  let release, signal;
+  const f = managedFixture({fetchPage(query, page, abort) {
+    signal = abort; return new Promise(resolve => {release = resolve;});
+  }});
+  assert.equal(f.open(), true);
+  const old = f.windows.current, pending = f.windows.load(2);
+  await flushWindow(); assert.equal(old.pending.size, 1);
+  f.results = new Array(1000);
+  assert.equal(f.open('B'), true);
+  assert.equal(signal.aborted, true);
+  release({results: [{File: 'old'}]});
+  assert.equal(await pending, false);
+  assert.equal(old.pending.size, 0);
+  assert.equal(f.windows.current.generation, 'B');
+  assert.equal(f.windows.current.count, 0);
+  assert.equal(f.results[1], undefined);
+  assert.deepEqual(f.accepted, []); assert.deepEqual(f.failed, []);
+});
+
+test('opening publishes the new owner before abort and does not overwrite a reentrant replacement', () => {
+  const f = managedFixture();
+  assert.equal(f.open('A'), true);
+  let observed;
+  f.windows.current.controller.signal.addEventListener('abort', () => {
+    observed = f.windows.current.generation;
+    f.results = new Array(1000);
+    f.open('C');
+  });
+  assert.equal(f.open('B'), false);
+  assert.equal(observed, 'B');
+  assert.equal(f.windows.current.generation, 'C');
+  assert.equal(f.windows.current.results, f.results);
+  assert.equal(f.windows.current.controller.signal.aborted, false);
+});
+
+test('a late result is ignored if the route or displayed row array changes before window detachment', async () => {
+  for (const replace of [f => {f.results = [];}, f => f.route('next')]) {
+    let release;
+    const f = managedFixture({fetchPage() {return new Promise(resolve => {release = resolve;});}});
+    f.open();
+    const pending = f.windows.load(2);
+    await flushWindow(); replace(f);
+    release({results: [{}]});
+    assert.equal(await pending, false);
+    assert.equal(f.windows.current.count, 0);
+    assert.deepEqual(f.accepted, []);
+  }
+});
+
+test('preview disk requests deduplicate, fill holes only and cannot publish after replacement', async () => {
+  const waits = [];
+  const f = managedFixture({readRecent(key, page, owner, delay, signal) {
+    return new Promise(resolve => waits.push({page, delay, signal, resolve}));
+  }, fetchPage() {assert.fail('preview must not use transport');}});
+  f.restore(true); f.open('A', 2);
+  const row = {File: 'already visible'};
+  f.results[2] = row; f.windows.current.count = 1;
+  const range = (start, end) => f.windows.demandRange(start, end, start, end, 1);
+  range(2, 4); range(2, 4);
+  assert.deepEqual(waits.map(w => w.page), [2]); assert.equal(waits[0].delay, 150);
+  let request = f.windows.current.pending.get(2);
+  waits[0].resolve({results: [{File: 'stale'}, {File: 'hole'}]}); await request; await flushWindow();
+  assert.equal(f.results[2], row); assert.equal(f.results[3].File, 'hole');
+  assert.equal(f.windows.current.count, 2); assert.equal(f.accepted.length, 1);
+  range(2, 4); range(4, 6); assert.deepEqual(waits.map(w => w.page), [2, 3]);
+  request = f.windows.current.pending.get(3);
+  f.restore(false); f.results = new Array(1000); f.open('B', 2);
+  assert.equal(waits[1].signal.aborted, true);
+  waits[1].resolve({results: [{File: 'late'}]}); await request; await flushWindow();
+  assert.equal(f.results[4], undefined); assert.equal(f.accepted.length, 1);
+});
+
+test('joined foreground demand publishes a prefetched page only once', async () => {
+  let calls = 0;
+  const f = managedFixture({fetchPage: async () => {calls++; return {results: [{File: 'r2'}]};}});
+  f.open();
+  await f.windows.load(2, true);
+  assert.equal(f.results[1], undefined);
+  await Promise.all([f.windows.load(2), f.windows.load(2)]);
+  await f.windows.load(2, true);
+  assert.equal(f.results[1].File, 'r2'); assert.equal(f.accepted.length, 1);
+  assert.equal(f.windows.current.count, 1); assert.equal(calls, 1);
+});
+
+test('prefetch failure tracking stays bounded and generation changes invalidate even prefetch', async () => {
   let error = new Error('temporary'), renders = 0, statuses = 0;
   const cache = new Map([['old-page', {}]]), stale = new Map([['query', {}]]);
-  const c = fixture(['loadResultWindowPage'], {resultWindow: window, positionRestoration: {current: null},
-    searchResponseStore: {cache}, resultSnapshots: {remove: key => stale.delete(key)}, STATE: {_pageCache: {1:[{}]} },
-    resultWindowCurrent: () => true, requestResultWindowPage: async () => {throw error;},
+  const state = {_pageCache: {1:[{}]}};
+  const f = managedFixture({fetchPage: async () => {throw error;}, STATE: state,
+    searchResponseStore: {cache}, resultSnapshots: {remove: key => stale.delete(key)},
     updateResultWindowStatus() {statuses++;}, scheduleVirtualRender() {renders++;},
-    DOM: {resultsList: {querySelectorAll: () => []}}, VSCROLL: {}});
-  for (let page = 1; page <= 65; page++) assert.equal(await c.loadResultWindowPage(page, true), false);
+    DOM: {resultsList: {querySelectorAll: () => []}}, VSCROLL: {},
+    failed: (...args) => f.c.presentResultWindowFailure(...args)});
+  for (const name of ['refreshResultWindowPlaceholders', 'presentResultWindowFailure']) {
+    vm.runInContext(source.match(new RegExp('^function ' + name + '\\([^]*?^}', 'm'))[0], f.c);
+  }
+  f.open();
+  const window = f.windows.current;
+  for (let page = 1; page <= 65; page++) assert.equal(await f.windows.load(page, true), false);
   assert.equal(window.prefetchFailures.size, 64); assert.equal(window.prefetchFailures.has(1), false);
   assert.equal(window.failures.size, 0); assert.equal(statuses, 0); assert.equal(renders, 0);
   error = new Error('RESTORE_PAGE_CHANGED');
-  assert.equal(await c.loadResultWindowPage(66, true), false);
+  assert.equal(await f.windows.load(66, true), false);
   assert.equal(window.invalid, true); assert.equal(window.failures.get(66), error);
   assert.equal(cache.size, 0); assert.equal(stale.size, 0);
-  assert.equal(Object.keys(c.STATE._pageCache).length, 0);
+  assert.equal(Object.keys(state._pageCache).length, 0);
   assert.equal(statuses, 1); assert.equal(renders, 1);
 });
 
@@ -167,28 +275,31 @@ test('status action reads the current window and placeholders retain loading, re
   const document = documentFixture(), host = document.createElement('div'), loaded = [];
   let restarted = 0;
   const c = fixture(['updateResultWindowStatus', 'createResultWindowPlaceholder'], {document,
-    DOM: {resultsContainer: {parentElement: host}}, resultWindow: null,
+    DOM: {resultsContainer: {parentElement: host}},
+    resultWindows: {current: null, retry: update => {
+      const window = c.resultWindows.current;
+      if (window) return c.VoiceOfMLResultWindowLoader.retryFailed(window, () => true, async page => {loaded.push(page); return true;}, update);
+    }},
     STATE: {pageSize: 100}, VSCROLL: {contentVersion: 9, heights: [72], estimatedHeight: 60},
-    restartResultWindow() {restarted++;}, resultWindowCurrent: () => true,
-    async loadResultWindowPage(page) {loaded.push(page); return true;}});
+    restartResultWindow() {restarted++;}});
   c.updateResultWindowStatus(); assert.equal(host.children.length, 0);
   const loading = c.createResultWindowPlaceholder(0);
   assert.equal(loading.style.height, '72px'); assert.equal(loading.dataset.contentVersion, '9');
   assert.equal(loading.attributes['aria-label'], '正在加载结果'); assert.ok(loading.markup.includes('aria-hidden="true"'));
-  c.resultWindow = {failures: new Map([[2, new Error()]])}; c.updateResultWindowStatus();
+  c.resultWindows.current = {failures: new Map([[2, new Error()]])}; c.updateResultWindowStatus();
   const status = host.children[0], button = status.querySelector('button');
   assert.equal(status.attributes.role, 'status'); assert.equal(button.textContent, '重试加载');
   const failed = c.createResultWindowPlaceholder(100);
   assert.equal(failed.style.height, '60px'); assert.equal(failed.dataset.index, '100');
   assert.equal(failed.children[0].dataset.windowPage, '2'); assert.equal(failed.children[0].textContent, '加载失败，点击重试');
-  c.resultWindow = {failures: new Map([[3, new Error()]]), pending: new Map()}; button.onclick();
+  c.resultWindows.current = {failures: new Map([[3, new Error()]]), pending: new Map()}; button.onclick();
   await new Promise(resolve => setImmediate(resolve));
   assert.deepEqual(loaded, [3]); assert.equal(status.hidden, true);
-  c.resultWindow.invalid = true; c.updateResultWindowStatus(); button.onclick();
+  c.resultWindows.current.invalid = true; c.updateResultWindowStatus(); button.onclick();
   assert.equal(restarted, 1); assert.equal(status.querySelector('span').textContent, '搜索数据已更新');
   assert.equal(button.textContent, '重新定位');
   assert.equal(c.createResultWindowPlaceholder(100).children[0].textContent, '数据已更新，点击重新定位');
-  c.resultWindow = null; button.onclick(); c.updateResultWindowStatus(); assert.equal(status.hidden, true);
+  c.resultWindows.current = null; button.onclick(); c.updateResultWindowStatus(); assert.equal(status.hidden, true);
   assert.equal(host.children.length, 1);
 });
 

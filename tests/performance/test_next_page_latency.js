@@ -67,7 +67,9 @@ function createFixture(source, root, pages) {
     doSearch(){appended.push(context.STATE.page); context.STATE._loadedPage=context.STATE.page;},
     renderVisible(){clock += 8; return true;}, updateScrollTrack(){}, updateScrollThumb(){},
   };
-  context.displayedSearchView = {key: context.getSearchViewKey(), results: context.STATE.results};
+  let displayed = {key: context.getSearchViewKey(), results: context.STATE.results};
+  context.resultSnapshots.owns = (key, results) => displayed.key === key && displayed.results === results;
+  context.setDisplayed = view => { displayed = view; };
   vm.createContext(context);
   installClassicSearchModules(root, context);
   context.searchResponseStore = context.VoiceOfMLSearchResponseStore.create({
@@ -82,7 +84,7 @@ function createFixture(source, root, pages) {
     elements:{get resultsContainer(){return context.DOM.resultsContainer;},
       get resultsList(){return context.DOM.resultsList;},multiSelectToggle:null},
     results:()=>context.STATE.results,total:()=>context.STATE.total,
-    hasWindow:()=>!!context.resultWindow,windowTotal:()=>context.resultWindow.total,
+    hasWindow:()=>!!context.resultWindows?.current,windowTotal:()=>context.resultWindows?.current.total,
     cloning:()=>!!context.resultSnapshots.cloneTask,restoring:()=>!!context.positionRestoration.current,
     loadedPage:()=>context.STATE._loadedPage,pendingEntrance:()=>false,consumeEntrance(){},recordMeasurement(){},
     recordForRow:()=>undefined,resetKeyboardIndex(){},ensureResultTemplateCache(){},
@@ -141,10 +143,11 @@ for (const {name:project,root} of searchTestProjects()) {
   const fixture = source => createFixture(source, root, project === "github-Search");
   function sparseFixture() {
     const f=fixture(source), c=f.context;
-    c.scheduleVirtualRender=()=>{};
-    c.resultWindowCurrent=window=>!window.controller.signal.aborted;
-    c.fetchPositionPageWithRecovery=(query,page,signal)=>c.fetchSearchPage('', '', {page}, signal);
-    install(source,c,['requestResultWindowPage']);
+    c.requestResultWindowPage=(window,page,prefetch)=>c.VoiceOfMLResultWindowLoader.requestPage({
+      readRecent:c.readRecentSearchPage, isCurrent:owner=>!owner.controller.signal.aborted,
+      fetchPage:(query,page,signal)=>c.fetchSearchPage('', '', {page}, signal),
+      validate:c.validatePositionWindowPage, scheduleRender:()=>{},
+    },window,page,prefetch);
     const window={key:'query',query:{pageSize:100},total:801,generation:'stable',
       controller:new AbortController(),pending:new Map(),failures:new Map()};
     return {...f,window};
@@ -194,7 +197,7 @@ for (const {name:project,root} of searchTestProjects()) {
     c.queryKey='new-query';
     c.maybeLoadNextPage();
     assert.deepStrictEqual(f.appended,[]);
-    c.displayedSearchView={key:c.queryKey,results:c.STATE.results};
+    c.setDisplayed({key:c.queryKey,results:c.STATE.results});
     c.maybeLoadNextPage();
     assert.deepStrictEqual(f.appended,[2]);
   });
@@ -302,7 +305,7 @@ for (const {name:project,root} of searchTestProjects()) {
   test(project + " offscreen appends preserve window but near-boundary appends render",()=>{
     for(const near of [false,true]) {
       const f=fixture(source),c=f.context;
-      Object.assign(c,{resultWindow:null,rememberDisplayedSearchView(){},
+      Object.assign(c,{resultWindows:{current:null},rememberDisplayedSearchView(){},
         DOM:{resultsContainer:{clientHeight:600,scrollTop:near?11400:0},resultsList:{querySelector:()=>({style:{}})}},
         ensureVirtualHeights(len){c.VSCROLL.heights.length=len;},ensureHeightTree(){},
         getVirtualOffset:n=>n*60,
@@ -353,7 +356,7 @@ for (const {name:project,root} of searchTestProjects()) {
   });
   test(project + " short unchanged windows skip row work while pagination starts before paint",()=>{
     const f=fixture(source), c=f.context, demanded=[];
-    Object.assign(c,{resultWindow:null,pendingResultEntrance:false,resultScrollOrigin:0,resultScrollTarget:null,
+    Object.assign(c,{resultWindows:{current:null},pendingResultEntrance:false,resultScrollOrigin:0,resultScrollTarget:null,
       RESULT_SCROLL_SEGMENT_HEIGHT:1000000,performance:{now:()=>16},
       DOM:{resultsContainer:{clientHeight:600,scrollTop:400}},ensureVirtualHeights(){},ensureHeightTree(){},
       getVirtualOffset:index=>index*60,findVirtualIndex:top=>Math.min(99,Math.floor(top/60)),
@@ -416,7 +419,7 @@ for (const {name:project,root} of searchTestProjects()) {
     for (const outcome of ["success","cancel","changed-generation","failure"]) {
       test("local lookahead joins demand and handles " + outcome,async()=>{
         const f=fixture(source), c=f.context;
-        Object.assign(c,{resultWindow:null,apiAvailable:false,STATE:{...c.STATE,_resultBackend:"local",dataLoaded:true},
+        Object.assign(c,{resultWindows:{current:null},apiAvailable:false,STATE:{...c.STATE,_resultBackend:"local",dataLoaded:true},
           getSearchApiBase:()=>"/api/search",buildCurrentSearchBody:()=>({}),buildLocalSearchParams:page=>({page,pageSize:100}),
           doSearchLocal:params=>new Promise((resolve,reject)=>f.calls.push({page:params.page,resolve,reject,signal:params.signal})),
           searchId:1,renderSearchPage(){},syncStateToURL(){},updateStatusBar(){},updatePagingStatus(){},

@@ -48,7 +48,7 @@ function fixture(count = 100) {
   document.activeElement = container;
   const STATE = {results: Array.from({length: count}, (_, index) => ({File: 'row-' + index})), total: count, _loadedPage: 1};
   const c = vm.createContext({STATE, DOM: {resultsList: list, resultsContainer: container, multiSelectToggle: {checked: false}},
-    document, performance: {now: () => clock += 16}, resultWindow: null, resultSnapshots: {cloneTask: null},
+    document, performance: {now: () => clock += 16}, resultWindows: {current: null}, resultSnapshots: {cloneTask: null},
     positionRestoration: {current: null}, pendingResultEntrance: false, measuredHeightRevision: 0, keyboardResultIndex: -1,
     resultRowRecords: records, virtualResults: undefined,
     requestAnimationFrame(fn) { const id = ++serial; frames.set(id, fn); return id; },
@@ -107,7 +107,7 @@ test('height growth retains cached keys, dense tree identity and sparse holes', 
   const tree = s.heightTree; c.ensureVirtualHeights(20); assert.equal(s.heightTree, tree);
   assert.equal(c.getVirtualOffset(2), 135.5); assert.equal(c.findVirtualIndex(135.5), 2);
   assert.equal(c.getVirtualTotalHeight(), 1215.5);
-  c.resultWindow = {total: 100000}; STATE.results = []; STATE.results.length = 100000; STATE.results[1] = {File: 'row-1'};
+  c.resultWindows.current = {total: 100000}; STATE.results = []; STATE.results.length = 100000; STATE.results[1] = {File: 'row-1'};
   c.resetVirtualScrollState(); c.ensureVirtualHeights(100000);
   assert.equal(s.sparseHeights, true); assert.equal(Object.keys(s.heights).length, 1);
   assert.equal(c.getVirtualTotalHeight(), 6000015.5);
@@ -202,7 +202,7 @@ test('sparse unloaded anchor keeps its index and offset when a loaded row above 
     const f = fixture(300), {c, STATE, list, container} = f;
     STATE.results = new Array(300);
     STATE.results[99] = {File: 'row-99', height: 80};
-    c.resultWindow = {total: 300};
+    c.resultWindows.current = {total: 300};
     c.resetVirtualScrollState(); c.ensureVirtualHeights(300);
     assert.equal(c.VSCROLL.heightBase, 60);
     container.scrollTop = 6007;
@@ -230,7 +230,7 @@ test('sparse unloaded anchor keeps its index and offset when a loaded row above 
 
 test('logical segmentation, restored velocity and append coverage retain exact bounds', () => {
   const f = fixture(100000), {c, container, list} = f;
-  c.resultWindow = {total: 100000}; c.resetVirtualScrollState(); c.ensureVirtualHeights(100000);
+  c.resultWindows.current = {total: 100000}; c.resetVirtualScrollState(); c.ensureVirtualHeights(100000);
   c.VSCROLL.isDraggingThumb = true; c.setResultScrollTop(5700000.25, true);
   assert.equal(c.findVirtualIndex(c.getResultScrollTop()), 95000);
   assert.equal(c.VSCROLL.scrollVelocity, 0); assert.ok(container.scrollTop < 1000000);

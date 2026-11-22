@@ -51,7 +51,7 @@ class PositionWindowTests(unittest.TestCase):
         self.assertEqual(errors, [])
 
     def wait_anchor(self, index, offset=11):
-        self.page.wait_for_function('''([index,offset])=>!positionRestoration.current && !!resultWindow &&
+        self.page.wait_for_function('''([index,offset])=>!positionRestoration.current && !!resultWindows.current &&
           findVirtualIndex(getResultScrollTop())===index && !!STATE.results[index] &&
           Math.abs(getResultScrollTop()-getVirtualOffset(index)-offset)<2''', arg=[index,offset])
 
@@ -63,7 +63,7 @@ class PositionWindowTests(unittest.TestCase):
         self.assertTrue(self.page.evaluate('windowCalls.every(page=>[1,498,499,500,501].includes(page))'))
         self.assertTrue(self.page.evaluate('''() => STATE.total === 50001 &&
           STATE.results.length >= 50000 && STATE.results.length <= 50001 &&
-          resultWindow.count === Object.keys(STATE.results).length'''))
+          resultWindows.current.count === Object.keys(STATE.results).length'''))
         self.assertEqual(self.page.locator('#current-result-position').input_value(), '49851')
 
     def test_jump_back_fills_only_visible_gap_and_keeps_anchor(self):
@@ -74,8 +74,8 @@ class PositionWindowTests(unittest.TestCase):
         self.assertEqual(self.page.evaluate('getResultStableId(STATE.results[49850])'), 'VoiceOfML/Test\0paging-49850.txt')
 
     def test_unloaded_anchor_stays_put_when_loaded_row_above_grows(self):
-        self.page.evaluate('windowStall=251;loadResultWindowPage(250);void 0')
-        self.page.wait_for_function('resultWindow.pages.has(250)')
+        self.page.evaluate('windowStall=251;resultWindows.load(250);void 0')
+        self.page.wait_for_function('resultWindows.current.pages.has(250)')
         self.jump(25000)
         self.page.wait_for_function('!!window.releaseWindow')
         result = self.page.evaluate('''async () => {
@@ -95,7 +95,7 @@ class PositionWindowTests(unittest.TestCase):
             afterOffset:getResultScrollTop()-getVirtualOffset(25000),delta:getResultScrollTop()-top,
             growth:VSCROLL.heights[24999]-height,
             unloaded:!STATE.results[25000] && !(25000 in VSCROLL.heights),
-            pending:resultWindow.pending.has(251)};
+            pending:resultWindows.current.pending.has(251)};
         }''')
         self.assertTrue(result['unloaded'], result)
         self.assertTrue(result['pending'], result)
@@ -115,7 +115,7 @@ class PositionWindowTests(unittest.TestCase):
         result = self.page.evaluate('''() => {
           const after=saveSearchViewSnapshot();
           return {beforeMissing:!beforeGap.results[25050],afterPresent:!!after.results[25050],
-            exact:getSearchSnapshotResultsBytes(STATE.results,true)===new TextEncoder().encode(JSON.stringify(STATE.results)).byteLength};
+            exact:resultSnapshots.budget.measure(STATE.results,true)===new TextEncoder().encode(JSON.stringify(STATE.results)).byteLength};
         }''')
         self.assertEqual(result, dict(beforeMissing=True, afterPresent=True, exact=True))
 
@@ -143,10 +143,10 @@ class PositionWindowTests(unittest.TestCase):
         self.assertEqual(self.page.evaluate('windowCalls.filter(page=>page===251).length'), 2)
 
     def test_failed_prefetch_is_bounded_and_does_not_poison_demand(self):
-        self.page.evaluate('windowFailures.add(251);loadResultWindowPage(251,true)')
-        self.page.wait_for_function('resultWindow.prefetchFailures?.has(251)')
-        self.page.evaluate('for(let i=0;i<20;i++)loadResultWindowPage(251,true)')
-        self.assertFalse(self.page.evaluate('resultWindow.failures.has(251)'))
+        self.page.evaluate('windowFailures.add(251);resultWindows.load(251,true)')
+        self.page.wait_for_function('resultWindows.current.prefetchFailures?.has(251)')
+        self.page.evaluate('for(let i=0;i<20;i++)resultWindows.load(251,true)')
+        self.assertFalse(self.page.evaluate('resultWindows.current.failures.has(251)'))
         self.assertEqual(self.page.evaluate('windowCalls.filter(page=>page===251).length'), 1)
         self.page.evaluate('windowFailures.clear()')
         self.jump(25050)
@@ -154,7 +154,7 @@ class PositionWindowTests(unittest.TestCase):
         self.assertEqual(self.page.evaluate('windowCalls.filter(page=>page===251).length'), 2)
 
     def test_demand_joins_failed_inflight_prefetch_and_owns_retries(self):
-        self.page.evaluate('windowStall=251;windowFailures.add(251);loadResultWindowPage(251,true);void 0')
+        self.page.evaluate('windowStall=251;windowFailures.add(251);resultWindows.load(251,true);void 0')
         self.page.wait_for_function('!!window.releaseWindow')
         self.jump(25050)
         self.page.evaluate('releaseWindow();windowStall=0')
@@ -170,15 +170,15 @@ class PositionWindowTests(unittest.TestCase):
         self.page.evaluate("STATE.query='paging-latest';doSearch()")
         self.page.wait_for_timeout(1000)
         self.assertEqual(self.page.evaluate('windowCalls.filter(page=>page===251).length'), 1)
-        self.assertTrue(self.page.evaluate('resultWindow===null'))
+        self.assertTrue(self.page.evaluate('resultWindows.current===null'))
 
     def test_online_recovers_exhausted_visible_page_only(self):
         self.page.evaluate('windowFailures.add(251)')
         self.jump(25050)
-        self.page.wait_for_function('resultWindow.failures.has(251)')
-        self.page.evaluate("resultWindow.failures.set(101,new Error('offline'));windowFailures.clear();window.dispatchEvent(new Event('online'))")
+        self.page.wait_for_function('resultWindows.current.failures.has(251)')
+        self.page.evaluate("resultWindows.current.failures.set(101,new Error('offline'));windowFailures.clear();window.dispatchEvent(new Event('online'))")
         self.wait_anchor(25050)
-        self.assertTrue(self.page.evaluate('resultWindow.failures.has(101)'))
+        self.assertTrue(self.page.evaluate('resultWindows.current.failures.has(101)'))
         self.assertEqual(self.page.evaluate('windowCalls.filter(page=>page===251).length'), 4)
         self.assertFalse(self.page.evaluate('windowCalls.includes(101)'))
 
@@ -189,7 +189,7 @@ class PositionWindowTests(unittest.TestCase):
         self.page.evaluate("Object.defineProperty(document,'hidden',{configurable:true,value:true})")
         self.page.wait_for_timeout(900)
         self.assertEqual(self.page.evaluate('windowCalls.filter(page=>page===251).length'), 1)
-        self.assertLessEqual(self.page.evaluate('resultWindow.pending.size'), 3)
+        self.assertLessEqual(self.page.evaluate('resultWindows.current.pending.size'), 3)
         self.page.evaluate("windowFailures.clear();Object.defineProperty(document,'hidden',{configurable:true,value:false});document.dispatchEvent(new Event('visibilitychange'))")
         self.wait_anchor(25050)
         self.assertEqual(self.page.evaluate('windowCalls.filter(page=>page===251).length'), 2)
@@ -225,24 +225,24 @@ class PositionWindowTests(unittest.TestCase):
         self.page.locator('#search-window-status button').click()
         self.wait_anchor(35050)
         self.assertEqual(self.page.evaluate('STATE.results[35050].File'), 'paging-49850')
-        self.assertEqual(self.page.evaluate('resultWindow.generation'), 'two')
+        self.assertEqual(self.page.evaluate('resultWindows.current.generation'), 'two')
 
     def test_snapshot_save_without_displayed_view_preserves_cached_position(self):
         self.assertTrue(self.page.evaluate('''() => {
           const snapshot=saveSearchViewSnapshot(), position=positionPersistence.positions.get(originalWindowKey);
-          const view=displayedSearchView, savedPosition=JSON.stringify(position);
-          displayedSearchView=null;
+          const view=resultSnapshots.displayed, savedPosition=JSON.stringify(position);
+          resultSnapshots.clearDisplayed();
           try {
             return saveSearchViewSnapshot()===null && !!snapshot && !!position &&
               resultSnapshots.snapshots.get(originalWindowKey)===snapshot &&
               positionPersistence.positions.get(originalWindowKey)===position && JSON.stringify(position)===savedPosition;
-          } finally { displayedSearchView=view; }
+          } finally { if (view) resultSnapshots.publish(view,STATE.pageSize); else resultSnapshots.clearDisplayed(); }
         }'''))
 
     def invalidate_window_generation(self):
-        self.page.evaluate("saveSearchPosition();windowGeneration='two';windowAnchor=35050;loadResultWindowPage(251,true)")
-        self.page.wait_for_function('resultWindow?.invalid === true')
-        self.assertEqual(self.page.evaluate('resultWindow.generation'), 'one')
+        self.page.evaluate("saveSearchPosition();windowGeneration='two';windowAnchor=35050;resultWindows.load(251,true)")
+        self.page.wait_for_function('resultWindows.current?.invalid === true')
+        self.assertEqual(self.page.evaluate('resultWindows.current.generation'), 'one')
         self.assertFalse(self.page.evaluate('!!STATE.results[25050]'))
 
     def test_invalid_window_snapshot_round_trip_revalidates_generation(self):
@@ -253,12 +253,12 @@ class PositionWindowTests(unittest.TestCase):
         self.page.wait_for_function('!STATE.isLoading')
         self.assertEqual(self.page.evaluate('positionPersistence.positions.get(originalWindowKey).index'), 49850)
         self.page.evaluate("windowCalls=[];STATE.query='paging-original';doSearch(false,false,true)")
-        self.assertTrue(self.page.evaluate("!!positionRestoration.current || resultWindow?.generation === 'two'"),
+        self.assertTrue(self.page.evaluate("!!positionRestoration.current || resultWindows.current?.generation === 'two'"),
                         'Returning must validate the invalid window instead of silently restoring generation one')
         self.wait_anchor(35050)
         self.assertIn(1, self.page.evaluate('windowCalls'))
-        self.assertEqual(self.page.evaluate('resultWindow.generation'), 'two')
-        self.assertFalse(self.page.evaluate('!!resultWindow.invalid'))
+        self.assertEqual(self.page.evaluate('resultWindows.current.generation'), 'two')
+        self.assertFalse(self.page.evaluate('!!resultWindows.current.invalid'))
         self.assertEqual(self.page.evaluate('STATE.results[35050].File'), 'paging-49850')
 
     def test_invalid_window_cannot_reuse_cached_snapshot(self):
@@ -276,7 +276,7 @@ class PositionWindowTests(unittest.TestCase):
     def test_restore_rejects_snapshot_marked_invalid_and_recovers_position(self):
         self.page.evaluate('window.invalidSnapshot=saveSearchViewSnapshot()')
         self.invalidate_window_generation()
-        self.page.evaluate('invalidSnapshot.window.invalid=resultWindow.invalid')
+        self.page.evaluate('invalidSnapshot.window.invalid=resultWindows.current.invalid')
         self.page.evaluate("STATE.query='paging-other';doSearch()")
         self.page.wait_for_function('!STATE.isLoading')
         self.page.evaluate('resultSnapshots.snapshots.set(originalWindowKey,invalidSnapshot)')
@@ -286,7 +286,7 @@ class PositionWindowTests(unittest.TestCase):
         self.page.evaluate("resultSnapshots.snapshots.set(originalWindowKey,invalidSnapshot);windowCalls=[];STATE.query='paging-original';doSearch(false,false,true)")
         self.wait_anchor(35050)
         self.assertIn(1, self.page.evaluate('windowCalls'))
-        self.assertEqual(self.page.evaluate('resultWindow.generation'), 'two')
+        self.assertEqual(self.page.evaluate('resultWindows.current.generation'), 'two')
         self.assertEqual(self.page.evaluate('STATE.results[35050].File'), 'paging-49850')
 
     def test_late_gap_response_cannot_replace_a_new_query(self):
@@ -296,7 +296,7 @@ class PositionWindowTests(unittest.TestCase):
         self.page.evaluate("STATE.query='paging-latest';doSearch();releaseWindow()")
         self.page.wait_for_function("STATE.query==='paging-latest' && !STATE.isLoading")
         self.page.wait_for_timeout(50)
-        self.assertTrue(self.page.evaluate('resultWindow===null && STATE.results.length<1000'))
+        self.assertTrue(self.page.evaluate('resultWindows.current===null && STATE.results.length<1000'))
 
     def test_sparse_snapshot_and_selection_keep_only_actual_records(self):
         self.page.evaluate('DOM.multiSelectToggle.checked=true;updateSelectionUI();DOM.multiSelectAll.click()')
@@ -307,7 +307,7 @@ class PositionWindowTests(unittest.TestCase):
         self.page.wait_for_function('!STATE.isLoading')
         self.page.evaluate("STATE.query='paging-original';doSearch(false,false,true)")
         self.wait_anchor(49850)
-        self.assertEqual(self.page.evaluate('resultWindow.count'), self.page.evaluate('Object.keys(STATE.results).length'))
+        self.assertEqual(self.page.evaluate('resultWindows.current.count'), self.page.evaluate('Object.keys(STATE.results).length'))
         self.assertFalse(self.page.evaluate('!!STATE.results[25050]'))
 
     def test_forward_append_reaches_exact_end_and_earlier_pages_remain_accessible(self):
@@ -324,7 +324,7 @@ class PositionWindowTests(unittest.TestCase):
         self.jump(25050)
         self.page.wait_for_function('!!window.releaseWindow')
         self.page.evaluate('VSCROLL.isDraggingThumb=true;releaseWindow()')
-        self.page.wait_for_function('resultWindow.prefetched?.has(251)')
+        self.page.wait_for_function('resultWindows.current.prefetched?.has(251)')
         self.assertFalse(self.page.evaluate('!!STATE.results[25050]'))
         self.page.evaluate('VSCROLL.isDraggingThumb=false')
         self.jump(35050)
@@ -395,7 +395,7 @@ class PositionWindowTests(unittest.TestCase):
         self.assertTrue(self.page.evaluate('!!positionRestoration.current.preview'))
         self.page.evaluate('releaseWindow()')
         self.wait_anchor(49850)
-        self.assertEqual(self.page.evaluate('resultWindow.generation'), 'two')
+        self.assertEqual(self.page.evaluate('resultWindows.current.generation'), 'two')
         self.assertEqual(self.page.evaluate('STATE.results[49851].File'),
                          'replacement-neighbor' if replace_neighbor else 'paging-49851')
         self.assertEqual(self.page.evaluate('STATE.results[49850].Size'), 2)
@@ -431,8 +431,8 @@ class PositionWindowTests(unittest.TestCase):
         self.wait_anchor(49850, saved_offset)
 
     def test_loading_an_adjacent_page_does_not_replace_visible_rows(self):
-        self.page.evaluate('window.keptRow=DOM.resultsList.querySelector(\'[data-index="49850"]\');loadResultWindowPage(497)')
-        self.page.wait_for_function('resultWindow.pages.has(497)')
+        self.page.evaluate('window.keptRow=DOM.resultsList.querySelector(\'[data-index="49850"]\');resultWindows.load(497)')
+        self.page.wait_for_function('resultWindows.current.pages.has(497)')
         self.assertTrue(self.page.evaluate('keptRow===DOM.resultsList.querySelector(\'[data-index="49850"]\')'))
         self.assertTrue(self.page.evaluate('''() => {
           const button=keptRow.querySelector('[data-action="read"]'), before=button.dataset.readerUrl;
@@ -465,7 +465,7 @@ class PositionWindowTests(unittest.TestCase):
                 !(box.left<count.right && box.right>count.left && box.top<count.bottom && box.bottom>count.top));
             }'''))
         self.page.locator('#restart-position-btn').click()
-        self.page.wait_for_function('!positionRestoration.current && !STATE.isLoading && !resultWindow')
+        self.page.wait_for_function('!positionRestoration.current && !STATE.isLoading && !resultWindows.current')
 
     def test_saved_viewport_is_bounded_and_not_used_for_another_anchor(self):
         self.persist_viewport()

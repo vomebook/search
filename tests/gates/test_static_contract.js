@@ -281,9 +281,10 @@ test("virtual results use bounded buffering", () => {
   assert.match(app, /VoiceOfMLVirtualResults\.create\(VSCROLL,/);
   assert.match(virtual, /const extraScreens = tightWindow \? 0 : Math\.min\(3/);
   assert.match(virtual, /const velocityOverscanPx = extraScreens \* viewH/);
-  assert.match(app, /const visibleFirst = Math\.floor\(findVirtualIndex\(scrollTop\) \/ size\) \+ 1/);
-  assert.match(app, /const direction = VSCROLL\.scrollDirection \|\| 1/);
-  assert.match(app, /Demand the page under the viewport before the surrounding overscan/);
+  const windowLoader = fs.readFileSync('static/search/results/window/application/page-loader.js', 'utf8');
+  assert.match(app, /resultWindows\.demandRange\(start, end, findVirtualIndex\(scrollTop\),\s*findVirtualIndex\(scrollTop \+ DOM\.resultsContainer\.clientHeight\), VSCROLL\.scrollDirection \|\| 1\)/);
+  assert.match(windowLoader, /const visibleFirst = Math\.floor\(visibleStart \/ size\) \+ 1/);
+  assert.match(windowLoader, /for \(let page = visibleFirst; page <= visibleLast; page\+\+\) pages\.add\(page\);[\s\S]*?direction >= 0 \? visibleLast \+ distance : visibleFirst - distance[\s\S]*?for \(let page = first; page <= last; page\+\+\) pages\.add\(page\);/);
   assert.match(virtual, /VSCROLL\.renderStart <= safeStart && VSCROLL\.renderEnd >= safeEnd/);
   assert.match(virtual, /function ensureVirtualViewportCovered/);
   assert.match(virtual, /function ensureVirtualViewportCovered\(\)[\s\S]*?VSCROLL\.renderStart = -1;[\s\S]*?VSCROLL\.renderEnd = -1;/);
@@ -349,8 +350,8 @@ test("virtual results use bounded buffering", () => {
 
 test("Reader return and search snapshot state is preserved", () => {
   for (const value of [
-    "SEARCH_VIEW_SNAPSHOT_VERSION",
-    "const SEARCH_VIEW_SNAPSHOT_VERSION = VoiceOfMLSnapshotPolicy.VERSION",
+    "resultSnapshots.publish({key: getSearchViewKey()",
+    "resultSnapshots.selectRestore(key)",
     "const resultSnapshots = VoiceOfMLResultSnapshots.create(",
     "function getSearchViewKey",
     "function saveSearchViewSnapshot",
@@ -366,8 +367,10 @@ test("Reader return and search snapshot state is preserved", () => {
   assert.match(policy, /VERSION = 1, MAX = 20, BYTES_MAX = 8 \* 1024 \* 1024/);
   assert.match(snapshots, /snapshots\.size > policy\.MAX/);
   assert.match(snapshots, /bytes \+ snapshot\.bytes > policy\.BYTES_MAX/);
-  assert.match(app, /return resultSnapshots\.save\(view, position,/);
-  assertCode(app, 'STATE.results = /** @type {(PagesSearchRecord | null | undefined)[]} */ (resultSnapshots.restoreResults(snapshot, key, STATE.pageSize, restoreScroll, preserveRestore));');
+  assert.match(app, /return resultSnapshots\.saveDisplayed\(key,/);
+  assertCode(snapshots, 'saved?.version === policy.VERSION && saved.loadedPage >= 1');
+  assertCode(snapshots, 'displayed === view ? save(view, position, geometry) : null');
+  assertCode(app, 'const restored = resultSnapshots.prepareRestore(snapshot, STATE.pageSize, restoreScroll, preserveRestore); STATE.results = /** @type {(PagesSearchRecord | null | undefined)[]} */ (restored.results);');
   const host = fs.readFileSync("static/search/reader-host/application/host.js", "utf8");
   const position = fs.readFileSync("static/search/reader-host/presentation/return-position.js", "utf8");
   assertCode(host, "navigation.remember(url, /** @type {object} */ (position.scroll))");
@@ -381,7 +384,7 @@ test("warmup eviction and snapshot restoration source proofs reject regressions"
   const eviction = 'while (warmedReaderSources.size > READER_WARMUP_MAX) { const oldest = warmedReaderSources.keys().next(); if (oldest.done) break; warmedReaderSources.delete(oldest.value); }';
   assert.throws(() => assertCode(eviction.replace('if (oldest.done) break;', ''), eviction));
   assert.throws(() => assertCode(eviction.replace('delete(oldest.value)', 'delete(key)'), eviction));
-  const restore = 'STATE.results = /** @type {(PagesSearchRecord | null | undefined)[]} */ (resultSnapshots.restoreResults(snapshot, key, STATE.pageSize, restoreScroll, preserveRestore));';
+  const restore = 'const restored = resultSnapshots.prepareRestore(snapshot, STATE.pageSize, restoreScroll, preserveRestore); STATE.results = /** @type {(PagesSearchRecord | null | undefined)[]} */ (restored.results);';
   assert.throws(() => assertCode(restore.replace('STATE.results =', 'other.results ='), restore));
   assert.throws(() => assertCode(restore.replace('restoreScroll, preserveRestore', 'false, preserveRestore'), restore));
 });

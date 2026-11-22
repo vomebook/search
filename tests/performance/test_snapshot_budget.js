@@ -16,7 +16,7 @@ function fixture(source, root) {
     STATE: { results: [], total: 0, _pageCache: {}, _loadedPage: 1 },
     DOM: { resultsContainer: {} }, VSCROLL: { heightCache: new Map(), estimatedHeight: 100 },
     searchPageMetadata: new WeakMap(),
-    SEARCH_VIEW_SNAPSHOT_VERSION: 1, measuredHeightRevision: 0, positionRestoration: {current: null},
+    measuredHeightRevision: 0, positionRestoration: {current: null},
     getReturnPositionTarget: () => null, getHeightMeasurementKey: () => "layout",
     saveSearchPosition: () => ({ index: 0, offset: 0 }), checkSearchPageAppend: () => true,
     getResultStableId: () => { throw Error("snapshot scanned result IDs"); },
@@ -31,7 +31,7 @@ function fixture(source, root) {
     if (helper) vm.runInContext(helper[0], c);
   }
   for (const name of ["cloneSearchResult",
-    "getSearchSnapshotResultsBytes", "extendSearchSnapshotBudget",
+    "extendSearchSnapshotBudget",
     "saveSearchViewSnapshot", "appendSearchResults"]) {
     const match = source.match(new RegExp("^function " + name + "\\([^]*?^}", "m"));
     assert(match, name);
@@ -39,9 +39,8 @@ function fixture(source, root) {
   }
   function view(results) {
     c.STATE.results = results; c.STATE.total = results.length;
-    c.displayedSearchView = {key:"query",results,total:results.length,loadedPage:1,
-      revision:1,pageCache:{},resultBackend:"api"};
-    return c.displayedSearchView;
+    c.resultSnapshots.publish({key:"query",results,total:results.length,loadedPage:1,pageCache:{},resultBackend:"api"}, 0);
+    return c.resultSnapshots.displayed;
   }
   return {c,encoded,view};
 }
@@ -52,10 +51,10 @@ for (const { name: project, root } of searchTestProjects()) {
     const {c} = fixture(source, root);
     for (const length of [0,1,99,100,101,201]) {
       const records = Array.from({length}, (_, i) => ({File:"\u6587\u5316-"+i,Folder:["\ud83d\udcd6"]}));
-      assert.strictEqual(c.getSearchSnapshotResultsBytes(records), new TextEncoder().encode(JSON.stringify(records)).length);
+      assert.strictEqual(c.resultSnapshots.budget.measure(records), new TextEncoder().encode(JSON.stringify(records)).length);
       delete records[1]; delete records[100];
       c.resultSnapshots.budget.invalidate(records);
-      assert.strictEqual(c.getSearchSnapshotResultsBytes(records, true), new TextEncoder().encode(JSON.stringify(records)).length);
+      assert.strictEqual(c.resultSnapshots.budget.measure(records, true), new TextEncoder().encode(JSON.stringify(records)).length);
     }
   });
   test(project + " restore accounting includes the exact envelope and reserve at the eviction boundary", () => {
@@ -137,7 +136,7 @@ for (const { name: project, root } of searchTestProjects()) {
     assert.strictEqual(c.saveSearchViewSnapshot(), null);
     assert.strictEqual(encoded.length, calls);
     c.appendSearchResults(2,[{File:"new"}]);
-    c.displayedSearchView.revision++;
+    c.resultSnapshots.publish({...c.resultSnapshots.displayed, loadedPage:2}, 0);
     assert.strictEqual(c.saveSearchViewSnapshot(), null);
     assert.strictEqual(encoded.length, calls);
     assert.strictEqual(c.resultSnapshots.snapshots.size, 0);
@@ -150,9 +149,9 @@ for (const { name: project, root } of searchTestProjects()) {
     c.appendSearchResults(2,[{File:"next",Folder:["new"]}]);
     assert.strictEqual(encoded.length,1);
     assert.strictEqual(JSON.parse(encoded[0]).length,1);
-    current.revision++; current.loadedPage=2; current.total=101;
+    c.resultSnapshots.publish({...current,loadedPage:2,total:101},0);
     const second = c.saveSearchViewSnapshot();
-    assert.strictEqual(c.getSearchSnapshotResultsBytes(current.results), new TextEncoder().encode(JSON.stringify(current.results)).length);
+    assert.strictEqual(c.resultSnapshots.budget.measure(current.results), new TextEncoder().encode(JSON.stringify(current.results)).length);
     assert.strictEqual(first.results.length,100);
     assert.strictEqual(second.results.length,101);
     assert.notStrictEqual(first.results[0],second.results[0]);
@@ -180,12 +179,15 @@ for (const { name: project, root } of searchTestProjects()) {
   test(project + " a filled sparse page invalidates old accounting without losing placeholders", () => {
     const {c,view} = fixture(source, root);
     const records = new Array(1000); records[950]={File:"old"};
-    const current=view(records); current.window={pages:new Set([10]),count:1,generation:"g"};
+    const current=view(records);
+    const window={total:records.length,pages:new Set([10]),count:1,generation:"g"};
+    c.resultSnapshots.publish({...current,window},0);
     const first=c.saveSearchViewSnapshot();
     records[50]={File:"\u6587\u5316",Folder:["new"]};
-    c.resultSnapshots.budget.invalidate(records); current.revision++;
+    c.resultSnapshots.budget.invalidate(records); c.resultSnapshots.clearDisplayed();
+    c.resultSnapshots.publish({...current,window},0);
     const second=c.saveSearchViewSnapshot();
-    assert.strictEqual(c.getSearchSnapshotResultsBytes(records,true),new TextEncoder().encode(JSON.stringify(records)).length);
+    assert.strictEqual(c.resultSnapshots.budget.measure(records,true),new TextEncoder().encode(JSON.stringify(records)).length);
     assert.strictEqual(50 in first.results,false);
     assert.strictEqual(second.results[50].File,"\u6587\u5316");
     assert.strictEqual(49 in second.results,false);

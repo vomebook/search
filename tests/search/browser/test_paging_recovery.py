@@ -88,7 +88,7 @@ class PagingRecoveryTests(unittest.TestCase):
         }''')
         self.page.wait_for_function("STATE._loadedPage === 1 && !STATE.isLoading && searchPageMetadata.get(STATE.results[0])?.generation === 'A'")
         self.page.evaluate("currentGeneration='B'; cancelSearchPrefetch(); STATE.page=2; doSearch(true)")
-        self.page.wait_for_function("!positionRestoration.current && resultWindow?.generation === 'B' && !STATE.isLoading")
+        self.page.wait_for_function("!positionRestoration.current && resultWindows.current?.generation === 'B' && !STATE.isLoading")
         names = self.page.evaluate('STATE.results.filter(Boolean).map(r => r.File)')
         self.assertGreaterEqual(len(names), 200)
         self.assertEqual(names, ['paging-' + str(i) for i in range(-1, len(names) - 1)])
@@ -119,7 +119,7 @@ class PagingRecoveryTests(unittest.TestCase):
           tryRestoreSearchPosition(key, {viewport:null, position:{version:1,key,index:12,offset:0,
             anchorId:repo+'\0local-12.txt',loadedPage:10,savedAt:Date.now()}});
         }''')
-        self.page.wait_for_function("!positionRestoration.current && resultWindow?.query.resultBackend === 'local'")
+        self.page.wait_for_function("!positionRestoration.current && resultWindows.current?.query.resultBackend === 'local'")
         self.assertTrue(self.page.evaluate('apiAvailable && !STATE.useLocalMode'))
         self.assertEqual(self.page.evaluate('STATE._resultBackend'), 'local')
         self.assertEqual(self.page.evaluate('STATE.results[12].File'), 'local-12')
@@ -127,10 +127,10 @@ class PagingRecoveryTests(unittest.TestCase):
           const key = getSearchViewKey();
           const snapshot = saveSearchViewSnapshot();
           const restored = restoreSearchViewSnapshot(key);
-          const hole = !resultWindow.pages.has(2);
-          const loaded = await loadResultWindowPage(2);
-          return {restored,hole,loaded,backend:snapshot.resultBackend,window:resultWindow.query.resultBackend,
-            invalid:!!resultWindow.invalid, file:STATE.results[2]?.File,
+          const hole = !resultWindows.current.pages.has(2);
+          const loaded = await resultWindows.load(2);
+          return {restored,hole,loaded,backend:snapshot.resultBackend,window:resultWindows.current.query.resultBackend,
+            invalid:!!resultWindows.current.invalid, file:STATE.results[2]?.File,
             workerOnly:restoreBackends.every(([backend]) => backend === 'local')};
         }''')
         self.assertEqual(restored, dict(restored=True, hole=True, loaded=True, backend='local', window='local',
@@ -201,7 +201,7 @@ class PagingRecoveryTests(unittest.TestCase):
               const cached = getCachedSearchResponse(getCurrentSearchCacheKey(1));
               STATE.results = cached.results;
               // Simulate a cache round trip for the same displayed view.
-              displayedSearchView.results = STATE.results;
+              rememberDisplayedSearchView();
               return cached.generation;
             }'''), '')
         if local_ready:
@@ -234,7 +234,7 @@ class PagingRecoveryTests(unittest.TestCase):
         if local_ready:
             self.assertEqual(self.page.evaluate('STATE._resultBackend'), 'local')
             self.assertTrue(self.page.evaluate('STATE.useLocalMode'))
-            self.assertTrue(self.page.evaluate('resultWindow?.generation === initialLocalGeneration'))
+            self.assertTrue(self.page.evaluate('resultWindows.current?.generation === initialLocalGeneration'))
             self.assertEqual(self.page.evaluate('STATE.total'), self.page.evaluate('initialLocalTotal'))
             self.assertEqual(self.page.evaluate('STATE.results.filter(Boolean).slice(0,200).map(getResultStableId)'),
                              self.page.evaluate('initialLocalIds'))
@@ -246,13 +246,13 @@ class PagingRecoveryTests(unittest.TestCase):
         shift = 0 if initial_generation == 'same' else 1
         self.assertEqual(names, ['initial-paging-' + str(i) for i in range(-shift, len(names) - shift)])
         if initial_generation == 'same':
-            self.assertTrue(self.page.evaluate('resultWindow === null'))
+            self.assertTrue(self.page.evaluate('resultWindows.current === null'))
             self.assertFalse(self.page.evaluate('initialContinuationRequests.some(body => body.page === 1)'))
             self.assertTrue(self.page.evaluate('initialRows.every((row, i) => STATE.results[i] === row)'))
             self.assertTrue(self.page.evaluate('''initialDomRow !== null && initialDomRow ===
               DOM.resultsList.querySelector('.result-item[data-index="0"]')'''))
         else:
-            self.assertTrue(self.page.evaluate('resultWindow?.generation === initialGenerationB'))
+            self.assertTrue(self.page.evaluate('resultWindows.current?.generation === initialGenerationB'))
             self.assertTrue(self.page.evaluate('''initialContinuationRequests.some(body =>
               body.page === 1 && body.anchor_id === initialAnchor)'''))
         self.assertEqual(self.page.evaluate('STATE.results.findIndex(row => row && getResultStableId(row) === initialAnchor)'), shift)

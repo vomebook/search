@@ -275,7 +275,7 @@ class ApiIntegrationTest(unittest.TestCase):
           // Exercise the pinned backend independently of a UI toggle, which
           // starts a fresh view. Keep the current rows owned by this test view.
           STATE.useLocalMode = false;
-          displayedSearchView.key = getSearchViewKey();
+          rememberDisplayedSearchView();
           STATE.page = 2; localStartupSearch(true);
         }''')
         self.page.wait_for_function("STATE._loadedPage >= 2 && !STATE.isLoading")
@@ -304,7 +304,7 @@ class ApiIntegrationTest(unittest.TestCase):
           // Simulate a changed preference without starting a new search, so
           // page 2 must still use the backend that supplied these rows.
           STATE.useLocalMode = true;
-          displayedSearchView.key = getSearchViewKey();
+          rememberDisplayedSearchView();
           cancelSearchPrefetch(); STATE._pageCache = {}; searchResponseStore.cache.clear();
         }''')
         self.search_response_override = {"page": 2, "page_size": 100, "total": 200,
@@ -351,7 +351,7 @@ class ApiIntegrationTest(unittest.TestCase):
             loadedPage:2,savedAt:Date.now()};
           tryRestoreSearchPosition(key,{position,viewport:null});
         }''')
-        self.page.wait_for_function("!positionRestoration.current && resultWindow?.query.resultBackend === 'api'")
+        self.page.wait_for_function("!positionRestoration.current && resultWindows.current?.query.resultBackend === 'api'")
         self.assertEqual(self.page.evaluate('STATE._resultBackend'), 'api')
         self.assertEqual(self.page.evaluate('STATE.total'), 204)
         calls = self.page.evaluate('mixedCalls')

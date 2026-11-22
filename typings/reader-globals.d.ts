@@ -69,7 +69,37 @@ interface VoiceOfMLWindowRequestDependencies {
   validate(data: VoiceOfMLSearchWindowPageData, page: number, size: number, expected: VoiceOfMLResultWindow): void;
   scheduleRender(): void;
 }
+interface VoiceOfMLWindowQuery extends VoiceOfMLSearchViewProjection {
+  resultBackend?: "api" | "local" | null | undefined;
+}
+interface VoiceOfMLManagedResultWindow extends VoiceOfMLResultWindow {
+  query: VoiceOfMLWindowQuery; results: unknown[];
+  pages: Set<number>; count: number; missingPages?: Set<number>;
+}
+interface VoiceOfMLWindowSavedState {generation?: string | undefined; pages: number[]; count: number; invalid?: boolean; preview?: boolean}
+interface VoiceOfMLCachedWindowPage extends VoiceOfMLSearchWindowPageData {id: [string, number]; key: string; savedAt: number}
+interface VoiceOfMLWindowPageAccepted {page: number; indices: number[]; pageSize: number; preview?: VoiceOfMLCachedWindowPage}
+interface VoiceOfMLResultWindowHost extends Omit<VoiceOfMLWindowRequestDependencies, "isCurrent" | "readRecent"> {
+  currentKey(): string; results(): unknown[];
+  isRestoring(): boolean; isPreview(): boolean; isDragging(): boolean;
+  isRecoverable(error: unknown): boolean;
+  readRecent(key: string, page: number, expected: VoiceOfMLResultWindow, delay: number, signal: AbortSignal): Promise<VoiceOfMLCachedWindowPage | null>;
+  accepted(event: VoiceOfMLWindowPageAccepted): void;
+  failed(key: string, changed: boolean): void;
+}
+interface VoiceOfMLResultWindows {
+  readonly current: VoiceOfMLManagedResultWindow | null;
+  detach(): AbortController | undefined;
+  open(saved: VoiceOfMLWindowSavedState, key: string, total: number, query: VoiceOfMLWindowQuery): boolean;
+  load(page: number, prefetch?: boolean): Promise<boolean>;
+  demandRange(start: number, end: number, visibleStart: number, visibleEnd: number, direction: number): void;
+  prefetchAfter(index: number): void;
+  clearRecoverable(start: number, end: number): boolean;
+  retry(update: () => void): Promise<void> | undefined;
+  retryPage(page: number): void;
+}
 declare var VoiceOfMLResultWindowLoader: {
+  create(host: VoiceOfMLResultWindowHost): VoiceOfMLResultWindows;
   waitForRecovery(signal: AbortSignal, delay: number, local: boolean | number | undefined): Promise<void>;
   fetchWithRecovery(deps: VoiceOfMLWindowRecoveryDependencies, query: VoiceOfMLSearchViewProjection, page: number, signal: AbortSignal, anchorId: string | undefined, demanded?: () => boolean): Promise<VoiceOfMLSearchWindowPageData>;
   requestPage(deps: VoiceOfMLWindowRequestDependencies, window: VoiceOfMLResultWindow, page: number, prefetch?: boolean): Promise<VoiceOfMLSearchWindowPageData | null | undefined> | undefined;

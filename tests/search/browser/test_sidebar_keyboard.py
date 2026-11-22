@@ -578,7 +578,7 @@ class SidebarKeyboardTests(unittest.TestCase):
     def test_first_view_gates_decode_until_matching_result_has_painted(self):
         outcome = self.page.evaluate(r'''async () => {
           const old={observer:window.MutationObserver,request:window.requestAnimationFrame,cancel:window.cancelAnimationFrame,
-            getSearchViewKey,loaded:STATE._loadedPage,loading:STATE.isLoading,view:displayedSearchView,
+            getSearchViewKey,loaded:STATE._loadedPage,loading:STATE.isLoading,view:resultSnapshots.displayed,
             mobile:STATE.isMobile,open:STATE.leftSidebarOpen,delay:readerAssetController.scheduling.state.delayUntilPaint,wake:readerAssetController.scheduling.state.parseWake};
           const frames=new Map();let next=0,callback,disconnected=0,done=false;
           try {
@@ -590,9 +590,9 @@ class SidebarKeyboardTests(unittest.TestCase):
             const controller=new AbortController();
             const pending=readerAssetController.scheduling.waitForReaderAssetFirstPaint(controller.signal,'expected').then(()=>{done=true});
             callback();const before={done,frames:frames.size};
-            STATE._loadedPage=1;STATE.isLoading=false;displayedSearchView={...displayedSearchView,key:'wrong'};callback();
+            STATE._loadedPage=1;STATE.isLoading=false;resultSnapshots.publish({...resultSnapshots.displayed,key:'wrong'},STATE.pageSize);callback();
             const wrong={done,frames:frames.size};
-            displayedSearchView={...displayedSearchView,key:'expected'};callback();
+            resultSnapshots.publish({...resultSnapshots.displayed,key:'expected'},STATE.pageSize);callback();
             const ready={done,frames:frames.size};
             const tick=()=>{const [id,fn]=frames.entries().next().value;frames.delete(id);fn()};
             tick();const first={done,frames:frames.size};tick();await pending;
@@ -601,7 +601,7 @@ class SidebarKeyboardTests(unittest.TestCase):
           } finally {
             window.MutationObserver=old.observer;window.requestAnimationFrame=old.request;window.cancelAnimationFrame=old.cancel;
             getSearchViewKey=old.getSearchViewKey;STATE._loadedPage=old.loaded;STATE.isLoading=old.loading;
-            displayedSearchView=old.view;STATE.isMobile=old.mobile;STATE.leftSidebarOpen=old.open;
+            if (old.view) resultSnapshots.publish(old.view,STATE.pageSize); else resultSnapshots.clearDisplayed();STATE.isMobile=old.mobile;STATE.leftSidebarOpen=old.open;
             readerAssetController.scheduling.state.delayUntilPaint=old.delay;readerAssetController.scheduling.state.parseWake=old.wake;
           }
         }''')
@@ -612,7 +612,7 @@ class SidebarKeyboardTests(unittest.TestCase):
     def test_first_view_gate_rechecks_loading_before_releasing_frame(self):
         result = self.page.evaluate(r'''async () => {
           const old={observer:window.MutationObserver,request:window.requestAnimationFrame,cancel:window.cancelAnimationFrame,
-            getSearchViewKey,loaded:STATE._loadedPage,loading:STATE.isLoading,view:displayedSearchView,
+            getSearchViewKey,loaded:STATE._loadedPage,loading:STATE.isLoading,view:resultSnapshots.displayed,
             mobile:STATE.isMobile,open:STATE.leftSidebarOpen,delay:readerAssetController.scheduling.state.delayUntilPaint,wake:readerAssetController.scheduling.state.parseWake};
           const frames=new Map();let next=0,callback,disconnected=0,done=false;
           try {
@@ -620,7 +620,7 @@ class SidebarKeyboardTests(unittest.TestCase):
             window.requestAnimationFrame=fn=>{const id=++next;frames.set(id,fn);return id};
             window.cancelAnimationFrame=id=>frames.delete(id);
             STATE.isMobile=false;STATE.leftSidebarOpen=true;STATE._loadedPage=1;STATE.isLoading=false;
-            readerAssetController.scheduling.state.delayUntilPaint=true;getSearchViewKey=()=>'expected';displayedSearchView={...displayedSearchView,key:'expected'};
+            readerAssetController.scheduling.state.delayUntilPaint=true;getSearchViewKey=()=>'expected';resultSnapshots.publish({...resultSnapshots.displayed,key:'expected'},STATE.pageSize);
             const pending=readerAssetController.scheduling.waitForReaderAssetFirstPaint(new AbortController().signal,'expected').then(()=>{done=true});
             const tick=()=>{const [id,fn]=frames.entries().next().value;frames.delete(id);fn()};
             STATE.isLoading=true;tick();tick();await Promise.resolve();
@@ -630,7 +630,7 @@ class SidebarKeyboardTests(unittest.TestCase):
           } finally {
             window.MutationObserver=old.observer;window.requestAnimationFrame=old.request;window.cancelAnimationFrame=old.cancel;
             getSearchViewKey=old.getSearchViewKey;STATE._loadedPage=old.loaded;STATE.isLoading=old.loading;
-            displayedSearchView=old.view;STATE.isMobile=old.mobile;STATE.leftSidebarOpen=old.open;
+            if (old.view) resultSnapshots.publish(old.view,STATE.pageSize); else resultSnapshots.clearDisplayed();STATE.isMobile=old.mobile;STATE.leftSidebarOpen=old.open;
             readerAssetController.scheduling.state.delayUntilPaint=old.delay;readerAssetController.scheduling.state.parseWake=old.wake;
           }
         }''')
@@ -751,7 +751,7 @@ class SidebarKeyboardTests(unittest.TestCase):
           cancelSearchPrefetch();searchAbortController?.abort();cancelPositionRestore();
           const previous={loadReaderAssets,getFolderContents,assets:readerAssetController.state.assets,pending:readerAssetController.state.pending,
             delay:readerAssetController.scheduling.state.delayUntilPaint,mobile:STATE.isMobile,open:STATE.leftSidebarOpen,
-            loaded:STATE._loadedPage,loading:STATE.isLoading,view:displayedSearchView};
+            loaded:STATE._loadedPage,loading:STATE.isLoading,view:resultSnapshots.displayed};
           try {
             STATE.mode='repo';STATE.repo='Test';STATE.repoFull='VoiceOfML/Test';STATE.browserPath='';
             STATE.isMobile=false;STATE.leftSidebarOpen=true;STATE.useLocalMode=true;STATE.dataLoaded=true;
@@ -774,7 +774,7 @@ class SidebarKeyboardTests(unittest.TestCase):
             loadReaderAssets=previous.loadReaderAssets;getFolderContents=previous.getFolderContents;
             readerAssetController.state.assets=previous.assets;readerAssetController.state.pending=previous.pending;readerAssetController.scheduling.state.delayUntilPaint=previous.delay;
             STATE.isMobile=previous.mobile;STATE.leftSidebarOpen=previous.open;
-            STATE._loadedPage=previous.loaded;STATE.isLoading=previous.loading;displayedSearchView=previous.view;
+            STATE._loadedPage=previous.loaded;STATE.isLoading=previous.loading;if (previous.view) resultSnapshots.publish(previous.view,STATE.pageSize); else resultSnapshots.clearDisplayed();
           }
         }''')
         self.assertEqual(result, dict(oldConnected=False,oldAfter='',current=True,label='打开阅读器：new.chm',loads=2))

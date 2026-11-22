@@ -290,8 +290,8 @@ class ScrollStabilityTests(unittest.TestCase):
           cancelPositionRestore();STATE.total=99522;STATE.results=STATE.results.slice(0,100);
           STATE._loadedPage=1;STATE.hasMore=true;STATE.isLoading=false;
           const key=getSearchViewKey();window.lastPageRequests=[];
-          resultWindow={key,total:STATE.total,query:JSON.parse(key),generation:'test',
-            pages:new Set([1]),pending:new Map(),failures:new Map(),count:100,controller:new AbortController()};
+          resultWindows.open({generation:'test',pages:[1],count:100},key,STATE.total,
+            {...JSON.parse(key),resultBackend:'api'});
           fetchPositionPage=async(query,page)=>{
             lastPageRequests.push(page);
             return {page,page_size:query.pageSize,total:99522,generation:'test',

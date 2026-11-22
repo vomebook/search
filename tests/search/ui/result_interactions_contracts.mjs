@@ -52,7 +52,7 @@ function fixture() {
     buildSearchURLParams: () => new URLSearchParams('q=one&folder_subtree=kept&min_size=2'),
     renderBrowser: (...args) => rendered.push(args), routeRenderId: 9,
     warmSelectedDownload: index => warmed.push(index), API: {_browserPending: new Map(), getContents: async () => ({})},
-    resultWindow: null, restartResultWindow() {}, loadResultWindowPage() {},
+    resultWindows: {current: null, load() {}}, restartResultWindow() {},
     materializeSnapshotRange(task, start, end, selected) {
       assert.equal(selected, true); for (let i = start; i < end; i++) c.STATE.results[i] = task.snapshot.results[i];
     }, applySnapshotCloneHeights() { c.heightsApplied++; }, heightsApplied: 0,

@@ -186,7 +186,7 @@ class PositionControlTests(unittest.TestCase):
         self.page.clock.run_for(1)
         self.assertEqual(self.page.evaluate('STATE.query'), 'paging-latest')
         self.page.clock.resume()
-        self.page.wait_for_function('displayedSearchView?.key === getSearchViewKey()')
+        self.page.wait_for_function('resultSnapshots.displayed?.key === getSearchViewKey()')
         self.wait_position(0)
         self.assertIsNone(self.page.evaluate('STATE.filterMinSize'))
         self.assertTrue(self.page.locator('#return-to-position-btn').is_hidden())
@@ -264,7 +264,7 @@ class PositionControlTests(unittest.TestCase):
         self.wait_position(95000)
         self.store_position(clear_viewport=True)
         # Suppress pagehide saving so it cannot recreate the deliberately absent viewport.
-        self.page.evaluate('displayedSearchView=null')
+        self.page.evaluate('resultSnapshots.clearDisplayed()')
         self.page.add_init_script("pagingTotal=100000;pagingMode='normal'")
         self.page.reload(wait_until='domcontentloaded')
         self.page.wait_for_function('!STATE.isLoading && STATE.results.length>0')
@@ -329,7 +329,7 @@ class PositionControlTests(unittest.TestCase):
         self.page.evaluate('blockPosition=false;releasePosition()')
         self.page.wait_for_timeout(100)
         self.wait_position(0)
-        self.assertEqual(self.page.evaluate('displayedSearchView.key'), self.page.evaluate('getSearchViewKey()'))
+        self.assertEqual(self.page.evaluate('resultSnapshots.displayed.key'), self.page.evaluate('getSearchViewKey()'))
 
     def test_pending_filter_timer_does_not_restart_explicit_position_restore(self):
         self.input_position(95001)

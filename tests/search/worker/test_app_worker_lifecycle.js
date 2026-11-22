@@ -86,7 +86,8 @@ function callerHarness() {
   const h = harness();
   h.run(`
     let searchRequestId = 0, searchAbortController = null;
-    let resultWindow = null, scrollLoadTimer = null;
+    const resultWindows = {current: null};
+    let scrollLoadTimer = null;
     const searchInputController = {cancelFilter() {}};
     let selectedIndices = {}, lastSelectedIndex = -1, apiAvailable = true;
     let finishLoad, finishApi, failApi, loadCalls = 0, pagingFailures = 0, filterSearches = 0;

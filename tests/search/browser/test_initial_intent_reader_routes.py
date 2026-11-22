@@ -303,7 +303,7 @@ class InitialIntentReaderRouteTests(unittest.TestCase):
         self.evaluate_bounded('''async () => {
           initialFlights[0].resolve(payload('seed')); await oldInitial;
           resultSnapshots.snapshots.clear(); initialPayloadCache.clear(); searchResponseStore.cache.clear();
-          displayedSearchView = null;
+          resultSnapshots.clearDisplayed();
           getReturnPositionTarget = () => ({index:0});
           readSearchViewport = () => new Promise(resolve => { window.releaseViewport = resolve; });
           window.restoring = searchWithInitialFallback();

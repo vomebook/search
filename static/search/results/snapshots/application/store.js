@@ -1,4 +1,4 @@
-// Owns retained snapshots, copy identities and the cancellable neighborhood-first clone.
+// Owns the displayed view identity, retained snapshots and their cancellable clones.
 (function () {
   /** @param {SearchSnapshotHost} host @returns {SearchSnapshotStore} */
   function create(host) {
@@ -13,6 +13,63 @@
     const cloneSources = new WeakMap();
     /** @type {SearchSnapshotCloneTask | null} */
     let cloneTask = null;
+    /** @type {SearchDisplayedView | null} */
+    let displayed = null;
+    let revision = 0;
+
+    /** @param {Omit<SearchSnapshotView, 'revision'>} view @param {number} pageSize */
+    function publish(view, pageSize) {
+      if (view.loadedPage < 1) return;
+      const previous = displayed;
+      const unchanged = previous && previous.key === view.key && previous.results === view.results &&
+        previous.length === view.results.length && previous.total === view.total && previous.loadedPage === view.loadedPage &&
+        previous.pageCache === view.pageCache && previous.window === view.window && previous.resultBackend === view.resultBackend;
+      displayed = { ...view, length: view.results.length, revision: unchanged ? previous.revision : ++revision };
+      if (view.results.length <= pageSize && !budget.has(view.results)) budget.measure(view.results, !!view.window);
+    }
+
+    // Clear identity without discarding saved positions or snapshots.
+    function clearDisplayed() { displayed = null; }
+
+    /** @param {string} key @param {unknown[]} results */
+    function owns(key, results) { return displayed?.key === key && displayed.results === results; }
+
+    /** @param {object} snapshot @param {string} key @param {number} length @param {number} loadedPage */
+    function changedSince(snapshot, key, length, loadedPage) {
+      const source = sources.get(snapshot), saved = snapshots.get(key);
+      return !!source && saved === snapshot && displayed?.key === key && displayed.revision === source.revision &&
+        (length !== saved.results.length || loadedPage !== saved.loadedPage);
+    }
+
+    /** @param {string | undefined} key @param {SearchDisplayedCapture} capture */
+    function saveDisplayed(key, capture) {
+      const view = displayed;
+      key ??= view?.key;
+      if (key === undefined) return null;
+      const saved = snapshots.get(key);
+      if ((view?.key === key && (view.window?.invalid || view.window?.preview)) || saved?.window?.invalid) {
+        // Retain the position, not stale or still-unverified rows.
+        snapshots.delete(key);
+        return null;
+      }
+      if (capture.protected(key)) return saved ?? null;
+      if (!capture.ready || view?.key !== key) return null;
+      const position = capture.position();
+      if (displayed !== view) return null;
+      const geometry = capture.geometry();
+      return displayed === view ? save(view, position, geometry) : null;
+    }
+
+    /** @param {string} key */
+    function selectRestore(key) {
+      const saved = snapshots.get(key);
+      if (saved?.window?.invalid) {
+        snapshots.delete(key);
+        return { snapshot: null, invalid: saved };
+      }
+      return { snapshot: saved?.version === policy.VERSION && saved.loadedPage >= 1 ? saved : null, invalid: null };
+    }
+
     /** @param {Record<string, unknown>} cache */
     function copyPageCache(cache) {
       /** @type {Record<string, unknown>} */
@@ -140,12 +197,18 @@
       };
       task.frame = requestAnimationFrame(() => { task.frame = 0; task.timer = setTimeout(step, 0); });
     }
-    return { snapshots, budget, get cloneTask() { return cloneTask; }, source: snapshot => sources.get(snapshot),
+    /** @param {SearchResultSnapshot} snapshot @param {number} pageSize @param {boolean} scroll @param {boolean} preserve */
+    function prepareRestore(snapshot, pageSize, scroll, preserve) {
+      return {results: restoreResults(snapshot, snapshot.key, pageSize, scroll, preserve), pageCache: copyPageCache(snapshot.pageCache)};
+    }
+
+    return { snapshots, budget, get displayed() { return displayed; }, publish, clearDisplayed, owns, changedSince, saveDisplayed, selectRestore, prepareRestore,
+      get cloneTask() { return cloneTask; }, source: snapshot => sources.get(snapshot),
       put: (key, snapshot) => { pendingRestores.delete(snapshot); snapshots.set(key, snapshot); },
       // Keep accounting in trim, after the existing restore/publication sequence.
       putRestored: (key, snapshot) => { pendingRestores.add(snapshot); snapshots.set(key, snapshot); },
       remove: key => { snapshots.delete(key); },
-      save, trim, copyPageCache, cancelClone, materializeRange, restoreResults, startClone };
+      save, trim, cancelClone, materializeRange, restoreResults, startClone };
   }
   globalThis.VoiceOfMLResultSnapshots = { create };
 })();

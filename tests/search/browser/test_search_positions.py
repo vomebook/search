@@ -119,12 +119,12 @@ class SearchPositionTests(unittest.TestCase):
         result = self.page.evaluate('''async () => {
           const position=positionPersistence.positions.get(getSearchViewKey());
           const sizes=['','unknown','1234'];
-          const results=displayedSearchView.results.slice();
+          const results=resultSnapshots.displayed.results.slice();
           sizes.forEach((Size,offset)=>{
             const index=position.index+offset;
             results[index]={...results[index],Size};
           });
-          saveSearchViewport(position,{...displayedSearchView,results});
+          saveSearchViewport(position,{...resultSnapshots.displayed,results});
           // Read the writer's committed IndexedDB entry, not a handcrafted preview.
           const viewport=await new Promise((resolve,reject)=>{
             const tx=positionStorage.database.transaction('viewports');
@@ -251,7 +251,7 @@ class SearchPositionTests(unittest.TestCase):
         self.page.wait_for_function('!!window.releaseRestore')
         self.page.evaluate("STATE.query='paging-latest'; doSearch(); releaseRestore()")
         self.page.wait_for_function("STATE.query==='paging-latest' && !STATE.isLoading && !positionRestoration.current")
-        self.assertEqual(self.page.evaluate('displayedSearchView.key'), self.page.evaluate('getSearchViewKey()'))
+        self.assertEqual(self.page.evaluate('resultSnapshots.displayed.key'), self.page.evaluate('getSearchViewKey()'))
         self.assertEqual(self.page.evaluate('positionPersistence.positions.get(' + repr(self.saved['key']) + ').anchorId'), self.saved['anchorId'])
         self.assertEqual(self.fixture.errors, [])
 

@@ -178,16 +178,27 @@ class PrefetchPipelineTests(unittest.TestCase):
         self.assertLessEqual(self.page.evaluate('searchPrefetchAbortController.active.size'), 1)
 
     def test_sparse_window_prefetch_tracks_visible_position_and_reserves_a_slot(self):
-        result = self.page.evaluate('''() => {
-          const previous=resultWindow,loader=loadResultWindowPage,finder=findVirtualIndex;
-          const loaded=STATE._loadedPage;const calls=[];
+        result = self.page.evaluate('''async () => {
+          const loaded=STATE._loadedPage, original=fetchPositionPage, calls=[];
+          const key=getSearchViewKey(), query={...JSON.parse(key),resultBackend:'api',pageSize:100};
+          const total=100000;
           try {
-            STATE._loadedPage=1000;resultWindow={pending:new Map()};findVirtualIndex=()=>450;
-            loadResultWindowPage=(page,prefetch)=>{calls.push([page,prefetch]);resultWindow.pending.set(page,true)};
-            prefetchNextPage();prefetchNextPage();return calls;
-          } finally {resultWindow=previous;loadResultWindowPage=loader;findVirtualIndex=finder;STATE._loadedPage=loaded}
+            STATE._loadedPage=1000;
+            resultWindows.open({pages:[1],count:100,generation:'prefetch-test'},key,total,query);
+            let ready;
+            const started = new Promise(resolve=>{ready=resolve});
+            fetchPositionPage=(q,page,signal)=>{
+              calls.push(page);if(calls.length===2)ready();
+              return new Promise((resolve,reject)=>signal.addEventListener('abort',
+                ()=>reject(new DOMException('Cancelled','AbortError')),{once:true}));
+            };
+            resultWindows.prefetchAfter(450);resultWindows.prefetchAfter(450);
+            const attempts=[...resultWindows.current.pending.keys()];
+            await Promise.race([started,new Promise(resolve=>setTimeout(resolve,1000))]);
+            return {calls,attempts};
+          } finally {resultWindows.detach()?.abort();fetchPositionPage=original;STATE._loadedPage=loaded}
         }''')
-        self.assertEqual(result, [[6,True],[7,True]])
+        self.assertEqual(result, {'calls': [6, 7], 'attempts': [6, 7]})
 
     def test_matching_saved_pages_avoid_network_and_old_generation_is_rejected(self):
         result = self.page.evaluate('''async () => {

@@ -89,3 +89,67 @@ test('snapshot retention uses byte bounds and access order without changing sour
   f.store.put('oversize',{bytes:8*1024*1024+1});f.store.trim();
   assert.equal(f.store.snapshots.has('oversize'),false);assert.equal(f.store.snapshots.get('query'),first);
 });
+
+test('displayed ownership follows array identity and a monotonic revision, not query alone', () => {
+  const {store,view} = fixture();
+  store.publish(view,100);
+  const initial = store.displayed;
+  assert.equal(store.owns(view.key,view.results),true);
+  store.publish(view,100);
+  assert.equal(store.displayed.revision,initial.revision);
+  view.results = view.results.slice();
+  assert.equal(store.owns(view.key,view.results),false);
+  store.publish(view,100);
+  assert.ok(store.displayed.revision > initial.revision);
+  store.clearDisplayed();
+  store.publish({...view,loadedPage:0},100);
+  assert.equal(store.displayed,null);
+  store.publish(view,100);
+  assert.ok(store.displayed.revision > initial.revision);
+});
+
+test('displayed capture retains protected snapshots and rejects synchronous same-key replacement', () => {
+  const {store,view,geometry} = fixture();
+  store.publish(view,100);
+  const capture = {ready:true, protected:()=>false, position:()=>({index:10,offset:4}), geometry:()=>geometry};
+  const saved = store.saveDisplayed(undefined,capture);
+  const fail = () => assert.fail('capture must not execute');
+  assert.equal(store.saveDisplayed(view.key,{...capture,protected:()=>true,position:fail}),saved);
+  assert.equal(store.saveDisplayed('wrong-key',{...capture,position:fail}),null);
+  assert.equal(store.saveDisplayed(view.key,{...capture,position:()=>{
+    store.publish({...view,results:view.results.slice()},100);
+    return {index:99,offset:1};
+  },geometry:fail}),null);
+  assert.equal(store.snapshots.get(view.key),saved);
+  assert.equal(saved.scroll.index,10);
+  assert.equal(store.changedSince(saved,view.key,0,1),false);
+  store.publish({...view,window:{preview:true,total:view.total,count:1,pages:new Set()}},100);
+  assert.equal(store.saveDisplayed(view.key,{...capture,protected:()=>true,position:fail}),null);
+  assert.equal(store.snapshots.has(view.key),false);
+});
+
+test('restore selection discards invalid windows and prepares detached rows and page cache', () => {
+  const {store,view,geometry} = fixture();
+  view.results = [{File:'old',Folder:['one']}, , {File:'third'}];
+  view.total = 1000;
+  view.loadedPage = 2;
+  view.pageCache = {2:[{File:'cached',Folder:['two']}]};
+  view.window = {generation:'g',total:1000,pages:new Set([1]),count:2};
+  store.publish(view,100);
+  const saved = store.saveDisplayed(view.key,{ready:true,protected:()=>false,position:()=>null,geometry:()=>geometry});
+  assert.equal(store.selectRestore(view.key).snapshot,saved);
+  assert.equal(store.changedSince(saved,view.key,3,2),false);
+  assert.equal(store.changedSince(saved,view.key,4,2),true);
+  const restored = store.prepareRestore(saved,100,true,false);
+  assert.notEqual(restored.results,saved.results);
+  assert.equal(1 in restored.results,false);
+  restored.results[0].Folder.push('changed');
+  restored.pageCache[2][0].Folder.push('changed');
+  assert.deepEqual(Array.from(saved.results[0].Folder),['one']);
+  assert.deepEqual(Array.from(saved.pageCache[2][0].Folder),['two']);
+  saved.window.invalid = true;
+  assert.equal(store.selectRestore(view.key).invalid,saved);
+  assert.equal(store.snapshots.has(view.key),false);
+  store.put(view.key,{...saved,version:0,window:null});
+  assert.equal(store.selectRestore(view.key).snapshot,null);
+});

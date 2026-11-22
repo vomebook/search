@@ -21,7 +21,7 @@ function fixture() {
   const c = vm.createContext({AbortController, TextEncoder: class extends TextEncoder {
     encode(value) {encoded.push(value); return super.encode(value);}
   }, setTimeout(fn, ms) {assert.equal(ms, 30); timers.push(fn);},
-    resultWindow: null, searchIntentId: 0, searchId: 0,
+    searchIntentId: 0, searchId: 0,
     STATE: {isLoading: false, results: []}, VSCROLL: {isDraggingThumb: false, estimatedHeight: 40},
     readerHost: {overlay: null}, getSearchViewKey: () => key,
     positionPersistence: {getPosition: () => position},
@@ -50,6 +50,7 @@ function fixture() {
     showToast(message) {events.push(['toast', message]);}
   });
   installClassicSearchModules(process.cwd(), c);
+  c.resultWindows = c.VoiceOfMLResultWindowLoader.create({currentKey: () => key, results: () => c.STATE.results});
   const store = c.VoiceOfMLResultSnapshots.create({});
   c.resultSnapshots = {...store,
     cancelClone() {store.cancelClone(); events.push('clone');},
@@ -244,18 +245,21 @@ test('active-search abort reentry exits before restoration cancellation', () => 
 test('window abort sees both owners cleared and retains the replacement window and restore', () => {
   const f = fixture();
   f.c.readSearchViewport = () => deferred().promise;
-  const active = f.start({}), old = new AbortController(), replacement = {controller: new AbortController()};
-  f.c.resultWindow = {controller: old};
+  const active = f.start({}), windows = f.c.resultWindows;
+  const open = () => windows.open({pages: [], count: 0}, key, 0, JSON.parse(key));
+  open();
+  const old = windows.current.controller;
+  let replacement;
   let newer, observed;
   old.signal.addEventListener('abort', () => {
-    observed = [f.c.resultWindow, f.restoration.current, f.c.STATE.isLoading, active.controller.signal.aborted];
+    observed = [windows.current, f.restoration.current, f.c.STATE.isLoading, active.controller.signal.aborted];
     newer = f.start({position});
-    f.c.resultWindow = replacement;
+    open(); replacement = windows.current;
   });
   f.restoration.cancel();
   assert.deepEqual(observed, [null, null, false, false]);
   assert.equal(active.controller.signal.aborted, true);
-  assert.equal(f.c.resultWindow, replacement);
+  assert.equal(windows.current, replacement);
   assert.equal(f.restoration.current, newer);
   assert.equal(replacement.controller.signal.aborted, false);
   assert.equal(newer.controller.signal.aborted, false);

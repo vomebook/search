@@ -286,10 +286,10 @@ for (const {name: project, root} of searchTestProjects()) {
     let release, activeKey = "B", calls = 0;
     const context = vm.createContext({STATE: state, window: {location: {pathname: '/search/', hash: '#/B'}},
       appliedSearchPath: '/search/', appliedRouteHash: '#/B',
-      displayedSearchView: {key: "A", results: old}, getSearchViewKey: () => activeKey,
+      getSearchViewKey: () => activeKey,
       searchId: 1, searchRequestId: 1, searchIntentId: 1, positionRestoration: {entry: 1, current: null},
       saveSearchViewSnapshot() {}, cancelActiveSearch: () => true, cancelPositionRestore() {}, prepareReturnPosition() {},
-      resultSnapshots: {snapshots: new Map()}, getReturnPositionTarget: () => ({index: 1}),
+      resultSnapshots: {snapshots: new Map(), owns: (key, results) => key === "A" && results === old}, getReturnPositionTarget: () => ({index: 1}),
       readSearchViewport: () => new Promise(resolve => { release = resolve; }),
       validSearchViewport: () => false, searchWithInitialFallbackFresh: () => true,
       getResultScrollTop: () => 90, getVirtualTotalHeight: () => 100, DOM: {resultsContainer: {clientHeight: 10}},

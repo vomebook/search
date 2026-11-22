@@ -94,7 +94,7 @@ class RecentSearchPageTests(unittest.TestCase):
         self.assertEqual(self.page.evaluate('STATE.results[25050].ID'), '25050')
         self.page.evaluate('window.keptRow=DOM.resultsList.querySelector(\'[data-index="25050"]\');releaseWindow()')
         self.fixture.wait_anchor(25050)
-        self.assertTrue(self.page.evaluate('keptRow.isConnected && resultWindow.count===STATE.results.filter(Boolean).length'))
+        self.assertTrue(self.page.evaluate('keptRow.isConnected && resultWindows.current.count===STATE.results.filter(Boolean).length'))
         self.assertNotIn(251, self.page.evaluate('windowCalls'))
         self.fixture.jump(35050)
         self.fixture.wait_anchor(35050)
@@ -121,7 +121,7 @@ class RecentSearchPageTests(unittest.TestCase):
         self.page.wait_for_function('!positionRestoration.current')
         anchor = self.page.evaluate('''index=>({index:findVirtualIndex(getResultScrollTop()),
           offset:getResultScrollTop()-getVirtualOffset(index),loaded:!!STATE.results[index],
-          generation:resultWindow.generation})''', index)
+          generation:resultWindows.current.generation})''', index)
         self.assertEqual(anchor['index'], index, anchor)
         self.assertAlmostEqual(anchor['offset'], 11, delta=2)
         self.assertFalse(anchor['loaded'])
@@ -150,7 +150,7 @@ class RecentSearchPageTests(unittest.TestCase):
           positionPersistence.recentPages.clear();return id;
         }'''), '25050')
         self.fixture.jump(25050)
-        self.page.wait_for_function('resultWindow.pages.has(251) || resultWindow.missingPages?.has(251)')
+        self.page.wait_for_function('resultWindows.current.pages.has(251) || resultWindows.current.missingPages?.has(251)')
         self.assertFalse(self.page.evaluate('!!STATE.results[25050]'),
                          'A corrupt disk record must not enter the preview')
         self.page.evaluate('windowStall=0;releaseWindow()')
@@ -168,7 +168,7 @@ class RecentSearchPageTests(unittest.TestCase):
         self.wait_cached(25050)
         self.page.evaluate("windowGeneration='two';windowStall=0;releaseWindow()")
         self.fixture.wait_anchor(25050)
-        self.assertEqual(self.page.evaluate('resultWindow.generation'), 'two')
+        self.assertEqual(self.page.evaluate('resultWindows.current.generation'), 'two')
         self.assertTrue(self.page.evaluate("STATE.results.filter(Boolean).every(record=>record.SnapshotVersion==='two')"))
         self.assertIn(251, self.page.evaluate('windowCalls'))
 
@@ -201,10 +201,10 @@ class RecentSearchPageTests(unittest.TestCase):
     def test_regular_page_metadata_survives_snapshot_cloning(self):
         result = self.page.evaluate('''async () => {
           const data=cloneSearchData({results:STATE.results.slice(49800,49900),page:499,page_size:100,total:STATE.total,generation:'regular'});
-          const results=STATE.results.map(cloneSearchResult),view={...displayedSearchView,results,window:null};
+          const results=STATE.results.map(cloneSearchResult),view={...resultSnapshots.displayed,results,window:null};
           positionPersistence.saveRecentPages(positionPersistence.positions.get(originalWindowKey),view,49850);
           positionPersistence.recentPages.clear();
-          const entry=await readRecentSearchPage(originalWindowKey,499,{...resultWindow,generation:'regular'});
+          const entry=await readRecentSearchPage(originalWindowKey,499,{...resultWindows.current,generation:'regular'});
           return entry && {generation:entry.generation,id:entry.results[50].ID};
         }''')
         self.assertEqual(result, {'generation':'regular','id':'49850'})
@@ -224,12 +224,12 @@ class RecentSearchPageTests(unittest.TestCase):
         self.page.wait_for_function('!!window.releaseDisk')
         self.page.evaluate("STATE.query='paging-latest';doSearch();releaseDisk();releaseWindow()")
         self.page.wait_for_function("!STATE.isLoading && STATE.query==='paging-latest'")
-        self.assertTrue(self.page.evaluate('!resultWindow && STATE.results.length<1000'))
+        self.assertTrue(self.page.evaluate('!resultWindows.current && STATE.results.length<1000'))
 
     def test_persistent_cache_rejects_expiry_other_queries_and_short_pages(self):
         self.prepare_pages()
         checks = self.page.evaluate('''async () => {
-          const key=getSearchViewKey(),expected=resultWindow;
+          const key=getSearchViewKey(),expected=resultWindows.current;
           positionPersistence.recentPages.clear();
           const entry=await readRecentSearchPage(key,251,expected);
           const good=entry?.results[50].ID==='25050';
@@ -245,7 +245,7 @@ class RecentSearchPageTests(unittest.TestCase):
     def test_cached_page_validates_metadata_and_rendering_fields(self):
         self.prepare_pages()
         result = self.page.evaluate('''async () => {
-          const key=originalWindowKey,id=JSON.stringify([key,251]),expected=resultWindow;
+          const key=originalWindowKey,id=JSON.stringify([key,251]),expected=resultWindows.current;
           positionPersistence.recentPages.clear();
           const original=await readRecentSearchPage(key,251,expected),rejected=[];
           const mutations=[
@@ -271,7 +271,7 @@ class RecentSearchPageTests(unittest.TestCase):
     def test_page_cache_is_bounded_and_oversized_pages_keep_all_live_results(self):
         self.fixture.persist_viewport()
         result = self.page.evaluate('''async () => {
-          const position=positionPersistence.positions.get(originalWindowKey), view=displayedSearchView;
+          const position=positionPersistence.positions.get(originalWindowKey), view=resultSnapshots.displayed;
           for(let i=0;i<35;i++)positionPersistence.saveRecentPages(position,{...view,key:JSON.stringify({...JSON.parse(view.key),query:'bounded-'+i})},position.index);
           await new Promise(resolve=>{const tx=positionStorage.database.transaction('recent-pages');tx.oncomplete=resolve});
           const count=await new Promise(resolve=>{const request=positionStorage.database.transaction('recent-pages').objectStore('recent-pages').count();request.onsuccess=()=>resolve(request.result)});
@@ -313,7 +313,7 @@ class RecentSearchPageTests(unittest.TestCase):
             return transaction.call(this,names,mode,...args);
           };
           try {
-            const view=displayedSearchView,key=JSON.stringify({...JSON.parse(view.key),query:'batch-write'});
+            const view=resultSnapshots.displayed,key=JSON.stringify({...JSON.parse(view.key),query:'batch-write'});
             positionPersistence.saveRecentPages({index:49895},{...view,key},49905);
             await new Promise(resolve=>{const tx=positionStorage.database.transaction('recent-pages');tx.oncomplete=resolve});
             return {writes,pages:[499,500].map(page=>positionPersistence.recentPages.get(JSON.stringify([key,page]))?.results.length)};

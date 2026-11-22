@@ -119,7 +119,7 @@ const readerAssetController = VoiceOfMLReaderAssets.create({
   getSearchViewKey: () => getSearchViewKey(),
   canWaitForPaint: () => !STATE.isMobile && STATE.leftSidebarOpen,
   resultsList: () => DOM.resultsList,
-  isFirstViewReady: targetKey => STATE._loadedPage >= 1 && !STATE.isLoading && displayedSearchView?.key === targetKey
+  isFirstViewReady: targetKey => STATE._loadedPage >= 1 && !STATE.isLoading && resultSnapshots.displayed?.key === targetKey
 });
 
 /** @param {boolean} [deferDecode] */
@@ -241,12 +241,8 @@ const readerHost = VoiceOfMLReaderHost.create({
   // A pending first page may still be showing the previous query's rows.
   captureScroll: () => STATE._loadedPage && ownsDisplayedSearchResults() ? captureReaderReturnScroll() : null,
   restoreScroll: () => restoreReaderReturnScroll(), saveSnapshot: key => saveSearchViewSnapshot(key),
-  snapshotChanged: (snapshot, key) => {
-    const source = resultSnapshots.source(snapshot), current = displayedSearchView;
-    return key === getSearchViewKey() && !!source && !!current && current.key === key &&
-      current.revision === source.revision && resultSnapshots.snapshots.get(key) === snapshot &&
-      (STATE.results.length !== snapshot.results.length || STATE._loadedPage !== snapshot.loadedPage);
-  },
+  snapshotChanged: (snapshot, key) => key === getSearchViewKey() &&
+    resultSnapshots.changedSince(snapshot, key, STATE.results.length, STATE._loadedPage),
   restoreSnapshot: key => restoreSearchViewSnapshot(key, false),
   routeChanged: () => location.pathname !== appliedSearchPath || location.hash !== appliedRouteHash,
   applyRoute: preserve => ROUTER.apply(preserve),
@@ -992,9 +988,8 @@ function prefetchSearchPages(base, template) {
 
 function prefetchNextPage() {
   if (!ownsDisplayedSearchResults()) return Promise.resolve();
-  if (resultWindow) {
-    const page = Math.floor(findVirtualIndex(getResultScrollTop()) / STATE.pageSize) + 1;
-    for (let next = page + 1; next <= page + 2 && resultWindow.pending.size < 2; next++) loadResultWindowPage(next, true);
+  if (resultWindows.current) {
+    resultWindows.prefetchAfter(findVirtualIndex(getResultScrollTop()));
     return;
   }
   if (!STATE._loadedPage) return Promise.resolve();
@@ -1622,7 +1617,6 @@ function stableSearchStringify(value) {
   return VoiceOfMLSearchCanonical.stableStringify(value, () => stableSearchStringify);
 }
 
-const SEARCH_VIEW_SNAPSHOT_VERSION = VoiceOfMLSnapshotPolicy.VERSION;
 const resultSnapshots = VoiceOfMLResultSnapshots.create({
   cloneResult: record => cloneSearchResult(record),
   measurementKey: () => getHeightMeasurementKey(),
@@ -1630,7 +1624,7 @@ const resultSnapshots = VoiceOfMLResultSnapshots.create({
   applyHeights: task => applySnapshotCloneHeights(task),
   isCurrent: task => STATE.results === task.results && getSearchViewKey() === task.key,
   completed: () => {
-    displayedSearchView = null; rememberDisplayedSearchView();
+    resultSnapshots.clearDisplayed(); rememberDisplayedSearchView();
     scheduleVirtualRender(); prefetchNextPage(); scheduleBottomLoad();
   }
 });
@@ -1639,10 +1633,15 @@ const positionPersistence = VoiceOfMLSearchPositions.create({
   storage: positionStorage, cloneResult: record => cloneSearchResult(record),
   metadata: record => searchPageMetadata.get(/** @type {object} */ (record))
 });
-/** @type {PagesDisplayedSearchView | null} */
-let displayedSearchView = null;
-/** @type {PagesResultWindow | null} */
-let resultWindow = null;
+const resultWindows = VoiceOfMLResultWindowLoader.create({
+  currentKey: getSearchViewKey, results: () => STATE.results,
+  isRestoring: () => !!positionRestoration.current,
+  isPreview: () => !!positionRestoration.current?.preview,
+  isDragging: () => VSCROLL.isDraggingThumb,
+  readRecent: (...args) => readRecentSearchPage(...args), fetchPage: fetchPositionPageWithRecovery,
+  validate: validatePositionWindowPage, isRecoverable: isRecoverableSearchError,
+  accepted: presentResultWindowPage, failed: presentResultWindowFailure, scheduleRender: () => scheduleVirtualRender(),
+});
 /** @type {SearchPosition | null} */
 let returnPositionTarget = null;
 /** @type {{key: string, last: number, distance: number, until: number} | null} */
@@ -1741,7 +1740,7 @@ function jumpToSearchResult(value) {
   const key = getSearchViewKey();
   setReturnPositionTarget();
   const restore = positionRestoration.current;
-  if (!restore && !resultWindow?.invalid && STATE.results[index]) setResultScrollTop(getVirtualOffset(index));
+  if (!restore && !resultWindows.current?.invalid && STATE.results[index]) setResultScrollTop(getVirtualOffset(index));
   else tryRestoreSearchPosition(key, { viewport: null,
     backend: restore?.key === key ? restore.backend : ownsDisplayedSearchResults() ? STATE._resultBackend : undefined, position: {
     version: 1, key, index, offset: 0, anchorId: "",
@@ -1799,7 +1798,6 @@ function setupSearchPositionControls() {
     else updateCurrentResultPosition();
   });
 }
-let displayedViewRevision = 0;
 let measuredHeightRevision = 0;
 const resultRowRecords = new WeakMap();
 /** @type {WeakMap<object, {generation?: string, total: number, page: number, page_size?: number | undefined, unverifiedInitial?: boolean}>} */
@@ -1818,34 +1816,6 @@ function rememberSearchPageMetadata(data) {
 /** @param {string} key @param {number} page @param {SearchRecentPageExpected} expected @param {number} [timeoutMs] @param {AbortSignal | null} [signal] */
 async function readRecentSearchPage(key, page, expected, timeoutMs = 150, signal = null) {
   return positionPersistence.readRecentPage(key, page, expected, timeoutMs, signal);
-}
-
-/** @param {PagesResultWindow} window @param {number} page */
-async function loadCachedPreviewPage(window, page) {
-  if (!window.generation || window.pages.has(page) || window.pending.has(page) || window.pending.size >= 3 || window.missingPages?.has(page)) return;
-  const request = readRecentSearchPage(window.key, page, window);
-  window.pending.set(page, request);
-  try {
-    const entry = await request;
-    if (!resultWindowCurrent(window) || !positionRestoration.current?.preview || VSCROLL.isDraggingThumb) return;
-    if (!entry) { (window.missingPages ||= new Set()).add(page); return; }
-    const start = (page - 1) * window.query.pageSize;
-    if (start + entry.results.length > STATE.results.length) return;
-    resultSnapshots.budget.invalidate(STATE.results);
-    entry.results.forEach((record, offset) => {
-      const index = start + offset;
-      if (STATE.results[index]) return;
-      // Persisted page validation does not narrow every legacy record field.
-      STATE.results[index] = /** @type {PagesSearchRecord} */ (record); window.count++; VSCROLL.templateCache.delete(index);
-    });
-    window.pages.add(page);
-    positionRestoration.rememberPreviewPage(page, entry);
-    VSCROLL.measuredWindowKey = ""; VSCROLL.renderStart = -1; VSCROLL.renderEnd = -1;
-    renderVisible(); updateLoadInfo();
-  } finally {
-    window.pending.delete(page);
-    if (resultWindowCurrent(window)) scheduleVirtualRender();
-  }
 }
 
 /** @param {SearchPosition} position @param {SearchPositionView} view */
@@ -1878,23 +1848,15 @@ async function initSearchPositions() {
 
 function rememberDisplayedSearchView() {
   if (STATE._loadedPage < 1) return;
-  const previous = displayedSearchView;
-  const key = getSearchViewKey();
-  const unchanged = previous && previous.key === key && previous.results === STATE.results
-    && previous.length === STATE.results.length && previous.total === STATE.total
-    && previous.loadedPage === STATE._loadedPage && previous.pageCache === STATE._pageCache && previous.window === resultWindow;
-  displayedSearchView = { key, results: STATE.results,
+  resultSnapshots.publish({key: getSearchViewKey(), results: STATE.results,
     resultBackend: STATE._resultBackend,
     total: STATE.total, loadedPage: STATE._loadedPage, pageCache: STATE._pageCache,
-    length: STATE.results.length, window: resultWindow, revision: unchanged ? previous.revision : ++displayedViewRevision };
-  if (STATE.results.length <= STATE.pageSize && !resultSnapshots.budget.has(STATE.results)) {
-    getSearchSnapshotResultsBytes(STATE.results, !!resultWindow);
-  }
+    window: resultWindows.current}, STATE.pageSize);
 }
 
 function saveSearchPosition() {
   positionPersistence.cancelSave();
-  const view = displayedSearchView;
+  const view = resultSnapshots.displayed;
   const target = view && getReturnPositionTarget(view.key);
   if (target) return target;
   if (!view || positionRestoration.current || readerHost.overlay || !view.results.length || !VSCROLL.heights.length) return null;
@@ -1910,7 +1872,7 @@ function saveSearchPosition() {
 
 function setupSearchPositionSaving() {
   DOM.resultsContainer.addEventListener("scroll", () => {
-    if (positionRestoration.current || STATE.isLoading || displayedSearchView?.key !== getSearchViewKey()) return;
+    if (positionRestoration.current || STATE.isLoading || resultSnapshots.displayed?.key !== getSearchViewKey()) return;
     positionPersistence.scheduleSave(saveSearchPosition);
   }, { passive: true });
   // Query and route handlers save explicitly; capture only filters before mutation.
@@ -1943,8 +1905,7 @@ const positionRestoration = VoiceOfMLPositionRestoration.create({
     return () => owner === searchId;
   },
   detachWindow: () => {
-    const controller = resultWindow?.controller;
-    resultWindow = null;
+    const controller = resultWindows.detach();
     updateResultWindowStatus();
     return controller;
   },
@@ -1998,11 +1959,10 @@ function applyValidatedSearchViewport(snapshot) {
     if (previous[index] && JSON.stringify(previous[index]) === JSON.stringify(snapshot.results[index])) snapshot.results[index] = previous[index];
     else { VSCROLL.templateCache.delete(index); VSCROLL.measuredRowKeys[index] = null; }
   }
-  resultWindow?.controller.abort();
-  resultWindow = { ...snapshot.window, key: snapshot.key, total: snapshot.total, query: {...JSON.parse(snapshot.key), resultBackend: snapshot.resultBackend},
-    pages: new Set(snapshot.window.pages), pending: new Map(), failures: new Map(), controller: new AbortController() };
-  // Snapshot owns the sparse array; keep its identity and legacy record values.
-  STATE.results = /** @type {(PagesSearchRecord | null | undefined)[]} */ (snapshot.results); STATE.total = snapshot.total;
+  // The displayed window adopts the snapshot's sparse array by identity.
+  STATE.results = /** @type {(PagesSearchRecord | null | undefined)[]} */ (snapshot.results);
+  if (!openResultWindow(snapshot)) return;
+  STATE.total = snapshot.total;
   STATE._resultBackend = snapshot.resultBackend || null;
   STATE.page = STATE._loadedPage = snapshot.loadedPage;
   STATE.hasMore = snapshot.hasMore; STATE.isLoading = false;
@@ -2022,13 +1982,14 @@ function validatePositionWindowPage(data, page, pageSize, expected) {
   VoiceOfMLSearchWindowPage.validate(data, page, pageSize, expected);
 }
 
-/** @param {VoiceOfMLResultWindow} window */
-function resultWindowCurrent(window) {
-  return resultWindow === window && window.key === getSearchViewKey() && !window.controller.signal.aborted;
+/** @param {SearchResultSnapshot} snapshot */
+function openResultWindow(snapshot) {
+  if (!snapshot.window) return true;
+  return resultWindows.open(snapshot.window, snapshot.key, snapshot.total, {...JSON.parse(snapshot.key), resultBackend: snapshot.resultBackend});
 }
 
 function restartResultWindow() {
-  const key = getSearchViewKey(), backend = resultWindow?.query.resultBackend;
+  const key = getSearchViewKey(), backend = resultWindows.current?.query.resultBackend;
   const scroll = captureReaderReturnScroll();
   const position = scroll && { version: 1, key, index: scroll.index, offset: Math.max(0, scroll.offset),
     anchorId: getResultStableId(STATE.results[scroll.index]), loadedPage: Math.max(1, STATE._loadedPage), savedAt: Date.now() };
@@ -2038,13 +1999,10 @@ function restartResultWindow() {
 
 function updateResultWindowStatus() {
   VoiceOfMLResultWindowStatus.update({
-    window: resultWindow, getHost: () => DOM.resultsContainer.parentElement,
+    window: resultWindows.current, getHost: () => DOM.resultsContainer.parentElement,
     retry: () => {
-      if (!resultWindow) return;
-      if (resultWindow.invalid) return restartResultWindow();
-      const window = resultWindow;
-      void VoiceOfMLResultWindowLoader.retryFailed(window,
-        () => resultWindowCurrent(window), page => loadResultWindowPage(page), updateResultWindowStatus);
+      if (resultWindows.current?.invalid) return restartResultWindow();
+      void resultWindows.retry(updateResultWindowStatus);
     },
   });
 }
@@ -2097,93 +2055,49 @@ function resumeResultRecovery() {
     const backend = pinned ?? preferredPositionBackend(JSON.parse(key));
     return navigator.onLine || backend === "local";
   })) return;
-  if (!resultWindow || resultWindow.invalid || (!navigator.onLine && resultWindow.query.resultBackend !== "local")) return;
+  if (!resultWindows.current || resultWindows.current.invalid || (!navigator.onLine && resultWindows.current.query.resultBackend !== "local")) return;
   const start = Math.floor(findVirtualIndex(getResultScrollTop()) / STATE.pageSize);
   const end = Math.floor(findVirtualIndex(getResultScrollTop() + DOM.resultsContainer.clientHeight) / STATE.pageSize) + 2;
-  for (const [page, error] of resultWindow.failures) {
-    if (page >= start && page <= end && isRecoverableSearchError(error)) resultWindow.failures.delete(page);
-  }
-  resultWindow.prefetchFailures?.clear();
+  if (resultWindows.clearRecoverable(start, end)) refreshResultWindowPlaceholders();
+}
+
+function refreshResultWindowPlaceholders() {
   updateResultWindowStatus();
   DOM.resultsList.querySelectorAll(".result-window-placeholder").forEach(row => row.remove());
   VSCROLL.renderStart = -1; VSCROLL.renderEnd = -1;
   scheduleVirtualRender();
 }
 
-/** @param {PagesResultWindow} window @param {number} page @param {boolean} [prefetch] */
-function requestResultWindowPage(window, page, prefetch = false) {
-  return VoiceOfMLResultWindowLoader.requestPage({
-    readRecent: (key, page, expected, delay, signal) => readRecentSearchPage(key, page, expected, delay, signal),
-    isCurrent: window => resultWindowCurrent(window),
-    fetchPage: (query, page, signal, anchorId, demanded) => fetchPositionPageWithRecovery(query, page, signal, anchorId, demanded),
-    validate: (data, page, size, expected) => validatePositionWindowPage(data, page, size, expected),
-    scheduleRender: () => scheduleVirtualRender(),
-  }, window, page, prefetch);
+/** @param {string} key @param {boolean} changed */
+function presentResultWindowFailure(key, changed) {
+  if (changed) {
+    searchResponseStore.cache.clear();
+    resultSnapshots.remove(key);
+    STATE._pageCache = {};
+  }
+  refreshResultWindowPlaceholders();
 }
 
-/** @param {number} page @param {boolean} [prefetch] */
-async function loadResultWindowPage(page, prefetch = false) {
-  const window = resultWindow;
-  if (!window || positionRestoration.current || !resultWindowCurrent(window) || window.pages.has(page) || page < 1 || page > Math.ceil(window.total / window.query.pageSize)) return false;
-  try {
-    const data = await requestResultWindowPage(window, page, prefetch);
-    if (!data || !resultWindowCurrent(window) || window.invalid || window.pages.has(page)) return false;
-    if (prefetch || VSCROLL.isDraggingThumb) {
-      if (!window.prefetched) window.prefetched = new Map();
-      window.prefetched.set(page, data);
-      while (window.prefetched.size > 3) {
-        const oldest = window.prefetched.keys().next();
-        if (oldest.done) break;
-        window.prefetched.delete(oldest.value);
-      }
-      return true;
-    }
-    const results = STATE.results;
-    resultSnapshots.budget.invalidate(results);
-    data.results.forEach((record, offset) => {
-      const index = (page - 1) * window.query.pageSize + offset;
-      // Page validation checks geometry, not the complete legacy record shape.
-      results[index] = /** @type {PagesSearchRecord} */ (record); VSCROLL.templateCache.delete(index); VSCROLL.measuredRowKeys[index] = null;
-    });
-    STATE.results = results;
-    window.pages.add(page); window.prefetched?.delete(page);
-    window.failures.delete(page); updateResultWindowStatus();
-    window.count += data.results.length;
-    STATE._loadedPage = Math.max(1, Math.ceil(results.length / window.query.pageSize));
-    STATE.page = STATE._loadedPage;
-    STATE.hasMore = results.length < STATE.total;
-    VSCROLL.measuredWindowKey = "";
-    ensureVirtualHeights(results.length);
-    VSCROLL.renderStart = -1; VSCROLL.renderEnd = -1;
-    displayedSearchView = null;
-    rememberDisplayedSearchView();
-    renderVisible(); updateLoadInfo(); updatePagingStatus();
-    positionPersistence.scheduleSave(saveSearchPosition);
-    return true;
-  } catch (error) {
-    if (!resultWindowCurrent(window)) return false;
-    if (prefetch && /** @type {{message?: string}} */ (error).message !== "RESTORE_PAGE_CHANGED") {
-      if (!window.prefetchFailures) window.prefetchFailures = new Set();
-      window.prefetchFailures.add(page);
-      if (window.prefetchFailures.size > 64) {
-        const oldest = window.prefetchFailures.values().next();
-        if (!oldest.done) window.prefetchFailures.delete(oldest.value);
-      }
-      return false;
-    }
-    window.failures.set(page, error);
-    if (/** @type {{message?: string}} */ (error).message === "RESTORE_PAGE_CHANGED") {
-      window.invalid = true;
-      searchResponseStore.cache.clear();
-      resultSnapshots.remove(window.key);
-      STATE._pageCache = {};
-    }
-    updateResultWindowStatus();
-    DOM.resultsList.querySelectorAll(".result-window-placeholder").forEach(row => row.remove());
-    VSCROLL.renderStart = -1; VSCROLL.renderEnd = -1;
-    scheduleVirtualRender();
-    return false;
+/** @param {VoiceOfMLWindowPageAccepted} event */
+function presentResultWindowPage({page, indices, pageSize, preview}) {
+  resultSnapshots.budget.invalidate(STATE.results);
+  for (const index of indices) {
+    VSCROLL.templateCache.delete(index);
+    if (!preview) VSCROLL.measuredRowKeys[index] = null;
   }
+  VSCROLL.measuredWindowKey = ""; VSCROLL.renderStart = -1; VSCROLL.renderEnd = -1;
+  if (preview) {
+    positionRestoration.rememberPreviewPage(page, preview);
+    renderVisible(); updateLoadInfo();
+    return;
+  }
+  updateResultWindowStatus();
+  STATE.page = STATE._loadedPage = Math.max(1, Math.ceil(STATE.results.length / pageSize));
+  STATE.hasMore = STATE.results.length < STATE.total;
+  ensureVirtualHeights(STATE.results.length);
+  resultSnapshots.clearDisplayed(); rememberDisplayedSearchView();
+  renderVisible(); updateLoadInfo(); updatePagingStatus();
+  positionPersistence.scheduleSave(saveSearchPosition);
 }
 
 /** @param {number} start @param {number} end */
@@ -2192,37 +2106,11 @@ function ensureResultWindowPages(start, end) {
     materializeSnapshotRange(resultSnapshots.cloneTask, start, end);
     return;
   }
-  // A restored search window must keep loading visible pages; reader return state
-  // is only a temporary scroll target and must not block normal pagination.
-  if (!resultWindow || readerHost.overlay || VSCROLL.isDraggingThumb) return;
-  const size = resultWindow.query.pageSize;
-  const restore = positionRestoration.current;
-  if (restore) {
-    if (restore.preview) for (let page = Math.floor(start / size) + 1; page <= Math.ceil(end / size); page++) loadCachedPreviewPage(resultWindow, page);
-    return;
-  }
+  if (!resultWindows.current || readerHost.overlay || VSCROLL.isDraggingThumb) return;
   const scrollTop = getResultScrollTop();
-  const viewEnd = scrollTop + DOM.resultsContainer.clientHeight;
-  const visibleFirst = Math.floor(findVirtualIndex(scrollTop) / size) + 1;
-  const visibleLast = Math.floor(findVirtualIndex(viewEnd) / size) + 1;
-  const first = Math.floor(start / size) + 1;
-  const last = Math.ceil(end / size);
-  const pages = new Set();
-  /** @param {number} page */
-  const add = page => {
-    if (resultWindow && page >= 1 && page <= Math.ceil(resultWindow.total / size)) pages.add(page);
-  };
-  // Demand the page under the viewport before the surrounding overscan. A
-  // large fling must never spend all three request slots on pages already
-  // behind the user's current position.
-  for (let page = visibleFirst; page <= visibleLast; page++) add(page);
-  const direction = VSCROLL.scrollDirection || 1;
-  for (let distance = 1; distance <= 4; distance++) {
-    add(direction > 0 ? visibleLast + distance : visibleFirst - distance);
-  }
-  for (let page = first; page <= last; page++) add(page);
-  pages.forEach(page => loadResultWindowPage(page));
-  prefetchNextPage();
+  resultWindows.demandRange(start, end, findVirtualIndex(scrollTop),
+    findVirtualIndex(scrollTop + DOM.resultsContainer.clientHeight), VSCROLL.scrollDirection || 1);
+  if (!positionRestoration.current) prefetchNextPage();
 }
 
 /** @param {number} index */
@@ -2231,7 +2119,7 @@ function createResultWindowPlaceholder(index) {
   return VoiceOfMLResultWindowStatus.createPlaceholder({
     index, page, contentVersion: VSCROLL.contentVersion,
     height: VSCROLL.heights[index] || VSCROLL.estimatedHeight,
-    invalid: resultWindow?.invalid, failed: resultWindow?.failures.has(page),
+    invalid: resultWindows.current?.invalid, failed: resultWindows.current?.failures.has(page),
   });
 }
 
@@ -2300,32 +2188,19 @@ function cloneSearchResult(result) {
   if (metadata && copy && (typeof copy === "object" || typeof copy === "function")) searchPageMetadata.set(copy, metadata);
   return copy;
 }
-/** @param {unknown[]} results @param {boolean} [sparse] */
-function getSearchSnapshotResultsBytes(results, sparse = false) {
-  return resultSnapshots.budget.measure(results, sparse);
-}
-
 /** @param {unknown[]} results @param {unknown[]} page */
 function extendSearchSnapshotBudget(results, page) {
   resultSnapshots.budget.extend(results, page);
 }
 
-function saveSearchViewSnapshot(key = displayedSearchView?.key) {
-  const view = displayedSearchView;
-  if (key === undefined) return null;
-  if ((view && view.key === key && (view.window?.invalid || view.window?.preview)) ||
-      resultSnapshots.snapshots.get(key)?.window?.invalid) {
-    // Keep the saved position for validation; stale rows must not replace it.
-    resultSnapshots.remove(key);
-    return null;
-  }
-  // Browsing from the top must not overwrite the snapshot offered by Return.
-  if (getReturnPositionTarget(key)) return resultSnapshots.snapshots.get(key) || null;
-  if (!DOM.resultsContainer || !view || positionRestoration.current || key !== view.key || view.loadedPage < 1) return null;
-  const position = saveSearchPosition();
-  return resultSnapshots.save(view, position, {
-    revision: measuredHeightRevision, measurementKey: getHeightMeasurementKey(),
-    estimatedHeight: VSCROLL.estimatedHeight, heightCache: VSCROLL.heightCache
+/** @param {string} [key] */
+function saveSearchViewSnapshot(key) {
+  return resultSnapshots.saveDisplayed(key, {
+    protected: target => !!getReturnPositionTarget(target),
+    ready: !!DOM.resultsContainer && !positionRestoration.current,
+    position: () => saveSearchPosition(),
+    geometry: () => ({revision: measuredHeightRevision, measurementKey: getHeightMeasurementKey(),
+      estimatedHeight: VSCROLL.estimatedHeight, heightCache: VSCROLL.heightCache}),
   });
 }
 function activateSearchView(key = getSearchViewKey()) {
@@ -2375,12 +2250,8 @@ function applySnapshotCloneHeights(task) {
 
 /** @param {string} key @param {boolean} [restoreScroll] @param {{preserveRestore?: boolean, preserveQueryDraft?: boolean}} [options] */
 function restoreSearchViewSnapshot(key, restoreScroll = true, { preserveRestore = false, preserveQueryDraft = false } = {}) {
-  const snapshot = resultSnapshots.snapshots.get(key);
-  if (snapshot?.window?.invalid) {
-    resultSnapshots.remove(key);
-    return restoreScroll && tryRestoreSearchPosition(key, {backend: snapshot.resultBackend});
-  }
-  if (!snapshot || snapshot.version !== SEARCH_VIEW_SNAPSHOT_VERSION || snapshot.loadedPage < 1) return restoreScroll && tryRestoreSearchPosition(key);
+  const {snapshot, invalid} = resultSnapshots.selectRestore(key);
+  if (!snapshot) return restoreScroll && tryRestoreSearchPosition(key, invalid ? {backend: invalid.resultBackend} : undefined);
   searchIntentId++;
   if (!cancelActiveSearch()) return false;
   const owner = searchId;
@@ -2388,14 +2259,14 @@ function restoreSearchViewSnapshot(key, restoreScroll = true, { preserveRestore 
   if (owner !== searchId) return false;
   if (!preserveRestore) searchInputController?.cancelPending(preserveQueryDraft);
   // Cloning preserves sparse slots and existing records without validating their fields.
-  STATE.results = /** @type {(PagesSearchRecord | null | undefined)[]} */ (resultSnapshots.restoreResults(snapshot, key, STATE.pageSize, restoreScroll, preserveRestore));
+  const restored = resultSnapshots.prepareRestore(snapshot, STATE.pageSize, restoreScroll, preserveRestore);
+  STATE.results = /** @type {(PagesSearchRecord | null | undefined)[]} */ (restored.results);
   STATE.total = snapshot.total;
   STATE.page = STATE._loadedPage = snapshot.loadedPage;
-  STATE._pageCache = /** @type {PagesSearchState['_pageCache']} */ (resultSnapshots.copyPageCache(snapshot.pageCache));
+  STATE._pageCache = /** @type {PagesSearchState['_pageCache']} */ (restored.pageCache);
   STATE._resultBackend = snapshot.resultBackend || null;
   STATE.hasMore = snapshot.hasMore;
-  if (snapshot.window) resultWindow = { ...snapshot.window, key, total: snapshot.total, query: {...JSON.parse(key), resultBackend: snapshot.resultBackend},
-    pages: new Set(snapshot.window.pages), pending: new Map(), failures: new Map(), controller: new AbortController() };
+  if (!openResultWindow(snapshot)) return false;
   STATE.isLoading = false;
   STATE._pendingPage = 0;
   STATE._deferredAppendWhileDragging = false;
@@ -2891,13 +2762,13 @@ function ownsAppliedSearchRoute() {
 
 function ownsDisplayedSearchResults() {
   return ownsAppliedSearchRoute() &&
-    displayedSearchView?.key === getSearchViewKey() && displayedSearchView.results === STATE.results;
+    resultSnapshots.owns(getSearchViewKey(), STATE.results);
 }
 
 /** @param {boolean} [append] @param {boolean} [fromStart] @param {boolean} [restorePosition] @param {boolean} [allowFallback] */
 function doSearch(append, fromStart = false, restorePosition = false, allowFallback = true) {
   if (append && STATE._loadedPage && !ownsDisplayedSearchResults()) return;
-  if (append && resultWindow) { loadResultWindowPage(STATE._loadedPage + 1); return; }
+  if (append && resultWindows.current) { resultWindows.load(STATE._loadedPage + 1); return; }
   const recoveringFirstPage = !!append && !STATE._loadedPage;
   if (recoveringFirstPage) append = false;
   if (!append) searchIntentId++;
@@ -3206,7 +3077,7 @@ function getVirtualResults() {
       get multiSelectToggle() { return DOM.multiSelectToggle; }
     },
     results: () => STATE.results, total: () => STATE.total,
-    hasWindow: () => !!resultWindow, windowTotal: () => resultWindow?.total ?? 0,
+    hasWindow: () => !!resultWindows.current, windowTotal: () => resultWindows.current?.total ?? 0,
     cloning: () => !!resultSnapshots.cloneTask, restoring: () => !!positionRestoration.current,
     loadedPage: () => STATE._loadedPage, pendingEntrance: () => pendingResultEntrance,
     consumeEntrance: () => { pendingResultEntrance = false; },
@@ -3963,7 +3834,7 @@ function setupKeyboard() {
       if (e.ctrlKey || e.metaKey || e.altKey) return;
       if (keyboardResultIndex >= 0 && keyboardResultIndex < STATE.results.length) {
         const rec = STATE.results[keyboardResultIndex];
-        if (!rec) { loadResultWindowPage(Math.floor(keyboardResultIndex / STATE.pageSize) + 1); return; }
+        if (!rec) { resultWindows.load(Math.floor(keyboardResultIndex / STATE.pageSize) + 1); return; }
         if (rec) openExternalWindow(getRecordLink(rec));
         return;
       }
@@ -4015,9 +3886,9 @@ function getResultInteractions() {
     getCopyableLink: link => getCopyableLink(link), startDownloadBatch: items => startDownloadBatch(items),
     showToast: message => showToast(message),
     retryWindowPage(page) {
-      if (!resultWindow) return false;
-      if (resultWindow.invalid) restartResultWindow();
-      else { resultWindow.failures.delete(page); loadResultWindowPage(page); }
+      if (!resultWindows.current) return false;
+      if (resultWindows.current.invalid) restartResultWindow();
+      else resultWindows.retryPage(page);
       return true;
     },
     recordForRow: row => row ? resultRowRecords.get(row) : undefined,

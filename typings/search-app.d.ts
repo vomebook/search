@@ -2,13 +2,6 @@ interface PagesPrefetchGroup extends AbortController {
   groupKey: string; active: Map<number, Promise<void> | Promise<VoiceOfMLSearchWindowPageData>>; attempted: Set<number>;
   cacheWaits?: Map<number, {controller: AbortController; urgent: boolean}>;
 }
-interface PagesResultWindow extends VoiceOfMLResultWindow {
-  query: PagesWindowQuery;
-  pages: Set<number>; count: number; missingPages?: Set<number>;
-}
-interface PagesDisplayedSearchView extends Omit<SearchSnapshotView, 'window'> {
-  length: number; window: PagesResultWindow | null;
-}
 
 interface PagesSearchRecord extends VoiceOfMLResultRecord {
   Link?: string; Path?: string; ReaderLink?: string; ReaderChapterManifest?: string;
