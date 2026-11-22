@@ -7,6 +7,19 @@
   const base = new URL("../../", script.src).href;
   const extension = pdf ? "pdf" : (params.get("ext") || "").toLowerCase();
   const workerWrapper = new URL("./pdf-worker-wrapper.mjs", script.src).href;
+  // Known DjVu opens need this graph, but not until the format controller
+  // runs its dynamic import. Start all three dependency levels together and
+  // before the ordered boot scripts; do not execute them or read book bytes.
+  if (extension === "djvu" || extension === "djv") {
+    for (const module of ["./reader-djvu-loader.mjs", "./reader-djvu-adapter.mjs",
+      "./reader-djvu-identity.mjs", "./reader-djvu-range.mjs", "./reader-djvu-worker.mjs",
+      "./reader-djvu-scheduler.mjs"]) {
+      const link = document.createElement("link");
+      link.rel = "modulepreload";
+      link.href = new URL(module, script.src).href;
+      document.head.appendChild(link);
+    }
+  }
   // Async warming must not hold up demand rendering. When it wins the
   // download race, wait for the two ordered bootstrap dependencies, not DCL
   // (the Reader module graph itself can still be fetching).

@@ -82,6 +82,31 @@ class ReaderEnginePreloadTests(unittest.TestCase):
                     finally:
                         context.close()
 
+    def test_known_djvu_fetches_module_graph_before_boot_without_reading_book(self):
+        with support.range_source(b"%PDF-1.7\n") as (origin, state, _lock):
+            prefix = "/search" if "/search/static/" in (support.ROOT / "static/reader.html").read_text() else ""
+            modules = {"loader", "adapter", "identity", "range", "worker", "scheduler"}
+            with self.browser.new_context(service_workers="block") as context:
+                page = context.new_page()
+                page.route("**/engine-preload-fixture*", lambda route: route.fulfill(
+                    content_type="text/html", body="<!doctype html><title>engine fixture</title>"))
+                page.route("**/reader-djvu-*.mjs", lambda route: route.fulfill(
+                    content_type="text/javascript", body="window.__djvuModuleExecuted = true;"))
+                for ext in ("DjVu", "djv", "txt", ""):
+                    with self.subTest(ext=ext):
+                        query = urlencode({"id": "example", "ext": ext})
+                        page.goto(origin + "/engine-preload-fixture?" + query)
+                        page.add_script_tag(url=origin + prefix + "/static/reader/pdf/reader-engine-preload.js")
+                        observed = page.evaluate('''() => ({
+                          hrefs: [...document.querySelectorAll('link[rel="modulepreload"]')].map(link => link.href),
+                          boot: typeof VoiceOfMLReaderResources !== 'undefined',
+                          executed: !!window.__djvuModuleExecuted
+                        })''')
+                        expected = {origin + prefix + f"/static/reader/pdf/reader-djvu-{module}.mjs" for module in modules} if ext.lower() in ("djvu", "djv") else set()
+                        self.assertCountEqual(observed["hrefs"], expected)
+                        self.assertFalse(observed["boot"] or observed["executed"])
+                self.assertEqual(state["requests"], [])
+
     def test_warm_fetch_success_http_failure_and_rejection_are_settled(self):
         with support.range_source(b"%PDF-1.7\n") as (origin, _state, _lock):
             prefix = "/search" if "/search/static/" in (support.ROOT / "static/reader.html").read_text() else ""
