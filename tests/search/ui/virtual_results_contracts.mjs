@@ -49,7 +49,7 @@ function fixture(count = 100) {
   const STATE = {results: Array.from({length: count}, (_, index) => ({File: 'row-' + index})), total: count, _loadedPage: 1};
   const c = vm.createContext({STATE, DOM: {resultsList: list, resultsContainer: container, multiSelectToggle: {checked: false}},
     document, performance: {now: () => clock += 16}, resultWindow: null, resultSnapshots: {cloneTask: null},
-    positionRestore: null, pendingResultEntrance: false, measuredHeightRevision: 0, keyboardResultIndex: -1,
+    positionRestoration: {current: null}, pendingResultEntrance: false, measuredHeightRevision: 0, keyboardResultIndex: -1,
     resultRowRecords: records, virtualResults: undefined,
     requestAnimationFrame(fn) { const id = ++serial; frames.set(id, fn); return id; },
     cancelAnimationFrame(id) { frames.delete(id); events.push(['cancel', id]); },

@@ -51,7 +51,7 @@ class PositionWindowTests(unittest.TestCase):
         self.assertEqual(errors, [])
 
     def wait_anchor(self, index, offset=11):
-        self.page.wait_for_function('''([index,offset])=>!positionRestore && !!resultWindow &&
+        self.page.wait_for_function('''([index,offset])=>!positionRestoration.current && !!resultWindow &&
           findVirtualIndex(getResultScrollTop())===index && !!STATE.results[index] &&
           Math.abs(getResultScrollTop()-getVirtualOffset(index)-offset)<2''', arg=[index,offset])
 
@@ -253,7 +253,7 @@ class PositionWindowTests(unittest.TestCase):
         self.page.wait_for_function('!STATE.isLoading')
         self.assertEqual(self.page.evaluate('positionPersistence.positions.get(originalWindowKey).index'), 49850)
         self.page.evaluate("windowCalls=[];STATE.query='paging-original';doSearch(false,false,true)")
-        self.assertTrue(self.page.evaluate("!!positionRestore || resultWindow?.generation === 'two'"),
+        self.assertTrue(self.page.evaluate("!!positionRestoration.current || resultWindow?.generation === 'two'"),
                         'Returning must validate the invalid window instead of silently restoring generation one')
         self.wait_anchor(35050)
         self.assertIn(1, self.page.evaluate('windowCalls'))
@@ -340,7 +340,7 @@ class PositionWindowTests(unittest.TestCase):
         }''')
 
     def assert_cached_viewport(self, offset=11):
-        self.page.wait_for_function('positionRestore?.preview && !!window.releaseWindow')
+        self.page.wait_for_function('positionRestoration.current?.preview && !!window.releaseWindow')
         self.assertTrue(self.page.evaluate('''offset => {
           const box=DOM.resultsContainer.getBoundingClientRect();
           return findVirtualIndex(getResultScrollTop())===49850 &&
@@ -392,7 +392,7 @@ class PositionWindowTests(unittest.TestCase):
         neighbor.check()
         self.assertEqual(self.page.evaluate('getSelectedFiles().map(file=>file.filename)'),
                          ['paging-49850.txt', 'paging-49851.txt'])
-        self.assertTrue(self.page.evaluate('!!positionRestore.preview'))
+        self.assertTrue(self.page.evaluate('!!positionRestoration.current.preview'))
         self.page.evaluate('releaseWindow()')
         self.wait_anchor(49850)
         self.assertEqual(self.page.evaluate('resultWindow.generation'), 'two')
@@ -465,7 +465,7 @@ class PositionWindowTests(unittest.TestCase):
                 !(box.left<count.right && box.right>count.left && box.top<count.bottom && box.bottom>count.top));
             }'''))
         self.page.locator('#restart-position-btn').click()
-        self.page.wait_for_function('!positionRestore && !STATE.isLoading && !resultWindow')
+        self.page.wait_for_function('!positionRestoration.current && !STATE.isLoading && !resultWindow')
 
     def test_saved_viewport_is_bounded_and_not_used_for_another_anchor(self):
         self.persist_viewport()
@@ -474,7 +474,7 @@ class PositionWindowTests(unittest.TestCase):
         self.page.wait_for_function('!STATE.isLoading')
         self.page.evaluate("resultSnapshots.snapshots.clear();positionPersistence.positions.get(originalWindowKey).anchorId='different';windowStall=1;STATE.query='paging-original';doSearch(false,false,true)")
         self.page.wait_for_function('!!window.releaseWindow')
-        self.assertFalse(self.page.evaluate('!!positionRestore.preview'))
+        self.assertFalse(self.page.evaluate('!!positionRestoration.current.preview'))
         self.page.evaluate('releaseWindow()')
         self.wait_anchor(49850)
 

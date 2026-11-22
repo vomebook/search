@@ -153,7 +153,7 @@ class SegmentedScrollTests(unittest.TestCase):
           };
           tryRestoreSearchPosition(key);
         }''')
-        self.page.wait_for_function('!positionRestore && resultWindow && findVirtualIndex(getResultScrollTop())===88050')
+        self.page.wait_for_function('!positionRestoration.current && resultWindow && findVirtualIndex(getResultScrollTop())===88050')
         self.page.evaluate('checkSegment()')
         self.assertAlmostEqual(self.page.evaluate('getResultScrollTop()-getVirtualOffset(88050)'), 11, delta=1)
         self.page.evaluate('setResultScrollTop(getVirtualTotalHeight());renderVisible()')

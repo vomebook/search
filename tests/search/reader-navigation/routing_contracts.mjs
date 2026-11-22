@@ -34,7 +34,8 @@ function fixture(route = '', overrides = {}) {
     setSidebarExpanded(value){dom.leftSidebar.classList.toggle('expanded-wide',value);},
     getSearchViewKey:()=>JSON.stringify([state.mode,state.repo,state.query,state.filterExtensions,state.filterFolderSelfs,state.filterFolderSubtrees]),
     saveSearchViewSnapshot:()=>events.push(['snapshot',state.query]),prepareRouteTransitionResults(){},
-    searchInputController:{invalidateVisit:()=>events.push(['intent'])},cancelPendingSearchControls:()=>events.push(['controls']),
+    searchInputController:{invalidateVisit:()=>events.push(['intent']), cancelPending:()=>events.push(['controls']), syncSize(){}},
+    cancelPendingSearchControls:()=>events.push(['controls']), // pre-extraction baseline
     readerReturnPosition:{invalidate:()=>events.push(['reader'])},cancelActiveSearch:()=>{events.push(['cancel']);return true;},
     cancelPositionRestore:()=>events.push(['position']),renderBrowser:(path,id)=>events.push(['browser',path,id]),
     retainFilterRenderingForRoute:id=>events.push(['retain',id]),searchWithInitialFallback:()=>events.push(['search']),
@@ -151,26 +152,45 @@ test('same-view path-only navigation retains active work and geometry; changed v
 
 if (source === current) {
   test('size controls preserve the exact restored minimum when editing only the maximum', () => {
-    const f = fixture('Test?min_size=1500B&max_size=1MB');
+    const f = fixture('Test?ext=txt&min_size=1500B&max_size=1MB');
     vm.runInContext(fs.readFileSync('static/search/results/presentation/size-format.js', 'utf8'), f.c);
-    let pending;
-    Object.assign(f.c, {
-      sizeFilterTimer: null, setTimeout(fn) { pending = fn; return 1; }, clearTimeout() {},
-      doFilterSearch: () => f.c.syncStateToURL(),
+    for (const path of ['domain/ownership.js', 'application/controller.js'])
+      vm.runInContext(fs.readFileSync('static/search/input/' + path, 'utf8'), f.c);
+    const timers = new Map();
+    let next = 0, controlState, filterRuns = 0;
+    for (const name of ['searchInput', 'filterMinSize', 'filterMaxSize', 'filterMinUnit', 'filterMaxUnit'])
+      f.dom[name] = Object.assign(new EventTarget(), {value: ''});
+    const controller = f.c.VoiceOfMLSearchInput.create({input: f.dom.searchInput, navigation: new EventTarget(),
+      ownership: f.c.VoiceOfMLSearchInputOwnership,
+      clock: {setTimeout(fn, ms) {timers.set(++next, {fn, ms}); return next;}, clearTimeout(id) {timers.delete(id);}},
+      canSubmit: () => !f.c.readerHost.overlay, onState: state => {controlState = state;},
+      filterSearch: () => {filterRuns++; f.c.syncStateToURL();},
+      size: {min: f.dom.filterMinSize, max: f.dom.filterMaxSize, minUnit: f.dom.filterMinUnit, maxUnit: f.dom.filterMaxUnit,
+        read: () => [f.state.filterMinSize, f.state.filterMaxSize], format: f.c.bytesToDisplay,
+        commit: (min, max) => {f.state.filterMinSize = min; f.state.filterMaxSize = max;}}
     });
-    for (const field of ['filterMinSize', 'filterMaxSize', 'filterMinUnit', 'filterMaxUnit']) {
-      f.dom[field].addEventListener = (type, fn) => { f.dom[field][type] = fn; };
-    }
-    for (const name of ['sizeInputToBytes', 'applyPendingSizeFilters', 'setupSizeFilterControls']) {
-      const match = source.match(new RegExp('^function ' + name + '\\([^]*?^}', 'm'));
-      assert.ok(match, name); vm.runInContext(match[0], f.c);
-    }
+    f.c.searchInputController = controller;
+    controller.mount();
     f.c.router.apply();
     assert.equal(f.state.filterMinSize, 1500);
     assert.deepEqual([f.dom.filterMinSize.value, f.dom.filterMinUnit.value], ['1500', 'B']);
     assert.deepEqual([f.dom.filterMaxSize.value, f.dom.filterMaxUnit.value], ['1', 'MB']);
-    f.c.setupSizeFilterControls();
-    f.dom.filterMaxSize.value = '2'; f.dom.filterMaxSize.input(); pending();
+    f.dom.filterMaxSize.value = '2'; f.dom.filterMaxSize.dispatchEvent(new Event('input'));
+    const pendingSize = controlState.sizeTimer;
+    controller.scheduleFilter();
+    const pendingFilter = controlState.filterTimer;
+    f.c.router.apply(true);
+    assert.equal(f.dom.filterMaxSize.value, '2');
+    assert.equal(controlState.sizeTimer, pendingSize);
+    assert.equal(controlState.filterTimer, pendingFilter);
+    assert.equal(timers.get(pendingSize).ms, 500);
+    assert.equal(timers.get(pendingFilter).ms, 200);
+    f.c.readerHost.overlay = {};
+    timers.get(pendingFilter).fn();
+    assert.equal(controlState.filterTimer, null);
+    assert.equal(filterRuns, 1, 'Reader blocks query input but not a committed filter search');
+    f.c.readerHost.overlay = null;
+    timers.get(pendingSize).fn();
     assert.deepEqual([f.state.filterMinSize, f.state.filterMaxSize], [1500, 2097152]);
     const params = new URLSearchParams(pages ? f.location.hash.split('?')[1] : f.location.search);
     assert.equal(f.c.parseSizeStr(params.get('min_size')), 1500);

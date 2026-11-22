@@ -50,7 +50,7 @@ class PositionControlTests(unittest.TestCase):
         self.page.locator('#current-result-position').press(key)
 
     def wait_position(self, index):
-        self.page.wait_for_function('''index=>!positionRestore && !STATE.isLoading &&
+        self.page.wait_for_function('''index=>!positionRestoration.current && !STATE.isLoading &&
           findVirtualIndex(getResultScrollTop())===index && !!STATE.results[index]''', arg=index)
 
     def store_position(self, clear_viewport=False):
@@ -133,7 +133,7 @@ class PositionControlTests(unittest.TestCase):
         self.page.set_viewport_size({'width': 390, 'height': 844})
         self.page.evaluate('STATE.isMobile=true;applyMobileMode();failPosition=true')
         self.input_position(95001)
-        self.page.wait_for_function('positionRestore?.failed')
+        self.page.wait_for_function('positionRestoration.current?.failed')
         self.assertTrue(self.page.locator('#load-info .result-position-actions #retry-position-btn').is_visible())
         self.assertTrue(self.page.locator('#cancel-position-btn').is_hidden())
         self.assertTrue(self.page.locator('#restart-position-btn').is_hidden())
@@ -154,7 +154,7 @@ class PositionControlTests(unittest.TestCase):
         self.page.wait_for_function('!!window.releasePosition')
         self.assertTrue(self.page.locator('#cancel-position-btn').is_hidden())
         self.page.locator('#search-input').press('Enter')
-        self.page.wait_for_function('!STATE.isLoading && !positionRestore')
+        self.page.wait_for_function('!STATE.isLoading && !positionRestoration.current')
         self.page.evaluate('blockPosition=false;releasePosition()')
         self.page.wait_for_timeout(100)
         self.assertEqual(self.page.evaluate('findVirtualIndex(getResultScrollTop())'), 0)
@@ -196,7 +196,7 @@ class PositionControlTests(unittest.TestCase):
         self.wait_position(95000)
         self.store_position()
         self.page.evaluate('doSearch()')
-        self.page.wait_for_function('!STATE.isLoading && !positionRestore')
+        self.page.wait_for_function('!STATE.isLoading && !positionRestoration.current')
         self.assertEqual(self.page.evaluate('getResultScrollTop()'), 0)
         self.assertTrue(self.page.locator('#load-info #return-to-position-btn').is_visible())
         self.page.evaluate('saveSearchPosition()')
@@ -204,7 +204,7 @@ class PositionControlTests(unittest.TestCase):
         self.page.locator('#return-to-position-btn').click()
         self.wait_position(95000)
         self.page.evaluate('doSearch()')
-        self.page.wait_for_function('!STATE.isLoading && !positionRestore')
+        self.page.wait_for_function('!STATE.isLoading && !positionRestoration.current')
         self.page.evaluate('setResultScrollTop(300)')
         self.page.wait_for_timeout(100)
         self.assertTrue(self.page.locator('#return-to-position-btn').is_visible())
@@ -230,7 +230,7 @@ class PositionControlTests(unittest.TestCase):
         self.page.locator('.history-item[data-query="paging-ui"]').click()
         self.wait_position(95000)
         self.page.locator('#search-input').press('Enter')
-        self.page.wait_for_function('!STATE.isLoading && !positionRestore')
+        self.page.wait_for_function('!STATE.isLoading && !positionRestoration.current')
         self.assertEqual(self.page.evaluate('getResultScrollTop()'), 0)
 
     def test_pending_size_filter_cannot_interrupt_return(self):
@@ -239,10 +239,20 @@ class PositionControlTests(unittest.TestCase):
         self.page.locator('#restart-position-btn').click()
         self.wait_position(0)
         self.page.evaluate('''()=>{
+          readSearchViewport=async()=>null;
+          blockPosition=true;positionCalls=[];
           DOM.filterMinSize.value='7';
           DOM.filterMinSize.dispatchEvent(new Event('input',{bubbles:true}));
           DOM.returnToPositionBtn.click();
+          window.explicitReturn=positionRestoration.current;
         }''')
+        self.page.wait_for_function('!!window.releasePosition')
+        self.assertIsNone(self.page.evaluate('sizeFilterTimer'))
+        self.assertEqual(self.page.locator('#filter-min-size').input_value(), '')
+        self.page.wait_for_timeout(550)
+        self.assertTrue(self.page.evaluate('positionRestoration.current === explicitReturn'))
+        self.assertEqual(self.page.evaluate('positionCalls'), [1])
+        self.page.evaluate('blockPosition=false;releasePosition()')
         self.wait_position(95000)
         self.page.wait_for_timeout(600)
         self.wait_position(95000)
@@ -259,7 +269,7 @@ class PositionControlTests(unittest.TestCase):
         self.page.reload(wait_until='domcontentloaded')
         self.page.wait_for_function('!STATE.isLoading && STATE.results.length>0')
         self.assertEqual(self.page.evaluate('getResultScrollTop()'), 0)
-        self.assertFalse(self.page.evaluate('!!positionRestore'))
+        self.assertFalse(self.page.evaluate('!!positionRestoration.current'))
         self.assertTrue(self.page.locator('#return-to-position-btn').is_visible())
 
     def test_sort_round_trip_restores_each_position_then_enter_starts_at_top(self):
@@ -315,7 +325,7 @@ class PositionControlTests(unittest.TestCase):
         self.page.locator('#sort-select').select_option('relevance')
         self.page.wait_for_function('!!window.releasePosition')
         self.page.locator('#search-input').fill('paging-latest')
-        self.page.wait_for_function('STATE.query==="paging-latest" && !STATE.isLoading && !positionRestore')
+        self.page.wait_for_function('STATE.query==="paging-latest" && !STATE.isLoading && !positionRestoration.current')
         self.page.evaluate('blockPosition=false;releasePosition()')
         self.page.wait_for_timeout(100)
         self.wait_position(0)
@@ -368,7 +378,7 @@ class PositionControlTests(unittest.TestCase):
           };
         })''')
         self.page.reload(wait_until='domcontentloaded')
-        self.page.wait_for_function('positionRestore?.preview && !!window.releaseValidation')
+        self.page.wait_for_function('positionRestoration.current?.preview && !!window.releaseValidation')
         self.assertEqual(self.page.evaluate('findVirtualIndex(getResultScrollTop())'), 95000)
         self.assertEqual(self.page.locator('#results-container').evaluate('(e)=>getComputedStyle(e).visibility'), 'visible')
         self.assertEqual(self.page.evaluate('STATE.results[95000].File'), 'paging-95000')

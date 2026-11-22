@@ -104,6 +104,8 @@ if (source.includes('function suspendSearchRequests(')) test('resume retains joi
   assert.equal(f.timers.size,0);assert.equal(entry.listeners.size,0);
 });
 
+const sizeControl = value => Object.assign(new EventTarget(), {value});
+
 function inputFixture({submit = () => {}, schedule = () => {}, early} = {}) {
   const context = vm.createContext({});
   for (const file of ['domain/ownership.js', 'application/controller.js'])
@@ -111,11 +113,16 @@ function inputFixture({submit = () => {}, schedule = () => {}, early} = {}) {
   const input = new EventTarget(), navigation = new EventTarget(), callbacks = new Map(), cancelled = [];
   input.value = 'old draft';
   if (early) input._earlySearchInput = early;
-  const c = {input, navigation, callbacks, cancelled, href: 'https://example.test/A', entry: 'entry-A', key: 'A', syncs: 0};
+  const c = {input, navigation, callbacks, cancelled, href: 'https://example.test/A', entry: 'entry-A', key: 'A', syncs: 0,
+    deadlines: new Map(), bounds: [null, null], filterSearches: []};
+  c.size = {min: sizeControl(''), max: sizeControl(''), minUnit: sizeControl('MB'), maxUnit: sizeControl('MB'),
+    read: () => c.bounds, commit: (...bounds) => { c.bounds = bounds; },
+    format: bytes => ({value: bytes === null ? '' : String(bytes), unit: bytes === null ? 'MB' : 'B'})};
   let next = 0;
-  c.controller = context.VoiceOfMLSearchInput.create({input, navigation,
+  c.controller = context.VoiceOfMLSearchInput.create({input, navigation, size: c.size,
     ownership: context.VoiceOfMLSearchInputOwnership,
-    clock: {setTimeout(fn, delay) { assert.equal(delay, 100); callbacks.set(++next, fn); schedule(); return next; },
+    filterSearch: clear => c.filterSearches.push(clear),
+    clock: {setTimeout(fn, delay) { callbacks.set(++next, fn); c.deadlines.set(next, delay); schedule(); return next; },
       clearTimeout(id) { cancelled.push(id); }},
     getHref: () => c.href, getEntryKey: () => c.entry, getViewKey: () => c.key,
     syncInput: () => c.syncs++, canSubmit: () => !c.readerOpen, submit, onState: state => {
@@ -206,22 +213,13 @@ test('online first page prefetch starts page two immediately and path-only reuse
   assert.equal(group.signal.aborted, false);
 });
 
-test('position abort reentry retains the replacement window and restoration', () => {
-  const old = new AbortController(), newer = {controller: new AbortController()};
-  const c = fixture(['cancelPositionRestore'], {positionEntryId: 0,
-    resultWindow: {controller: old}, positionRestore: {controller: new AbortController()},
-    STATE: {isLoading: true}, cancelSnapshotClone() {}, updateResultWindowStatus() {}, showPositionRestoreStatus() {}});
-  old.signal.addEventListener('abort', () => { c.resultWindow = newer; c.positionRestore = newer; });
-  c.cancelPositionRestore();
-  assert.equal(c.resultWindow, newer);
-  assert.equal(c.positionRestore, newer);
-  assert.equal(newer.controller.signal.aborted, false);
-});
-
 test('filter change incorporates the pending completed query before cancelling debounce', () => {
-  const c = fixture(['prepareFilterChange'], {searchTimer: 1, searchComposing: false,
-    DOM: {searchInput: {value: '  current draft  '}}, STATE: {query: 'old', page: 3, results: [1]},
-    applyPendingSizeFilters() {}, cancelPendingSearchControls() { c.searchTimer = null; },
+  const i = inputFixture();
+  i.controller.finishStartup(true);
+  i.input.value = '  current draft  ';
+  i.emit('input');
+  const c = fixture(['prepareFilterChange'], {searchInputController: i.controller,
+    STATE: {query: 'old', page: 3, results: [1]},
     saveSearchViewSnapshot() { assert.equal(c.STATE.query, 'old'); }});
   c.prepareFilterChange(true);
   assert.equal(c.STATE.query, 'current draft');
@@ -231,12 +229,16 @@ test('filter change incorporates the pending completed query before cancelling d
 
 test('filter change preserves composing and overlong drafts without submitting them', () => {
   for (const [composing, value] of [[true, 'composition'], [false, 'x'.repeat(257)]]) {
-    const c = fixture(['prepareFilterChange'], {searchTimer: 1, searchComposing: composing,
-      DOM: {searchInput: {value}}, STATE: {query: 'old'}, applyPendingSizeFilters() {},
-      cancelPendingSearchControls() {}, saveSearchViewSnapshot() {}});
+    const i = inputFixture();
+    i.controller.finishStartup(true);
+    if (composing) i.emit('compositionstart');
+    i.input.value = value;
+    i.emit('input');
+    const c = fixture(['prepareFilterChange'], {searchInputController: i.controller,
+      STATE: {query: 'old'}, saveSearchViewSnapshot() {}});
     c.prepareFilterChange(false);
     assert.equal(c.STATE.query, 'old');
-    assert.equal(c.DOM.searchInput.value, value);
+    assert.equal(i.input.value, value);
   }
 });
 
@@ -429,7 +431,7 @@ test('published state is a detached narrow projection without mutable ownership'
   const queries = [], snapshots = [];
   const c = inputFixture({submit: query => queries.push(query)});
   c.onState = state => {
-    assert.deepEqual(Object.keys(state).sort(), ['composing', 'dirty', 'ready', 'timer']);
+    assert.deepEqual(Object.keys(state).sort(), ['composing', 'dirty', 'filterTimer', 'ready', 'sizeTimer', 'timer']);
     snapshots.push(state);
   };
   c.controller.captureDraft();
@@ -468,9 +470,11 @@ test('app adapter publishes readable input state and delegates submit with histo
   let callback;
   navigation.setTimeout = fn => { callback = fn; return 42; };
   navigation.clearTimeout = () => {};
-  const c = fixture(['setupSearchInput', 'initialSearchDraftIsCurrent', 'finishInitialSearchInput', 'cancelPendingSearchControls'], {
+  const c = fixture(['setupSearchInput', 'initialSearchDraftIsCurrent', 'finishInitialSearchInput'], {
     VoiceOfMLSearchInput: modules.VoiceOfMLSearchInput, VoiceOfMLSearchInputOwnership: modules.VoiceOfMLSearchInputOwnership,
-    DOM: {searchInput: input}, window: navigation, location: {href: 'https://example.test/A'},
+    DOM: {searchInput: input, filterMinSize: sizeControl(''), filterMaxSize: sizeControl(''),
+      filterMinUnit: sizeControl('MB'), filterMaxUnit: sizeControl('MB')},
+    window: navigation, location: {href: 'https://example.test/A'}, bytesToDisplay() {},
     readerHost: {overlay:null}, ownsAppliedSearchRoute: () => true,
     routeInitialized: true, getSearchViewKey: () => 'A', syncSearchInputState() {}, clearTimeout() {},
     filterSearchTimer: null, sizeFilterTimer: null,
@@ -492,10 +496,36 @@ test('app adapter publishes readable input state and delegates submit with histo
   assert.equal(c.searchComposing, true);
   input.dispatchEvent(new Event('compositionend'));
   assert.equal(c.searchComposing, false);
-  c.cancelPendingSearchControls();
+  c.searchInputController.cancelPending();
   callback();
   assert.equal(c.searchTimer, null);
   assert.equal(queries.length, 1);
+});
+
+test('restore retires both filter slots without rescheduling the query or consuming a discarded bound', () => {
+  const queries = [], c = inputFixture({submit: query => queries.push(query)});
+  c.controller.finishStartup(true);
+  c.emit('input');
+  c.controller.scheduleFilter();
+  c.size.min.value = '7';
+  c.size.min.dispatchEvent(new Event('input'));
+  const {timer, filterTimer, sizeTimer} = c.state;
+  assert.deepEqual([timer, filterTimer, sizeTimer].map(id => c.deadlines.get(id)), [100, 200, 500]);
+  c.controller.cancelPending(true);
+  assert.deepEqual([c.state.timer, c.state.filterTimer, c.state.sizeTimer], [timer, null, null]);
+  assert.equal(c.size.min.value, '');
+  c.size.max.value = '2';
+  c.size.max.dispatchEvent(new Event('input'));
+  const replacement = c.state.sizeTimer;
+  c.callbacks.get(filterTimer)();
+  c.callbacks.get(sizeTimer)();
+  assert.equal(c.state.sizeTimer, replacement);
+  assert.deepEqual(c.filterSearches, []);
+  c.callbacks.get(timer)();
+  assert.deepEqual(queries, ['old draft']);
+  c.callbacks.get(replacement)();
+  assert.deepEqual(c.bounds, [null, 2097152]);
+  assert.deepEqual(c.filterSearches, [true]);
 });
 
 test('input dependency order, source shell, build resources and SW agree without delaying inline capture', async () => {

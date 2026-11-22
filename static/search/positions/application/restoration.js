@@ -1,5 +1,5 @@
-// Coordinates asynchronous restoration. The host retains synchronous search
-// cancellation/publication because abort listeners can reenter navigation.
+// Owns the restore task and its preview-to-validated transition. The host
+// renders snapshots and detaches the displayed pagination window on cancellation.
 (function () {
   /** @param {SearchPositionRestoreInput} input */
   function createTask({ key, position, previous, backend }) {
@@ -13,16 +13,83 @@
 
   /** @param {SearchPositionRestorationHost} host */
   function create(host) {
+    const { snapshots } = host;
+    /** @type {SearchPositionRestoreTask | null} */
+    let active = null;
+    let entry = 0;
+
+    function cancel() {
+      snapshots.cancelClone();
+      entry++;
+      const previous = active;
+      active = null;
+      const windowController = host.detachWindow();
+      if (previous) host.status("cancelled", "");
+      // Both owners and their UI are cleared before abort listeners can reenter.
+      windowController?.abort();
+      previous?.controller.abort();
+    }
+
+    /** @param {string} key @param {SearchPositionRestoreOptions} [options] */
+    function start(key, options = {}) {
+      const same = active?.key === key ? active : null;
+      const previous = same?.failed && !options.position ? same : null;
+      const position = options.position || previous?.position || host.getPosition(key);
+      if (!globalThis.VoiceOfMLPositionPolicy.validPosition(position)) return false;
+      host.noteSearchIntent();
+      if (!options.position && same && !same.failed) return true;
+      const stillOwnsSearch = host.retireSearch();
+      if (!stillOwnsSearch) return false;
+      cancel();
+      if (!stillOwnsSearch()) return false;
+      const task = createTask({ key, position, previous, backend: options.backend });
+      active = task;
+      host.status("started", "正在恢复上次位置…");
+      void run(task, options.viewport);
+      return true;
+    }
+
+    /** @param {(key: string, backend: SearchResultBackend | undefined) => boolean} canRetry */
+    function resume(canRetry) {
+      if (!active?.failed || !globalThis.VoiceOfMLSearchRecovery.isRecoverable(active.error)) return false;
+      if (canRetry(active.key, active.backend)) start(active.key);
+      return true;
+    }
+
+    /** @param {number} page @param {SearchRecentPage} data */
+    function rememberPreviewPage(page, data) {
+      if (active?.preview) (active.cachedPages ||= new Map()).set(page, data);
+    }
+
+    /** @param {SearchPositionViewport | null} viewport @param {SearchPosition} position @param {SearchPositionRestoreTask} task */
+    function showPreview(viewport, position, task) {
+      if (!globalThis.VoiceOfMLPositionPolicy.validViewport(viewport, position, host.stableId)) return;
+      const size = JSON.parse(position.key).pageSize;
+      const results = new Array(Math.min(viewport.total, position.loadedPage * size));
+      for (const [index, record] of viewport.records) if (Number.isInteger(index) && index >= 0 && index < results.length) results[index] = record;
+      const snapshot = { version: globalThis.VoiceOfMLSnapshotPolicy.VERSION, key: position.key, results, total: viewport.total,
+        loadedPage: position.loadedPage, pageCache: {}, hasMore: results.length < viewport.total,
+        resultBackend: viewport.resultBackend,
+        window: { preview: true, generation: viewport.generation, pages: [], count: Object.keys(results).length }, estimatedHeight: viewport.estimatedHeight,
+        heightCache: viewport.records.map(([, record, height]) => /** @type {SearchSnapshotHeightEntry} */ ([host.stableId(record), {height, measurementKey: viewport.measurementKey}])),
+        scroll: {index: position.index, offset: position.offset, viewKey: position.key}, savedAt: Date.now() };
+      task.preview = true;
+      snapshots.put(position.key, snapshot);
+      host.restoreSnapshot(position.key, true);
+      snapshots.remove(position.key);
+      host.status("preview", "已恢复上次画面，正在核对结果…");
+    }
+
     /** @param {SearchPositionRestoreTask} task @param {SearchPositionViewport | null | undefined} viewport */
     async function run(task, viewport) {
       const { key, controller } = task;
       let position = task.position;
-      const current = () => host.isCurrent(task) && !controller.signal.aborted;
+      const current = () => active === task && key === host.currentKey() && !controller.signal.aborted;
       try {
         const query = JSON.parse(key);
         if (viewport === undefined) viewport = await host.readViewport(key);
         if (!current()) return;
-        host.showPreview(viewport, position, task);
+        showPreview(viewport, position, task);
         while (current()) {
           if (!task.lookup) {
             const {data, backend} = await host.lookupPage(query, controller.signal, position.anchorId, task.backend);
@@ -88,14 +155,14 @@
             estimatedHeight: host.estimatedHeight(), heightCache: [], heightRecords: [],
             scroll: { index: geometry ? Math.min(geometry.index, Math.max(0, total - 1)) : found < 0 ? index : found,
               offset: total ? geometry?.offset ?? position.offset : 0, viewKey: key }, savedAt: Date.now() };
-          host.release();
+          active = null;
+          host.status("finished", "");
           if (task.preview && (geometry || found === position.index)) host.applyPreview(snapshot);
           else {
-            host.snapshots.putRestored(key, snapshot);
+            snapshots.putRestored(key, snapshot);
             host.restoreSnapshot(key);
           }
-          host.completed();
-          host.snapshots.trim();
+          snapshots.trim();
           if (!geometry && found < 0 && position.anchorId) host.notify("搜索结果已变化，已恢复到原位置附近");
           return;
         }
@@ -105,11 +172,11 @@
         task.failed = true;
         task.error = err;
         if (err.message === "RESTORE_PAGE_CHANGED") { task.lookup = null; task.ready.clear(); }
-        host.failed(err.message === "RESTORE_PAGE_CHANGED"
+        host.status("failed", err.message === "RESTORE_PAGE_CHANGED"
           ? "搜索数据已更新，请重试恢复" : "暂时无法加载原位置附近的结果");
       }
     }
-    return { run };
+    return { get current() { return active; }, get entry() { return entry; }, start, cancel, resume, rememberPreviewPage };
   }
-  globalThis.VoiceOfMLPositionRestoration = { createTask, create };
+  globalThis.VoiceOfMLPositionRestoration = { create };
 })();

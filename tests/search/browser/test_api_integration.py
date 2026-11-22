@@ -351,7 +351,7 @@ class ApiIntegrationTest(unittest.TestCase):
             loadedPage:2,savedAt:Date.now()};
           tryRestoreSearchPosition(key,{position,viewport:null});
         }''')
-        self.page.wait_for_function("!positionRestore && resultWindow?.query.resultBackend === 'api'")
+        self.page.wait_for_function("!positionRestoration.current && resultWindow?.query.resultBackend === 'api'")
         self.assertEqual(self.page.evaluate('STATE._resultBackend'), 'api')
         self.assertEqual(self.page.evaluate('STATE.total'), 204)
         calls = self.page.evaluate('mixedCalls')

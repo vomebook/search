@@ -26,7 +26,7 @@ function createFixture(source, root, pages) {
     document:{hidden:false}, DOM:{resultsContainer:{clientHeight:600,
       get scrollTop(){return scrollTop;},set scrollTop(value){scrollTop=value;}}}, navigator:{onLine:true}, AbortController, DOMException,
     searchPrefetchAbortController:null, searchPagePrefetch:undefined, searchRequestId:1,
-    positionRestore:null, readerHost:{overlay:null}, resultSnapshots:{cloneTask:null},
+    positionRestoration:{current:null}, readerHost:{overlay:null}, resultSnapshots:{cloneTask:null},
     window:{location:{pathname:'/search/',hash:'#/'}}, appliedSearchPath:'/search/', appliedRouteHash:'#/',
     APPEND_REQUEST_TIMEOUT:5000, RECENT_SEARCH_PAGE_TTL:604800000,
     searchPageMetadata:new WeakMap([[first,{generation:"stable",total:801}]]),
@@ -83,7 +83,7 @@ function createFixture(source, root, pages) {
       get resultsList(){return context.DOM.resultsList;},multiSelectToggle:null},
     results:()=>context.STATE.results,total:()=>context.STATE.total,
     hasWindow:()=>!!context.resultWindow,windowTotal:()=>context.resultWindow.total,
-    cloning:()=>!!context.resultSnapshots.cloneTask,restoring:()=>!!context.positionRestore,
+    cloning:()=>!!context.resultSnapshots.cloneTask,restoring:()=>!!context.positionRestoration.current,
     loadedPage:()=>context.STATE._loadedPage,pendingEntrance:()=>false,consumeEntrance(){},recordMeasurement(){},
     recordForRow:()=>undefined,resetKeyboardIndex(){},ensureResultTemplateCache(){},
     createResultRow(){throw Error('This latency fixture must not render populated rows');},
@@ -302,7 +302,7 @@ for (const {name:project,root} of searchTestProjects()) {
   test(project + " offscreen appends preserve window but near-boundary appends render",()=>{
     for(const near of [false,true]) {
       const f=fixture(source),c=f.context;
-      Object.assign(c,{positionRestore:null,resultWindow:null,rememberDisplayedSearchView(){},
+      Object.assign(c,{resultWindow:null,rememberDisplayedSearchView(){},
         DOM:{resultsContainer:{clientHeight:600,scrollTop:near?11400:0},resultsList:{querySelector:()=>({style:{}})}},
         ensureVirtualHeights(len){c.VSCROLL.heights.length=len;},ensureHeightTree(){},
         getVirtualOffset:n=>n*60,

@@ -86,7 +86,8 @@ function callerHarness() {
   const h = harness();
   h.run(`
     let searchRequestId = 0, searchAbortController = null;
-    let resultWindow = null, filterSearchTimer = null, scrollLoadTimer = null;
+    let resultWindow = null, scrollLoadTimer = null;
+    const searchInputController = {cancelFilter() {}};
     let selectedIndices = {}, lastSelectedIndex = -1, apiAvailable = true;
     let finishLoad, finishApi, failApi, loadCalls = 0, pagingFailures = 0, filterSearches = 0;
     let toggleChange, restoring = false;
@@ -102,7 +103,7 @@ function callerHarness() {
     function cancelSearchPrefetch() {}
     function clearResultsSkeleton() {}
     function prepareFilterChange() { filterSearches++; }
-    ${section('function doFilterSearch(', 'function sizeInputToBytes(')}
+    ${section('function doFilterSearch(', 'function scheduleFilterSearch(')}
     function finishPagingAttempt() { pagingFailures++; }
     function doSearchAPI() { return new Promise((resolve, reject) => { finishApi = resolve; failApi = reject; }); }
     function renderSearchPage() { renders++; }

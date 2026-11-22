@@ -88,7 +88,7 @@ class PagingRecoveryTests(unittest.TestCase):
         }''')
         self.page.wait_for_function("STATE._loadedPage === 1 && !STATE.isLoading && searchPageMetadata.get(STATE.results[0])?.generation === 'A'")
         self.page.evaluate("currentGeneration='B'; cancelSearchPrefetch(); STATE.page=2; doSearch(true)")
-        self.page.wait_for_function("!positionRestore && resultWindow?.generation === 'B' && !STATE.isLoading")
+        self.page.wait_for_function("!positionRestoration.current && resultWindow?.generation === 'B' && !STATE.isLoading")
         names = self.page.evaluate('STATE.results.filter(Boolean).map(r => r.File)')
         self.assertGreaterEqual(len(names), 200)
         self.assertEqual(names, ['paging-' + str(i) for i in range(-1, len(names) - 1)])
@@ -119,7 +119,7 @@ class PagingRecoveryTests(unittest.TestCase):
           tryRestoreSearchPosition(key, {viewport:null, position:{version:1,key,index:12,offset:0,
             anchorId:repo+'\0local-12.txt',loadedPage:10,savedAt:Date.now()}});
         }''')
-        self.page.wait_for_function("!positionRestore && resultWindow?.query.resultBackend === 'local'")
+        self.page.wait_for_function("!positionRestoration.current && resultWindow?.query.resultBackend === 'local'")
         self.assertTrue(self.page.evaluate('apiAvailable && !STATE.useLocalMode'))
         self.assertEqual(self.page.evaluate('STATE._resultBackend'), 'local')
         self.assertEqual(self.page.evaluate('STATE.results[12].File'), 'local-12')
@@ -136,7 +136,7 @@ class PagingRecoveryTests(unittest.TestCase):
         self.assertEqual(restored, dict(restored=True, hole=True, loaded=True, backend='local', window='local',
                                         invalid=False, file='local-02', workerOnly=True))
         self.page.evaluate('jumpToSearchResult("17")')  # Jump to a different unloaded page by index.
-        self.page.wait_for_function('!positionRestore && STATE.results[16]?.File === "local-16"')
+        self.page.wait_for_function('!positionRestoration.current && STATE.results[16]?.File === "local-16"')
         self.assertTrue(self.page.evaluate("restoreBackends.every(([backend]) => backend === 'local')"))
         self.assertEqual(self.errors, [])
 
@@ -230,7 +230,7 @@ class PagingRecoveryTests(unittest.TestCase):
         self.page.evaluate('() => { STATE.page = 2; doSearch(true); }')
         # The buggy append also settles here, yielding a direct row-content
         # failure instead of timing out while waiting for a restore it never starts.
-        self.page.wait_for_function('STATE._loadedPage >= 2 && !STATE.isLoading && !positionRestore')
+        self.page.wait_for_function('STATE._loadedPage >= 2 && !STATE.isLoading && !positionRestoration.current')
         if local_ready:
             self.assertEqual(self.page.evaluate('STATE._resultBackend'), 'local')
             self.assertTrue(self.page.evaluate('STATE.useLocalMode'))

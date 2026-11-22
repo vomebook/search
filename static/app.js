@@ -216,9 +216,12 @@ function getReaderLink(rec, returnUrl, cacheMetadata = true) {
 
 // Reader host owns overlay and return-position state. Effects resolve live host hooks.
 const readerReturnPosition = VoiceOfMLReaderReturn.create({
-  readView: () => ({ hasContainer: !!DOM.resultsContainer, containerHeight: DOM.resultsContainer?.clientHeight || 0,
-    resultCount: STATE.results.length, total: STATE.total, loading: STATE.isLoading, loadedPage: STATE._loadedPage,
-    positionRestore: positionRestore && { preview: positionRestore.preview, key: positionRestore.key }, routeRevision: routeRenderId }),
+  readView: () => {
+    const restore = positionRestoration.current;
+    return { hasContainer: !!DOM.resultsContainer, containerHeight: DOM.resultsContainer?.clientHeight || 0,
+      resultCount: STATE.results.length, total: STATE.total, loading: STATE.isLoading, loadedPage: STATE._loadedPage,
+      positionRestore: restore && { preview: restore.preview, key: restore.key }, routeRevision: routeRenderId };
+  },
   hasResult: index => !!STATE.results[index], getViewKey: () => getSearchViewKey(),
   getTop: () => getResultScrollTop(), setTop: top => setResultScrollTop(top),
   ensureHeights: () => ensureHeightTree(), findIndex: top => findVirtualIndex(top),
@@ -1395,30 +1398,8 @@ const ROUTER = {
     STATE.filterFolderSubtrees = projected.filterFolderSubtrees;
     STATE.sort = projected.sort;
     DOM.sortSelect.value = STATE.sort;
-    var ms = route.params.min_size;
-    if (ms) {
-      var parsed = parseSizeStr(ms);
-      STATE.filterMinSize = parsed;
-      var disp = bytesToDisplay(parsed);
-      DOM.filterMinSize.value = disp.value;
-      DOM.filterMinUnit.value = disp.unit;
-    } else {
-      STATE.filterMinSize = null;
-      DOM.filterMinSize.value = "";
-      DOM.filterMinUnit.value = "MB";
-    }
-    var mx = route.params.max_size;
-    if (mx) {
-      var parsedMx = parseSizeStr(mx);
-      STATE.filterMaxSize = parsedMx;
-      var dispMx = bytesToDisplay(parsedMx);
-      DOM.filterMaxSize.value = dispMx.value;
-      DOM.filterMaxUnit.value = dispMx.unit;
-    } else {
-      STATE.filterMaxSize = null;
-      DOM.filterMaxSize.value = "";
-      DOM.filterMaxUnit.value = "MB";
-    }
+    STATE.filterMinSize = parseSizeStr(route.params.min_size);
+    STATE.filterMaxSize = parseSizeStr(route.params.max_size);
     STATE.searchFolders = projected.searchFolders;
     if (DOM.searchFoldersToggle) DOM.searchFoldersToggle.checked = STATE.searchFolders;
     STATE.exact = projected.exact;
@@ -1437,12 +1418,13 @@ const ROUTER = {
     STATE.leftSidebarOpen = keepMobileSidebarOpen || projected.leftSidebarOpen;
     STATE.rightSidebarOpen = projected.rightSidebarOpen;
     const sameSearchView = previousSearchKey === getSearchViewKey();
+    searchInputController?.syncSize(sameSearchView);
     const directoryOnly = sameSearchView && STATE.mode === "repo" && previousPath !== STATE.browserPath;
     if (directoryOnly && searchComposing) searchInputController?.invalidateVisit();
     if (!directoryOnly && !searchComposing && !initialSearchDraft) setSearchInputValue(STATE.query);
     if (!sameSearchView) {
       if (routeInitialized) searchInputController?.invalidateVisit();
-      cancelPendingSearchControls();
+      searchInputController?.cancelPending();
       readerReturnPosition.invalidate();
       if (!cancelActiveSearch()) return;
     }
@@ -1570,7 +1552,6 @@ let searchRequestId = 0;
 let filterSearchTimer = null;
 /** @type {number | null} */
 let sizeFilterTimer = null;
-const FILTER_SEARCH_DEBOUNCE_MS = 200;
 let routeRenderId = 0;
 // A path-only route change bumps routeRenderId for the browser, but must not
 // orphan an unfinished filter render or its batched folder-tree tasks.
@@ -1660,15 +1641,12 @@ const positionPersistence = VoiceOfMLSearchPositions.create({
 });
 /** @type {PagesDisplayedSearchView | null} */
 let displayedSearchView = null;
-/** @type {SearchPositionRestoreTask | null} */
-let positionRestore = null;
 /** @type {PagesResultWindow | null} */
 let resultWindow = null;
 /** @type {SearchPosition | null} */
 let returnPositionTarget = null;
 /** @type {{key: string, last: number, distance: number, until: number} | null} */
 let positionControlScroll = null;
-let positionEntryId = 0;
 
 function getReturnPositionTarget(key = getSearchViewKey()) {
   return returnPositionTarget?.key === key ? returnPositionTarget : null;
@@ -1694,32 +1672,21 @@ function prepareReturnPosition(key, updateControls = true) {
 
 function updateSearchPositionControls() {
   if (!getReturnPositionTarget()) setReturnPositionTarget();
-  if (DOM.returnToPositionBtn) DOM.returnToPositionBtn.hidden = !returnPositionTarget || !!positionRestore;
+  if (DOM.returnToPositionBtn) DOM.returnToPositionBtn.hidden = !returnPositionTarget || !!positionRestoration.current;
   if (DOM.backToTopBtn) DOM.backToTopBtn.hidden = !STATE.results.length || getResultScrollTop() <= 0;
-  if (DOM.positionRestoreStatus) DOM.positionRestoreStatus.hidden = !positionRestore;
-}
-
-/** @param {boolean} [preserveDrafts] */
-function cancelPendingSearchControls(preserveDrafts = false) {
-  if (preserveDrafts) return;
-  searchInputController?.cancelTimer();
-  if (filterSearchTimer !== null) clearTimeout(filterSearchTimer);
-  if (sizeFilterTimer !== null) clearTimeout(sizeFilterTimer);
-  filterSearchTimer = null;
-  sizeFilterTimer = null;
+  if (DOM.positionRestoreStatus) DOM.positionRestoreStatus.hidden = !positionRestoration.current;
 }
 
 /** @param {{fromStart: boolean, restorePosition: boolean}} options */
 function prepareSearchPositionNavigation({ fromStart, restorePosition }) {
-  // First-page fallback and retries belong to the current view, not to the
-  // newer input draft. Explicit query/filter commits cancel their own debounce.
-  cancelPendingSearchControls(!fromStart);
+  // First-page fallback and retries do not own newer query or size drafts.
+  if (fromStart) searchInputController?.cancelPending();
   // The URL is the handoff contract for Reader navigation and session restore.
   // Publish the current controls before any async result work starts.
   syncStateToURL();
   // A deliberate trip to the top captures the currently displayed position.
   // During restoration (or when already at the top), retain the existing target.
-  if (fromStart && !positionRestore && getResultScrollTop() > 0) setReturnPositionTarget();
+  if (fromStart && !positionRestoration.current && getResultScrollTop() > 0) setReturnPositionTarget();
   saveSearchViewSnapshot();
   const key = getSearchViewKey();
   if (fromStart) saveSearchPosition();
@@ -1734,8 +1701,10 @@ function prepareSearchPositionNavigation({ fromStart, restorePosition }) {
 
 function returnToSavedPosition() {
   const position = getReturnPositionTarget();
-  if (position) return tryRestoreSearchPosition(position.key, { position });
-  return false;
+  if (!position) return false;
+  // A queued filter must not restart the search while Return is waiting for I/O.
+  searchInputController?.cancelPending(true);
+  return tryRestoreSearchPosition(position.key, { position });
 }
 
 function backToSearchTop() {
@@ -1757,7 +1726,7 @@ function updateReturnPositionOnScroll() {
   const top = getResultScrollTop();
   if (Date.now() <= progress.until) progress.distance += Math.abs(top - progress.last);
   progress.last = top;
-  if (!positionRestore && progress.distance > Math.max(1200, DOM.resultsContainer.clientHeight * 2)) {
+  if (!positionRestoration.current && progress.distance > Math.max(1200, DOM.resultsContainer.clientHeight * 2)) {
     setReturnPositionTarget();
     updateSearchPositionControls();
   }
@@ -1771,9 +1740,10 @@ function jumpToSearchResult(value) {
   const index = Math.min(STATE.total - 1, Math.floor(requested) - 1);
   const key = getSearchViewKey();
   setReturnPositionTarget();
-  if (!positionRestore && !resultWindow?.invalid && STATE.results[index]) setResultScrollTop(getVirtualOffset(index));
+  const restore = positionRestoration.current;
+  if (!restore && !resultWindow?.invalid && STATE.results[index]) setResultScrollTop(getVirtualOffset(index));
   else tryRestoreSearchPosition(key, { viewport: null,
-    backend: positionRestore?.key === key ? positionRestore.backend : ownsDisplayedSearchResults() ? STATE._resultBackend : undefined, position: {
+    backend: restore?.key === key ? restore.backend : ownsDisplayedSearchResults() ? STATE._resultBackend : undefined, position: {
     version: 1, key, index, offset: 0, anchorId: "",
     loadedPage: Math.floor(index / STATE.pageSize) + 1, savedAt: Date.now()
   }});
@@ -1857,7 +1827,7 @@ async function loadCachedPreviewPage(window, page) {
   window.pending.set(page, request);
   try {
     const entry = await request;
-    if (!resultWindowCurrent(window) || !positionRestore?.preview || VSCROLL.isDraggingThumb) return;
+    if (!resultWindowCurrent(window) || !positionRestoration.current?.preview || VSCROLL.isDraggingThumb) return;
     if (!entry) { (window.missingPages ||= new Set()).add(page); return; }
     const start = (page - 1) * window.query.pageSize;
     if (start + entry.results.length > STATE.results.length) return;
@@ -1869,7 +1839,7 @@ async function loadCachedPreviewPage(window, page) {
       STATE.results[index] = /** @type {PagesSearchRecord} */ (record); window.count++; VSCROLL.templateCache.delete(index);
     });
     window.pages.add(page);
-    (positionRestore.cachedPages ||= new Map()).set(page, entry);
+    positionRestoration.rememberPreviewPage(page, entry);
     VSCROLL.measuredWindowKey = ""; VSCROLL.renderStart = -1; VSCROLL.renderEnd = -1;
     renderVisible(); updateLoadInfo();
   } finally {
@@ -1895,25 +1865,6 @@ async function readSearchViewport(key) {
 /** @param {unknown} viewport @param {SearchPosition | null | undefined} position @returns {viewport is SearchPositionViewport} */
 function validSearchViewport(viewport, position) {
   return VoiceOfMLPositionPolicy.validViewport(viewport, position, getResultStableId);
-}
-
-/** @param {SearchPositionViewport | null} viewport @param {SearchPosition} position @param {SearchPositionRestoreTask} task */
-function showSavedSearchViewport(viewport, position, task) {
-  if (!validSearchViewport(viewport, position)) return;
-  const size = JSON.parse(position.key).pageSize;
-  const results = new Array(Math.min(viewport.total, position.loadedPage * size));
-  for (const [index, record] of viewport.records) if (Number.isInteger(index) && index >= 0 && index < results.length) results[index] = record;
-  const snapshot = { version: SEARCH_VIEW_SNAPSHOT_VERSION, key: position.key, results, total: viewport.total,
-    loadedPage: position.loadedPage, pageCache: {}, hasMore: results.length < viewport.total,
-    resultBackend: viewport.resultBackend,
-    window: { preview: true, generation: viewport.generation, pages: [], count: Object.keys(results).length }, estimatedHeight: viewport.estimatedHeight,
-    heightCache: viewport.records.map(([, record, height]) => /** @type {SearchSnapshotHeightEntry} */ ([getResultStableId(record), {height, measurementKey: viewport.measurementKey}])),
-    scroll: {index: position.index, offset: position.offset, viewKey: position.key}, savedAt: Date.now() };
-  task.preview = true;
-  resultSnapshots.put(position.key, snapshot);
-  restoreSearchViewSnapshot(position.key, true, { preserveRestore: true });
-  resultSnapshots.remove(position.key);
-  showPositionRestoreStatus("已恢复上次画面，正在核对结果…");
 }
 
 /** @param {unknown} value @returns {value is SearchPosition} */
@@ -1946,7 +1897,7 @@ function saveSearchPosition() {
   const view = displayedSearchView;
   const target = view && getReturnPositionTarget(view.key);
   if (target) return target;
-  if (!view || positionRestore || readerHost.overlay || !view.results.length || !VSCROLL.heights.length) return null;
+  if (!view || positionRestoration.current || readerHost.overlay || !view.results.length || !VSCROLL.heights.length) return null;
   if (STATE.results !== view.results || (STATE.isLoading && view.key !== getSearchViewKey())) return positionPersistence.getPosition(view.key) || null;
   const index = Math.min(findVirtualIndex(getResultScrollTop()), view.results.length - 1);
   if (!view.results[index]) return positionPersistence.getPosition(view.key) || null;
@@ -1959,7 +1910,7 @@ function saveSearchPosition() {
 
 function setupSearchPositionSaving() {
   DOM.resultsContainer.addEventListener("scroll", () => {
-    if (positionRestore || STATE.isLoading || displayedSearchView?.key !== getSearchViewKey()) return;
+    if (positionRestoration.current || STATE.isLoading || displayedSearchView?.key !== getSearchViewKey()) return;
     positionPersistence.scheduleSave(saveSearchPosition);
   }, { passive: true });
   // Query and route handlers save explicitly; capture only filters before mutation.
@@ -1982,29 +1933,33 @@ function showPositionRestoreStatus(message, retry = false) {
   updateLoadInfo();
 }
 
-function cancelPositionRestore() {
-  cancelSnapshotClone();
-  positionEntryId++;
-  const previousWindow = resultWindow;
-  const previousRestore = positionRestore;
-  resultWindow = null;
-  positionRestore = null;
-  updateResultWindowStatus();
-  if (previousRestore) {
-    STATE.isLoading = false;
-    showPositionRestoreStatus("");
-  }
-  previousWindow?.controller.abort();
-  previousRestore?.controller.abort();
-}
-
 const positionRestoration = VoiceOfMLPositionRestoration.create({
+  currentKey: () => getSearchViewKey(),
+  getPosition: key => positionPersistence.getPosition(key),
+  noteSearchIntent: () => { searchIntentId++; },
+  retireSearch: () => {
+    if (!cancelActiveSearch()) return null;
+    const owner = searchId;
+    return () => owner === searchId;
+  },
+  detachWindow: () => {
+    const controller = resultWindow?.controller;
+    resultWindow = null;
+    updateResultWindowStatus();
+    return controller;
+  },
+  status: (phase, message) => {
+    if (phase === "started") {
+      setReturnPositionTarget();
+      STATE.isLoading = true;
+      resetPagingRecovery();
+    } else if (phase === "cancelled" || phase === "failed") STATE.isLoading = false;
+    showPositionRestoreStatus(message, phase === "failed");
+  },
   validatePage: (data, page, size, expected) => validatePositionWindowPage(data, page, size, expected),
-  isCurrent: task => positionRestore === task && task.key === getSearchViewKey(),
   readViewport: key => readSearchViewport(key),
   lookupPage: (query, signal, anchorId, backend) => lookupPositionPage(query, signal, anchorId, backend),
   fetchPage: (query, page, signal) => fetchPositionPageWithRecovery(query, page, signal, undefined),
-  showPreview: (viewport, position, task) => showSavedSearchViewport(viewport, position, task),
   isDragging: () => VSCROLL.isDraggingThumb,
   capturePreviewAnchor: () => {
     if (readerHost.overlay) return null;
@@ -2014,40 +1969,19 @@ const positionRestoration = VoiceOfMLPositionRestoration.create({
   },
   stableId: record => getResultStableId(record),
   estimatedHeight: () => VSCROLL.estimatedHeight,
-  release: () => { positionRestore = null; showPositionRestoreStatus(""); },
   applyPreview: snapshot => applyValidatedSearchViewport(snapshot),
   snapshots: resultSnapshots,
   // Completing a position restore does not own query input typed while it was loading.
-  restoreSnapshot: key => restoreSearchViewSnapshot(key, true, { preserveQueryDraft: true }),
-  completed: () => {},
-  failed: message => { STATE.isLoading = false; showPositionRestoreStatus(message, true); },
+  restoreSnapshot: (key, preview) => restoreSearchViewSnapshot(key, true,
+    preview ? { preserveRestore: true } : { preserveQueryDraft: true }),
   notify: message => showToast(message)
 });
-
-/** @param {string} key @param {{position?: SearchPosition | null, backend?: SearchResultBackend | null | undefined, viewport?: SearchPositionViewport | null}} [options] */
-function tryRestoreSearchPosition(key, options = {}) {
-  const previous = positionRestore?.key === key && positionRestore.failed && !options.position ? positionRestore : null;
-  const position = options.position || previous?.position || positionPersistence.getPosition(key);
-  if (!validSearchPosition(position)) return false;
-  searchIntentId++;
-  if (!options.position && positionRestore?.key === key && !positionRestore.failed) return true;
-  if (!cancelActiveSearch()) return false;
-  const owner = searchId;
-  cancelPositionRestore();
-  if (owner !== searchId) return false;
-  setReturnPositionTarget();
-  const task = VoiceOfMLPositionRestoration.createTask({ key, position, previous, backend: options.backend });
-  positionRestore = task;
-  STATE.isLoading = true;
-  resetPagingRecovery();
-  showPositionRestoreStatus("正在恢复上次位置…");
-  void positionRestoration.run(task, options.viewport);
-  return true;
-}
+const { cancel: cancelPositionRestore, start: tryRestoreSearchPosition } = positionRestoration;
 
 /** @param {SearchResultSnapshot} snapshot */
 function applyValidatedSearchViewport(snapshot) {
   if (!snapshot.window) return;
+  searchInputController?.cancelPending(true);
   const anchor = snapshot.scroll;
   const previous = STATE.results;
   // Preview selections belong to records, not to slots replaced by validation.
@@ -2159,11 +2093,10 @@ async function lookupPositionPage(query, signal, anchorId, backend) {
 
 function resumeResultRecovery() {
   if (document.hidden || readerHost.overlay) return;
-  if (positionRestore?.failed && isRecoverableSearchError(positionRestore.error)) {
-    const backend = positionRestore.backend ?? preferredPositionBackend(JSON.parse(positionRestore.key));
-    if (navigator.onLine || backend === "local") tryRestoreSearchPosition(positionRestore.key);
-    return;
-  }
+  if (positionRestoration.resume((key, pinned) => {
+    const backend = pinned ?? preferredPositionBackend(JSON.parse(key));
+    return navigator.onLine || backend === "local";
+  })) return;
   if (!resultWindow || resultWindow.invalid || (!navigator.onLine && resultWindow.query.resultBackend !== "local")) return;
   const start = Math.floor(findVirtualIndex(getResultScrollTop()) / STATE.pageSize);
   const end = Math.floor(findVirtualIndex(getResultScrollTop() + DOM.resultsContainer.clientHeight) / STATE.pageSize) + 2;
@@ -2191,7 +2124,7 @@ function requestResultWindowPage(window, page, prefetch = false) {
 /** @param {number} page @param {boolean} [prefetch] */
 async function loadResultWindowPage(page, prefetch = false) {
   const window = resultWindow;
-  if (!window || positionRestore || !resultWindowCurrent(window) || window.pages.has(page) || page < 1 || page > Math.ceil(window.total / window.query.pageSize)) return false;
+  if (!window || positionRestoration.current || !resultWindowCurrent(window) || window.pages.has(page) || page < 1 || page > Math.ceil(window.total / window.query.pageSize)) return false;
   try {
     const data = await requestResultWindowPage(window, page, prefetch);
     if (!data || !resultWindowCurrent(window) || window.invalid || window.pages.has(page)) return false;
@@ -2263,8 +2196,9 @@ function ensureResultWindowPages(start, end) {
   // is only a temporary scroll target and must not block normal pagination.
   if (!resultWindow || readerHost.overlay || VSCROLL.isDraggingThumb) return;
   const size = resultWindow.query.pageSize;
-  if (positionRestore) {
-    if (positionRestore.preview) for (let page = Math.floor(start / size) + 1; page <= Math.ceil(end / size); page++) loadCachedPreviewPage(resultWindow, page);
+  const restore = positionRestoration.current;
+  if (restore) {
+    if (restore.preview) for (let page = Math.floor(start / size) + 1; page <= Math.ceil(end / size); page++) loadCachedPreviewPage(resultWindow, page);
     return;
   }
   const scrollTop = getResultScrollTop();
@@ -2387,7 +2321,7 @@ function saveSearchViewSnapshot(key = displayedSearchView?.key) {
   }
   // Browsing from the top must not overwrite the snapshot offered by Return.
   if (getReturnPositionTarget(key)) return resultSnapshots.snapshots.get(key) || null;
-  if (!DOM.resultsContainer || !view || positionRestore || key !== view.key || view.loadedPage < 1) return null;
+  if (!DOM.resultsContainer || !view || positionRestoration.current || key !== view.key || view.loadedPage < 1) return null;
   const position = saveSearchPosition();
   return resultSnapshots.save(view, position, {
     revision: measuredHeightRevision, measurementKey: getHeightMeasurementKey(),
@@ -2400,10 +2334,6 @@ function activateSearchView(key = getSearchViewKey()) {
   const snapshot = resultSnapshots.snapshots.get(key);
   VSCROLL.heightCache = new Map(snapshot?.heightCache || []);
 }
-function cancelSnapshotClone() {
-  resultSnapshots.cancelClone();
-}
-
 /** @param {SearchSnapshotCloneTask} task @param {number} start @param {number} end @param {boolean} [deferHeights] */
 function materializeSnapshotRange(task, start, end, deferHeights = false) {
   resultSnapshots.materializeRange(task, start, end, deferHeights);
@@ -2456,7 +2386,7 @@ function restoreSearchViewSnapshot(key, restoreScroll = true, { preserveRestore 
   const owner = searchId;
   if (!preserveRestore) cancelPositionRestore();
   if (owner !== searchId) return false;
-  if (!preserveRestore) cancelPendingSearchControls(preserveQueryDraft);
+  if (!preserveRestore) searchInputController?.cancelPending(preserveQueryDraft);
   // Cloning preserves sparse slots and existing records without validating their fields.
   STATE.results = /** @type {(PagesSearchRecord | null | undefined)[]} */ (resultSnapshots.restoreResults(snapshot, key, STATE.pageSize, restoreScroll, preserveRestore));
   STATE.total = snapshot.total;
@@ -2716,7 +2646,7 @@ async function searchWithInitialFallback() {
   const owner = searchId;
   cancelPositionRestore();
   if (owner !== searchId || intent !== searchIntentId) return false;
-  const key = getSearchViewKey(), entry = positionEntryId;
+  const key = getSearchViewKey(), entry = positionRestoration.entry;
   prepareReturnPosition(key);
   if (resultSnapshots.snapshots.has(key)) {
     setReturnPositionTarget();
@@ -2724,7 +2654,7 @@ async function searchWithInitialFallback() {
   }
   const position = getReturnPositionTarget(key);
   const viewport = position ? await readSearchViewport(key) : null;
-  if (intent !== searchIntentId || entry !== positionEntryId || key !== getSearchViewKey()) return false;
+  if (intent !== searchIntentId || entry !== positionRestoration.entry || key !== getSearchViewKey()) return false;
   if (validSearchViewport(viewport, position)) return tryRestoreSearchPosition(key, {position, viewport});
   return searchWithInitialFallbackFresh(intent);
 }
@@ -2838,8 +2768,8 @@ function submitSearchQuery(query, { restore = false, record = false, refreshHist
     return;
   }
   // Another search can preempt the size debounce: include its visible input.
-  applyPendingSizeFilters();
-  cancelPendingSearchControls();
+  searchInputController?.flushSize();
+  searchInputController?.cancelPending();
   saveSearchViewSnapshot();
   if (updateInput) setSearchInputValue(query);
   STATE.query = query;
@@ -2857,9 +2787,10 @@ function submitSearchQuery(query, { restore = false, record = false, refreshHist
 
 function prepareReaderSearch() {
   if (readerHost.overlay || !ownsAppliedSearchRoute()) return;
-  if (searchTimer !== null && !searchComposing) {
+  const query = searchInputController?.pendingQuery();
+  if (query != null) {
     searchInputController?.cancelTimer();
-    submitSearchQuery(DOM.searchInput.value.trim(), { record: true, refreshHistory: true });
+    submitSearchQuery(query, { record: true, refreshHistory: true });
   }
   if (sizeFilterTimer !== null || filterSearchTimer !== null) {
     doFilterSearch();
@@ -2886,8 +2817,16 @@ function setupSearchInput() {
     syncInput: syncSearchInputState,
     canSubmit: () => !readerHost.overlay && ownsAppliedSearchRoute(),
     submit: query => { submitSearchQuery(query, { record: true, refreshHistory: true }); },
+    filterSearch: clearResults => doFilterSearch(clearResults),
+    size: {
+      min: DOM.filterMinSize, max: DOM.filterMaxSize, minUnit: DOM.filterMinUnit, maxUnit: DOM.filterMaxUnit,
+      read: () => [STATE.filterMinSize, STATE.filterMaxSize], format: bytesToDisplay,
+      commit: (min, max) => { STATE.filterMinSize = min; STATE.filterMaxSize = max; }
+    },
     onState: state => {
       searchTimer = state.timer;
+      filterSearchTimer = state.filterTimer;
+      sizeFilterTimer = state.sizeTimer;
       searchComposing = state.composing;
       initialSearchDraft = state.dirty;
     }
@@ -2968,8 +2907,7 @@ function doSearch(append, fromStart = false, restorePosition = false, allowFallb
   if (owner !== searchId) return;
   if (append && STATE.isLoading) return;
   if (!append) STATE.page = 1;
-  if (filterSearchTimer !== null) clearTimeout(filterSearchTimer);
-  filterSearchTimer = null;
+  searchInputController?.cancelFilter();
   const id = ++searchId;
   const intent = searchIntentId;
   const params = buildLocalSearchParams(STATE.page);
@@ -3072,7 +3010,7 @@ function renderSearchPage(append) {
 }
 
 function renderResults(animate = false) {
-  if (!positionRestore && STATE._loadedPage >= 1) rememberDisplayedSearchView();
+  if (!positionRestoration.current && STATE._loadedPage >= 1) rememberDisplayedSearchView();
   activateSearchView();
   redrawResults(animate);
 }
@@ -3269,7 +3207,7 @@ function getVirtualResults() {
     },
     results: () => STATE.results, total: () => STATE.total,
     hasWindow: () => !!resultWindow, windowTotal: () => resultWindow?.total ?? 0,
-    cloning: () => !!resultSnapshots.cloneTask, restoring: () => !!positionRestore,
+    cloning: () => !!resultSnapshots.cloneTask, restoring: () => !!positionRestoration.current,
     loadedPage: () => STATE._loadedPage, pendingEntrance: () => pendingResultEntrance,
     consumeEntrance: () => { pendingResultEntrance = false; },
     recordMeasurement: () => { measuredHeightRevision++; },
@@ -3357,11 +3295,11 @@ function setSearchVisualLoading(loading) {
 /** @param {boolean} clearResults */
 function prepareFilterChange(clearResults) {
   // Merge completed query drafts too; a filter click must not discard typing.
-  const query = searchTimer !== null && !searchComposing ? DOM.searchInput.value.trim() : null;
-  applyPendingSizeFilters();
-  cancelPendingSearchControls();
+  const query = searchInputController?.pendingQuery();
+  searchInputController?.flushSize();
+  searchInputController?.cancelPending();
   saveSearchViewSnapshot();
-  if (query !== null && Array.from(query).length <= 256) STATE.query = query;
+  if (query != null && Array.from(query).length <= 256) STATE.query = query;
   STATE.page = 1;
   if (clearResults) STATE.results = [];
 }
@@ -3369,37 +3307,6 @@ function prepareFilterChange(clearResults) {
 function doFilterSearch(clearResults = false) {
   prepareFilterChange(clearResults);
   return doSearch(false, false, true);
-}
-
-/** @param {HTMLInputElement} input @param {HTMLSelectElement} unitSelect */
-function sizeInputToBytes(input, unitSelect) {
-  const value = parseFloat(input.value);
-  if (isNaN(value) || value < 0) return null;
-  const factor = /** @type {Record<string, number>} */ ({ B: 1, KB: 1024, MB: 1048576, GB: 1073741824 })[unitSelect.value] || 1;
-  return Math.round(value * factor);
-}
-
-function applyPendingSizeFilters() {
-  if (sizeFilterTimer === null) return;
-  if (sizeFilterTimer !== null) clearTimeout(sizeFilterTimer);
-  sizeFilterTimer = null;
-  STATE.filterMinSize = sizeInputToBytes(DOM.filterMinSize, DOM.filterMinUnit);
-  STATE.filterMaxSize = sizeInputToBytes(DOM.filterMaxSize, DOM.filterMaxUnit);
-}
-
-function setupSizeFilterControls() {
-  const schedule = () => {
-    if (sizeFilterTimer !== null) clearTimeout(sizeFilterTimer);
-    sizeFilterTimer = setTimeout(() => {
-      applyPendingSizeFilters();
-      doFilterSearch(true);
-    }, 500);
-  };
-  [DOM.filterMinSize, DOM.filterMaxSize].forEach(input => input.addEventListener("input", schedule));
-  // A unit alone does not change the search. Leave any pending edit to
-  // either bound on its existing debounce deadline.
-  DOM.filterMinUnit.addEventListener("change", () => { if (DOM.filterMinSize.value !== "") schedule(); });
-  DOM.filterMaxUnit.addEventListener("change", () => { if (DOM.filterMaxSize.value !== "") schedule(); });
 }
 
 function scheduleFilterSearch(clearResults = false) {
@@ -3413,10 +3320,7 @@ function scheduleFilterSearch(clearResults = false) {
   STATE.isLoading = true;
   setSearchVisualLoading(true);
   syncStateToURL();
-  filterSearchTimer = setTimeout(() => {
-    filterSearchTimer = null;
-    doFilterSearch();
-  }, FILTER_SEARCH_DEBOUNCE_MS);
+  searchInputController?.scheduleFilter();
 }
 
 function updateCurrentResultPosition() {
@@ -3683,7 +3587,7 @@ function readPagingView() {
   return {
     generation: searchRequestId, loadedPage: STATE._loadedPage, page: STATE.page,
     resultCount: STATE.results.length, hasMore: STATE.hasMore, loading: STATE.isLoading,
-    suspended: !!resultSnapshots.cloneTask || !!positionRestore ||
+    suspended: !!resultSnapshots.cloneTask || !!positionRestoration.current ||
       (STATE._loadedPage ? !ownsDisplayedSearchResults() :
         searchTimer !== null || filterSearchTimer !== null || sizeFilterTimer !== null || searchComposing),
     inactive: document.hidden || !!readerHost.overlay, dragging: VSCROLL.isDraggingThumb,
@@ -4240,7 +4144,6 @@ async function init() {
   DOM.randomBookBtn.addEventListener("click", randomBook);
   if (DOM.randomTxtBtn) DOM.randomTxtBtn.addEventListener("click", randomTxt);
   DOM.emptyRandomBtn.addEventListener("click", randomTxt);
-  setupSizeFilterControls();
   setupExtensionBulkSelection();
   if (DOM.folderToggleAll) DOM.folderToggleAll.addEventListener("click", () =>
     setAllFoldersCollapsed(DOM.folderToggleAll.getAttribute("aria-expanded") === "true"));

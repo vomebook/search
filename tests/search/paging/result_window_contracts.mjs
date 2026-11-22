@@ -132,7 +132,7 @@ test('host keeps prefetch failures bounded and generation changes invalidate eve
   const window = {key: 'query', total: 1000, query: {pageSize: 1}, controller: new AbortController(), pages: new Set(), failures: new Map()};
   let error = new Error('temporary'), renders = 0, statuses = 0;
   const cache = new Map([['old-page', {}]]), stale = new Map([['query', {}]]);
-  const c = fixture(['loadResultWindowPage'], {resultWindow: window, positionRestore: null,
+  const c = fixture(['loadResultWindowPage'], {resultWindow: window, positionRestoration: {current: null},
     searchResponseStore: {cache}, resultSnapshots: {remove: key => stale.delete(key)}, STATE: {_pageCache: {1:[{}]} },
     resultWindowCurrent: () => true, requestResultWindowPage: async () => {throw error;},
     updateResultWindowStatus() {statuses++;}, scheduleVirtualRender() {renders++;},

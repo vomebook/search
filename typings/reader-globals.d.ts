@@ -175,7 +175,15 @@ declare var VoiceOfMLPagingStatus: {create(options: VoiceOfMLPagingStatusOptions
 interface VoiceOfMLInputDraftOwner {href: string; key: string | undefined; cancelled: boolean}
 interface VoiceOfMLInputVisitOwner {generation: number; viewKey: string | null}
 interface VoiceOfMLInputState {
-  timer: number | null; composing: boolean; dirty: boolean; ready: boolean;
+  timer: number | null; filterTimer: number | null; sizeTimer: number | null;
+  composing: boolean; dirty: boolean; ready: boolean;
+}
+interface VoiceOfMLSizeControls {
+  min: VoiceOfMLInputElement; max: VoiceOfMLInputElement;
+  minUnit: VoiceOfMLInputElement; maxUnit: VoiceOfMLInputElement;
+  read(): [number | null, number | null];
+  format(bytes: number | null): {value: string; unit: string};
+  commit(min: number | null, max: number | null): void;
 }
 interface VoiceOfMLInputElement extends EventTarget {
   value: string;
@@ -186,10 +194,14 @@ interface VoiceOfMLInputDependencies {
   clock: {setTimeout(callback: () => void, delay: number): number; clearTimeout(timer: number): void};
   getHref(): string; getEntryKey(): string | undefined; getViewKey(): string | null;
   syncInput(): void; canSubmit(): boolean; submit(query: string): void; onState(state: Readonly<VoiceOfMLInputState>): void;
+  filterSearch(clearResults?: boolean): void;
+  size: VoiceOfMLSizeControls;
 }
 interface VoiceOfMLInputController {
   mount(): void; dispose(): void; debounce(): void; cancelTimer(): void; invalidateVisit(): void;
   captureDraft(renew?: boolean): void; cancelDraft(): void; draftIsCurrent(): boolean; finishStartup(current: boolean): void;
+  pendingQuery(): string | null; flushSize(): void; syncSize(preserveDraft?: boolean): void;
+  cancelPending(preserveQuery?: boolean): void; scheduleFilter(): void; cancelFilter(): void;
 }
 declare var VoiceOfMLSearchInputOwnership: {
   draft(href: string, key: string | undefined): VoiceOfMLInputDraftOwner;

@@ -52,10 +52,10 @@ class RecentSearchPageTests(unittest.TestCase):
         self.page.evaluate("STATE.query='paging-other';doSearch()")
         self.page.wait_for_function('!STATE.isLoading')
         self.page.evaluate("resultSnapshots.snapshots.clear();positionPersistence.viewports.clear();positionPersistence.recentPages.clear();windowCalls=[];windowStall=1;STATE.query='paging-original';doSearch(false,false,true)")
-        self.page.wait_for_function('positionRestore?.preview && !!window.releaseWindow')
+        self.page.wait_for_function('positionRestoration.current?.preview && !!window.releaseWindow')
 
     def wait_cached(self, index):
-        self.page.wait_for_function('''index=>!!positionRestore?.preview && !!STATE.results[index] &&
+        self.page.wait_for_function('''index=>!!positionRestoration.current?.preview && !!STATE.results[index] &&
           findVirtualIndex(getResultScrollTop())===index &&
           Math.abs(getResultScrollTop()-getVirtualOffset(index)-11)<2''', arg=index)
 
@@ -118,7 +118,7 @@ class RecentSearchPageTests(unittest.TestCase):
 
         # Hold the demanded page as well, so we check the handoff while the row is still a hole.
         self.page.evaluate('windowStall=751;releaseWindow()')
-        self.page.wait_for_function('!positionRestore')
+        self.page.wait_for_function('!positionRestoration.current')
         anchor = self.page.evaluate('''index=>({index:findVirtualIndex(getResultScrollTop()),
           offset:getResultScrollTop()-getVirtualOffset(index),loaded:!!STATE.results[index],
           generation:resultWindow.generation})''', index)
@@ -154,7 +154,7 @@ class RecentSearchPageTests(unittest.TestCase):
         self.assertFalse(self.page.evaluate('!!STATE.results[25050]'),
                          'A corrupt disk record must not enter the preview')
         self.page.evaluate('windowStall=0;releaseWindow()')
-        self.page.wait_for_function('!positionRestore')
+        self.page.wait_for_function('!positionRestoration.current')
         self.fixture.jump(25050)
         self.fixture.wait_anchor(25050)
         self.assertIn(251, self.page.evaluate('windowCalls'))
@@ -189,7 +189,7 @@ class RecentSearchPageTests(unittest.TestCase):
           };
         });''')
         self.page.reload(wait_until='domcontentloaded')
-        self.page.wait_for_function('positionRestore?.preview && !!window.releaseWindow')
+        self.page.wait_for_function('positionRestoration.current?.preview && !!window.releaseWindow')
         for index in [25050,35050,49850,35050,25050]:
             self.fixture.jump(index)
             self.wait_cached(index)

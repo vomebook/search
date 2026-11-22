@@ -16,7 +16,7 @@ function fixture(source, root) {
     STATE: { results: [], total: 0, _pageCache: {}, _loadedPage: 1 },
     DOM: { resultsContainer: {} }, VSCROLL: { heightCache: new Map(), estimatedHeight: 100 },
     searchPageMetadata: new WeakMap(),
-    SEARCH_VIEW_SNAPSHOT_VERSION: 1, measuredHeightRevision: 0, positionRestore: null,
+    SEARCH_VIEW_SNAPSHOT_VERSION: 1, measuredHeightRevision: 0, positionRestoration: {current: null},
     getReturnPositionTarget: () => null, getHeightMeasurementKey: () => "layout",
     saveSearchPosition: () => ({ index: 0, offset: 0 }), checkSearchPageAppend: () => true,
     getResultStableId: () => { throw Error("snapshot scanned result IDs"); },

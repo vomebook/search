@@ -33,7 +33,7 @@ class SearchPositionTests(unittest.TestCase):
         self.fixture.tearDown()
 
     def assert_position(self):
-        self.page.wait_for_function("!positionRestore && !STATE.isLoading && STATE.query==='paging-original'")
+        self.page.wait_for_function("!positionRestoration.current && !STATE.isLoading && STATE.query==='paging-original'")
         self.page.wait_for_function('''saved => {
           const index=findVirtualIndex(DOM.resultsContainer.scrollTop);
           return getResultStableId(STATE.results[index])===saved.anchorId &&
@@ -95,7 +95,7 @@ class SearchPositionTests(unittest.TestCase):
         # Accept either position restoration or a fresh search, but never a blank
         # startup or an unhandled rejection. Surface errors without a long timeout.
         self.page.wait_for_function('''() => window.viewportReloadErrors?.length ||
-          (STATE.query==='paging-original' && !STATE.isLoading && !positionRestore &&
+          (STATE.query==='paging-original' && !STATE.isLoading && !positionRestoration.current &&
            STATE.results.some(record=>record?.File==='paging-125'||record?.File==='paging-0'))''')
         self.assertEqual(self.page.evaluate('window.viewportReloadErrors'), [])
         self.assertEqual(self.fixture.errors, [])
@@ -250,7 +250,7 @@ class SearchPositionTests(unittest.TestCase):
         }''')
         self.page.wait_for_function('!!window.releaseRestore')
         self.page.evaluate("STATE.query='paging-latest'; doSearch(); releaseRestore()")
-        self.page.wait_for_function("STATE.query==='paging-latest' && !STATE.isLoading && !positionRestore")
+        self.page.wait_for_function("STATE.query==='paging-latest' && !STATE.isLoading && !positionRestoration.current")
         self.assertEqual(self.page.evaluate('displayedSearchView.key'), self.page.evaluate('getSearchViewKey()'))
         self.assertEqual(self.page.evaluate('positionPersistence.positions.get(' + repr(self.saved['key']) + ').anchorId'), self.saved['anchorId'])
         self.assertEqual(self.fixture.errors, [])
@@ -284,7 +284,7 @@ class SearchPositionTests(unittest.TestCase):
         self.page.evaluate("STATE.query='paging-other'; doSearch()")
         self.page.wait_for_function('!STATE.isLoading')
         self.page.evaluate("resultSnapshots.snapshots.clear(); STATE.query=''; doSearch(false,false,true)")
-        self.page.wait_for_function('!positionRestore && !STATE.isLoading')
+        self.page.wait_for_function('!positionRestoration.current && !STATE.isLoading')
         self.page.wait_for_function('''saved=>{
           const index=findVirtualIndex(DOM.resultsContainer.scrollTop);
           return getResultStableId(STATE.results[index])===saved.anchorId &&
