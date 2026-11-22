@@ -97,10 +97,9 @@ export function sharedPdfRangeCache() {
       version:cache.version,
       get(url, begin, end, version) {
         const bytes = cache.get(url, begin, end, version);
-        // The previous overlay's Uint8Array fails instanceof in this reader.
-        // Re-view the already isolated copy without copying its bytes again.
-        return !bytes || Object.prototype.isPrototypeOf.call(Uint8Array.prototype, bytes) ? bytes :
-          new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+        // PDF.js checks the backing ArrayBuffer before transferring it to its
+        // worker. A view over the previous overlay's buffer is not enough.
+        return !bytes || bytes.buffer instanceof ArrayBuffer ? bytes : new Uint8Array(bytes);
       },
       put:cache.put,
       get byteLength() { return cache.byteLength; },

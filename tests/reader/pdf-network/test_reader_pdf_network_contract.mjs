@@ -685,12 +685,14 @@ try {
         if(overlay) {
           assert.deepEqual(requests,['bytes=0-0'],'both the prefix and the tail come from the parent cache');
           assert.equal(second.rangeChunkSize,16384,'the retained prefix still enables adaptive chunks');
+          assert.ok(second.bytes.buffer instanceof ArrayBuffer,'PDF.js needs the prefix buffer in this reader realm');
           assert.ok(tail.bytes instanceof Uint8Array);
           const rangeCache=sharedPdfRangeCache(), current={etag:'"A"',total:data.length};
           assert.equal(rangeCache.size,2);
           assert.equal(rangeCache.byteLength,3*input.rangeChunkSize);
           const copy=rangeCache.get(input.url,1,6,current);
           assert.deepEqual(copy,data.subarray(1,6));
+          assert.ok(copy.buffer instanceof ArrayBuffer,'demanded cache bytes must also own a local transferable buffer');
           copy.fill(0);
           structuredClone(copy,{transfer:[copy.buffer]});
           assert.equal(copy.byteLength,0);

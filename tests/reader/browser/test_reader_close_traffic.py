@@ -9,6 +9,7 @@ from unittest.mock import patch
 
 from tests.performance.test_reader_performance import sync_playwright, PlaywrightError, minimal_pdf
 from tests.support.browser_support import SearchHandler as StaticHandler, local_server
+from tests.reader.browser.test_reader_pdf_first_page import SOURCE, range_source, sparse_pdf
 
 
 @contextlib.contextmanager
@@ -19,6 +20,49 @@ def static_server():
 
 @unittest.skipIf(sync_playwright is None, 'Playwright is unavailable')
 class ReaderCloseTrafficTests(unittest.TestCase):
+    def test_reopen_pdf_paints_saved_page_from_validated_parent_ranges(self):
+        with range_source(sparse_pdf(count=32, stride=16384)) as (origin, state, lock), sync_playwright() as playwright:
+            state['block'].set()
+            browser = playwright.chromium.launch(headless=True, args=['--no-sandbox'])
+            try:
+                page = browser.new_page(service_workers='block', viewport={'width': 390, 'height': 844})
+                page.add_init_script('''const nativeFetch = window.fetch;
+                  window.fetch = (input, init) => {
+                    const url = new URL(input instanceof Request ? input.url : input, location.href);
+                    return nativeFetch(url.pathname === '/api/reader-content' ? location.origin + url.pathname + url.search : input, init);
+                  };''')
+                prefix = origin + '/search'
+                page.goto(prefix + '/manifest.json')
+                page.add_script_tag(url=prefix + '/static/search/reader-host/application/navigation.js')
+                reader_path = '/search/static/reader.html'
+                target = prefix + '/static/reader.html?' + urllib.parse.urlencode(dict(url=SOURCE, ext='pdf'))
+                page.evaluate('''path => { window.navigationHost = VoiceOfMLReaderNavigation.createNavigation(path); }''', reader_path)
+                frame = page.frame_locator('iframe.reader-overlay')
+                phase = frame.locator('html[data-reader-phase="ready"]')
+                for expected in (1, 19):
+                    with lock:
+                        state['requests'].clear()
+                    page.evaluate('url => navigationHost.mount(new URL(url)) && true', target)
+                    frame.locator(f'.reader-page[data-page="{expected}"] canvas.ready').wait_for(timeout=12000)
+                    phase.wait_for(timeout=12000)
+                    self.assertEqual(frame.locator('#page-number').input_value(), str(expected))
+                    with lock:
+                        ranges = state['requests'][:]
+                    if expected == 1:
+                        self.assertEqual(ranges[0], (0, 262143))
+                        control = frame.locator('#page-number')
+                        control.fill('19')
+                        control.dispatch_event('change')
+                        frame.locator('.reader-page[data-page="19"] canvas.ready').wait_for(timeout=12000)
+                        page.evaluate('() => { navigationHost.unmount(); }')
+                        page.locator('iframe.reader-overlay').wait_for(state='detached')
+                        page.wait_for_function('''async url => (await VoiceOfMLReaderStore.get(url))?.page === 19''', arg=SOURCE)
+                    else:
+                        self.assertEqual(ranges[0], (0, 0))
+                        self.assertNotIn((0, 262143), ranges)
+            finally:
+                browser.close()
+
     def test_close_mid_transfer_stops_bytes_and_next_book_opens(self):
         original = StaticHandler.do_GET
         lock = threading.Lock()
