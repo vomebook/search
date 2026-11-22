@@ -16,6 +16,9 @@
  * @property {{title: string}} documentState
  * @property {ReaderTextRenderer} renderText
  * @property {(entries: {label: string; depth: number; target: HTMLElement; activate(): void}[]) => void} setToc
+ * @property {{query: string}} searchState
+ * @property {(name: string) => unknown} nextReaderGeneration
+ * @property {() => void} clearFullSearchMarks
  * @typedef {ReaderTextHost & ReaderOriginalFormat} ReaderTextContext
  */
 
@@ -88,13 +91,72 @@ function formatVCard(text) {
 // the position. Never replace the text used by search, speech or the original download.
 const TXT_LAYOUT_BYTES = 128 * 1024;
 const TXT_LAYOUT_EDITS = 1024;
+const TXT_TOC_ENTRIES = 512;
+const TXT_TITLE_LENGTH = 72;
 const TXT_CHAPTER = /^第[ \u3000]*[\d０-９〇零一二三四五六七八九十百千万两]+[ \u3000]*([卷部篇章节回])(?:$|[ \t\u3000.．:：、—–-]+[^\r\n]+$)/u;
 
 /** @typedef {{ start: number; end: number; heading?: string; depth?: number }} TextLayoutEdit */
+/** @typedef {{element: HTMLElement; length: number}} TextBlock */
+
+function createTxtOutline() {
+  /** @type {TextLayoutEdit[]} */
+  const headings = [];
+  const newline = /[\r\n]/g;
+  let prefix = "", lineStart = 0, heldSpace = 0, spaceText = "", skipped = false;
+  /** @param {string} text @param {number} start */
+  function take(text, start) {
+    if (skipped) return;
+    if (!prefix) {
+      const trimmed = text.trimStart();
+      lineStart = start + text.length - trimmed.length;
+      text = trimmed;
+    }
+    // Ignore trailing whitespace until more content makes it internal.
+    // Never retain a body-sized line or let its next chunk look like a title.
+    const content = text.trimEnd();
+    if (content) {
+      if (prefix.length + heldSpace + content.length > TXT_TITLE_LENGTH) { skipped = true; return; }
+      prefix += spaceText + content;
+      heldSpace = 0;
+      spaceText = "";
+    }
+    if (heldSpace + text.length - content.length <= TXT_TITLE_LENGTH) spaceText += text.slice(content.length);
+    heldSpace = Math.min(TXT_TITLE_LENGTH + 1, heldSpace + text.length - content.length);
+  }
+  function finishLine() {
+    if (prefix && !skipped && headings.length < TXT_TOC_ENTRIES) {
+      const kind = TXT_CHAPTER.exec(prefix)?.[1];
+      if (kind && !/[。！？；!?]$/u.test(prefix))
+        headings.push({ start: lineStart, end: lineStart + prefix.length, heading: prefix, depth: kind === "节" ? 1 : 0 });
+    }
+    prefix = "";
+    heldSpace = 0;
+    spaceText = "";
+    skipped = false;
+  }
+  return {
+    /** @param {string} text @param {number} start */
+    append(text, start) {
+      let cursor = 0;
+      newline.lastIndex = 0;
+      // CRLF behaves like two boundaries with an empty line between them;
+      // an empty line never creates a title, even across packet boundaries.
+      for (let match; headings.length < TXT_TOC_ENTRIES && (match = newline.exec(text));) {
+        take(text.slice(cursor, match.index), start + cursor);
+        finishLine();
+        cursor = newline.lastIndex;
+      }
+      if (headings.length < TXT_TOC_ENTRIES && cursor < text.length) take(text.slice(cursor), start + cursor);
+    },
+    finish() { finishLine(); return headings; },
+    reset() { headings.length = 0; prefix = spaceText = ""; heldSpace = 0; skipped = false; }
+  };
+}
+
 /** @param {string} text */
 function planTextLayout(text) {
   /** @type {TextLayoutEdit[]} */
-  const indents = [], gaps = [], headings = [];
+  const indents = [], gaps = [];
   let total = 0, padded = 0, prose = 0, blankLines = 0;
   /** @type {TextLayoutEdit | null} */
   let gap = null;
@@ -118,29 +180,27 @@ function planTextLayout(text) {
         padded++;
         indents.push({ start: start + 2, end: start + indent.length });
       }
-      const kind = label.length <= 72 ? TXT_CHAPTER.exec(label)?.[1] : null;
-      if (kind && !/[。！？；!?]$/u.test(label)) {
-        const titleStart = start + raw.indexOf(label);
-        headings.push({ start: titleStart, end: titleStart + label.length, heading: label, depth: kind === "节" ? 1 : 0 });
-      }
     }
-    if (indents.length + gaps.length + headings.length > TXT_LAYOUT_EDITS) return [];
+    if (indents.length + gaps.length > TXT_LAYOUT_EDITS) return [];
   }
   // A few indented lines are not a padding convention. Require recurring long
   // indents and sentence-like prose; keep meaningful whitespace in code/tables.
   const compact = total >= 8 && padded * 4 >= total * 3 && prose >= 3;
-  return [...(compact ? indents : []), ...gaps, ...headings].sort((a, b) => a.start - b.start);
+  return [...(compact ? indents : []), ...gaps];
 }
 
-/** @param {HTMLElement} root */
-function typesetPlainText(root) {
-  const edits = planTextLayout(root.textContent ?? "");
+/** @param {TextBlock[]} blocks @param {TextLayoutEdit[]} edits @param {boolean} emphasize */
+function typesetPlainText(blocks, edits, emphasize) {
+  edits.sort((a, b) => a.start - b.start);
   /** @type {{label: string; depth: number; target: HTMLElement; activate(): void}[]} */
   const toc = [];
   let from = 0, editIndex = 0;
-  for (const block of root.children) {
-    const text = block.textContent ?? "", to = from + text.length;
-    if ((edits[editIndex]?.start ?? Infinity) < to) {
+  for (const {element: block, length} of blocks) {
+    const next = edits[editIndex];
+    if (!next) break;
+    const to = from + length;
+    if (next.start < to) {
+      const text = block.textContent ?? "";
       /** @type {Node[]} */
       const nodes = [];
       let cursor = from;
@@ -148,7 +208,9 @@ function typesetPlainText(root) {
         const begin = Math.max(from, edit.start), end = Math.min(to, edit.end);
         if (cursor < begin) nodes.push(document.createTextNode(text.slice(cursor - from, begin - from)));
         const span = document.createElement("span");
-        span.className = edit.heading ? "reader-text-chapter-title" : "reader-text-padding";
+        span.className = edit.heading
+          ? emphasize ? "reader-text-chapter-title" : "reader-text-chapter-anchor"
+          : "reader-text-padding";
         span.textContent = text.slice(begin - from, end - from);
         nodes.push(span);
         if (edit.heading && edit.start >= from) {
@@ -172,7 +234,11 @@ export function createReaderTextFormat(readerContext) {
   /** @param {Response} response */
   async function renderPlainText(response) {
     readerContext.assertReaderActive();
-    const vCard = isReaderVCard(readerContext);
+    const extension = originalTextExtension(readerContext), vCard = extension === "vcf";
+    const outline = extension === "txt" ? createTxtOutline() : null;
+    /** @type {TextBlock[]} */
+    const blocks = [];
+    let position = 0;
     const pre = document.createElement("div");
     pre.className = "reader-text";
     if (!vCard) readerContext.content.appendChild(pre);
@@ -188,6 +254,7 @@ export function createReaderTextFormat(readerContext) {
           block = document.createElement("pre");
           block.className = "reader-text-block";
           pre.appendChild(block);
+          if (outline) blocks.push({ element: block, length: 0 });
         }
         let end = Math.min(text.length, offset + 32768 - blockLength);
         if (end < text.length) {
@@ -199,11 +266,16 @@ export function createReaderTextFormat(readerContext) {
               (previous === 13 && next === 10)) end--;
         }
         if (end === offset) { block = null; blockLength = 0; continue; }
-        const tail = block.lastChild;
-        if (tail?.nodeType === Node.TEXT_NODE) (/** @type {Text} */ (tail)).appendData(text.slice(offset, end));
-        else block.appendChild(document.createTextNode(text.slice(offset, end)));
+        const tail = block.lastChild, part = text.slice(offset, end);
+        if (tail?.nodeType === Node.TEXT_NODE) (/** @type {Text} */ (tail)).appendData(part);
+        else block.appendChild(document.createTextNode(part));
         if (!vCard) readerContext.markReaderContentReady();
-        blockLength += end - offset;
+        blockLength += part.length;
+        if (outline) {
+          outline.append(part, position);
+          /** @type {TextBlock} */ (blocks.at(-1)).length = blockLength;
+          position += part.length;
+        }
         offset = end;
         if (offset < text.length || blockLength >= 32768) { block = null; blockLength = 0; }
         if (offset < text.length && performance.now() >= deadline) {
@@ -213,21 +285,38 @@ export function createReaderTextFormat(readerContext) {
         }
       }
     };
+    // Search may have started during streaming. The ready path already
+    // reruns an open query after its text nodes and chapter targets settle.
+    const invalidateSearch = () => {
+      if (!vCard && readerContext.searchState.query) {
+        readerContext.nextReaderGeneration("search");
+        readerContext.clearFullSearchMarks();
+      }
+    };
+    const resetText = () => {
+      invalidateSearch();
+      pre.textContent = "";
+      block = null;
+      blockLength = position = blocks.length = 0;
+      outline?.reset();
+    };
     /** @param {number} length */
     const finishText = async (length) => {
       if (!vCard) {
-        if (length <= TXT_LAYOUT_BYTES && originalTextExtension(readerContext) === "txt") {
-          const toc = typesetPlainText(pre);
-          if (toc.length) readerContext.setToc(toc);
-        }
+        if (!outline) return;
+        const emphasize = length <= TXT_LAYOUT_BYTES;
+        const edits = outline.finish();
+        if (emphasize) edits.push(...planTextLayout(pre.textContent ?? ""));
+        if (!edits.length) return;
+        invalidateSearch();
+        const toc = typesetPlainText(blocks, edits, emphasize);
+        if (toc.length) readerContext.setToc(toc);
         return;
       }
       readerContext.assertReaderActive();
       const summary = formatVCard(pre.textContent ?? "");
       if (summary !== null) {
-        pre.textContent = "";
-        block = null;
-        blockLength = 0;
+        resetText();
         await appendDecoded(summary);
       }
       readerContext.assertReaderActive();
@@ -322,9 +411,7 @@ export function createReaderTextFormat(readerContext) {
       if (decoder.encoding.startsWith("utf-16") && displayedSampleSize) {
         // A late NUL pattern can choose UTF-16 even after the ASCII preview
         // stopped. Rebuild from byte zero, not the ASCII preview's byte offset.
-        pre.textContent = "";
-        block = null;
-        blockLength = 0;
+        resetText();
         displayedSampleSize = 0;
       }
       await appendDecoded(decoder.decode(sample.subarray(displayedSampleSize), { stream: true }), decoder.encoding);
@@ -378,9 +465,7 @@ export function createReaderTextFormat(readerContext) {
             asciiPrefixLength += asciiLength;
             if (value[asciiLength] === 0) {
               // A split UTF-16 prefix must not leave an ASCII preview behind.
-              pre.textContent = "";
-              block = null;
-              blockLength = 0;
+              resetText();
               displayedSampleSize = 0;
               asciiPrefixLength = 0;
               asciiPreviewPossible = false;

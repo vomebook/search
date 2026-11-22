@@ -25,7 +25,8 @@ function fixture({limit=1_000_000, waits=()=>Promise.resolve()}={}) {
     const size=Number(response.headers.get('content-length'));
     if(size>max)throw Object.assign(new Error('READER_RESOURCE_LIMIT'),{code:'READER_RESOURCE_LIMIT'});
   }};
-  const events=[],context={content:new FakeElement('content'),documentState:{title:'synthetic'},
+  const events=[],context={content:new FakeElement('content'),documentState:{title:'synthetic'},searchState:{query:''},
+    nextReaderGeneration(name){events.push(name);},clearFullSearchMarks(){events.push('clear');},
     assertReaderActive(){},markReaderContentReady(){events.push('ready');},waitForReader:waits,
     trackReaderResource(cleanup){events.push('track');this.cleanup=cleanup;return()=>events.push('untrack');},
     readerAbortError:()=>new DOMException('closed','AbortError'),awaitReader:promise=>Promise.resolve(promise),
@@ -73,8 +74,52 @@ test('TXT layout leaves ordinary indents and one or two blank lines alone, and c
     assert.equal(root.textContent,raw);
     const hidden=root.children.flatMap(block=>block.children).filter(node=>node.className==='reader-text-padding');
     assert.equal(hidden.map(node=>node.textContent).join(''),raw===crossBlock?'\n'.repeat(32798):'');
+    if (raw===large || raw===dense) assert.equal(f.context.toc[0].label,'第一章 绪论');
   }
+});
+
+test('large TXT keeps streaming and builds exact chapter anchors across packet and storage boundaries', async t => {
+  const f=fixture(); t.after(f.restore);
+  f.context.extension='txt';
+  const first='第一章　开头', third='第三节 末尾';
+  const prefix='\ufeff'+first+'\r\n'+'字😀'.repeat(11000)+'第二章 不是新行\n';
+  const body=prefix+' '.repeat(33000)+'第二章　中段'+'\t'.repeat(500)+'\r\n'+
+    '文'.repeat(42000)+'\r\n'+third;
+  const raw=encode(body);
+  const cut=encode('\ufeff'+first+'\r\n'+('字😀'.repeat(128))).length;
+  let controller;
+  const stream=new ReadableStream({start(active){controller=active;}});
+  const pending=f.context.renderPlainText(new Response(stream));
+  controller.enqueue(raw.subarray(0,cut));
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.ok(f.events.includes('ready'));
+  assert.equal(f.context.content.textContent,body.slice(1,1+first.length+2+128*3));
   assert.equal(f.context.toc,undefined);
+  f.context.searchState.query='中段';
+  for(let i=cut;i<raw.length;i+=719) controller.enqueue(raw.subarray(i,i+719));
+  controller.close();
+  await pending;
+  const expected=[[first,0],['第二章　中段',0],[third,1]];
+  assert.equal(f.context.content.textContent,body.slice(1));
+  assert.deepEqual(f.context.toc.map(({label,depth})=>[label,depth]),expected);
+  for (const {label,target} of f.context.toc) {
+    assert.ok(label.startsWith(target.textContent));
+    assert.equal(target.className,'reader-text-chapter-anchor');
+  }
+  assert.deepEqual(f.events.filter(e=>e==='search'||e==='clear'),['search','clear']);
+  await f.context.renderPlainText(buffered(body));
+  assert.equal(f.context.content.children.at(-1).textContent,body.slice(1));
+  assert.deepEqual(f.context.toc.map(({label,depth})=>[label,depth]),expected);
+});
+
+test('large TXT outline caps entries without clipping the body', async t => {
+  const f=fixture(); t.after(f.restore);
+  f.context.extension='txt';
+  const raw=Array.from({length:520},(_,i)=>`第${i+1}章 标题\n`).join('')+'文'.repeat(50000);
+  await f.context.renderPlainText(buffered(raw));
+  assert.equal(f.context.content.textContent,raw);
+  assert.equal(f.context.toc.length,512);
+  assert.equal(f.context.toc.at(-1).label,'第512章 标题');
 });
 
 const vCard = [

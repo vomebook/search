@@ -268,6 +268,43 @@ class ReaderFormatPipelineTests(unittest.TestCase):
         self.page.wait_for_function("()=>document.documentElement.dataset.readerPhase==='ready'")
         self.assertEqual(self.page.locator('.reader-text').text_content(),'Readable text\nTail text')
 
+    def test_large_streaming_txt_has_precise_toc_jump_and_preserves_early_search(self):
+        self.page.emulate_media(reduced_motion='reduce')
+        self.page.add_init_script(r'''(()=>{
+          const native=fetch;window.fetch=(input,init)=>String(input).includes('/api/reader-content?')
+            ?Promise.resolve(new Response(new ReadableStream({start(c){
+              const encode = new TextEncoder(), body = '这是一行足够长的用来测试目录滚动的普通正文。\r\n';
+              const head = '第一章 首段\r\n开头的检索词。\r\n';
+              const tail = body.repeat(2000)+'第二章 中段\r\n'+body.repeat(80)+
+                '第三节 目标\r\n第三章之后的检索词。\r\n'+body.repeat(95)+'第四章 结尾';
+              window.__txtRaw=head+tail;
+              c.enqueue(encode.encode('\ufeff'+head));
+              window.__finishLargeTxt=()=>{c.enqueue(encode.encode(tail));c.close();};
+            }}),{headers:{'Content-Type':'text/plain'}})):native(input,init);
+        })();''')
+        self.page.goto(self.origin+support.PREFIX+'/static/reader.html?'+urlencode(dict(
+            url='https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/large-outline.txt',ext='txt')),wait_until='domcontentloaded')
+        self.page.wait_for_function("()=>document.querySelector('.reader-text')?.textContent.startsWith('第一章 首段')")
+        self.assertEqual(self.page.locator('.reader-loading-indicator').count(),0)
+        self.assertNotEqual(self.page.locator('html').get_attribute('data-reader-phase'),'ready')
+        self.assertEqual(self.page.locator('#toc-list .toc-item').count(),0)
+        self.page.locator('#history').click()
+        self.page.locator('#full-search-toggle').click()
+        self.page.locator('#full-search-input').fill('检索词')
+        self.page.wait_for_function("()=>document.querySelector('#full-search-status').textContent==='1 个结果'")
+        self.page.evaluate('window.__finishLargeTxt()')
+        self.page.wait_for_function("()=>document.documentElement.dataset.readerPhase==='ready' && document.querySelector('#full-search-status').textContent==='2 个结果'")
+        self.assertEqual(self.page.locator('.reader-text').text_content(),self.page.evaluate('window.__txtRaw'))
+        self.assertEqual(self.page.locator('#toc-list .panel-item-main').all_text_contents(),['第一章 首段','第二章 中段','第三节 目标','第四章 结尾'])
+        self.page.locator('#toc-tab').click()
+        self.page.locator('#toc-list').get_by_role('link',name='第三节 目标',exact=True).click()
+        self.page.locator('#history-panel').wait_for(state='hidden')
+        self.page.wait_for_function('''()=>{
+          const target=[...document.querySelectorAll('.reader-text-chapter-anchor')].find(n=>n.textContent==='第三节 目标');
+          return !!target && Math.abs(target.getBoundingClientRect().top-document.querySelector('#viewport').getBoundingClientRect().top)<4;
+        }''')
+        self.assertEqual(self.page.locator('.reader-text').text_content(),self.page.evaluate('window.__txtRaw'))
+
     def test_bomless_chinese_text_is_visible_before_charset_sample_finishes(self):
         self.page.add_init_script(r'''(()=>{
           const native=fetch;window.fetch=(input,init)=>String(input).includes('/api/reader-content?')
