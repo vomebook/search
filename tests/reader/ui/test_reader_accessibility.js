@@ -7,8 +7,12 @@ const html = fs.readFileSync("static/reader.html", "utf8");
 const css = fs.readFileSync("static/reader.css", "utf8");
 const search = fs.readFileSync("static/reader/search/reader-search-controller.mjs", "utf8");
 for (const value of ['role="status"', 'id="page-number"', 'id="page-total"']) assert.ok(html.includes(value), value);
-for (const value of ['["#back", "返回"]', '["#page-number", "页码"]', '["#zoom", "缩放百分比"]']) assertCode(reader, value);
-for (const value of ['setAttribute("role", "region")', 'setAttribute("aria-label", `第 ${page} 页`)', 'setAttribute("aria-modal", "true")', 'focus({ preventScroll: true })', 'composedPath()']) assertCode(reader, value);
+for (const [id, label] of [['back', '返回'], ['page-number', '页码'], ['zoom', '缩放百分比']]) {
+  const control = html.match(new RegExp(`<(?:button|input)\\b[^>]*\\bid="${id}"[^>]*>`));
+  assert.ok(control?.[0].includes(`aria-label="${label}"`), `${id} needs its accessible label in the shell`);
+}
+assert.match(html, /<div\b[^>]*\bid="bookmark-popover"[^>]*\brole="dialog"[^>]*\baria-modal="true"/);
+for (const value of ['setAttribute("role", "region")', 'setAttribute("aria-label", `第 ${page} 页`)', 'focus({ preventScroll: true })', 'composedPath()']) assertCode(reader, value);
 assert.match(css, /prefers-contrast\s*:\s*more/);
 for (const value of ['aria-label="下载原文件"', 'role="tablist"', 'role="tab"', 'aria-controls="toc-panel"', 'role="tabpanel"']) assert.ok(html.includes(value), value);
 assert.doesNotMatch(html, /id=["']ocr["']/i);

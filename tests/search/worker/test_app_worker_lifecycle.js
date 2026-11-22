@@ -304,7 +304,9 @@ test('client registration and host boundary preserve raw and composed Worker URL
   const html = fs.readFileSync('static/index.html', 'utf8');
   assert.ok(html.indexOf('static/' + modulePath) < html.indexOf('src="static/app.js"'));
   assert.ok(!stripBundledScripts(html).includes('src="static/' + modulePath + '"'));
-  for (const path of ['static/sw.js', 'static/reader-resources.js', 'scripts/build/check_reader_release.mjs']) {
+  const {installSourcePrecachePaths} = await import('../../support/shell_assets.mjs');
+  assert.equal((await installSourcePrecachePaths('/search/static/')).filter(path => path === modulePath).length, 1);
+  for (const path of ['static/reader-resources.js', 'scripts/build/check_reader_release.mjs']) {
     assert.ok(fs.readFileSync(path, 'utf8').includes(modulePath), path);
   }
   assert.match(source, /new Worker\("\/search\/static\/search\/index-worker\.js"\)/);

@@ -512,7 +512,7 @@ class EbookFlowTests(unittest.TestCase):
         def count_base_parses(route):
             response = route.fetch()
             script = response.text()
-            needle = 'const url = new URL(raw, base);'
+            needle = 'const url = new URL(raw, location.href);'
             self.assertEqual(script.count(needle), 1)
             route.fulfill(response=response, body=script.replace(needle,
                 'window.__chapterBaseParses.push(raw);\n      ' + needle))
