@@ -70,11 +70,6 @@
       return data;
     }
 
-    /** @param {string} cacheKey @param {VoiceOfMLSidebarEntries} data */
-    function setBrowserApiCache(cacheKey, data) {
-      browserApiCache.set(cacheKey, data);
-    }
-
     /** @param {string} repo @param {string} path */
     async function fetchFolderContents(repo, path) {
       if (!deps.apiAvailable()) return null;
@@ -94,7 +89,7 @@
             if (browserApiPending.get(cacheKey) !== promise) return null;
             if (data) {
               deps.noteApiSuccess();
-              setBrowserApiCache(cacheKey, data);
+              browserApiCache.set(cacheKey, data);
             }
             return data;
           })
@@ -140,17 +135,14 @@
     /** @param {string} repo @param {string} path */
     async function getFolderContents(repo, path) {
       const cacheKey = repo + "|" + (path || "");
-      if (folderContentsCache.has(cacheKey)) {
-        const val = folderContentsCache.get(cacheKey);
-        return val;
-      }
+      if (folderContentsCache.has(cacheKey)) return folderContentsCache.get(cacheKey);
       const result = await deps.localWorker(repo, path || "");
       folderContentsCache.set(cacheKey, result);
       return result;
     }
 
     return { fetchRepos, fetchExtensions, fetchFolderTree, fetchFolderContents, loadSidebarInitial, getFolderContents,
-      folderTreeCache, browserApiCache, browserApiPending, sidebarInitialCache, sidebarInitialPending,
+      folderTreeCache, browserApiPending,
       folderContentsCache, extensionApiCache, extensionApiPending,
       get repoApiCache() { return repoApiCache; }, set repoApiCache(value) { repoApiCache = value; },
       get repoApiPending() { return repoApiPending; }, set repoApiPending(value) { repoApiPending = value; } };

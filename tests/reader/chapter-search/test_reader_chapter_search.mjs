@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import {chapterMayContainBigrams, countMatches, queryBigramFilters, resultPage, scanText}
+import {countMatches, queryBigramFilters, resultPage, scanText}
   from "../../../static/reader/search/reader-chapter-search-core.mjs";
 import {validateIndex} from "../../../static/reader/search/reader-chapter-search-index.mjs";
 import {isSearchIndexProxyURL} from "../../../static/reader/search/reader-chapter-search-proxy-url.mjs";
@@ -28,10 +28,12 @@ const chapters = [
 ];
 const progressPages = [];
 const counted = await countMatches(chapters, "needle", () => true, partial => {
-  progressPages.push({ total: partial.total, results: partial.firstPage.slice() });
+  assert.deepEqual(Object.keys(partial).sort(), ['firstPage', 'scanned', 'total']);
+  progressPages.push({ total: partial.total, scanned: partial.scanned, results: partial.firstPage.slice() });
 });
 assert.equal(counted.total, 255);
 assert.deepEqual(counted.counts, [125, 130]);
+assert.deepEqual(progressPages.map(({scanned}) => scanned), [1, 2]);
 assert.equal(progressPages[0].total, 125);
 assert.equal(progressPages[0].results.length, 50);
 assert.equal(progressPages.at(-1).total, 255);
@@ -96,9 +98,6 @@ const indexedChapters = validateIndex({
   { index: 1, title: "命中", path: "chapters/1.xhtml" },
   { index: 2, title: "排除", path: "chapters/2.xhtml" }
 ]);
-const filters = queryBigramFilters("手机");
-assert.ok(chapterMayContainBigrams(indexedChapters[0], filters));
-assert.equal(chapterMayContainBigrams(indexedChapters[1], filters), false);
 assert.equal(queryBigramFilters("MOBILE"), null);
 const filteredCount = await countMatches(indexedChapters, "手机", () => true);
 const fullScanCount = await countMatches(indexedChapters.map(({ bigramFilter, ...chapter }) => chapter), "手机", () => true);
@@ -120,25 +119,23 @@ assert.equal((await resultPage(literals, "&nbsp;", literalCounts.counts, 50, () 
 // The same pure search logic serves both Worker backends. A sparse Bloom
 // filter may reject a chapter, whereas an all-ones filter never does.
 {
-  const filters = queryBigramFilters("手机");
   const chapter = {index: 1, title: "filter", path: "1", text: "手机", bigramFilter: new Uint8Array(32)};
-  assert.equal(chapterMayContainBigrams(chapter, filters), false);
+  assert.equal((await countMatches([chapter], "手机", () => true)).total, 0);
   chapter.bigramFilter.fill(255);
-  assert.equal(chapterMayContainBigrams(chapter, filters), true);
   assert.equal(queryBigramFilters("A"), null);
   assert.equal((await countMatches([chapter], "手机", () => true)).total, 1);
 }
 // Version-1 historical JSON can contain array-like filter properties rather
 // than the decoded Uint8Array; preserve the old coercion and bit decisions.
 {
-  const filters = queryBigramFilters("手机");
   const bloom = Object.assign({length:32}, Object.fromEntries(Array.from({length:32}, (_, i) => [i,255])));
   const chapter = {index:1,title:42,path:"one",text:"手机",bigramFilter:bloom};
-  assert.equal(chapterMayContainBigrams(chapter, filters), true);
+  const total = async () => (await countMatches([chapter], "手机", () => true)).total;
+  assert.equal(await total(), 1);
   for (let i=0;i<32;i++) bloom[i]=0;
-  assert.equal(chapterMayContainBigrams(chapter, filters), false);
+  assert.equal(await total(), 0);
   chapter.bigramFilter = {};
-  assert.equal(chapterMayContainBigrams(chapter, filters), false);
+  assert.equal(await total(), 0);
 }
 // Force a cooperative yield without timing dependence. The currentness guard
 // executes inside the real scan; after the yield it must check cancellation.

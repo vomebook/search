@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import vm from 'node:vm';
 import test from 'node:test';
 import {APP_DEPENDENCIES, stripBundledScripts} from '../../../scripts/build/compose_app.mjs';
+import {installSourcePrecachePaths} from '../../support/shell_assets.mjs';
 
 const paths = ['search/reader-host/presentation/return-position.js', 'search/reader-host/application/host.js'];
 function context(values = {}) {
@@ -11,7 +12,8 @@ function context(values = {}) {
   return c;
 }
 
-test('reader host dependencies are composed, cached and loaded before the app', () => {
+test('reader host dependencies are composed, cached and loaded before the app', async () => {
+  const precache = await installSourcePrecachePaths('/search/static/');
   const html = fs.readFileSync('static/index.html', 'utf8'), c = context();
   vm.runInContext(fs.readFileSync('static/reader-resources.js', 'utf8'), c);
   for (const path of paths) {
@@ -19,7 +21,7 @@ test('reader host dependencies are composed, cached and loaded before the app', 
     assert.ok(html.indexOf(path) > html.indexOf('search/reader-host/application/navigation.js'));
     assert.ok(html.indexOf(path) < html.indexOf('static/app.js'));
     assert.ok(!stripBundledScripts(html).includes(path));
-    assert.ok(fs.readFileSync('static/sw.js', 'utf8').includes('/static/' + path));
+    assert.equal(precache.filter(file => file === path).length, 1, path);
     for (const site of ['github', 'huggingface']) assert.ok(c.VoiceOfMLReaderResources.buildFiles(site).includes(path));
     const source = fs.readFileSync('static/' + path, 'utf8');
     assert.doesNotMatch(source, /\bSTATE\b|\bVSCROLL\b|\bDOM\b|new Proxy/);

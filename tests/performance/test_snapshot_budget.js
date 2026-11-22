@@ -30,7 +30,7 @@ function fixture(source, root) {
     const helper = source.match(new RegExp("^function " + name + "\\([^]*?^}", "m"));
     if (helper) vm.runInContext(helper[0], c);
   }
-  for (const name of ["cloneSearchResult", "cloneSearchPageCache",
+  for (const name of ["cloneSearchResult",
     "getSearchSnapshotResultsBytes", "extendSearchSnapshotBudget",
     "saveSearchViewSnapshot", "appendSearchResults"]) {
     const match = source.match(new RegExp("^function " + name + "\\([^]*?^}", "m"));

@@ -103,5 +103,5 @@
     return { startThemeTransition, finishThemeTransition, applyTheme, applyMobileMode, finishMobileMode,
       collapseLeftSidebar, focusSidebar, updateSidebarVisibility };
   }
-  globalThis.VoiceOfMLShellView = { create, focusSearchSidebar };
+  globalThis.VoiceOfMLShellView = { create };
 })();

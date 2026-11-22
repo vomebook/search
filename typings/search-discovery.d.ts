@@ -8,7 +8,6 @@ interface VoiceOfMLRandomDiscoveryDependencies {
   button(): HTMLElement | null | undefined;
   apiBase: string;
   nativeCount(): number;
-  assetsLoaded(): boolean;
   loadReaderAssets(): Promise<unknown>;
   getConvertedReaderRecords(repo: string): Promise<VoiceOfMLDiscoveryRecord[]>;
   localRecord(repo: string, readerOnly: boolean): Promise<{record?: VoiceOfMLDiscoveryRecord | null} | null>;

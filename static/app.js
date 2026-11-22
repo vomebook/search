@@ -693,8 +693,6 @@ function updateSelectionUI() {
     DOM.mobileSelectedCount.style.display = (STATE.isMobile && DOM.multiSelectToggle.checked && count > 0) ? "inline-block" : "none";
   }
   DOM.multiActionBar.style.display = DOM.multiSelectToggle.checked ? "" : "none";
-  if (DOM.multiCopyLinks) DOM.multiCopyLinks.textContent = "复制链接";
-  if (DOM.multiDeselect) DOM.multiDeselect.textContent = "取消选择";
   if (DOM.multiSelectToggle.checked) {
     document.body.classList.add("multiselect");
   } else {
@@ -768,11 +766,6 @@ function toMirrorURL(url) {
 /** @param {string} link */
 function getCopyableLink(link) {
   return STATE.useMirrorLinks ? toMirrorURL(link) : link;
-}
-
-/** @param {string} path */
-function getPreviewLink(path) {
-  return STATE.useMirrorLinks ? toMirrorURL(path) : path;
 }
 
 /** @param {PagesSearchParams} params */
@@ -1257,9 +1250,9 @@ function cacheDOM() {
   DOM.mirrorLinksToggle = $("#mirror-links-toggle");
   DOM.loadInfo = $("#load-info");
   DOM.mobileSelectedCount = $("#mobile-selected-count");
-  DOM.loadedCount = $("#loaded-count");
   DOM.totalCount = $("#total-count");
   DOM.currentResultPosition = $("#current-result-position");
+  DOM.resultPositionDisplay = $("#result-position-display");
   DOM.scrollTrack = $("#scroll-track");
   DOM.scrollThumb = $("#scroll-thumb");
   DOM.hitokoto = $("#hitokoto");
@@ -1294,7 +1287,6 @@ function cacheDOM() {
   DOM.returnToPositionBtn = $("#return-to-position-btn");
   DOM.backToTopBtn = $("#restart-position-btn");
   DOM.retryPositionBtn = $("#retry-position-btn");
-  DOM.cancelPositionBtn = $("#cancel-position-btn");
   DOM.positionRestoreStatus = $("#search-position-status");
   DOM.multiToggleLabel = $("#multi-toggle-label");
   DOM.multiSelectToggle = $("#multi-select-toggle");
@@ -1357,10 +1349,6 @@ function navigateSidebarParent() {
   const parts = String(STATE.browserPath || "").split("/").filter(Boolean);
   const parent = parts.slice(0, -1).join("/");
   ROUTER.navigate(parts.length ? "repo" : "global", STATE.repo, parent);
-}
-
-function returnFromSidebar() {
-  navigateSidebarParent();
 }
 
 function closeLeftSidebar() { getShell().closeLeftSidebar(); }
@@ -1568,7 +1556,6 @@ function renderSidebarAndFiltersDeferred(routeId) {
 let searchTimer = null;
 let searchComposing = false;
 let initialSearchDraft = false;
-/** @type {VoiceOfMLInputController} */
 /** @type {VoiceOfMLInputController | undefined} */
 let searchInputController;
 let searchId = 0;
@@ -1710,7 +1697,6 @@ function updateSearchPositionControls() {
   if (DOM.returnToPositionBtn) DOM.returnToPositionBtn.hidden = !returnPositionTarget || !!positionRestore;
   if (DOM.backToTopBtn) DOM.backToTopBtn.hidden = !STATE.results.length || getResultScrollTop() <= 0;
   if (DOM.positionRestoreStatus) DOM.positionRestoreStatus.hidden = !positionRestore;
-  if (DOM.cancelPositionBtn) DOM.cancelPositionBtn.hidden = true;
 }
 
 /** @param {boolean} [preserveDrafts] */
@@ -1807,7 +1793,6 @@ function setupSearchPositionControls() {
   DOM.returnToPositionBtn?.addEventListener("click", returnToSavedPosition);
   DOM.backToTopBtn.addEventListener("click", backToSearchTop);
   DOM.retryPositionBtn.addEventListener("click", () => tryRestoreSearchPosition(getSearchViewKey()));
-  DOM.cancelPositionBtn?.addEventListener("click", backToSearchTop);
 
   /** @type {{key: string, value: string} | null} */
   let edit = null;
@@ -1919,7 +1904,7 @@ function showSavedSearchViewport(viewport, position, task) {
   const results = new Array(Math.min(viewport.total, position.loadedPage * size));
   for (const [index, record] of viewport.records) if (Number.isInteger(index) && index >= 0 && index < results.length) results[index] = record;
   const snapshot = { version: SEARCH_VIEW_SNAPSHOT_VERSION, key: position.key, results, total: viewport.total,
-    page: position.loadedPage, loadedPage: position.loadedPage, pageCache: {}, hasMore: results.length < viewport.total,
+    loadedPage: position.loadedPage, pageCache: {}, hasMore: results.length < viewport.total,
     resultBackend: viewport.resultBackend,
     window: { preview: true, generation: viewport.generation, pages: [], count: Object.keys(results).length }, estimatedHeight: viewport.estimatedHeight,
     heightCache: viewport.records.map(([, record, height]) => /** @type {SearchSnapshotHeightEntry} */ ([getResultStableId(record), {height, measurementKey: viewport.measurementKey}])),
@@ -1947,7 +1932,7 @@ function rememberDisplayedSearchView() {
   const unchanged = previous && previous.key === key && previous.results === STATE.results
     && previous.length === STATE.results.length && previous.total === STATE.total
     && previous.loadedPage === STATE._loadedPage && previous.pageCache === STATE._pageCache && previous.window === resultWindow;
-  displayedSearchView = { key: getSearchViewKey(), results: STATE.results,
+  displayedSearchView = { key, results: STATE.results,
     resultBackend: STATE._resultBackend,
     total: STATE.total, loadedPage: STATE._loadedPage, pageCache: STATE._pageCache,
     length: STATE.results.length, window: resultWindow, revision: unchanged ? previous.revision : ++displayedViewRevision };
@@ -2381,11 +2366,6 @@ function cloneSearchResult(result) {
   if (metadata && copy && (typeof copy === "object" || typeof copy === "function")) searchPageMetadata.set(copy, metadata);
   return copy;
 }
-/** @param {Record<string, unknown>} cache */
-function cloneSearchPageCache(cache) {
-  return /** @type {PagesSearchState['_pageCache']} */ (resultSnapshots.copyPageCache(cache));
-}
-
 /** @param {unknown[]} results @param {boolean} [sparse] */
 function getSearchSnapshotResultsBytes(results, sparse = false) {
   return resultSnapshots.budget.measure(results, sparse);
@@ -2480,15 +2460,13 @@ function restoreSearchViewSnapshot(key, restoreScroll = true, { preserveRestore 
   // Cloning preserves sparse slots and existing records without validating their fields.
   STATE.results = /** @type {(PagesSearchRecord | null | undefined)[]} */ (resultSnapshots.restoreResults(snapshot, key, STATE.pageSize, restoreScroll, preserveRestore));
   STATE.total = snapshot.total;
-  STATE.page = snapshot.page;
-  STATE._loadedPage = snapshot.loadedPage;
-  STATE._pageCache = cloneSearchPageCache(snapshot.pageCache);
+  STATE.page = STATE._loadedPage = snapshot.loadedPage;
+  STATE._pageCache = /** @type {PagesSearchState['_pageCache']} */ (resultSnapshots.copyPageCache(snapshot.pageCache));
   STATE._resultBackend = snapshot.resultBackend || null;
   STATE.hasMore = snapshot.hasMore;
   if (snapshot.window) resultWindow = { ...snapshot.window, key, total: snapshot.total, query: {...JSON.parse(key), resultBackend: snapshot.resultBackend},
     pages: new Set(snapshot.window.pages), pending: new Map(), failures: new Map(), controller: new AbortController() };
   STATE.isLoading = false;
-  STATE.page = STATE._loadedPage;
   STATE._pendingPage = 0;
   STATE._deferredAppendWhileDragging = false;
   STATE._initialActive = false;
@@ -3147,7 +3125,7 @@ function getResultRows() {
     escapeHTML: value => escapeHTML(value), highlightText: (text, query) => highlightText(text, query),
     getFileIconType: ext => getFileIconType(ext), formatSize: size => formatSize(size),
     getRecordLink: record => getRecordLink(record), getCopyableLink: link => getCopyableLink(link),
-    getRecordPath: record => getRecordPath(record), getPreviewLink: path => getPreviewLink(path), icons: ICONS,
+    getRecordPath: record => getRecordPath(record), getPreviewLink: path => getCopyableLink(path), icons: ICONS,
     readerAction(rec, recordLink) {
       const readerRecord = applyReaderAsset(rec, rec.Repo || "", buildRecordRelativePath(rec), recordLink);
       const { record, label } = selectResultReaderAction(rec, readerRecord);
@@ -3442,15 +3420,14 @@ function scheduleFilterSearch(clearResults = false) {
 }
 
 function updateCurrentResultPosition() {
-  const label = /** @type {HTMLInputElement | null} */ (document.getElementById("current-result-position"));
-  if (!label) return;
-  const editing = document.activeElement === label;
-  label.hidden = !editing;
+  const {currentResultPosition: input, resultPositionDisplay: display} = DOM;
+  if (!input) return;
+  const editing = document.activeElement === input;
+  input.hidden = !editing;
   if (STATE.results.length || STATE.total) {
-    const index = findVirtualIndex(getResultScrollTop());
-    if (!editing && label.value !== String(index + 1)) label.value = String(index + 1);
-    const display = document.getElementById('result-position-display');
-    if (display && display.textContent !== String(index + 1)) display.textContent = String(index + 1);
+    const position = String(findVirtualIndex(getResultScrollTop()) + 1);
+    if (!editing && input.value !== position) input.value = position;
+    if (display && display.textContent !== position) display.textContent = position;
   }
   updateSearchPositionControls();
 }
@@ -3643,7 +3620,6 @@ function getRandomDiscovery() {
     button: () => DOM.randomTxtBtn,
     apiBase: API_BASE,
     nativeCount: () => STATE.repoFull ? (readerMetadata.byRepo[STATE.repoFull] || 0) : (readerMetadata.count || 0),
-    assetsLoaded: () => !!readerAssetController.state.assets,
     loadReaderAssets: () => loadReaderAssets(),
     getConvertedReaderRecords: repo => getConvertedReaderRecords(repo),
     // Preserve the unvalidated Worker record and its identity for discovery.
@@ -4213,7 +4189,7 @@ async function init() {
     updateSidebarHeader();
     syncStateToURL();
   });
-  DOM.sidebarBackBtn.addEventListener("click", returnFromSidebar);
+  DOM.sidebarBackBtn.addEventListener("click", navigateSidebarParent);
   DOM.themeBtn.addEventListener("click", toggleTheme);
   DOM.mobileToggleBtn.addEventListener("click", toggleMobile);
   DOM.clearFiltersBtn.addEventListener("click", clearAllFilters);

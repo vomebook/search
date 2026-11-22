@@ -76,7 +76,7 @@ test('restoration retries retain lookup and partial-neighbor buffer identity wit
   f.c.fetchPositionPageWithRecovery = (...args) => args[1] === 3 ? Promise.reject(new Error('offline')) : original(...args);
   const first = f.make(); await f.run(first);
   assert.equal(first.failed, true); assert.deepEqual([...first.ready.keys()], [1, 2, 4]);
-  assert.equal(first.page, 1); assert.equal(first.results.length, 0);
+  assert.equal(f.c.snapshot, undefined); assert.equal(f.events.includes('restore'), false);
   const retry = f.make(first);
   assert.equal(retry.ready, first.ready); assert.equal(retry.lookup, first.lookup);
   assert.equal(retry.backend, 'api');
@@ -98,7 +98,7 @@ test('generation mismatch clears the shared retry buffer and restarts lookup thr
   f.c.validatePositionWindowPage = (...args) => {validations++; f.c.VoiceOfMLSearchWindowPage.validate(...args);};
   await f.run(first);
   assert.ok(validations >= 2); assert.equal(first.error.message, 'RESTORE_PAGE_CHANGED');
-  assert.equal(first.ready, buffer); assert.equal(buffer.size, 0); assert.equal(first.lookup, null); assert.equal(first.page, 0);
+  assert.equal(first.ready, buffer); assert.equal(buffer.size, 0); assert.equal(first.lookup, null); assert.equal(f.c.snapshot, undefined);
   f.calls.length = 0; f.c.fetchPositionPageWithRecovery = original;
   const retry = f.make(first); assert.equal(retry.ready, buffer);
   await f.run(retry); assert.deepEqual(f.calls.map(call => call.number), [1, 2, 3, 4]);

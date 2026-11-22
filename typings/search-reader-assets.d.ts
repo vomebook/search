@@ -23,7 +23,6 @@ interface ReaderAssetScheduling {
 interface ReaderAssetTransport {
   state: { compressedLimit: number; expandedLimit: number };
   fetchReaderAssetMap(deferDecode?: boolean): Promise<ReaderAssetMap>;
-  readBoundedReaderStream(stream: ReadableStream<Uint8Array>, limit: number, signal: AbortSignal): Promise<Uint8Array>;
 }
 interface ReaderAssetController {
   state: ReaderAssetState; scheduling: ReaderAssetScheduling; transport: ReaderAssetTransport;

@@ -156,5 +156,5 @@
     }
     return {get database() { return database; }, close, init, read, writeContent, writePosition};
   }
-  Object.assign(globalThis, {VoiceOfMLPositionStorage: {create, pruneContent}});
+  Object.assign(globalThis, {VoiceOfMLPositionStorage: {create}});
 })();

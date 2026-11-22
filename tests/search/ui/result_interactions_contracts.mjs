@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import vm from 'node:vm';
 import test from 'node:test';
 import {APP_DEPENDENCIES, stripBundledScripts} from '../../../scripts/build/compose_app.mjs';
+import {installSourcePrecachePaths} from '../../support/shell_assets.mjs';
 import {createRequire} from 'node:module';
 const space = fs.existsSync('pyrightconfig.json');
 const app = fs.readFileSync('static/app.js', 'utf8');
@@ -67,17 +68,17 @@ function fixture() {
   return {c, DOM, copied, downloads, navigated, warmed, rendered, toasts, click};
 }
 
-test('result modules are source, composition, resource and offline dependencies exactly once', () => {
+test('result modules are source, composition, resource and offline dependencies exactly once', async () => {
+  const precache = await installSourcePrecachePaths('/search/static/');
   const html = fs.readFileSync('static/index.html', 'utf8');
   const resources = createRequire(import.meta.url)('../../../static/reader-resources.js');
-  const sw = fs.readFileSync('static/sw.js', 'utf8');
   for (const name of names) {
     assert.equal(APP_DEPENDENCIES.filter(item => item === name).length, 1);
     assert.equal(html.split(name).length - 1, 1);
     assert.ok(html.indexOf(name) < html.lastIndexOf('app.js'));
     assert.ok(!stripBundledScripts(html).includes(name));
     for (const project of ['github', 'hf']) assert.equal(resources.buildFiles(project).filter(item => item === name).length, 1);
-    assert.equal(sw.split('/static/' + name).length - 1, 1);
+    assert.equal(precache.filter(file => file === name).length, 1, name);
     assert.doesNotMatch(fs.readFileSync('static/' + name, 'utf8'), /\bSTATE\b|\bVSCROLL\b|refreshResultReaderActions|scheduleVirtualRender/);
   }
   assert.ok(app.indexOf('getResultInteractions().installSelection();') < app.lastIndexOf('setupResultDelegation();'));

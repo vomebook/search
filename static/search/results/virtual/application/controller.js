@@ -12,7 +12,7 @@ const scroll = { origin: 0, target: null };
 /** @type {number | null} */
 let releasedDragTop = null;
 const heights = VoiceOfMLVirtualHeights.create(VSCROLL, deps);
-const { ensureHeightTree, getVirtualTotalHeight, getVirtualOffset, findVirtualIndex, ensureVirtualHeights } = heights;
+const { getVirtualTotalHeight, getVirtualOffset, findVirtualIndex, ensureVirtualHeights } = heights;
 const { getResultScrollOrigin, layoutResultScrollSegment, reconcileVirtualRows } = VoiceOfMLVirtualRows.create(VSCROLL, scroll, {
   elements: DOM, total: deps.total, recordForRow: deps.recordForRow,
   resetKeyboardIndex: deps.resetKeyboardIndex, ensureResultTemplateCache: deps.ensureResultTemplateCache,
@@ -97,7 +97,6 @@ function renderVisible() {
   const extraScreens = tightWindow ? 0 : Math.min(3, Math.floor(VSCROLL.scrollVelocity / 1.5));
   const baseOverscanPx = overscanItems * (est || 60);
   const velocityOverscanPx = extraScreens * viewH;
-  ensureHeightTree();
   const scrollingDown = scrollTop >= previousScrollTop;
   VSCROLL.scrollDirection = scrollingDown ? 1 : -1;
   VSCROLL.lastScrollTop = scrollTop;
@@ -204,7 +203,6 @@ function refreshVirtualAfterAppend(updateView = true) {
     if (updateView) scheduleVirtualRender();
     return;
   }
-  ensureHeightTree();
   const topH = getVirtualOffset(VSCROLL.renderStart);
   const endH = getVirtualOffset(VSCROLL.renderEnd);
   const totalH = getVirtualTotalHeight();

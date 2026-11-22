@@ -15,7 +15,7 @@ type Cleanup = (() => void) | { dispose?: () => void } | null | undefined;
 export interface ReaderBindingsContext {
   readerRuntime: { track(value: Cleanup): unknown; cancel(id: number): void; update(domain: 'source', value: {id: string; url: string; contentUrl: string; downloadUrl: string; extension: string; metadata: SourceData | null}): unknown; events: {on(type: string, callback: (detail: unknown, type: string) => void): () => void}; negotiate(capability: Capability): Capability; currentGeneration(kind: string): number };
   readerRequestManager: Disposable;
-  formatAdapters: Disposable; stopReaderWork(): void; trackReaderResource(cleanup: () => void): unknown;
+  formatAdapters: Disposable; trackReaderResource(cleanup: () => void): unknown;
   pdfDiagnostics: { snapshot(): unknown }; pdfPageTimings: unknown[];
   readerId: string; localReaderData: SourceData | null; cachedReaderData: SourceData | null; resolvedReaderData: SourceData | null;
   extension: string; sourceUrl: string; contentUrl: string; downloadUrl: string; sourceName: string; params: URLSearchParams; capability: Capability;
@@ -23,16 +23,15 @@ export interface ReaderBindingsContext {
   panelState: {showingAllBookmarks: boolean; editingBookmark: StoredBookmark | null}; renderHistory(): void; renderBookmarks(): Promise<unknown>;
   setReaderPhase(phase: string): unknown;
   viewport: HTMLElement; setReaderPanelOpen(open: boolean, focus?: boolean, keyboard?: boolean): void;
-  loadingIndicator: HTMLElement; content: HTMLElement; downloadButton: HTMLElement; startReaderDownload(event: MouseEvent): unknown;
+  loadingIndicator: HTMLElement; content: HTMLElement;
   updateDocumentState(value: {title: string; zoom: number}): void; documentState: {title: string; zoom: number; pageCount: number; page: number};
   returnUrl: string; returnNavigationToken: string; returnNeedsReload: boolean; returnHistoryKey: string | null; canReturnWithHistory: boolean;
   chapterSearchClient: Disposable | null; pdfV3Repository: Disposable | null; pdfTextLayerRepository: Disposable | null;
   pdfBookSearchClient: Disposable | null; pdfBookSearchPrefetchTimer: number; pdfBookSearchPrefetchPromise: Promise<unknown> | null;
   clearPdfManifestPrefetches(): void; pdfRenderWaiters: {reject(error: Error): void}[]; pdfTextWaiters: {reject(error: Error): void}[]; readerAbortError(): Error; nextReaderGeneration(name: string): number;
-  applyReaderMetadata(data: unknown): void;
-  bookmarkPopover: HTMLElement; bookmarkLabelInput: HTMLInputElement; bookmarkExcerptInput: HTMLTextAreaElement; bookmarkEditFields: HTMLElement;
-  bookmarksAllButton: HTMLButtonElement; bookmarksSearchButton: Element; bookmarksHeaderActions: HTMLElement; bookmarksHeader: Element;
-  mediaTab: HTMLButtonElement; mediaPanel: HTMLElement; status: HTMLElement; openBookmarkPopover(invoker?: HTMLElement): void;
+  bookmarkPopover: HTMLElement; bookmarkLabelInput: HTMLInputElement; bookmarkExcerptInput: HTMLTextAreaElement;
+  bookmarksAllButton: HTMLButtonElement;
+  mediaTab: HTMLButtonElement; mediaPanel: HTMLElement; openBookmarkPopover(invoker?: HTMLElement): void;
   pageInverted: boolean; pageInvertToggle: HTMLElement; applyPageInversion(persist?: boolean): void;
   readerThemeToggle: HTMLElement; readerTheme: string; applyReaderTheme(theme: string, persist?: boolean, notify?: boolean): void;
   readerPath: HTMLElement; navigateReaderFolder(event: Event): void; isReaderOverlayFrame(): boolean;
@@ -52,7 +51,7 @@ export interface ReaderBindingsContext {
   progressSeeking: boolean; previousProgressState: ProgressState | null; captureProgressState(): ProgressState | null; isReaderGenerationCurrent(kind: string, generation: number): boolean; flushEpubSeek(): Promise<unknown>;
   progressRange: HTMLInputElement; progressPercent: HTMLElement; seekProgress(value: string, user: boolean): boolean; progressUndo: HTMLElement; restoreProgressState(state: ProgressState | null): unknown;
   chapterPrev: HTMLElement; chapterNext: HTMLElement; activateChapter(index: number): unknown; adjacentTocIndex(direction: number): number;
-  domSearch: Disposable; fullSearchController: Disposable; pdfPersistentTextStore: Disposable | null; pdfPersistentTextOpening: Promise<unknown> | null; pdfPersistentTextVersion: string | null; pdfSearchTextCache: {clear(): void}; pdfSearchTextCacheBytes: number;
+  pdfPersistentTextStore: Disposable | null; pdfPersistentTextOpening: Promise<unknown> | null; pdfPersistentTextVersion: string | null; pdfSearchTextCache: {clear(): void}; pdfSearchTextCacheBytes: number;
   registerReaderFormatAdapters(): void; syncCapabilityControls(): void; start(): Promise<unknown>; readerAbortController: AbortController; classifyReaderError(error: unknown): unknown; fail(message: string, code: string): void;
 }
 declare global {

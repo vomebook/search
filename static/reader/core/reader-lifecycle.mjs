@@ -171,7 +171,8 @@ export function createReaderLifecycle(readerContext) {
     if (code === "READER_DJVU_TRANSPORT") void readerContext.saveProgress().catch(() => {});
     readerContext.updateDocumentState({ restorationReady: false });
     readerContext.readerRuntime.fail(code);
-    if (["READER_PDF_TRANSPORT", "READER_DJVU_TRANSPORT", "READER_MEDIA"].includes(code)) readerContext.setReaderPanelOpen(false);
+    const closePanel = ["READER_PDF_TRANSPORT", "READER_DJVU_TRANSPORT", "READER_MEDIA"].includes(code);
+    if (closePanel) readerContext.setReaderPanelOpen(false);
     readerContext.stopReaderWork();
     readerContext.readerRequestManager.dispose();
     readerContext.formatAdapters.dispose();
@@ -186,8 +187,9 @@ export function createReaderLifecycle(readerContext) {
       : message;
     const visibleMessage = `${description} [${readerContext.readerLifecycle.stage}]`;
     readerContext.content.innerHTML = `<div class="reader-error" role="alert"></div>`;
-    (/** @type {Element} */ (readerContext.content.querySelector(".reader-error"))).textContent = visibleMessage;
-    const waitForProgress = ["READER_PDF_TRANSPORT", "READER_DJVU_TRANSPORT", "READER_MEDIA", "READER_DOCUMENT_INTERRUPTED"].includes(code);
+    const surface = /** @type {Element} */ (readerContext.content.querySelector(".reader-error"));
+    surface.textContent = visibleMessage;
+    const waitForProgress = closePanel || code === "READER_DOCUMENT_INTERRUPTED";
     if (waitForProgress || ["READER_ENGINE_NETWORK", "READER_RESTORE", "READER_CHAPTER_MANIFEST_TRANSIENT"].includes(code)) {
       const retry = document.createElement("button");
       retry.type = "button";
@@ -207,7 +209,7 @@ export function createReaderLifecycle(readerContext) {
         }
         location.reload();
       });
-      (/** @type {Element} */ (readerContext.content.querySelector(".reader-error"))).append(document.createElement("br"), retry);
+      surface.append(document.createElement("br"), retry);
     }
     readerContext.status.textContent = "无法打开";
   }

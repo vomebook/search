@@ -23,22 +23,14 @@ function decodeFilter(encoded) {
   for (let j=0;j<binary.length;j++) filter[j]=binary.charCodeAt(j);
   return filter;
 }
-/** @param {unknown} value @returns {value is IndexedChapter} */
-function isValidChapter(value) {
-  return isRawChapter(value);
-}
-/** @param {unknown[]} values @returns {values is IndexedChapter[]} */
-function allValidChapters(values) { return values.every(isValidChapter); }
-/** @param {unknown} value @param {ExpectedChapter | undefined} expected @param {1 | 2} version @returns {IndexedChapter} */
+/** @param {unknown} value @param {ExpectedChapter | undefined} expected @param {1 | 2} version */
 function validateChapter(value,expected,version) {
   if (!expected || !isRawChapter(value) || value.index!==expected.index || value.path!==expected.path)
     throw new Error("全文搜索索引与章节不一致");
   if (version===2 && value.bf!==undefined) {
     value.bigramFilter=decodeFilter(String(value.bf));delete value.bf;
   }
-  const title=expected.title || `章节 ${expected.index}`;
-  value.title=title;
-  return value;
+  value.title=expected.title || `章节 ${expected.index}`;
 }
 /** @param {unknown} data @param {ExpectedChapter[]} chapters @param {string | undefined} [textProfile] @returns {IndexedChapter[]} */
 export function validateIndex(data,chapters,textProfile) {
@@ -46,6 +38,6 @@ export function validateIndex(data,chapters,textProfile) {
   if ((textProfile !== undefined && textProfile !== "dom-text-v1") || data.text_profile !== textProfile)
     throw new Error("全文搜索索引文本格式不一致，请重试");
   for (let i=0;i<chapters.length;i++) validateChapter(data.chapters[i],chapters[i],data.version);
-  if (!allValidChapters(data.chapters)) throw new Error("全文搜索过滤索引无效");
-  return data.chapters;
+  // The loop checks every entry (including holes) and normalizes it in place.
+  return /** @type {IndexedChapter[]} */ (data.chapters);
 }

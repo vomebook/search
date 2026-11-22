@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import vm from 'node:vm';
 import test from 'node:test';
 import { APP_DEPENDENCIES, stripBundledScripts } from '../../../scripts/build/compose_app.mjs';
+import {installSourcePrecachePaths} from '../../support/shell_assets.mjs';
 
 const current = fs.readFileSync('static/app.js', 'utf8');
 // The same literal contracts can also run against the exact pre-extraction host.
@@ -53,13 +54,14 @@ function fixture(route = '', overrides = {}) {
   return {c,state,dom,events,location,classes};
 }
 
-test('routing modules are in HTML, composition, resources, service worker and strict projects',()=>{
+test('routing modules are in HTML, composition, resources, service worker and strict projects',async ()=>{
+  const precache = await installSourcePrecachePaths('/search/static/');
   const html=fs.readFileSync('static/index.html','utf8'),c=vm.createContext({});
   vm.runInContext(fs.readFileSync('static/reader-resources.js','utf8'),c);
   for(const path of modules){
     assert.ok(APP_DEPENDENCIES.includes(path));assert.ok(html.indexOf(path)<html.indexOf('static/app.js'));
     assert.ok(html.includes(path));assert.ok(!stripBundledScripts(html).includes(path));
-    assert.ok(fs.readFileSync('static/sw.js','utf8').includes('/static/'+path));
+    assert.equal(precache.filter(file => file === path).length, 1, path);
     for(const site of ['github','huggingface']) assert.ok(c.VoiceOfMLReaderResources.buildFiles(site).includes(path));
     for(const config of ['check','strict','search-exact']) assert.ok(fs.readFileSync('config/types/jsconfig.'+config+'.json','utf8').includes(path));
     assert.doesNotMatch(fs.readFileSync('static/'+path,'utf8'),/\bSTATE\b|\bVSCROLL\b|\bDOM\b|new Proxy/);

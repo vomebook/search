@@ -184,10 +184,6 @@ export function createReaderDocumentLoader(readerContext) {
     return {response, engine:engines};
   }
 
-  function loadMediaDocument() {
-    return Promise.resolve(null);
-  }
-
   /** @param {string} [target] */
   async function loadImageDocument(target = readerContext.sourceUrl) {
     const deadline = performance.now() + readerContext.READER_PROXY_TIMEOUT_MS;
@@ -230,7 +226,6 @@ export function createReaderDocumentLoader(readerContext) {
     loadTextDocument,
     loadMarkdownDocument,
     loadHtmlDocument,
-    loadMediaDocument,
     loadImageDocument,
     loadChapterManifestDocument
   };

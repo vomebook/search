@@ -82,7 +82,7 @@
       });
     }
 
-    return { cache, pendingWrites, identities, cloneSearchData, getCachedSearchResponse,
+    return { cache, identities, cloneSearchData, getCachedSearchResponse,
       cancelPendingSearchCacheWrites, setCachedSearchResponse };
   }
   globalThis.VoiceOfMLSearchResponseStore = { create };

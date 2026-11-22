@@ -178,7 +178,9 @@ test('sidebar focus skips disabled, invisible and hidden or inert controls and f
   const inertParent = f.element('inertParent', sidebar); inertParent.inert = true;
   const inert = f.element('inert', inertParent);
   sidebar.controls = [disabled, invisible, inert, f.leftControl];
-  const view = f.c.VoiceOfMLShellView;
-  view.focusSearchSidebar(sidebar); assert.equal(f.document.activeElement, f.leftControl);
-  sidebar.controls.pop(); view.focusSearchSidebar(sidebar); assert.equal(f.document.activeElement, sidebar);
+  f.c.closeLeftSidebar();
+  f.c.toggleLeftSidebar({detail: 0}); assert.equal(f.document.activeElement, f.leftControl);
+  f.c.closeLeftSidebar();
+  sidebar.controls.pop();
+  f.c.toggleLeftSidebar({detail: 0}); assert.equal(f.document.activeElement, sidebar);
 });

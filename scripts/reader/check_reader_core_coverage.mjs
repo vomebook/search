@@ -21,6 +21,7 @@ const boundaryTests = [
   {file: "tests/reader/core/test_reader_format_controller_boundary.mjs", names: [
     "DjVu loader remains a separate module at the Pages runtime URL",
     "resolution ignores non-string extensions and preserves the existing extension",
+    "direct and resolved PDF links retain legacy page-manifest mode",
     "resolution retains string and legacy DJVU semantics",
     "classification is narrowed at the fail boundary without coercion",
     "dynamic lifecycle code remains uncoerced and is narrowed by the controller",

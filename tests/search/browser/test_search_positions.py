@@ -457,7 +457,7 @@ class SearchPositionTests(unittest.TestCase):
           };
         }''')
         self.page.get_by_text('重试恢复', exact=True).wait_for()
-        self.assertEqual(self.page.evaluate('positionRestore.page'), 1)
+        self.assertEqual(self.page.evaluate('restoreCalls.filter(page=>page<=2)'), [1, 2, 2, 2])
         self.page.evaluate('failPage=false')
         self.page.get_by_text('重试恢复', exact=True).click()
         self.assert_position()
@@ -474,7 +474,6 @@ class SearchPositionTests(unittest.TestCase):
         }''')
         self.page.locator('#retry-position-btn').wait_for()
         self.assertEqual(self.page.locator('#search-position-status').get_attribute('title'), '搜索数据已更新，请重试恢复')
-        self.assertEqual(self.page.evaluate('positionRestore.results.length'), 0)
         self.page.get_by_text('重试恢复', exact=True).click()
         self.assert_position()
         self.assertEqual(self.page.evaluate('restoreCalls.filter(page=>page<=2)'), [1, 2, 1, 2])
@@ -530,7 +529,7 @@ class SearchPositionTests(unittest.TestCase):
           };
         }''')
         self.page.get_by_text('重试恢复', exact=True).wait_for()
-        self.assertEqual(self.page.evaluate('[positionRestore.page,...positionRestore.ready.keys()]'), [1,1,3])
+        self.assertEqual(self.page.evaluate('restoreCalls'), [1, 2, 3, 2, 2])
         self.page.evaluate('failPage=false')
         self.page.get_by_text('重试恢复', exact=True).click()
         self.assert_position()
@@ -543,12 +542,15 @@ class SearchPositionTests(unittest.TestCase):
           pagingTotal=400;searchResponseStore.cache.clear();
           const key=[...positionPersistence.positions.keys()].find(key=>JSON.parse(key).query==='paging-original');
           positionPersistence.positions.get(key).loadedPage=4;
-          const original=fetchPositionPage;window.coherent=false;
-          fetchPositionPage=async (...args)=>({...await original(...args),generation:coherent||args[1]===3?'new':'old'});
+          const original=fetchPositionPage;window.coherent=false;window.restoreCalls=[];
+          fetchPositionPage=async (...args)=>{
+            restoreCalls.push(args[1]);
+            return {...await original(...args),generation:coherent||args[1]===3?'new':'old'};
+          };
         }''')
         self.page.locator('#retry-position-btn').wait_for()
         self.assertEqual(self.page.locator('#search-position-status').get_attribute('title'), '搜索数据已更新，请重试恢复')
-        self.assertEqual(self.page.evaluate('[positionRestore.results.length,positionRestore.ready.size,positionRestore.page]'), [0,0,0])
-        self.page.evaluate('coherent=true')
+        self.page.evaluate('coherent=true;restoreCalls.length=0')
         self.page.get_by_text('重试恢复', exact=True).click()
         self.assert_position()
+        self.assertEqual(self.page.evaluate('restoreCalls.slice(0,3)'), [1, 2, 3])

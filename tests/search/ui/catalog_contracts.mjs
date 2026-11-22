@@ -99,16 +99,25 @@ test(label + ' contents waiters preserve URL, retry, cache TTL and lazy receiver
   assert.equal(failed.every(result => space ? result.status === 'rejected' : result.value === null), true);
   const retry = f.contents('owner/repo', 'a b/#'); const data = {folders:[], files:[]}; f.reply(1, data);
   assert.equal(await retry, data); assert.equal(await f.contents('owner/repo', 'a b/#'), data);
-  const cache = space ? f.c.owner._browserCache : f.c.catalog.browserApiCache;
-  assert.equal(cache.get('owner/repo|a b/#'), data);
-  for (let i=0; i<201; i++) cache.set('key'+i, data);
-  assert.equal(cache.size, 200); assert.equal(cache.has('key0'), false);
-  f.c.clock = 300000; assert.equal(cache.has('key200'), false);
-  const expired = f.contents('owner/repo'); f.reply(2, data); await expired;
-  assert.equal(f.calls[2].url.endsWith('/contents'), true); assert.equal(f.timers.size, 0);
+  async function miss(path) {
+    const index = f.calls.length;
+    const pending = f.contents('owner/repo', path);
+    assert.equal(f.calls.length, index + 1, `expected request for ${path}`);
+    f.reply(index, data);
+    assert.equal(await pending, data);
+  }
+  for (let i = 0; i < 200; i++) await miss('key' + i);
+  await miss('a b/#'); // The 201st entry evicted the original request.
+  const before = f.calls.length;
+  assert.equal(await f.contents('owner/repo', 'key199'), data);
+  assert.equal(f.calls.length, before);
+  f.c.clock = 300000;
+  await miss('key199');
+  await miss('');
+  assert.ok(f.calls.at(-1).url.endsWith('/contents')); assert.equal(f.timers.size, 0);
   if (space) {
     const receiver = {getBootstrap:async () => null};
-    const pending = f.c.owner.getContents.call(receiver, 'other', ''); f.reply(3, data); await pending;
+    const pending = f.c.owner.getContents.call(receiver, 'other', ''); f.reply(f.calls.length - 1, data); await pending;
     assert.equal(receiver._browserCache.get('other|'), data);
     assert.equal(f.c.owner._browserCache.has('other|'), false);
   } else {

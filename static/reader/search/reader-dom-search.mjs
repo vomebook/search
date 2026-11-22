@@ -267,6 +267,17 @@ export function createReaderDomSearch({
     const entries = getTocEntries();
     /** @type {{start: number, label: string}[]} */
     const boundaries = [];
+    /** @type {DomSearch.HeadingLookup} */
+    const lookup = offset => {
+      if (getTocEntries() !== entries) return null;
+      let low = 0, high = boundaries.length;
+      while (low < high) {
+        const middle = (low + high) >> 1;
+        if ((boundaries[middle]?.start ?? Infinity) <= offset) low = middle + 1;
+        else high = middle;
+      }
+      return { label: boundaries[low - 1]?.label };
+    };
     const headings = entries.filter(isTocEntry).filter(/** @returns {entry is typeof entry & { target: Element }} */ (entry) => !!entry.target);
     // For a large in-root TOC, walk the same DOM order once. Repeated
     // compareDocumentPosition on distant siblings can otherwise dominate search.
@@ -291,16 +302,7 @@ export function createReaderDomSearch({
         previous = position.order;
         boundaries.push({ start: offsets[position.index]?.start ?? Infinity, label: entry.label });
       }
-      return (offset) => {
-        if (getTocEntries() !== entries) return null;
-        let low = 0, high = boundaries.length;
-        while (low < high) {
-          const middle = (low + high) >> 1;
-          if ((boundaries[middle]?.start ?? Infinity) <= offset) low = middle + 1;
-          else high = middle;
-        }
-        return { label: boundaries[low - 1]?.label };
-      };
+      return lookup;
     }
     let previous = null;
     for (const entry of headings) {
@@ -330,16 +332,7 @@ export function createReaderDomSearch({
       }
       boundaries.push({ start: offsets[low]?.start ?? Infinity, label: entry.label });
     }
-    return (offset) => {
-      if (getTocEntries() !== entries) return null;
-      let low = 0, high = boundaries.length;
-      while (low < high) {
-        const middle = (low + high) >> 1;
-        if ((boundaries[middle]?.start ?? Infinity) <= offset) low = middle + 1;
-        else high = middle;
-      }
-      return { label: boundaries[low - 1]?.label };
-    };
+    return lookup;
   }
   /** @param {Node} node @param {number} offset @param {number} total @param {DomSearch.HeadingLookup | null} [headingLookup] @param {HTMLElement | null} [parent] */
   function fullSearchLocation(node, offset, total, headingLookup = null, parent = node.parentElement) {

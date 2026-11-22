@@ -47,7 +47,7 @@ export function createReaderPdfScheduler(readerContext) {
   function stopPdfManifestPrefetch() {
     clearTimeout(readerContext.pdfManifestPrefetchTimer);
     readerContext.pdfManifestPrefetchTimer = 0;
-    for (const record of [...readerContext.pdfManifestPrefetchActive]) readerContext.cancelPdfManifestPrefetch(record);
+    for (const record of [...readerContext.pdfManifestPrefetchActive]) cancelPdfManifestPrefetch(record);
   }
 
   function trimPdfManifestPrefetches() {
@@ -183,17 +183,17 @@ export function createReaderPdfScheduler(readerContext) {
   }
 
   function queuePdfManifestPrefetch(delay = 250) {
-    if (readerContext.readerAbortController.signal.aborted || !readerContext.pdfManifestPrefetchOrigin || !readerContext.canPrefetchPdfImages()) return;
+    if (readerContext.readerAbortController.signal.aborted || !readerContext.pdfManifestPrefetchOrigin || !canPrefetchPdfImages()) return;
     clearTimeout(readerContext.pdfManifestPrefetchTimer);
     readerContext.pdfManifestPrefetchTimer = setTimeout(() => {
       readerContext.pdfManifestPrefetchTimer = 0;
       if (readerContext.readerAbortController.signal.aborted || document.hidden || !navigator.onLine ||
-          readerContext.pdfManifestPrefetchActive.size >= readerContext.pdfManifestPrefetchConcurrency() ||
-          readerContext.pdfManifestPrefetchCount >= readerContext.pdfManifestPrefetchMaxPages() ||
+          readerContext.pdfManifestPrefetchActive.size >= pdfManifestPrefetchConcurrency() ||
+          readerContext.pdfManifestPrefetchCount >= pdfManifestPrefetchMaxPages() ||
           ((readerContext.pdfActiveRenders || pdfPreviewActive.size) &&
             readerContext.content.querySelector('.reader-page[data-render-visible="1"][data-render-state="rendering"]'))) return;
-      while (readerContext.pdfManifestPrefetchActive.size < readerContext.pdfManifestPrefetchConcurrency()) {
-        if (readerContext.pdfManifestPrefetchCount >= readerContext.pdfManifestPrefetchMaxPages()) return;
+      while (readerContext.pdfManifestPrefetchActive.size < pdfManifestPrefetchConcurrency()) {
+        if (readerContext.pdfManifestPrefetchCount >= pdfManifestPrefetchMaxPages()) return;
         if (readerContext.pdfManifestPrefetchWrapped && readerContext.pdfManifestPrefetchNext >= readerContext.pdfManifestPrefetchOrigin) return;
         if (readerContext.pdfManifestPrefetchNext > readerContext.documentState.pageCount) {
           readerContext.pdfManifestPrefetchNext = 1;
@@ -236,7 +236,7 @@ export function createReaderPdfScheduler(readerContext) {
   /** @param {string} target */
   function prioritizePdfManifestPrefetch(target) {
     for (const record of [...readerContext.pdfManifestPrefetchActive]) {
-      if (record.url !== target) readerContext.cancelPdfManifestPrefetch(record);
+      if (record.url !== target) cancelPdfManifestPrefetch(record);
     }
     const record = readerContext.pdfManifestPrefetches.get(target);
     if (record && readerContext.pdfManifestPrefetchActive.has(record)) record.image.fetchPriority = "high";
@@ -554,10 +554,6 @@ export function createReaderPdfScheduler(readerContext) {
   }
 
   return {
-    pdfManifestPrefetchConcurrency,
-    pdfManifestPrefetchMaxPages,
-    canPrefetchPdfImages,
-    cancelPdfManifestPrefetch,
     stopPdfManifestPrefetch,
     trimPdfManifestPrefetches,
     pdfPixelBudget,

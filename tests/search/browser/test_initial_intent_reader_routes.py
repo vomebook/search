@@ -198,7 +198,7 @@ class InitialIntentReaderRouteTests(unittest.TestCase):
             now++; const expiredAtBoundary=getCachedSearchResponse(key)===null;
             setCachedSearchResponse(key,data,true); now+=SEARCH_CACHE_TTL;
             flushWrite();
-            const flushDropsExpired=!searchResponseStore.cache.has(key) && !searchResponseStore.pendingWrites.has(key);
+            const flushDropsExpired=!searchResponseStore.cache.has(key) && getCachedSearchResponse(key)===null;
             return {expiredPending,expiredAfterFlush,keptAge,expiredAtBoundary,flushDropsExpired};
           } finally {
             cancelPendingSearchCacheWrites();searchResponseStore.cache.delete(key);

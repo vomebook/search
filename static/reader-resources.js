@@ -204,12 +204,8 @@
     if (["html", "htm"].includes(extension)) return [vendorUrl("purify", base)];
     return [];
   }
-  /** @param {string} project */
-  function buildFiles(project) {
-    return [
-      ...readerFiles,
-      // Search host assets are built separately for compatibility, but the
-      // Reader iframe neither imports nor warms them.
+  // Classic host modules in app composition order. Reader neither imports nor warms them.
+  const searchHostFiles = Object.freeze([
       "search/reader-host/application/navigation.js",
       "search/reader-host/presentation/return-position.js", "search/reader-host/application/host.js",
       "search/positions/domain/policy.js", "search/positions/infrastructure/indexed-db.js", "search/positions/application/persistence.js", "search/positions/application/restoration.js",
@@ -225,10 +221,10 @@
       "search/ambient/application/quotation.js",
       "search/corpus/application/client.js",
       "search/results/snapshots/domain/copy-budget.js", "search/results/snapshots/application/store.js",
-      "search/execution/application/session.js",
-      "search/downloads/application/controller.js",
       "search/execution/domain/policy.js",
       "search/execution/application/controller.js",
+      "search/execution/application/session.js",
+      "search/downloads/application/controller.js",
       "search/downloads/application/batch.js",
       "search/downloads/presentation/queue.js",
       "search/results/presentation/size-format.js",
@@ -238,19 +234,19 @@
       "search/catalog/domain/file-types.js",
       "search/requests/domain/response-validation.js",
       "search/results/domain/result-identity.js",
-      "search/sidebar/domain/folder-selection.js",
       "search/input/domain/ownership.js",
       "search/input/application/controller.js",
-      "search/results/domain/paging-policy.js",
-      "search/results/application/paging-controller.js",
       "search/requests/infrastructure/shared-transport.js",
       "search/requests/application/prefetch-controller.js",
       "search/requests/application/response-store.js",
       "search/catalog/domain/sidebar-payload.js",
       "search/catalog/application/client.js",
-      "search/results/presentation/paging-status.js",
       "search/results/window/application/page-loader.js",
       "search/results/window/presentation/status.js",
+      "search/results/domain/paging-policy.js",
+      "search/results/application/paging-controller.js",
+      "search/results/presentation/paging-status.js",
+      "search/sidebar/domain/folder-selection.js",
       "search/results/virtual/domain/height-index.js",
       "search/shared/domain/stable-stringify.js",
       "search/positions/domain/view-key.js",
@@ -263,14 +259,29 @@
       "search/sidebar/infrastructure/scroll.js",
       "search/sidebar/presentation/directory.js",
       "search/sidebar/application/directory.js",
+  ]);
+  /** @param {string} project */
+  function buildFiles(project) {
+    return [
+      ...readerFiles,
+      ...searchHostFiles,
       "style.css",
       ...(project === "github" ? ["search/worker/domain/text.js", "search/worker/domain/intersection.js", "search/index-worker.js"] : []),
       "app.js"
     ];
   }
+  // Reader components ship inside reader.js. Speech loads independently and still
+  // imports the text formatter, so that formatter also needs its own release URL.
+  const bundleOnlyFiles = Object.freeze([...searchHostFiles, "reader/reader-components.mjs",
+    ...readerComponentFiles.filter(file => file !== "reader/formats/reader-text-format.mjs")]);
+  /** @param {string} project */
+  function releaseFiles(project) {
+    const bundled = new Set(bundleOnlyFiles);
+    return buildFiles(project).filter(file => !bundled.has(file));
+  }
   /** @param {string} filename */
   function bundleArguments(filename) {
-    if (!["reader.js", "reader/reader-components.mjs"].includes(filename)) return [];
+    if (filename !== "reader.js") return [];
     const external = readerFiles.filter(file => !readerComponentFiles.includes(file) &&
       !["reader.js", "reader/reader-components.mjs"].includes(file) && /\.(?:js|mjs)$/.test(file));
     return ["--bundle", "--format=esm", "--external:/static/*", "--external:/search/static/*",
@@ -291,7 +302,10 @@
     djvuSupportsSIMD,
     djvuSelectedAssets,
     engineAssets,
+    searchHostFiles,
+    bundleOnlyFiles,
     buildFiles,
+    releaseFiles,
     bundleArguments
   });
   if (typeof module !== "undefined" && module.exports) module.exports = resources;

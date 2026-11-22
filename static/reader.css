@@ -1131,10 +1131,6 @@ body {
   cursor: text;
   pointer-events: auto;
 }
-.reader-pdf-text-run::selection {
-  color: transparent;
-  background: #4285f466;
-}
 .reader-pdf-text-run.full-search-highlight {
   color: transparent;
   background: #f0c75e88;

@@ -1,4 +1,6 @@
 import assert from 'node:assert/strict';
+import {readFileSync} from 'node:fs';
+import {createRequire} from 'node:module';
 import vm from 'node:vm';
 import {html as html5, parse} from 'parse5';
 
@@ -49,7 +51,7 @@ export function shellScriptPaths(html, staticBase, {ordered = [], onScript} = {}
 }
 
 // Observe the real worker install in an empty cache with no browser or network.
-export async function installPrecachePaths(source, resources, staticBase) {
+export async function installPrecacheRequests(source, resources, staticBase) {
   const base = new URL(staticBase, origin);
   // Both sites serve sw.js beside static/, not inside it. A service worker's
   // Request constructor and Cache.addAll resolve strings against that URL.
@@ -61,7 +63,7 @@ export async function installPrecachePaths(source, resources, staticBase) {
   }
   const listeners = new Map(), requested = [];
   const cache = {match: async () => undefined, async addAll(inputs) {
-    for (const input of inputs) requested.push(new URL(input instanceof Request ? input.url : input, workerUrl));
+    for (const input of inputs) requested.push(input instanceof Request ? input : new WorkerRequest(input));
   }};
   const context = vm.createContext({
     URL, Request: WorkerRequest, location: workerUrl, importScripts() {}, VoiceOfMLReaderResources: resources,
@@ -74,6 +76,19 @@ export async function installPrecachePaths(source, resources, staticBase) {
   listeners.get('install')({waitUntil(promise) { done = promise; }});
   assert.ok(done && typeof done.then === 'function', 'install must register a lifetime');
   await done;
-  return requested.filter(url => url.origin === base.origin && url.pathname.startsWith(base.pathname))
+  return requested;
+}
+
+export async function installPrecachePaths(source, resources, staticBase) {
+  const base = new URL(staticBase, origin);
+  const requests = await installPrecacheRequests(source, resources, staticBase);
+  return requests.map(request => new URL(request.url))
+    .filter(url => url.origin === base.origin && url.pathname.startsWith(base.pathname))
     .map(url => url.pathname.slice(base.pathname.length));
+}
+
+export function installSourcePrecachePaths(staticBase) {
+  const source = readFileSync('static/sw.js', 'utf8');
+  const resources = createRequire(import.meta.url)('../../static/reader-resources.js');
+  return installPrecachePaths(source, resources, staticBase);
 }

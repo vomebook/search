@@ -9,7 +9,7 @@ if (!["github", "hf"].includes(project) || !cwd || !outdir || !esbuild) {
 
 // Resolve against the source checkout, not the location of this driver.
 const resources = createRequire(import.meta.url)(resolve(cwd, "static/reader-resources.js"));
-for (const file of resources.buildFiles(project)) {
+for (const file of resources.releaseFiles(project)) {
   if (file === "app.js") continue; // The caller builds the composed app separately.
   const result = spawnSync(esbuild, [
     `static/${file}`, ...resources.bundleArguments(file),

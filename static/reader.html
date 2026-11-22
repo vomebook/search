@@ -96,20 +96,20 @@
       </div>
       <div class="reader-actions">
         <span class="control-group page-controls">
-          <button id="page-prev" class="icon-button" type="button">&#8249;</button>
+          <button id="page-prev" class="icon-button" type="button" aria-label="上一页">&#8249;</button>
           <label class="compact-input">
-            <input id="page-number" type="number" min="1" value="1" />
+            <input id="page-number" type="number" min="1" value="1" aria-label="页码" />
             <span id="page-total">/ -</span>
           </label>
-          <button id="page-next" class="icon-button" type="button">&#8250;</button>
+          <button id="page-next" class="icon-button" type="button" aria-label="下一页">&#8250;</button>
         </span>
         <span class="control-group zoom-controls">
-          <button id="zoom-out" class="icon-button" type="button">&#8722;</button>
+          <button id="zoom-out" class="icon-button" type="button" aria-label="缩小">&#8722;</button>
           <label class="compact-input">
-            <input id="zoom" type="number" min="25" max="400" step="10" value="100" />
+            <input id="zoom" type="number" min="25" max="400" step="10" value="100" aria-label="缩放百分比" />
             <span>%</span>
           </label>
-          <button id="zoom-in" class="icon-button" type="button">+</button>
+          <button id="zoom-in" class="icon-button" type="button" aria-label="放大">+</button>
         </span>
         <a
           id="download"
@@ -130,9 +130,13 @@
       <button id="history" class="icon-button" type="button" aria-label="阅读选项" aria-controls="history-panel" aria-expanded="false">&#9776;</button>
     </header>
     <main id="viewport" class="reader-viewport" tabindex="-1" aria-label="正文">
-      <button id="bookmark-ribbon" class="bookmark-ribbon" type="button"></button>
-      <div id="bookmark-popover" hidden>
+      <button id="bookmark-ribbon" class="bookmark-ribbon" type="button" aria-label="添加书签"></button>
+      <div id="bookmark-popover" class="bookmark-popover" role="dialog" aria-modal="true" aria-labelledby="bookmark-prompt" hidden>
         <span id="bookmark-prompt"></span>
+        <div class="bookmark-edit-fields">
+          <label>标题<input id="bookmark-label" maxlength="120" /></label>
+          <label>摘要<textarea id="bookmark-excerpt-input" maxlength="500" rows="3"></textarea></label>
+        </div>
         <div>
           <button id="bookmark-add" type="button">添加书签</button>
           <button id="bookmark-cancel" type="button">取消</button>
@@ -189,7 +193,8 @@
         data-panel-view="toc"
         hidden
       >
-        <div class="panel-view-header"><strong>目录</strong></div>
+        <div class="panel-view-header"><strong>目录</strong><button type="button" class="panel-search-toggle text-action" aria-expanded="false" aria-controls="toc-panel-search" aria-label="搜索目录">搜索</button></div>
+        <input id="toc-panel-search" class="panel-search" type="search" aria-label="搜索目录" hidden />
         <div id="toc-list" class="panel-list"></div>
       </section>
       <section
@@ -200,7 +205,14 @@
         data-panel-view="bookmarks"
         hidden
       >
-        <div class="panel-view-header"><strong>书签</strong></div>
+        <div class="panel-view-header">
+          <strong>书签</strong>
+          <span>
+            <button id="bookmarks-all" class="text-action" type="button" aria-pressed="false">全部书签</button>
+            <button type="button" class="panel-search-toggle text-action" aria-expanded="false" aria-controls="bookmarks-panel-search" aria-label="搜索书签">搜索</button>
+          </span>
+        </div>
+        <input id="bookmarks-panel-search" class="panel-search" type="search" aria-label="搜索书签" hidden />
         <div id="bookmarks-list" class="panel-list"></div>
       </section>
       <section
@@ -215,8 +227,10 @@
           <strong>阅读历史</strong>
           <span>
             <button id="history-clear" class="text-action" type="button">清空历史</button>
+            <button type="button" class="panel-search-toggle text-action" aria-expanded="false" aria-controls="history-view-search" aria-label="搜索阅读历史">搜索</button>
           </span>
         </div>
+        <input id="history-view-search" class="panel-search" type="search" aria-label="搜索阅读历史" hidden />
         <div id="history-list" class="panel-list"></div>
       </section>
     </aside>
@@ -311,20 +325,6 @@
       })();
       if (window.parent !== window)
         window.parent.postMessage({ type: "voice-reader-shell" }, location.origin);
-      for (const panel of document.querySelectorAll(".reader-panel-view")) {
-        const header = panel.querySelector(".panel-view-header");
-        const actions =
-          panel.id === "history-view" ? header.querySelector("span") || header : header;
-        const button = document.createElement("button");
-        button.type = "button";
-        button.className = "panel-search-toggle";
-        actions.appendChild(button);
-        const input = document.createElement("input");
-        input.className = "panel-search";
-        input.setAttribute("aria-label", `搜索${header.querySelector("strong").textContent}`);
-        input.hidden = true;
-        panel.insertBefore(input, panel.querySelector(".panel-list"));
-      }
     </script>
     <section id="speech-panel" class="speech-panel" aria-label="朗读设置" hidden>
       <div class="speech-heading"><span id="speech-title">朗读</span><button type="button" id="speech-collapse" class="icon-button" aria-label="收起设置，继续播放" title="收起，继续播放"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M5 12h14"/></svg></button><button type="button" id="speech-stop" class="icon-button" aria-label="停止朗读" title="停止朗读">×</button></div>

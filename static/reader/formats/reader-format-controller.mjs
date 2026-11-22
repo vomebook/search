@@ -1,3 +1,10 @@
+/** Legacy PDF links can name a page manifest without an explicit `pdf-pages` extension.
+ * @param {string} extension @param {string} sourceUrl @param {string} [base] */
+export function readerSourceExtension(extension, sourceUrl, base) {
+  return extension === "pdf" && sourceUrl.includes("/api/reader-bucket-resource?") &&
+    new URL(sourceUrl, base).searchParams.get("path")?.endsWith("page-manifest.json") ? "pdf-pages" : extension;
+}
+
 /** @param {unknown} original */
 function originalImageFallbackExtension(original) {
   const extension = typeof original === "string" ? original.toLowerCase() : "";
@@ -60,6 +67,8 @@ export function createReaderFormatController(readerContext) {
     function pair(open, render) {
       return { open, render: /** @param {unknown} value */ (value) => render(/** @type {Awaited<T>} */ (value)) };
     }
+    // Media rendering assigns the source directly to the native player.
+    const openMedia = () => null;
     const formats = {
       "pdf-pages": pair(() => readerContext.fetchReaderResponse(), readerContext.renderPdfPages),
       "image-pages": pair(() => readerContext.fetchReaderResponse(), readerContext.renderImagePages),
@@ -75,8 +84,8 @@ export function createReaderFormatController(readerContext) {
       markdown: pair(readerContext.loadMarkdownDocument, readerContext.renderMarkdownDocument),
       html: pair(readerContext.loadHtmlDocument, readerContext.renderHtml),
       "epub-chapters": pair(readerContext.loadChapterManifestDocument, readerContext.renderChapterManifest),
-      audio: pair(readerContext.loadMediaDocument, () => readerContext.renderMedia("audio")),
-      video: pair(readerContext.loadMediaDocument, () => readerContext.renderMedia("video")),
+      audio: pair(openMedia, () => readerContext.renderMedia("audio")),
+      video: pair(openMedia, () => readerContext.renderMedia("video")),
       swf: pair(readerContext.loadSwfDocument, readerContext.renderSwf)
     };
     for (const [mode, {open, render}] of Object.entries(formats))
@@ -116,12 +125,7 @@ export function createReaderFormatController(readerContext) {
     readerContext.downloadUrl = typeof resolved.download === "string" && resolved.download || readerContext.sourceUrl;
     readerContext.chapterManifestUrl = typeof resolved.chapter_manifest === "string" ? resolved.chapter_manifest : "";
     if (typeof resolved.extension === "string" && resolved.extension) readerContext.extension = resolved.extension.toLowerCase();
-    if (
-      readerContext.extension === "pdf" &&
-      readerContext.sourceUrl.includes("/api/reader-bucket-resource?") &&
-      new URL(readerContext.sourceUrl).searchParams.get("path")?.endsWith("page-manifest.json")
-    )
-      readerContext.extension = "pdf-pages";
+    readerContext.extension = readerSourceExtension(readerContext.extension, readerContext.sourceUrl);
     readerContext.capability = readerContext.readerRuntime.negotiate(VoiceOfMLReader.capability(readerContext.extension));
     if (readerContext.capability.mode !== "pdf" && !readerContext.pdfPrimarySource()) readerContext.releasePdfWorker?.();
     readerContext.readerRuntime.update("source", {

@@ -220,5 +220,5 @@
     return { request: corpusWorkerRequest, post: postCorpusWorkerRequest,
       ensure: ensureCorpusWorker, terminate: terminateCorpusWorker, expireRequests, inspect };
   }
-  globalThis.VoiceOfMLCorpusClient = { create, makeWorkerError };
+  globalThis.VoiceOfMLCorpusClient = { create };
 })();

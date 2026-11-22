@@ -56,7 +56,7 @@
       /** @type {SearchResultSnapshot} */
       const snapshot = {
         version: policy.VERSION, key, results: [], total: view.total,
-        page: view.loadedPage, loadedPage: view.loadedPage, pageCache: copyPageCache(view.pageCache),
+        loadedPage: view.loadedPage, pageCache: copyPageCache(view.pageCache),
         ...(view.resultBackend === undefined ? {} : { resultBackend: view.resultBackend }),
         hasMore: view.results.length < view.total,
         window: view.window ? { generation: view.window.generation, pages: [...view.window.pages], count: view.window.count } : null,

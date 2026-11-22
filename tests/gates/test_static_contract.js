@@ -155,7 +155,7 @@ test("reader intent prefetches the shell and format engines", () => {
   assertCode(sw, 'VoiceOfMLReaderResources.runtimePaths("/search/static/")');
   const compiler = fs.readFileSync("scripts/build/compile_static_assets.mjs", "utf8");
   assert.ok(compiler.includes('resolve(cwd, "static/reader-resources.js")'));
-  assert.ok(compiler.includes("resources.buildFiles(project)"));
+  assert.ok(compiler.includes("resources.releaseFiles(project)"));
   assert.ok(compiler.includes("...resources.bundleArguments(file)"));
   assertCode(app, 'var warmedReaderSources = new Map()');
   assertCode(app, 'const READER_WARMUP_TTL = 5 * 60 * 1000');
@@ -428,7 +428,7 @@ test("random and folder corpus fallbacks use Worker requests", () => {
   assert.match(app, /corpusWorkerRequest\("folder-tree"/);
   assert.strictEqual(/RECORDS\.filter|buildFilterFolderTree|getRandomTxtLocal/.test(app), false);
 });
-test("reader uses original files and lazy PDF canvas rendering", () => {
+test("reader uses original files and lazy PDF canvas rendering", async () => {
   const contract = fs.readFileSync("static/reader/core/reader-contract.js", "utf8");
   const reader = readReaderSource(require("path").resolve("."));
   const readerCss = fs.readFileSync("static/reader.css", "utf8");
@@ -588,7 +588,9 @@ test("reader uses original files and lazy PDF canvas rendering", () => {
   assert.match(navigation, /sessionStorage\.setItem\("reader-return:" \+ token/);
   assert.match(navigation, /crypto\.getRandomValues\(new Uint32Array\(4\)\)/);
   assert.match(html, /search\/reader-host\/application\/navigation\.js/);
-  assert.match(sw, /search\/reader-host\/application\/navigation\.js/);
+  const { installSourcePrecachePaths } = await import('../support/shell_assets.mjs');
+  const precache = await installSourcePrecachePaths('/search/static/');
+  assert.equal(precache.filter(file => file === 'search/reader-host/application/navigation.js').length, 1);
   assert.doesNotMatch(app, /openPendingWindow/);
   assert.match(reader, /new URL\(returnUrl, location\.origin\)/);
   assert.match(reader, /sessionStorage\.removeItem\(returnHistoryKey\)/);
@@ -612,6 +614,8 @@ test("reader uses original files and lazy PDF canvas rendering", () => {
   assert.match(app, /setTimeout\(load, 6000\)/);
   assert.match(readerHtml, /id="page-number"/);
   assert.match(reader, /document\.querySelector\("\.page-controls"\)\)\.hidden = !capability\.features\.pagination/);
+  assert.match(reader, /document\.querySelector\("\.zoom-controls"\)\)\.hidden = !capability\.features\.zoom/);
+  assertCode(reader, 'readerBindings.mountMediaPanel(); status.hidden = true');
   assert.match(reader, /document\.createElement\(mode\)/);
   assert.match(reader, /media\.preload = "metadata"/);
   assert.match(reader, /media\.playsInline = true/);
@@ -625,7 +629,6 @@ test("reader uses original files and lazy PDF canvas rendering", () => {
   assert.match(contract, /params\.set\("path"/);
   assert.match(contract, /params\.set\("folder_url"/);
   assert.match(app, /FolderUrl: getReaderFolderUrl\(rec\)/);
-  assert.match(reader, /status\.hidden = true/);
   assertCode(reader, 'location.assign(folderNavigationTarget.href)');
   assert.match(readerStore, /indexedDB\.open\(DB_NAME, DB_VERSION\)/);
   assert.match(readerStore, /DB_VERSION = 3/);

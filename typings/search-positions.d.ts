@@ -51,7 +51,6 @@ declare var VoiceOfMLPositionPolicy: {
 };
 declare var VoiceOfMLPositionStorage: {
   create(): SearchPositionStorage;
-  pruneContent(store: IDBObjectStore, limit: number, ttl: number): void;
 };
 declare var VoiceOfMLSearchPositions: {
   create(deps: {storage: SearchPositionStorage; cloneResult(record: unknown): unknown;

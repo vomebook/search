@@ -14,6 +14,7 @@ import '../ui/test_sidebar_directory.mjs';
 import '../ui/virtual_results_contracts.mjs';
 import { installClassicSearchModules } from '../../support/classic_search_modules.js';
 import { APP_DEPENDENCIES, stripBundledScripts } from '../../../scripts/build/compose_app.mjs';
+import {installSourcePrecachePaths} from '../../support/shell_assets.mjs';
 
 const source = fs.readFileSync('static/app.js', 'utf8');
 function fixture(names, values = {}) {
@@ -497,7 +498,8 @@ test('app adapter publishes readable input state and delegates submit with histo
   assert.equal(queries.length, 1);
 });
 
-test('input dependency order, source shell, build resources and SW agree without delaying inline capture', () => {
+test('input dependency order, source shell, build resources and SW agree without delaying inline capture', async () => {
+  const precache = await installSourcePrecachePaths('/search/static/');
   const paths = ['search/input/domain/ownership.js', 'search/input/application/controller.js'];
   const html = fs.readFileSync('static/index.html', 'utf8');
   assert.ok(APP_DEPENDENCIES.indexOf(paths[0]) < APP_DEPENDENCIES.indexOf(paths[1]));
@@ -511,7 +513,7 @@ test('input dependency order, source shell, build resources and SW agree without
     assert.ok(html.indexOf(path) < html.indexOf('static/app.js'));
     assert.ok(!stripBundledScripts(html).includes(path));
     for (const site of ['github', 'huggingface']) assert.ok(modules.VoiceOfMLReaderResources.buildFiles(site).includes(path));
-    assert.ok(fs.readFileSync('static/sw.js', 'utf8').includes('/static/' + path));
+    assert.equal(precache.filter(file => file === path).length, 1, path);
   }
 });
 

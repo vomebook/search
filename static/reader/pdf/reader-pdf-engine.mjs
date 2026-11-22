@@ -7,6 +7,10 @@
 export function createReaderPdfEngine(readerContext) {
   /** @type {Promise<PdfModule> | null} */
   let pdfModulePreload = null;
+  /** @type {Promise<PdfModule> | null} */
+  let pdfEnginePreload = null;
+  /** @type {import('../../../typings/reader-pdf-engine-strict').PdfWorker | null} */
+  let pdfWorker = null;
   /** @type {AbortController | null} */
   let pdfWorkerPreloadOwner = null;
 
@@ -31,10 +35,14 @@ export function createReaderPdfEngine(readerContext) {
         reject(readerContext.readerAbortError());
       };
       const untrack = readerContext.trackReaderResource(destroy);
-      timeout = setTimeout(() => {
-        reject(new Error("reader PDF timeout"));
+      /** @param {unknown} error */
+      const fail = error => {
+        reject(error);
         untrack();
         destroy();
+      };
+      timeout = setTimeout(() => {
+        fail(new Error("reader PDF timeout"));
       }, readerContext.READER_PROXY_TIMEOUT_MS);
       const documentOptions = options(url);
       readerContext.openPdfRangeTask(pdfjs, documentOptions, {
@@ -73,12 +81,7 @@ export function createReaderPdfEngine(readerContext) {
           }
           resolve(document);
         },
-        (error) => {
-          clearTimeout(timeout);
-          reject(error);
-          untrack();
-          destroy();
-        }
+        fail
       );
     }));
   }
@@ -86,17 +89,17 @@ export function createReaderPdfEngine(readerContext) {
   /** @param {PdfModule} pdfjs @param {(url: string) => PdfOptions} options @param {string} proxyUrl @param {(url: string) => Initial} [takeInitial] */
   function loadPdfWithTimeout(pdfjs, options, proxyUrl, takeInitial = () => null) {
     // Retry the proxy URL only; never fall back to the original source URL.
-    return readerContext.retryReaderProxy(() => readerContext.loadPdfTaskWithTimeout(pdfjs, options, proxyUrl, takeInitial(proxyUrl)));
+    return readerContext.retryReaderProxy(() => loadPdfTaskWithTimeout(pdfjs, options, proxyUrl, takeInitial(proxyUrl)));
   }
 
   function preloadPdfEngine() {
-    if (!readerContext.pdfEnginePreload) {
+    if (!pdfEnginePreload) {
       pdfWorkerPreloadOwner = new AbortController();
       const signal = pdfWorkerPreloadOwner.signal;
-      pdfModulePreload = readerContext.measurePdf(readerContext.loadPdfEngine(), "engine-module");
-      readerContext.pdfEnginePreload = pdfModulePreload.then(pdfjs => readerContext.preparePdfWorker(pdfjs, false, signal));
+      pdfModulePreload = readerContext.measurePdf(loadPdfEngine(), "engine-module");
+      pdfEnginePreload = pdfModulePreload.then(pdfjs => readerContext.preparePdfWorker(pdfjs, false, signal));
     }
-    return readerContext.pdfEnginePreload;
+    return pdfEnginePreload;
   }
 
   /** @param {PdfModule} pdfjs @param {boolean} firstPage @param {AbortSignal | null} signal */
@@ -106,7 +109,7 @@ export function createReaderPdfEngine(readerContext) {
       if (signal?.aborted) throw readerContext.readerAbortError();
       if (attempt && !firstPage) await readerContext.awaitReader(readerContext.waitForReader(attempt * 500), signal);
       try {
-        return await readerContext.measurePdf(readerContext.preparePdfWorkerAttempt(pdfjs, attempt, firstPage, signal),
+        return await readerContext.measurePdf(preparePdfWorkerAttempt(pdfjs, attempt, firstPage, signal),
           firstPage && attempt === 0 ? "engine-worker-staged" : "engine-worker");
       } catch (error) {
         readerContext.assertReaderActive();
@@ -146,7 +149,7 @@ export function createReaderPdfEngine(readerContext) {
     try { worker = new pdfjs.PDFWorker(); }
     finally { if (typeof NativeWorker === "function") globalThis.Worker = NativeWorker; }
     worker.readerFirstPageWorker = firstPage && attempt === 0;
-    readerContext.pdfWorker = worker;
+    pdfWorker = worker;
     /** @type {ReturnType<typeof setTimeout> | undefined} */
     let timer;
     let destroyed = false;
@@ -157,8 +160,8 @@ export function createReaderPdfEngine(readerContext) {
       const port = worker.port;
       try { worker.destroy(); }
       finally { if (nativeWorker && nativeWorker !== port) nativeWorker.terminate(); }
-      if (readerContext.pdfWorker === worker) {
-        readerContext.pdfWorker = null;
+      if (pdfWorker === worker) {
+        pdfWorker = null;
         readerContext.releasePdfWorker = null;
       }
     };
@@ -371,11 +374,11 @@ export function createReaderPdfEngine(readerContext) {
     const openingEngine = Promise.race([selectingEngine, workerFailure]);
     return readerContext.measurePdf(openingEngine, "engine").then(pdfjs => {
       readerContext.assertReaderActive();
-      const stagedWorker = readerContext.pdfWorker?.readerFirstPageWorker;
+      const stagedWorker = pdfWorker?.readerFirstPageWorker;
       /** @param {string} url @returns {PdfOptions} */
       const options = (url) => ({
         url,
-        worker: readerContext.pdfWorker,
+        worker: pdfWorker,
         // Bound demand reads for original and converted PDFs alike. Streaming
         // otherwise keeps the full download running alongside these ranges.
         rangeChunkSize: 262144,
@@ -410,12 +413,9 @@ export function createReaderPdfEngine(readerContext) {
   }
 
   return {
-    loadPdfTaskWithTimeout,
     loadPdfWithTimeout,
     preloadPdfEngine,
     preparePdfWorker,
-    preparePdfWorkerAttempt,
-    loadPdfEngine,
     loadPdfDocument
   };
 }

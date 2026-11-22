@@ -27,11 +27,17 @@ const windowPage = 'search/results/window/domain/page.js';
 const appScripts = [...APP_DEPENDENCIES, 'app.js'];
 const scripts = shellScriptPaths(html, staticBase, {ordered: appScripts});
 const bundled = shellScriptPaths(stripBundledScripts(html), staticBase, {ordered: ['app.js']});
-const precache = await installPrecachePaths(worker, resources, staticBase);
+// Select the release branch as the build does; this gate checks membership,
+// while the build fixture checks hashed paths and the stamped integrity.
+const integrityMarker = 'READER_SHELL_INTEGRITY = "development"';
+assert.equal(worker.split(integrityMarker).length - 1, 1);
+const releaseWorker = worker.replace(integrityMarker, 'READER_SHELL_INTEGRITY = "sha256-fixture"');
+const releasePrecache = await installPrecachePaths(releaseWorker, resources, staticBase);
+const devPrecache = await installPrecachePaths(worker, resources, staticBase);
 const count = (files, target) => files.filter(file => file === target).length;
 assert.deepEqual(bundled, ['app.js'], 'bundled shell must contain only the application script');
 assert.equal(count(scripts, 'app.js'), 1);
-assert.equal(count(precache, 'app.js'), 1);
+assert.equal(count(releasePrecache, 'app.js'), 1);
 // The development shell need not mirror the full bundle order, but every
 // composed classic dependency must load once and execute before the host.
 assert.equal(new Set(appScripts).size, appScripts.length, 'application composition must not duplicate scripts');
@@ -42,11 +48,16 @@ for (const name of APP_DEPENDENCIES) {
 }
 for (const name of required) {
   assert.equal(count(APP_DEPENDENCIES, name), 1, `${name} must be composed once`);
-  assert.ok(!precache.includes(name), `${name} must not be individually precached`);
   for (const project of ['github', 'hf']) {
     assert.equal(count(resources.buildFiles(project), name), 1,
       name === windowPage ? 'window page must be a build dependency' : `${name} missing or duplicated in ${project}`);
   }
+}
+for (const name of resources.searchHostFiles) {
+  assert.ok(!releasePrecache.includes(name), `${name} must not be individually precached in production`);
+}
+for (const name of scripts) {
+  assert.equal(count(devPrecache, name), 1, `${name} must be precached once in development`);
 }
 // The identity and window helpers consume the modules preceding them.
 const ordered = [required[0], ...required.slice(5)];

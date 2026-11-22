@@ -10,7 +10,6 @@ export interface PdfShell extends HTMLElement {
   _renderPromise?: Promise<void>;
   _renderCancel?: () => void;
   _renderStarted?: boolean;
-  _renderActivePriority?: string;
   _pdfRenderCancelled?: boolean;
   _resumePdfDemand?: boolean;
   _pdfRenderNeedsRequeue?: boolean;

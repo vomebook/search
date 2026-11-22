@@ -28,7 +28,8 @@ const required = [
   'phase and stage forward return values unchanged',
   'dispose is idempotent and clears all timer handles',
   'failure cleanup preserves message, lifecycle stage and retry control semantics',
-  'retry click waits for progress and reloads only while reader remains live'
+  'retry click waits for progress and reloads only while reader remains live',
+  'terminal DjVu transport captures progress before invalidation and reloads the unchanged reader URL'
 ].map(name => ({name}));
 const lines = text.split(/\r?\n/);
 if (result.status !== 0 || rows.length !== 1 || rows[0].some((value, index) => value < minimum[index]) ||

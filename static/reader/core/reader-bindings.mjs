@@ -37,14 +37,6 @@ export function createReaderBindings(readerContext) {
     readerContext.readerRuntime.track(window.__VOICE_READER_CHAPTER_PRELOAD__);
   }
 
-  function trackWorkCancellation() {
-    readerContext.readerRuntime.track(readerContext.stopReaderWork);
-  }
-
-  function trackEarlySourceResolution() {
-    readerContext.trackReaderResource(() => window.__VOICE_READER_RESOLVE__?.dispose());
-  }
-
   function publishDiagnosticsAndInstallCompatibility() {
     window.VoiceOfMLReaderPdfDiagnostics = readerContext.pdfDiagnostics;
     readerContext.trackReaderResource(() => {
@@ -85,22 +77,10 @@ export function createReaderBindings(readerContext) {
     return readerContext.localReaderData;
   }
 
-  function normalizeConvertedPdfMode() {
-    if (
-      readerContext.extension === "pdf" &&
-      /\/api\/reader-bucket-resource\?/.test(readerContext.sourceUrl) &&
-      new URL(readerContext.sourceUrl, location.href).searchParams.get("path")?.endsWith("page-manifest.json")
-    ) {
-      readerContext.extension = "pdf-pages";
-      readerContext.capability = readerContext.readerRuntime.negotiate(VoiceOfMLReader.capability(readerContext.extension));
-    }
-  }
-
   function applySourceSessionAndCachedMetadata() {
     const source = readerContext.localReaderData;
     if (source && typeof source === "object") {
       if ("title" in source && source.title) readerContext.params.set("title", String(source.title));
-      if ("extension" in source && source.extension) readerContext.params.set("ext", String(source.extension));
       if ("repo" in source && source.repo) {
         const folder = "folder" in source ? source.folder : null;
         readerContext.params.set("path", [source.repo, ...(Array.isArray(folder) || typeof folder === "string" ? folder : [])].join("/"));
@@ -162,7 +142,6 @@ export function createReaderBindings(readerContext) {
     document.querySelectorAll('.reader-toolbar svg, #history-panel > header svg').forEach(node => {
       node.setAttribute('aria-hidden', 'true'); node.setAttribute('focusable', 'false');
     });
-    document.querySelector(".reader-panel-tabs")?.setAttribute("role", "tablist");
     document.querySelector(".reader-skip-link")?.addEventListener("click", (event) => {
       event.preventDefault();
       readerContext.setReaderPanelOpen(false);
@@ -177,10 +156,6 @@ export function createReaderBindings(readerContext) {
       '<span class="reader-loading-spinner" aria-hidden="true"></span><span>正在加载正文...</span>';
     readerContext.content.appendChild(readerContext.loadingIndicator);
     readerContext.content.dataset.mode = readerContext.capability.mode || "unsupported";
-  }
-
-  function bindDownloadAction() {
-    readerContext.downloadButton.addEventListener("click", readerContext.startReaderDownload);
   }
 
   function initializeDocumentTitle() {
@@ -281,69 +256,12 @@ export function createReaderBindings(readerContext) {
       readerContext.nextReaderGeneration(generationName);
   }
 
-  function labelToolbarControls() {
-    for (const [selector, label] of [
-      ["#back", "返回"],
-      ["#page-prev", "上一页"],
-      ["#page-next", "下一页"],
-      ["#page-number", "页码"],
-      ["#zoom-out", "缩小"],
-      ["#zoom-in", "放大"],
-      ["#zoom", "缩放百分比"],
-      ["#bookmark-ribbon", "添加书签"],
-      ["#history", "阅读选项"]
-    ])
-      if (selector && label) document.querySelector(selector)?.setAttribute("aria-label", label);
-  }
-
-  function applyMetadataAndConfigureBookmarkPopover() {
-    readerContext.applyReaderMetadata(readerContext.resolvedReaderData);
-    readerContext.bookmarkPopover.className = "bookmark-popover";
-    readerContext.bookmarkPopover.setAttribute("role", "dialog");
-    readerContext.bookmarkPopover.setAttribute("aria-modal", "true");
-    readerContext.bookmarkPopover.setAttribute("aria-labelledby", "bookmark-prompt");
-  }
-
-  function initializeBookmarkEditor() {
-    readerContext.bookmarkLabelInput.id = "bookmark-label";
-    readerContext.bookmarkLabelInput.maxLength = 120;
-    readerContext.bookmarkExcerptInput.id = "bookmark-excerpt-input";
-    readerContext.bookmarkExcerptInput.maxLength = 500;
-    readerContext.bookmarkExcerptInput.rows = 3;
-    readerContext.bookmarkEditFields.className = "bookmark-edit-fields";
-    readerContext.bookmarkEditFields.innerHTML = "<label>标题</label><label>摘要</label>";
-    const [titleField, excerptField] = readerContext.bookmarkEditFields.children;
-    titleField?.appendChild(readerContext.bookmarkLabelInput);
-    excerptField?.appendChild(readerContext.bookmarkExcerptInput);
-    readerContext.bookmarkPopover.insertBefore(readerContext.bookmarkEditFields, readerContext.bookmarkPopover.querySelector("div"));
-  }
-
-  function initializeBookmarkSearchControls() {
-    if (!document.querySelector("#bookmarks-panel .panel-search-toggle")) {
-      const button = document.createElement("button");
-      button.className = "panel-search-toggle";
-      button.type = "button";
-      /** @type {Element} */ (document.querySelector("#bookmarks-panel .panel-view-header")).appendChild(button);
-    }
-    readerContext.bookmarksAllButton.id = "bookmarks-all";
-    readerContext.bookmarksAllButton.className = "text-action";
-    readerContext.bookmarksAllButton.type = "button";
-    readerContext.bookmarksAllButton.textContent = "全部书签";
-    readerContext.bookmarksAllButton.setAttribute("aria-pressed", "false");
-  }
-
-  function mountBookmarkHeaderActions() {
-    readerContext.bookmarksHeaderActions.append(readerContext.bookmarksAllButton, readerContext.bookmarksSearchButton);
-    readerContext.bookmarksHeader.appendChild(readerContext.bookmarksHeaderActions);
-  }
-
   function mountMediaPanel() {
     readerContext.mediaTab.id = "media-tab";
     readerContext.mediaTab.type = "button";
     readerContext.mediaTab.role = "tab";
     readerContext.mediaTab.dataset.panel = "media";
     readerContext.mediaTab.textContent = "播放";
-    readerContext.mediaTab.hidden = !readerContext.capability.features.media;
     readerContext.mediaPanel.id = "media-panel";
     readerContext.mediaPanel.className = "reader-panel-view";
     readerContext.mediaPanel.dataset.panelView = "media";
@@ -355,10 +273,6 @@ export function createReaderBindings(readerContext) {
       .insertBefore(readerContext.mediaPanel, document.querySelector("#toc-panel"));
     /** @type {Element} */ (readerContext.mediaPanel.querySelector(".media-panel-bookmark"))
       .addEventListener("click", (event) => readerContext.openBookmarkPopover(event.currentTarget instanceof HTMLElement ? event.currentTarget : undefined));
-    /** @type {HTMLElement} */ (document.querySelector(".page-controls")).hidden = !readerContext.capability.features.pagination;
-    /** @type {HTMLElement} */ (document.querySelector(".zoom-controls")).hidden = !readerContext.capability.features.zoom;
-
-    readerContext.status.hidden = true;
     readerContext.mediaTab.setAttribute("aria-controls", "media-panel");
     readerContext.mediaTab.setAttribute("aria-selected", "false");
     readerContext.mediaPanel.setAttribute("role", "tabpanel");
@@ -402,8 +316,6 @@ export function createReaderBindings(readerContext) {
   }
 
   function restoreReaderThemeAndBindReturn() {
-    readerContext.readerThemeToggle.className = "theme-toggle";
-
     readerContext.applyReaderTheme(activeReaderTheme(), false, false);
 
     readerContext.readerPath.addEventListener("click", readerContext.navigateReaderFolder);
@@ -658,27 +570,12 @@ export function createReaderBindings(readerContext) {
       readerContext.bookmarksAllButton.setAttribute("aria-pressed", String(readerContext.panelState.showingAllBookmarks));
       readerContext.renderBookmarks();
     });
-    for (const button of /** @type {NodeListOf<HTMLButtonElement>} */ (document.querySelectorAll(".panel-search-toggle"))) {
-      button.classList.remove("icon-button");
-      button.classList.add("text-action");
-      button.textContent = "搜索";
-      button.hidden = false;
-      button.setAttribute("aria-expanded", "false");
-      const view = /** @type {Element} */ (button.closest(".reader-panel-view")), input = /** @type {Element} */ (view.querySelector(".panel-search"));
-      input.id ||= `${view.id}-search`;
-      button.setAttribute("aria-controls", input.id);
-      button.setAttribute("aria-label", `搜索${view.querySelector(".panel-view-header strong")?.textContent || "列表"}`);
+    for (const button of /** @type {NodeListOf<HTMLButtonElement>} */ (document.querySelectorAll(".panel-search-toggle")))
       button.addEventListener("click", () =>
         readerContext.setPanelSearchOpen(button, button.getAttribute("aria-expanded") !== "true")
       );
-    }
     for (const input of /** @type {NodeListOf<HTMLInputElement>} */ (document.querySelectorAll(".panel-search"))) {
       const view = /** @type {Element} */ (input.closest(".reader-panel-view"));
-      input.type = "search";
-      input.setAttribute(
-        "aria-label",
-        `搜索${view.querySelector(".panel-view-header strong")?.textContent || "列表"}`
-      );
       input.addEventListener("input", (event) => {
         if (!/** @type {InputEvent} */ (event).isComposing) readerContext.filterPanel(view);
       });
@@ -721,18 +618,18 @@ export function createReaderBindings(readerContext) {
         write({ ...progress, closeTime: Date.now() });
       }
     });
-    window.addEventListener("voice-reader-dispose", () => {
+    const saveAndDispose = () => {
       readerContext.saveProgress();
       readerContext.disposeReader();
-    });
+    };
+    window.addEventListener("voice-reader-dispose", saveAndDispose);
     window.addEventListener("message", (event) => {
       if (
         event.origin === location.origin &&
         event.source === window.parent &&
         event.data?.type === "voice-reader-abort"
       ) {
-        readerContext.saveProgress();
-        readerContext.disposeReader();
+        saveAndDispose();
         return;
       }
       if (
@@ -954,14 +851,6 @@ export function createReaderBindings(readerContext) {
     );
   }
 
-  function ownDomSearchController() {
-    readerContext.trackReaderResource(readerContext.domSearch.dispose);
-  }
-
-  function ownSearchViewController() {
-    readerContext.trackReaderResource(readerContext.fullSearchController.dispose);
-  }
-
   function ownPdfSearchStorageAndStart() {
     readerContext.trackReaderResource(() => {
       readerContext.pdfPersistentTextStore?.dispose();
@@ -983,16 +872,12 @@ export function createReaderBindings(readerContext) {
 
   return {
     trackStartupOwners,
-    trackWorkCancellation,
-    trackEarlySourceResolution,
     publishDiagnosticsAndInstallCompatibility,
     readSelectedSourceSession,
-    normalizeConvertedPdfMode,
     applySourceSessionAndCachedMetadata,
     publishSourceAndSubscribeToStore,
     initializePanelAccessibility,
     mountInitialLoadingFeedback,
-    bindDownloadAction,
     initializeDocumentTitle,
     restoreReturnNavigation,
     validateReturnHistory,
@@ -1001,11 +886,6 @@ export function createReaderBindings(readerContext) {
     ownPdfBookSearchClient,
     ownPdfPrefetchAndQueues,
     initializeGenerations,
-    labelToolbarControls,
-    applyMetadataAndConfigureBookmarkPopover,
-    initializeBookmarkEditor,
-    initializeBookmarkSearchControls,
-    mountBookmarkHeaderActions,
     mountMediaPanel,
     restoreAndBindPageInversion,
     restoreReaderThemeAndBindReturn,
@@ -1017,8 +897,6 @@ export function createReaderBindings(readerContext) {
     mountProgressControls,
     mountProgressSummary,
     bindProgressActions,
-    ownDomSearchController,
-    ownSearchViewController,
     ownPdfSearchStorageAndStart
   };
 }

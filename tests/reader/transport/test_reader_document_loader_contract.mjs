@@ -313,7 +313,6 @@ test("document preparation preserves failure and byte-limit ownership", {timeout
     const failed = h.loader.prepareReaderDocument([Promise.reject(new Error("engine failed"))]);
     await assert.rejects(failed.engines, /engine failed/); await assert.rejects(failed.response, /engine failed/);
     const text = await h.loader.loadTextDocument(); assert.equal(await text.response.text(), "content");
-    assert.equal(await h.loader.loadMediaDocument(), null);
     const scripts = [];
     h.context.loadScript = async url => {scripts.push(url);};
     const markdown = h.loader.loadMarkdownDocument();

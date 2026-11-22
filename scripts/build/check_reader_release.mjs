@@ -2,10 +2,12 @@ import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
 import { createRequire } from "node:module";
+import { isDeepStrictEqual } from "node:util";
 import { pathToFileURL } from "node:url";
-const resources = createRequire(import.meta.url)(
-  path.join(process.cwd(), "static/reader-resources.js")
-);
+
+const require = createRequire(import.meta.url);
+const loadResources = root => require(path.join(root, "static/reader-resources.js"));
+const isMain = process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href;
 
 const args = Object.fromEntries(
   process.argv
@@ -13,13 +15,17 @@ const args = Object.fromEntries(
     .reduce(
       (items, value, index, all) =>
         value.startsWith("--")
-          ? [...items, [value.slice(2), all[index + 1]?.startsWith("--") ? true : all[index + 1]]]
+          ? [...items, [value.slice(2), !all[index + 1] || all[index + 1].startsWith("--") ? true : all[index + 1]]]
           : items,
       []
     )
 );
-const sourceRequired = ["reader.html", ...resources.readerFiles];
+// The manual cross gate loads both inventories from the supplied roots, not cwd.
+const resources = isMain && args.cross ? undefined : loadResources(process.cwd());
+const sourceFiles = inventory => ["reader.html", ...inventory.readerFiles];
+const sourceRequired = resources ? sourceFiles(resources) : [];
 const required = sourceRequired;
+const bundleOnly = new Set(resources?.bundleOnlyFiles);
 // Source smoke assertions, not a substitute for runtime behavior tests.
 const behavioral = [
   /\bVoiceOfMLReaderRuntime\s*\.\s*createReaderRuntime\s*\(/,
@@ -40,12 +46,13 @@ function staticRoot(root, artifact) {
   return fs.existsSync(path.join(artifact, "static")) ? path.join(artifact, "static") : artifact;
 }
 
-function checkBehavior(root) {
-  const reader = ["reader.js", ...resources.readerComponentFiles].map(file =>
+function checkBehavior(root, inventory = resources) {
+  const files = sourceFiles(inventory);
+  const reader = ["reader.js", ...inventory.readerComponentFiles].map(file =>
     fs.readFileSync(path.join(root, "static", file), "utf8")).join("\n").replace(/\breaderContext\./g, "");
   for (const [, dependency] of reader.matchAll(/(?:\/static\/)([^"'\s]+\.(?:js|mjs))/g)) {
     assert(
-      required.includes(dependency),
+      files.includes(dependency),
       `Reader dependency missing from inventory: ${dependency}`
     );
   }
@@ -96,7 +103,8 @@ function checkAssets(output, hashed = false) {
       `vendor integrity mismatch: ${vendor.path}`
     );
   }
-  const files = new Set([...required, "app.js"].map(file => hashed ? currentAsset(output, file) : file));
+  const files = new Set([...required, "app.js"].filter(file => !hashed || !bundleOnly.has(file))
+    .map(file => hashed ? currentAsset(output, file) : file));
   for (const file of files) {
     const target = path.join(output, file);
     assert(fs.existsSync(target) && fs.statSync(target).isFile(), `missing Reader asset: ${file}`);
@@ -179,7 +187,15 @@ function checkProject(root, artifact) {
   if (artifact) {
     assert(!fs.existsSync(path.join(output, "foliate-reader")), "obsolete Foliate runtime in release");
     const project = args.project || (fs.existsSync(path.join(root, "Dockerfile")) ? "hf" : "github");
-    for (const file of resources.buildFiles(project)) currentAsset(output, file);
+    for (const file of resources.releaseFiles(project)) currentAsset(output, file);
+    for (const file of bundleOnly) {
+      const target = path.join(output, file), directory = path.dirname(target);
+      const extension = path.extname(target), stem = path.basename(target, extension) + ".";
+      assert(!fs.existsSync(directory) || !fs.readdirSync(directory).some(name =>
+        name === path.basename(target) || (name.startsWith(stem) && name.endsWith(extension) &&
+          /^[0-9a-f]{12}$/.test(name.slice(stem.length, -extension.length)))),
+      `bundled script published separately: ${file}`);
+    }
     const readerEntry = currentAsset(output, "reader.js");
     const readerBundle = fs.readFileSync(path.join(output, readerEntry), "utf8");
     const readerShell = fs.readFileSync(path.join(output, "reader.html"), "utf8");
@@ -237,9 +253,111 @@ function checkProject(root, artifact) {
   return crypto.createHash("sha256").update(manifest).digest("hex");
 }
 
-function crossCheck(githubRoot, hfRoot) {
+const pagesHostFiles = [
+  "search/reader-assets/infrastructure/scheduling.js",
+  "search/corpus/application/client.js"
+];
+const pagesWorkerFiles = [
+  "search/worker/domain/text.js",
+  "search/worker/domain/intersection.js",
+  "search/index-worker.js"
+];
+
+// Existing site adapters and type differences; their behavior is covered by
+// the per-site gates. New differences in shared host files still fail closed.
+const siteVariants = new Set([
+  "reader/core/reader-security.js", // HF validates the image-page proxy manifest.
+  "search/bootstrap/application/controller.js",
+  "search/catalog/application/client.js", "search/catalog/domain/record-path.js",
+  "search/discovery/application/random.js",
+  "search/downloads/application/batch.js", "search/downloads/application/controller.js",
+  "search/downloads/presentation/queue.js",
+  "search/execution/application/controller.js", "search/execution/domain/policy.js",
+  "search/positions/application/persistence.js", "search/positions/application/restoration.js",
+  "search/positions/domain/policy.js", "search/positions/domain/view-key.js",
+  "search/reader-assets/application/snapshot.js", "search/reader-assets/infrastructure/sidecar.js",
+  "search/reader-host/application/host.js", "search/reader-host/application/navigation.js",
+  "search/requests/application/prefetch-controller.js", "search/requests/application/response-store.js",
+  "search/requests/infrastructure/shared-transport.js",
+  "search/results/application/interactions.js", "search/results/presentation/row.js",
+  "search/results/virtual/application/controller.js", "search/results/virtual/presentation/rows.js",
+  "search/results/window/application/page-loader.js", "search/results/window/domain/page.js",
+  "search/results/window/presentation/status.js",
+  "search/routing/application/router.js", "search/routing/domain/route.js",
+  "search/sidebar/application/directory.js", "search/sidebar/application/filters.js",
+  "search/sidebar/presentation/directory.js", "search/sidebar/presentation/markup.js"
+]);
+
+const equal = (actual, expected, message) => assert(isDeepStrictEqual(actual, expected), message);
+
+function checkSiteInventory(github, hf) {
+  const without = (files, removed) => files.filter(file => !removed.includes(file));
+  const expectOnly = (files, only, message) => equal(files.filter(file => only.includes(file)).sort(),
+    [...only].sort(), message);
+
+  expectOnly(github.searchHostFiles, pagesHostFiles, "Pages-only app host inventory mismatch");
+  equal(hf.searchHostFiles, without(github.searchHostFiles, pagesHostFiles), "cross-project drift: app host order or membership");
+  equal(hf.bundleOnlyFiles, without(github.bundleOnlyFiles, pagesHostFiles), "cross-project drift: bundle-only inventory");
+  for (const key of ["readerFiles", "readerComponentFiles", "vendors", "pdfArchive", "ruffleArchive"]) {
+    equal(hf[key], github[key], `cross-project drift: Reader resources ${key}`);
+  }
+  const resourceApi = (inventory, base) => ({
+    runtime: inventory.runtimePaths(base), shell: inventory.shellAssets(base),
+    ruffle: inventory.ruffleAssets(base), pdfSupport: inventory.pdfSupportAssets(base),
+    djvu: inventory.djvuDecoderAssets(base), selectedDjvu: inventory.djvuSelectedAssets(base),
+    simd: inventory.djvuSupportsSIMD(),
+    vendorUrls: Object.keys(inventory.vendors).map(name => inventory.vendorUrl(name, base)),
+    engines: ["pdf", "djvu", "djv", "md", "markdown", "html", "htm", "txt"].map(ext => inventory.engineAssets(ext, base)),
+    customPdfWorker: inventory.engineAssets("pdf", base, base + "custom-wrapper.mjs"),
+    bundle: inventory.bundleArguments("reader.js"), appBundle: inventory.bundleArguments("app.js")
+  });
+  for (const base of ["/search/static/", "/static/"]) {
+    equal(resourceApi(hf, base), resourceApi(github, base), `cross-project drift: Reader resource API (${base})`);
+  }
+
+  const githubBuild = github.buildFiles("github");
+  const githubRelease = github.releaseFiles("github");
+  expectOnly(githubBuild, pagesWorkerFiles, "Pages-only Worker build inventory mismatch");
+  expectOnly(githubRelease, pagesWorkerFiles, "Pages-only Worker release inventory mismatch");
+  assert(pagesWorkerFiles.every(file => !github.searchHostFiles.includes(file)), "Pages Worker must stay outside the app bundle");
+  equal(hf.buildFiles("hf"), without(githubBuild, [...pagesHostFiles, ...pagesWorkerFiles]),
+    "cross-project drift: build inventory outside Pages-only assets");
+  equal(hf.releaseFiles("hf"), without(githubRelease, pagesWorkerFiles),
+    "cross-project drift: release inventory outside Pages-only Worker assets");
+}
+
+async function checkCompose(root, inventory, base) {
+  const cwd = process.cwd();
+  let compose;
+  // The composer resolves its resources relative to cwd. Import each site's
+  // module separately without running the CLI or writing build output.
+  try {
+    process.chdir(root);
+    compose = await import(pathToFileURL(path.join(root, "scripts/build/compose_app.mjs")).href);
+  } finally {
+    process.chdir(cwd);
+  }
+  const dependencies = ["reader-resources.js", "reader/core/reader-contract.js", ...inventory.searchHostFiles];
+  equal(compose.APP_DEPENDENCIES, dependencies, `app composition inventory mismatch: ${root}`);
+  const script = file => `<script src="${base}${file}"></script>`;
+  const retained = [...pagesWorkerFiles, "app.js"].map(script).join("");
+  equal(compose.stripBundledScripts(dependencies.map(script).join("") + retained), retained,
+    `app composition script stripping mismatch: ${root}`);
+
+}
+
+async function crossCheck(githubRoot, hfRoot) {
+  assert(fs.realpathSync(githubRoot) !== fs.realpathSync(hfRoot), "cross gate requires two different project roots");
+  const github = loadResources(githubRoot), hf = loadResources(hfRoot);
+  checkSiteInventory(github, hf);
+  for (const file of [...pagesHostFiles, ...pagesWorkerFiles]) {
+    const target = path.join(githubRoot, "static", file);
+    assert(fs.existsSync(target) && fs.statSync(target).isFile(), `missing Pages-only source asset: ${file}`);
+    assert(!fs.existsSync(path.join(hfRoot, "static", file)), `unexpected Pages-only source asset in HF: ${file}`);
+  }
+  await checkCompose(githubRoot, github, "/search/static/");
+  await checkCompose(hfRoot, hf, "/static/");
   const exact = [
-    "reader-resources.js",
     "reader/core/reader-store.js",
     "reader/pdf/reader-pdf-text.js",
     "reader/pdf/reader-pdf-range-cache.mjs",
@@ -259,56 +377,6 @@ function crossCheck(githubRoot, hfRoot) {
     "reader/search/reader-pdf-book-validate.mjs",
     "reader/search/workers/reader-pdf-book-search-worker.mjs",
     "reader/search/reader-pdf-book-search.mjs",
-    "search/execution/application/session.js",
-    "search/downloads/application/controller.js",
-    "search/execution/domain/policy.js",
-    "search/execution/application/controller.js",
-    "search/downloads/application/batch.js",
-    "search/downloads/presentation/queue.js",
-    "search/results/presentation/size-format.js",
-    "search/catalog/domain/record-path.js",
-    "search/results/presentation/highlight.js",
-    "search/requests/infrastructure/response-cache.js",
-    "search/catalog/domain/file-types.js",
-    "search/requests/domain/response-validation.js",
-    "search/results/domain/result-identity.js",
-    "search/sidebar/domain/folder-selection.js",
-    "search/input/domain/ownership.js",
-    "search/input/application/controller.js",
-    "search/results/domain/paging-policy.js",
-    "search/results/application/paging-controller.js",
-    "search/requests/infrastructure/shared-transport.js",
-    "search/requests/application/prefetch-controller.js",
-    "search/requests/application/response-store.js",
-    "search/catalog/domain/sidebar-payload.js",
-    "search/catalog/application/client.js",
-    "search/results/presentation/paging-status.js",
-    "search/results/window/application/page-loader.js",
-    "search/results/window/presentation/status.js",
-    "search/results/virtual/domain/height-index.js",
-    "search/shared/domain/stable-stringify.js",
-    "search/positions/domain/view-key.js",
-    "search/results/domain/recovery.js",
-    "search/results/window/domain/page.js",
-    "search/sidebar/presentation/markup.js",
-    "search/sidebar/infrastructure/scroll.js",
-    "search/sidebar/presentation/directory.js",
-    "search/sidebar/application/directory.js",
-    "search/reader-host/application/navigation.js",
-  "search/reader-host/presentation/return-position.js", "search/reader-host/application/host.js",
-  "search/positions/domain/policy.js", "search/positions/infrastructure/indexed-db.js", "search/positions/application/persistence.js", "search/positions/application/restoration.js",
-  "search/results/presentation/row.js", "search/results/application/interactions.js",
-  "search/discovery/application/random.js",
-  "search/shell/presentation/view.js", "search/shell/application/controller.js",
-  "search/bootstrap/domain/initial-payload.js", "search/bootstrap/application/controller.js",
-  "search/reader-assets/infrastructure/scheduling.js", "search/reader-assets/infrastructure/sidecar.js", "search/reader-assets/application/snapshot.js",
-  "search/results/virtual/domain/heights.js", "search/results/virtual/presentation/rows.js", "search/results/virtual/application/controller.js",
-  "search/routing/domain/route.js", "search/routing/application/router.js",
-  "search/history/infrastructure/store.js",
-  "search/history/application/controller.js",
-  "search/ambient/application/quotation.js",
-  "search/corpus/application/client.js",
-  "search/results/snapshots/domain/copy-budget.js", "search/results/snapshots/application/store.js",
     "reader.css",
     "reader/core/reader-request-manager.js",
     "reader/formats/reader-chapter-repository.js",
@@ -316,7 +384,6 @@ function crossCheck(githubRoot, hfRoot) {
     "reader/formats/reader-section-virtualizer.js",
     "reader/core/reader-runtime.js",
     "reader/formats/reader-format-adapters.js",
-    "reader/core/reader-security.js",
     "reader/pdf/reader-v3.mjs", "reader/pdf/reader-djvu-engine-worker.mjs", "reader/pdf/reader-djvu-worker.mjs", "reader/pdf/reader-djvu-scheduler.mjs",
     "reader/pdf/reader-djvu-adapter.mjs", "reader/pdf/reader-djvu-identity.mjs",
     "vendor/djvu-rs-reader/LICENSE.txt", "vendor/djvu-rs-reader/NOTICE.txt",
@@ -337,35 +404,41 @@ function crossCheck(githubRoot, hfRoot) {
     "reader/ui/reader-document-styles.mjs",
     "reader/core/reader-diagnostics.mjs", "reader/core/reader-lifecycle.mjs", "reader/ui/reader-bookmarks.mjs",
     "reader/formats/reader-media-format.mjs", "reader/core/reader-document-loader.mjs", "reader/formats/reader-html-format.mjs",
-    "reader/formats/reader-text-format.mjs", "reader/formats/reader-chapter-format.mjs",
+    "reader/formats/reader-text-format.mjs",
     "reader/pdf/pdf-worker-wrapper.mjs", "reader/pdf/pdf-first-page-worker-adapter.mjs",
     "reader/ui/reader-speech.mjs", "tts-client.js"
   ];
-  for (const file of exact) {
-    assert(
-      hash(path.join(githubRoot, "static", file)) === hash(path.join(hfRoot, "static", file)),
-      `cross-project drift: ${file}`
-    );
+  const chapterFormat = "reader/formats/reader-chapter-format.mjs";
+  const chapterSource = root => fs.readFileSync(path.join(root, "static", chapterFormat), "utf8");
+  const exportedHelper = "export function chapterOptionalText(value) {";
+  const githubChapter = chapterSource(githubRoot), hfChapter = chapterSource(hfRoot);
+  assert(!githubChapter.includes(exportedHelper) && hfChapter.includes(exportedHelper), "HF-only chapter helper export mismatch");
+  equal(githubChapter, hfChapter.replace(exportedHelper, "function chapterOptionalText(value) {"),
+    `cross-project drift: ${chapterFormat}`);
+
+  const files = new Set([
+    ...[...exact, ...hf.searchHostFiles.filter(file => !siteVariants.has(file))].map(file => `static/${file}`),
+    "scripts/build/copy_reader_vendor.mjs",
+    "scripts/build/check_reader_release.mjs",
+    "tests/support/reader-contract-vectors.json"
+  ]);
+  for (const file of files) {
+    assert(hash(path.join(githubRoot, file)) === hash(path.join(hfRoot, file)), `cross-project drift: ${file}`);
   }
-  for (const file of ["compose_app.mjs", "copy_reader_vendor.mjs", "check_reader_release.mjs"]) {
-    assert(
-      hash(path.join(githubRoot, "scripts/build", file)) === hash(path.join(hfRoot, "scripts/build", file)),
-      `cross-project drift: scripts/build/${file}`
-    );
+  for (const file of siteVariants) {
+    for (const root of [githubRoot, hfRoot]) {
+      assert(fs.statSync(path.join(root, "static", file)).isFile(), `missing site variant: ${root}/static/${file}`);
+    }
   }
-  for (const root of [githubRoot, hfRoot]) checkBehavior(root);
-  const vectors = "tests/support/reader-contract-vectors.json";
-  if (fs.existsSync(path.join(githubRoot, vectors)) && fs.existsSync(path.join(hfRoot, vectors))) {
-    assert(
-      hash(path.join(githubRoot, vectors)) === hash(path.join(hfRoot, vectors)),
-      "cross-project drift: Reader contract vectors"
-    );
-  }
+  checkBehavior(githubRoot, github);
+  checkBehavior(hfRoot, hf);
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) try {
+if (isMain) try {
   if (args.cross) {
-    crossCheck(path.resolve(args["github-root"]), path.resolve(args["hf-root"]));
+    assert(typeof args["github-root"] === "string" && typeof args["hf-root"] === "string",
+      "--cross requires --github-root and --hf-root");
+    await crossCheck(path.resolve(args["github-root"]), path.resolve(args["hf-root"]));
     console.log("reader cross-project release gate ok");
   } else {
     const root = path.resolve(args.root || ".");

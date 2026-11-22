@@ -53,8 +53,9 @@ interface PagesSearchDOM {
   resultsList: HTMLElement; resultsContainer: HTMLElement; emptyState: HTMLElement; emptyDesc: HTMLElement;
   emptyRandomBtn: HTMLButtonElement; resultCount: HTMLElement; clearFiltersBtn: HTMLButtonElement;
   sortSelect: HTMLSelectElement; mirrorLinksToggle: HTMLInputElement; loadInfo: HTMLElement;
-  mobileSelectedCount: HTMLElement; loadedCount: HTMLElement | null; totalCount: HTMLElement;
-  currentResultPosition: HTMLInputElement; scrollTrack: HTMLElement; scrollThumb: HTMLElement;
+  mobileSelectedCount: HTMLElement; totalCount: HTMLElement;
+  currentResultPosition: HTMLInputElement; resultPositionDisplay: HTMLElement | null;
+  scrollTrack: HTMLElement; scrollThumb: HTMLElement;
   hitokoto: HTMLElement; randomBookBtn: HTMLButtonElement; randomTxtBtn: HTMLButtonElement;
   overlay: HTMLElement; toast: HTMLElement; filterRepoSection: HTMLElement; filterRepoList: HTMLElement;
   repoFilterCancel: HTMLButtonElement; filterFolderSection: HTMLElement; filterFolderTree: HTMLElement;
@@ -65,7 +66,7 @@ interface PagesSearchDOM {
   searchFoldersToggle: HTMLInputElement; exactSearchToggle: HTMLInputElement; exactSearchSection: HTMLElement;
   localModeToggle: HTMLInputElement; historyToggle: HTMLInputElement; historyDropdown: HTMLElement;
   returnToPositionBtn: HTMLButtonElement; backToTopBtn: HTMLButtonElement; retryPositionBtn: HTMLButtonElement;
-  cancelPositionBtn: HTMLButtonElement | null; positionRestoreStatus: HTMLElement;
+  positionRestoreStatus: HTMLElement;
   multiToggleLabel: HTMLElement; multiSelectToggle: HTMLInputElement; multiActionBar: HTMLElement;
   multiCopyLinks: HTMLButtonElement; multiBatchDownload: HTMLButtonElement; multiSelectAll: HTMLButtonElement;
   multiSelectedCount: HTMLElement; multiDeselect: HTMLButtonElement;

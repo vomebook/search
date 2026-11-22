@@ -286,11 +286,11 @@ for (const {name:project,root} of searchTestProjects()) {
     for (const afterFrame of [false,true]) {
       const f=fixture(source),c=f.context;
       for(let page=2;page<=6;page++) c.setCachedSearchResponse(String(page),f.data(page),true);
-      assert.strictEqual(c.searchResponseStore.pendingWrites.size,3);
+      for(let page=2;page<=6;page++) assert.strictEqual(c.getCachedSearchResponse(String(page))?.page ?? null,page<4?null:page);
       if(afterFrame) f.frames[0]();
       c.cancelSearchPrefetch();
       f.frames[0](); await f.advance(0);
-      assert.strictEqual(c.searchResponseStore.pendingWrites.size,0);assert.strictEqual(c.searchResponseCache.size,0);
+      for(let page=2;page<=6;page++) assert.strictEqual(c.getCachedSearchResponse(String(page)),null);
     }
   });
   test(project + " stale deferred cache writes cannot cross query boundaries",async()=>{

@@ -5,7 +5,7 @@ interface SearchPositionRestoreTask {
   key: string; controller: AbortController; position: SearchPosition;
   backend?: SearchResultBackend | undefined;
   lookup?: SearchPositionRestorePage | null | undefined;
-  ready: Map<number, SearchPositionRestorePage>; page: number; results: unknown[];
+  ready: Map<number, SearchPositionRestorePage>;
   preview?: boolean; cachedPages?: Map<number, SearchRecentPage>;
   failed?: boolean; error?: Error;
 }

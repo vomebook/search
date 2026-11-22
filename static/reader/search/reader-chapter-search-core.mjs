@@ -2,7 +2,7 @@
 /** @typedef {{ordinal: number, chapterIndex: number, start: number}} SearchCheckpoint */
 /** @typedef {{text: string, matchStart: number, matchLength: number, prefix: string, suffix: string}} SearchSnippet */
 /** @typedef {{chapterIndex: number, start: number, length: number, location: string, snippet: SearchSnippet}} SearchResult */
-/** @typedef {{counts: number[], total: number, scanned: number, firstPage: SearchResult[]}} SearchProgress */
+/** @typedef {{total: number, scanned: number, firstPage: SearchResult[]}} SearchProgress */
 export const PAGE_SIZE = 50;
 const CHECKPOINT_STRIDE = 256;
 const BIGRAM_FILTER_HASHES = 7;
@@ -64,7 +64,7 @@ function legacyBloomMayContain(bloom, filters) {
 }
 
 /** @param {SearchChapter} chapter @param {number[][] | null} filters */
-export function chapterMayContainBigrams(chapter, filters) {
+function chapterMayContainBigrams(chapter, filters) {
   const bloom = chapter.bigramFilter;
   if (!filters || !bloom) return true;
   return bloom instanceof Uint8Array ? typedBloomMayContain(bloom, filters) : legacyBloomMayContain(bloom, filters);
@@ -129,7 +129,7 @@ export async function countMatches(chapters, query, current, progress = null) {
     total += count;
     if (progress && (counts.length === 1 || (count && total <= PAGE_SIZE) ||
         counts.length % 8 === 0 || counts.length === chapters.length))
-      await progress({ counts, total, scanned: counts.length, firstPage });
+      await progress({ total, scanned: counts.length, firstPage });
   }
   return { counts, checkpoints, total, firstPage };
 }

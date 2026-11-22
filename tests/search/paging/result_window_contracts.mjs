@@ -4,6 +4,7 @@ import vm from 'node:vm';
 import test from 'node:test';
 import {installClassicSearchModules} from '../../support/classic_search_modules.js';
 import {APP_DEPENDENCIES, stripBundledScripts} from '../../../scripts/build/compose_app.mjs';
+import {installSourcePrecachePaths} from '../../support/shell_assets.mjs';
 
 const source = fs.readFileSync('static/app.js', 'utf8');
 function fixture(names, values = {}) {
@@ -191,14 +192,15 @@ test('status action reads the current window and placeholders retain loading, re
   assert.equal(host.children.length, 1);
 });
 
-test('window modules load once in source, composition, resources, SW and all three type projects', () => {
-  const html = fs.readFileSync('static/index.html', 'utf8'), worker = fs.readFileSync('static/sw.js', 'utf8');
+test('window modules load once in source, composition, resources, SW and all three type projects', async () => {
+  const precache = await installSourcePrecachePaths('/search/static/');
+  const html = fs.readFileSync('static/index.html', 'utf8');
   const c = vm.createContext({}); vm.runInContext(fs.readFileSync('static/reader-resources.js', 'utf8'), c);
   for (const name of ['search/results/window/application/page-loader.js', 'search/results/window/presentation/status.js']) {
     assert.equal(APP_DEPENDENCIES.filter(path => path === name).length, 1);
     assert.equal(html.split(name).length - 1, 1); assert.ok(html.indexOf(name) < html.indexOf('static/app.js'));
     assert.equal(stripBundledScripts(html).includes(name), false);
-    assert.equal(worker.split('/static/' + name).length - 1, 1);
+    assert.equal(precache.filter(file => file === name).length, 1, name);
     for (const site of ['github', 'huggingface']) assert.equal(c.VoiceOfMLReaderResources.buildFiles(site).filter(path => path === name).length, 1);
     for (const config of ['check', 'strict', 'search-exact'])
       assert.equal(JSON.parse(fs.readFileSync(`config/types/jsconfig.${config}.json`, 'utf8')).files.filter(path => path === '../../static/' + name).length, 1);

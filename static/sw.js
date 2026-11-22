@@ -62,7 +62,7 @@ function isRemovedReaderAsset(pathname) {
 /** @param {string} pathname @returns {boolean} */
 function isRetiredAsset(pathname) {
   return currentAssetPaths.size > 0 &&
-    (isDjvuDecoderAsset(pathname) || isRuffleAsset(pathname) || HASHED_ASSET_PATTERN.test(pathname) ||
+    (isImmutableAssetPath(pathname) ||
       /^\/search\/static\/(?:(?:reader|search)\/[^?]+|[^/]+)\.(js|mjs|css)$/.test(pathname)) &&
     !currentAssetPaths.has(pathname);
 }
@@ -93,8 +93,7 @@ async function activeGeneration() {
 /** @param {URL} url @returns {boolean} */
 function isImmutableURL(url) {
   return url.origin === self.location.origin && !url.searchParams.has("sw-retained-generation") && url.pathname.startsWith("/search/static/") &&
-    !isRemovedReaderAsset(url.pathname) &&
-    (HASHED_ASSET_PATTERN.test(url.pathname) || isDjvuDecoderAsset(url.href) || isRuffleAsset(url.href));
+    !isRemovedReaderAsset(url.pathname) && isImmutableAssetPath(url.pathname);
 }
 /** @param {URL} url @returns {Promise<Response | undefined>} */
 async function previousAsset(url) {
@@ -167,10 +166,11 @@ function pruneHashedAssets(cache) {
 /** @param {Request | string} request @returns {Request | string} */
 function revalidatedRequest(request) {
   const url = typeof request === "string" ? request : request.url;
-  if (HASHED_ASSET_PATTERN.test(url) || isDjvuDecoderAsset(url) || isRuffleAsset(url) || typeof Request !== "function") return request;
+  const { pathname } = new URL(url, self.location.origin);
+  if (isImmutableAssetPath(pathname) || typeof Request !== "function") return request;
   // Pin both installation and background refresh: a concurrent deploy must
   // not put HTML that references a different graph into this generation.
-  if (READER_SHELL_INTEGRITY !== "development" && new URL(url, self.location.origin).pathname === "/search/static/reader.html") {
+  if (READER_SHELL_INTEGRITY !== "development" && pathname === "/search/static/reader.html") {
     const cache = typeof request !== "string" && request.cache !== "default" ? request.cache : "no-cache";
     return new Request(request, { cache, integrity: READER_SHELL_INTEGRITY });
   }
@@ -178,16 +178,11 @@ function revalidatedRequest(request) {
   try { return new Request(request, { cache: "no-cache" }); } catch (_) { return request; }
 }
 
-/** @param {string} value @returns {boolean} */
-function isDjvuDecoderAsset(value) {
-  try { return /^\/search\/static\/vendor\/djvu-rs-reader\/release-[0-9a-f]{12}-[0-9a-f]{12}\/(?:scalar|simd128)\/djvu_rs(?:_bg\.wasm|\.js)$/.test(value.startsWith('/') ? value : new URL(value).pathname); }
-  catch (_) { return false; }
-}
-
-/** @param {string} value @returns {boolean} */
-function isRuffleAsset(value) {
-  try { return /^\/search\/static\/vendor\/ruffle\/release-[0-9a-f]{12}\/(?:ruffle\.js|core\.ruffle\.[0-9a-f]{20}\.js|[0-9a-f]{20}\.wasm)$/.test(value.startsWith('/') ? (value.split(/[?#]/)[0] || '') : new URL(value).pathname); }
-  catch (_) { return false; }
+/** @param {string} pathname @returns {boolean} */
+function isImmutableAssetPath(pathname) {
+  return HASHED_ASSET_PATTERN.test(pathname) ||
+    /^\/search\/static\/vendor\/djvu-rs-reader\/release-[0-9a-f]{12}-[0-9a-f]{12}\/(?:scalar|simd128)\/djvu_rs(?:_bg\.wasm|\.js)$/.test(pathname) ||
+    /^\/search\/static\/vendor\/ruffle\/release-[0-9a-f]{12}\/(?:ruffle\.js|core\.ruffle\.[0-9a-f]{20}\.js|[0-9a-f]{20}\.wasm)$/.test(pathname);
 }
 
 const PRECACHE_URLS = [
@@ -195,56 +190,6 @@ const PRECACHE_URLS = [
   "/search/static/style.css",
   "/search/static/reader-resources.js",
   "/search/static/reader/core/reader-contract.js",
-  "/search/static/search/reader-host/application/navigation.js",
-  "/search/static/search/reader-host/presentation/return-position.js",
-  "/search/static/search/reader-host/application/host.js",
-  "/search/static/search/positions/domain/policy.js",
-  "/search/static/search/positions/infrastructure/indexed-db.js",
-  "/search/static/search/positions/application/persistence.js",
-  "/search/static/search/positions/application/restoration.js",
-  "/search/static/search/results/presentation/row.js",
-  "/search/static/search/results/application/interactions.js",
-  "/search/static/search/discovery/application/random.js",
-  "/search/static/search/shell/presentation/view.js",
-  "/search/static/search/shell/application/controller.js",
-  "/search/static/search/bootstrap/domain/initial-payload.js",
-  "/search/static/search/bootstrap/application/controller.js",
-  "/search/static/search/results/virtual/domain/heights.js",
-  "/search/static/search/results/virtual/presentation/rows.js",
-  "/search/static/search/results/virtual/application/controller.js",
-  "/search/static/search/reader-assets/infrastructure/scheduling.js",
-  "/search/static/search/reader-assets/infrastructure/sidecar.js",
-  "/search/static/search/reader-assets/application/snapshot.js",
-  "/search/static/search/routing/domain/route.js",
-  "/search/static/search/routing/application/router.js",
-  "/search/static/search/history/infrastructure/store.js",
-  "/search/static/search/history/application/controller.js",
-  "/search/static/search/ambient/application/quotation.js",
-  "/search/static/search/corpus/application/client.js",
-  "/search/static/search/results/snapshots/domain/copy-budget.js",
-  "/search/static/search/results/snapshots/application/store.js",
-  "/search/static/search/input/domain/ownership.js",
-  "/search/static/search/input/application/controller.js",
-  "/search/static/search/sidebar/presentation/filter-list.js",
-  "/search/static/search/sidebar/presentation/folder-tree.js",
-  "/search/static/search/sidebar/application/filters.js",
-  "/search/static/search/sidebar/infrastructure/scroll.js",
-  "/search/static/search/sidebar/presentation/directory.js",
-  "/search/static/search/sidebar/application/directory.js",
-  "/search/static/search/results/domain/paging-policy.js",
-  "/search/static/search/results/application/paging-controller.js",
-  "/search/static/search/requests/infrastructure/shared-transport.js",
-  "/search/static/search/requests/application/prefetch-controller.js",
-  "/search/static/search/requests/application/response-store.js",
-  "/search/static/search/catalog/domain/sidebar-payload.js",
-  "/search/static/search/catalog/application/client.js",
-  "/search/static/search/results/presentation/paging-status.js",
-  "/search/static/search/results/window/application/page-loader.js",
-  "/search/static/search/results/window/presentation/status.js",
-  "/search/static/search/execution/domain/policy.js",
-  "/search/static/search/execution/application/controller.js",
-  "/search/static/search/downloads/application/batch.js",
-  "/search/static/search/downloads/presentation/queue.js",
   "/search/static/app.js",
   "/search/static/search/index-worker.js",
   "/search/static/search/worker/domain/text.js",
@@ -263,6 +208,8 @@ const PRECACHE_URLS = [
 const READER_RUNTIME_PATHS = new Set(VoiceOfMLReaderResources.runtimePaths("/search/static/"));
 const READER_SHELL_ASSETS = VoiceOfMLReaderResources.shellAssets("/search/static/");
 if (READER_SHELL_INTEGRITY === "development") {
+  // The production Search app bundles these classic scripts.
+  PRECACHE_URLS.push(...VoiceOfMLReaderResources.searchHostFiles.map(file => "/search/static/" + file));
   // The production Reader entry bundles these static imports.
   READER_SHELL_ASSETS.push("/search/static/reader/reader-components.mjs",
     ...VoiceOfMLReaderResources.readerComponentFiles.map(file => "/search/static/" + file));
@@ -349,7 +296,7 @@ readerWorkerScope.addEventListener("fetch", (event) => {
   const generatedData = url.pathname.startsWith("/search/data/");
   const networkFirst = !readerShell && (searchNavigation || generatedData || READER_RUNTIME_PATHS.has(url.pathname));
   const cacheKey = readerShell ? "/search/static/reader.html" : searchNavigation ? "/search/" : event.request;
-  const immutable = HASHED_ASSET_PATTERN.test(url.pathname) || isDjvuDecoderAsset(url.href) || isRuffleAsset(url.href);
+  const immutable = isImmutableAssetPath(url.pathname);
   // Assign order before any asynchronous work, using the actual normalized key.
   const mutableKey = new URL(typeof cacheKey === "string" ? cacheKey : cacheKey.url, self.location.origin).href;
   // Online navigations may see the next release before its worker activates.

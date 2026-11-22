@@ -8,7 +8,7 @@
       previous?.position.anchorId === position.anchorId ? previous : null;
     return /** @type {SearchPositionRestoreTask} */ ({ key, controller: new AbortController(),
       position: { ...position }, backend: pinned,
-      lookup: reusable?.lookup, ready: reusable?.ready || new Map(), page: 0, results: [] });
+      lookup: reusable?.lookup, ready: reusable?.ready || new Map() });
   }
 
   /** @param {SearchPositionRestorationHost} host */
@@ -33,7 +33,7 @@
           }
           const lookup = task.lookup;
           const pinnedQuery = {...query, resultBackend: task.backend};
-          task.ready.set(1, lookup); task.page = 1;
+          task.ready.set(1, lookup);
           const total = lookup.total;
           const index = typeof lookup.anchor_index === "number" && Number.isInteger(lookup.anchor_index) && lookup.anchor_index >= 0 && lookup.anchor_index < total
             ? lookup.anchor_index : Math.min(position.index, Math.max(0, total - 1));
@@ -82,7 +82,7 @@
             if (host.stableId(record) === position.anchorId) found = index;
           });
           const snapshot = { version: globalThis.VoiceOfMLSnapshotPolicy.VERSION, key, results, total,
-            page, loadedPage: page, pageCache: {}, hasMore: results.length < total,
+            loadedPage: page, pageCache: {}, hasMore: results.length < total,
             resultBackend: task.backend,
             window: { generation: lookup.generation, pages: [...task.ready.keys()], count: [...task.ready.values()].reduce((sum, data) => sum + data.results.length, 0) },
             estimatedHeight: host.estimatedHeight(), heightCache: [], heightRecords: [],
@@ -104,7 +104,7 @@
         const err = /** @type {Error} */ (error);
         task.failed = true;
         task.error = err;
-        if (err.message === "RESTORE_PAGE_CHANGED") { task.lookup = null; task.ready.clear(); task.page = 0; }
+        if (err.message === "RESTORE_PAGE_CHANGED") { task.lookup = null; task.ready.clear(); }
         host.failed(err.message === "RESTORE_PAGE_CHANGED"
           ? "搜索数据已更新，请重试恢复" : "暂时无法加载原位置附近的结果");
       }

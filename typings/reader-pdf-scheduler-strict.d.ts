@@ -29,13 +29,12 @@ export interface SchedulerContext {
   pdfActiveTextLoads: number; pdfActiveSearchTextLoads: number; pdfTextWaiters: TextWaiter[];
   pdfTextContentPromises: Map<number, { request: TextRequest }>;
   readerAbortController: AbortController;
-  cancelPdfManifestPrefetch(record: PrefetchRecord): void; stopPdfManifestPrefetch(): void;
+  stopPdfManifestPrefetch(): void;
   trimPdfManifestPrefetches(): void; pdfRetainedPixels(): number; pdfPixelBudget(): number;
   pdfSurfacePixels(surface: HTMLCanvasElement | HTMLImageElement): number;
   pageAtMarker(): PdfShell | null; isPdfPageVisible(shell: PdfShell | null): boolean; pdfSelectionIntersects(shell: PdfShell): boolean;
   setPdfPageLoadingState(state: Element, page: string | undefined): void;
   domSearch: { pruneMarks(): void };
-  canPrefetchPdfImages(): boolean; pdfManifestPrefetchConcurrency(): number; pdfManifestPrefetchMaxPages(): number;
   queuePdfManifestPrefetch(delay?: number): void; trimPdfSurfaces(shell?: PdfShell | null, incomingPixels?: number): void;
   pdfPagePriority(shell: PdfShell | null): number; normalizePdfPriority(priority: boolean | number): number;
   readerAbortError(): Error; drainPdfTextWaiters(): void;

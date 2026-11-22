@@ -7,7 +7,7 @@ interface SearchSnapshotView {
   window?: {generation?: string | undefined; pages: Iterable<number>; count: number; invalid?: boolean | undefined} | null;
 }
 interface SearchResultSnapshot {
-  version: number; key: string; results: unknown[]; total: number; page: number; loadedPage: number;
+  version: number; key: string; results: unknown[]; total: number; loadedPage: number;
   pageCache: Record<string, unknown>; resultBackend?: SearchResultBackend | null | undefined; hasMore: boolean;
   window: {generation?: string | undefined; pages: number[]; count: number; invalid?: boolean} | null;
   estimatedHeight: number; heightCache: SearchSnapshotHeightEntry[]; heightRecords?: SearchSnapshotHeightEntry[];

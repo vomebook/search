@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import vm from 'node:vm';
 import test from 'node:test';
 import { APP_DEPENDENCIES, stripBundledScripts } from '../../../scripts/build/compose_app.mjs';
+import {installSourcePrecachePaths} from '../../support/shell_assets.mjs';
 
 const current = fs.readFileSync('static/app.js', 'utf8');
 const source = process.env.BOOTSTRAP_BASELINE_SOURCE ? fs.readFileSync(process.env.BOOTSTRAP_BASELINE_SOURCE, 'utf8') : current;
@@ -46,13 +47,14 @@ function fixture() {
   return {c,state,events,flights,location,payload,inline(value){text=value;try{c.embeddedInitialPayload=JSON.parse(value);}catch{c.embeddedInitialPayload=null;}}};
 }
 
-test('bootstrap registration covers source, composed and offline entry points and strict projects',()=>{
+test('bootstrap registration covers source, composed and offline entry points and strict projects',async ()=>{
+  const precache = await installSourcePrecachePaths('/search/static/');
   const html=fs.readFileSync('static/index.html','utf8'), c=vm.createContext({});
   vm.runInContext(fs.readFileSync('static/reader-resources.js','utf8'),c);
   for(const file of modules) {
     assert.ok(html.includes(file));assert.ok(html.indexOf(file)<html.indexOf('static/app.js'));
     assert.ok(APP_DEPENDENCIES.includes(file));assert.ok(!stripBundledScripts(html).includes(file));
-    assert.ok(fs.readFileSync('static/sw.js','utf8').includes('/static/'+file));
+    assert.equal(precache.filter(path => path === file).length, 1, file);
     for(const site of ['github','huggingface']) assert.ok(c.VoiceOfMLReaderResources.buildFiles(site).includes(file));
     for(const config of ['check','strict','search-exact']) assert.ok(fs.readFileSync('config/types/jsconfig.'+config+'.json','utf8').includes(file));
     assert.doesNotMatch(fs.readFileSync('static/'+file,'utf8'),/\bSTATE\b|\bDOM\b|\bVSCROLL\b|new Proxy/);

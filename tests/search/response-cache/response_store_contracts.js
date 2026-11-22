@@ -73,7 +73,7 @@ test(name + " cancellation removes either scheduled stage and a fresh write can 
     assert.equal(afterFrame ? f.timers.size : f.frames.size, 1);
     c.cancelPendingSearchCacheWrites();
     assert.equal(f.frames.size, 0); assert.equal(f.timers.size, 0);
-    assert.equal(f.store.pendingWrites.size, 0);
+    assert.equal(c.getCachedSearchResponse("old"), null);
     c.setCachedSearchResponse("new", page("new"), true);
     f.frame(); f.timer();
     assert.deepEqual([...f.store.cache.keys()], ["new"]);
@@ -84,17 +84,21 @@ test(name + " pending reads precede committed memory, replace in insertion order
   const f = responseFixture(), c = f.context;
   c.setCachedSearchResponse("a", page("committed"));
   for (const key of ["a", "b", "c", "a", "d"]) c.setCachedSearchResponse(key, page(key), true);
-  assert.deepEqual([...f.store.pendingWrites.keys()], ["c", "a", "d"]);
-  assert.equal(c.getCachedSearchResponse("a").results[0].File, "a");
+  assert.equal(c.getCachedSearchResponse("b"), null);
+  for (const key of ["c", "a", "d"]) assert.equal(c.getCachedSearchResponse(key).results[0].File, key);
   c.view = "other";
   assert.equal(c.getCachedSearchResponse("a").results[0].File, "committed");
   assert.equal(c.getCachedSearchResponse("d"), null);
   f.frame(); f.timer();
   assert.deepEqual([...f.store.cache.keys()], ["a"]);
-  assert.equal(f.store.pendingWrites.size, 0);
+  c.view = "query";
+  assert.equal(c.getCachedSearchResponse("d"), null);
   c.setCachedSearchResponse("new", page("new"), true);
   f.frame(); c.view = "third"; f.timer();
-  assert.equal(f.store.cache.has("new"), false);
+  assert.equal(c.getCachedSearchResponse("new"), null);
+  for (const key of ["a", "b", "c", "a", "d"]) c.setCachedSearchResponse(key, page(key), true);
+  f.frame(); f.timer();
+  assert.deepEqual([...f.store.cache.keys()], ["c", "a", "d"]);
 });
 
 test(name + " deferred writes preserve acquisition age and cannot revive expired responses", () => {
@@ -118,12 +122,11 @@ test(name + " view changes preserve pending age, and immediate replacement wins 
   c.clock = 10; c.setCachedSearchResponse("key", page("pending"), true);
   c.view = "other"; c.clock = 109;
   assert.equal(c.getCachedSearchResponse("key"), null);
-  assert.equal(f.store.pendingWrites.size, 1);
   c.view = "query";
   assert.equal(c.getCachedSearchResponse("key").results[0].File, "pending");
   c.clock = 110;
   assert.equal(c.getCachedSearchResponse("key"), null);
-  assert.equal(f.store.pendingWrites.size, 0);
+  f.frame(); f.timer(); assert.equal(f.store.cache.has("key"), false);
   c.setCachedSearchResponse("key", page("deferred"), true);
   f.frame();
   c.setCachedSearchResponse("key", page("immediate"));
@@ -172,8 +175,8 @@ test(name + " response store declarations enforce page and dependency contracts"
     VoiceOfMLSearchResponseStore.create({...deps, rememberSearchPageMetadata: (data: string) => { void data; }});
     // @ts-expect-error cache timestamps must be numbers
     store.cache.set("key", {time: "now", data: page});
-    // @ts-expect-error pending entries require acquisition time
-    store.pendingWrites.set("key", {data: page, viewKey: "view"});
+    // @ts-expect-error the deferred write queue is private
+    void store.pendingWrites;
     void mustExist;
   `;
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "response-store-types-"));

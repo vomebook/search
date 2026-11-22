@@ -989,18 +989,25 @@ keepValue(1, 2);
         self.assert_check(self.run_check(*check), True, 'bundled shell/SW contracts preserved')
         install_entries = 'PRECACHE_URLS.map(revalidatedRequest)'
         self.assertEqual(original_worker.count(install_entries), 1)
-        # Exercise raw strings as well as Request objects in the cache call.
+        # Exercise raw strings as well as Request objects in the release install.
         for entry in (json.dumps(static_base + name), json.dumps('./static/' + name),
                       f'new Request("./static/../static/{name}?v=1#asset")'):
             with self.subTest(precache=entry):
                 worker.write_text(original_worker.replace(install_entries, f'[...{install_entries}, {entry}]'))
-                self.assert_check(self.run_check(*check), False, 'must not be individually precached')
+                self.assert_check(self.run_check(*check), False, 'must not be individually precached in production')
+        for entries in (f'PRECACHE_URLS.filter(url => url !== "{static_base}{name}").map(revalidatedRequest)',
+                        f'[...{install_entries}, new Request("{static_base}{name}")]'):
+            with self.subTest(dev_precache=entries):
+                # Omit the window page or add it twice, only in the source install.
+                worker.write_text(original_worker.replace(install_entries,
+                    f'(READER_SHELL_INTEGRITY === "development" ? {entries} : {install_entries})'))
+                self.assert_check(self.run_check(*check), False, f'{name} must be precached once in development')
         worker.write_text(original_worker)
         compose = self.root / paths[3]
         original_compose = compose.read_text()
-        dependency = '"search/results/window/domain/page.js", '
+        dependency = 'resources.searchHostFiles'
         self.assertEqual(original_compose.count(dependency), 1)
-        compose.write_text(original_compose.replace(dependency, ""))
+        compose.write_text(original_compose.replace(dependency, f'{dependency}.filter(file => file !== "{name}")'))
         self.assert_check(self.run_check(*check), False, "bundled shell must contain only the application script")
         compose.write_text(original_compose)
         resources = self.root / paths[2]
@@ -1008,7 +1015,7 @@ keepValue(1, 2);
         resource = '      "search/results/window/domain/page.js",\n'
         self.assertEqual(original_resources.count(resource), 1)
         resources.write_text(original_resources.replace(resource, ""))
-        self.assert_check(self.run_check(*check), False, "window page must be a build dependency")
+        self.assert_check(self.run_check(*check), False, "bundled shell must contain only the application script")
         resources.write_text(original_resources)
 
         # Execute the actual CLI on its complete production inputs, not just its

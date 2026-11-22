@@ -34,7 +34,6 @@ interface VoiceOfMLShellDependencies {
 }
 declare var VoiceOfMLShellView: {
   create(elements: () => VoiceOfMLShellElements, zeroRippleMargins: boolean): VoiceOfMLShellViewInstance;
-  focusSearchSidebar(sidebar: HTMLElement): void;
 };
 declare var VoiceOfMLShell: { create(deps: VoiceOfMLShellDependencies): {
   toggleTheme(): void; applyTheme(): void; toggleMobile(): void; applyMobileMode(): void;

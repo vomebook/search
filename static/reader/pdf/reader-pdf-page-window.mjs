@@ -653,7 +653,7 @@ export function createReaderPdfPageWindow(readerContext) {
     // observers still wait for the complete layout.
     const mounted = !readerContext.pdfShellWindow && initialPage > 1 ? Promise.withResolvers() : null;
     const shellsReady = readerContext.pdfShellsReady = readerContext.pdfShellWindow
-      ? Promise.resolve() : readerContext.appendShellsBatched(createShell, totalPages, 250, mounted
+      ? Promise.resolve() : appendShellsBatched(createShell, totalPages, 250, mounted
         ? endPage => { if (endPage >= initialPage) mounted.resolve(undefined); } : undefined);
     shellsReady.catch(() => {});
     publishLayout();
@@ -1405,7 +1405,7 @@ export function createReaderPdfPageWindow(readerContext) {
     // adjacent observers still need the full layout (including near the end).
     const mounted = drawWhileBatching && initialPage > 1 ? Promise.withResolvers() : null;
     const shellsReady = readerContext.pdfShellsReady = readerContext.pdfShellWindow
-      ? Promise.resolve() : readerContext.appendShellsBatched(createShell, pdf.numPages, 24, mounted
+      ? Promise.resolve() : appendShellsBatched(createShell, pdf.numPages, 24, mounted
         ? endPage => { if (endPage >= initialPage) mounted.resolve(undefined); } : undefined);
     shellsReady.catch(() => {});
     publishLayout();
@@ -1487,7 +1487,6 @@ export function createReaderPdfPageWindow(readerContext) {
   return {
     pdfManifestSource,
     pdfPageEntry,
-    appendShellsBatched,
     pdfSelectionIntersects,
     correctPdfCrossPageSelection,
     createPdfShellWindow,

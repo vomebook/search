@@ -116,7 +116,7 @@ assert.strictEqual((reader.match(/function loadPdfDocument\(/g) || []).length, 1
 for (const renderer of ['renderImageDocument', 'renderMedia']) assert.strictEqual((reader.match(new RegExp(`function ${renderer}\\s*\\(`,'g')) || []).length, 1)
 for (const renderer of ['renderTextDocument', 'renderMarkdownDocument']) assert.strictEqual((reader.match(new RegExp(`function ${renderer}\\(`,'g')) || []).length, 1)
 for (const loader of ['loadTextDocument', 'loadMarkdownDocument', 'loadHtmlDocument']) assert.strictEqual((reader.match(new RegExp(`function ${loader}\\(`,'g')) || []).length, 1)
-for (const loader of ['loadMediaDocument', 'loadImageDocument', 'loadChapterManifestDocument']) assert.strictEqual((reader.match(new RegExp(`function ${loader}\\(`,'g')) || []).length, 1)
+for (const loader of ['loadImageDocument', 'loadChapterManifestDocument']) assert.strictEqual((reader.match(new RegExp(`function ${loader}\\(`,'g')) || []).length, 1)
 assert.match(reader, /reader-chapter-repository\.js/)
 assert.match(reader, /reader-scroll-anchor\.js/)
 assert.match(reader, /reader-section-virtualizer\.js/)
@@ -204,7 +204,7 @@ const expected = {
 }
 const registered = new Map(), calls = []
 const registryContext = { extension: 'pdf', formatAdapters: { register: (mode, adapter) => registered.set(mode, adapter) } }
-for (const name of [...new Set(Object.values(expected).flat()), 'loadPdfDocument', 'renderPdf', 'fetchReaderResponse', 'renderPdfPages', 'renderImagePages', 'loadMediaDocument', 'renderMedia', 'restoreFormat', 'disposeFormatResources']) registryContext[name] = (...args) => calls.push([name, ...args])
+for (const name of [...new Set(Object.values(expected).flat()), 'loadPdfDocument', 'renderPdf', 'fetchReaderResponse', 'renderPdfPages', 'renderImagePages', 'renderMedia', 'restoreFormat', 'disposeFormatResources']) registryContext[name] = (...args) => calls.push([name, ...args])
 vm.runInNewContext(registry[0] + '; registerReaderFormatAdapters();', registryContext)
 assert.deepStrictEqual([...registered.keys()].sort(), [...Object.keys(expected), 'pdf', 'pdf-pages', 'image-pages', 'audio', 'video'].sort())
 registered.get('pdf').open()
@@ -233,7 +233,7 @@ assert.deepStrictEqual(calls.splice(0), [['fetchReaderResponse']])
 registered.get('image-pages').render(preparedDocument)
 assert.deepStrictEqual(calls.splice(0), [['renderImagePages', preparedDocument]])
 for (const mode of ['audio', 'video']) {
-  assert.strictEqual(registered.get(mode).open, registryContext.loadMediaDocument)
+  assert.strictEqual(registered.get(mode).open(), null, mode + ' has no separate preparation')
   registered.get(mode).render()
   assert.deepStrictEqual(calls.splice(0), [['renderMedia', mode]])
 }

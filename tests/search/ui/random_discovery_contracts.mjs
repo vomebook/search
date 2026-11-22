@@ -4,6 +4,7 @@ import vm from 'node:vm';
 import test from 'node:test';
 import {createRequire} from 'node:module';
 import {APP_DEPENDENCIES, stripBundledScripts} from '../../../scripts/build/compose_app.mjs';
+import {installSourcePrecachePaths} from '../../support/shell_assets.mjs';
 const space = fs.existsSync('pyrightconfig.json');
 const name = 'search/discovery/application/random.js';
 const app = fs.readFileSync('static/app.js', 'utf8');
@@ -43,7 +44,8 @@ function fixture() {
   return {c, opened, downloads, messages, requests, timers, loads, localCalls};
 }
 
-test('discovery is registered once in source, composed bundle, resources, offline and strict projects', () => {
+test('discovery is registered once in source, composed bundle, resources, offline and strict projects', async () => {
+  const precache = await installSourcePrecachePaths('/search/static/');
   const html = fs.readFileSync('static/index.html', 'utf8');
   const resources = createRequire(import.meta.url)('../../../static/reader-resources.js');
   assert.equal(APP_DEPENDENCIES.filter(item => item === name).length, 1);
@@ -51,7 +53,7 @@ test('discovery is registered once in source, composed bundle, resources, offlin
   assert.ok(html.indexOf(name) < html.lastIndexOf('app.js'));
   assert.ok(!stripBundledScripts(html).includes(name));
   for (const project of ['github', 'hf']) assert.equal(resources.buildFiles(project).filter(item => item === name).length, 1);
-  assert.equal(fs.readFileSync('static/sw.js', 'utf8').split('/static/' + name).length - 1, 1);
+  assert.equal(precache.filter(file => file === name).length, 1, name);
   for (const project of ['check', 'strict', 'search-exact']) {
     const files = JSON.parse(fs.readFileSync(`config/types/jsconfig.${project}.json`, 'utf8')).files;
     assert.ok(files.includes('../../static/' + name));

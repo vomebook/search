@@ -22,5 +22,4 @@ interface VoiceOfMLCorpusClient {
 }
 declare var VoiceOfMLCorpusClient: {
   create(deps: VoiceOfMLCorpusDependencies): VoiceOfMLCorpusClient;
-  makeWorkerError(code: string, message?: string): Error & {code: string};
 };

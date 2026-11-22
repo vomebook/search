@@ -116,8 +116,6 @@ export interface PageWindowContext {
   pdfSelectionIntersects(element: Element): boolean; pageAtMarker(): WindowShell | null;
   isPdfPageVisible(shell: Element | null | undefined): boolean;
   createPdfShellWindow(total: number, first: WindowShell, create: (page: number) => WindowShell, unobserve: (shell: WindowShell) => void, ratio: number, retained?: Map<number, WindowShell> | null): PageWindowHandle | null;
-  appendShellsBatched(create: (page: number) => WindowShell, total: number, batch: number,
-    onBatchMounted?: (endPage: number) => void): Promise<void>;
   createPdfV3Repository(sha: string, count: number): PageWindowRepository;
   validateReadingManifest(value: unknown, limit: number): import('./reader-v3-strict').ReadingManifest & {kind: 'pdf-reading'};
   validatePageMap(value: unknown, manifest: import('./reader-v3-strict').ReadingManifest): import('./reader-v3-strict').PageMap;

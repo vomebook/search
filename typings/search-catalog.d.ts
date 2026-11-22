@@ -3,10 +3,6 @@ interface CatalogSidebarPayload {
   folders?: {n?: string; c?: number}[];
   files?: {n?: string; e?: string; t?: unknown; s?: string | number}[];
 }
-interface CatalogBootstrap {
-  repos?: VoiceOfMLFilterCount[]; extensions?: VoiceOfMLFilterCount[];
-  sidebar?: CatalogSidebarPayload;
-}
 interface PagesCatalogDependencies {
   apiBase: string; apiAvailable(): boolean;
   fetchJSON(url: string, timeout: number, requireOK?: boolean): Promise<unknown>;
@@ -25,10 +21,7 @@ declare var VoiceOfMLCatalogClient: {create(deps: PagesCatalogDependencies): {
   getFolderContents(repo: string | null, path: string): Promise<VoiceOfMLSidebarEntries | undefined>;
   folderTreeCache: Map<string, VoiceOfMLFilterFolder[]>;
   folderContentsCache: BoundedResponseCache<VoiceOfMLSidebarEntries>;
-  browserApiCache: BoundedResponseCache<VoiceOfMLSidebarEntries>;
   browserApiPending: Map<string, Promise<VoiceOfMLSidebarEntries | null>>;
-  sidebarInitialCache: Map<string, VoiceOfMLSidebarEntries>;
-  sidebarInitialPending: Map<string, Promise<VoiceOfMLSidebarEntries | null>>;
   extensionApiCache: Map<string, VoiceOfMLFilterCount[]>;
   extensionApiPending: Map<string, Promise<VoiceOfMLFilterCount[] | null>>;
   repoApiCache: VoiceOfMLFilterCount[] | null;

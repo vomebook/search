@@ -61,7 +61,6 @@ export function createReaderPdfRenderer(readerContext) {
         readerContext.pdfActiveRenders >= (matchMedia("(max-width: 700px)").matches ? 1 : 2))
       readerContext.cancelSpeculativePdfRenders(shell);
     if (priority) {
-      shell.dataset.renderPriority = "1";
       readerContext.promotePdfRenderWaiter(shell);
       if (readerContext.capability.mode === "image-pages" && readerContext.pdfPageManifest)
         readerContext.prioritizePdfManifestPrefetch(readerContext.pdfPageManifest.pageUrl(Number(shell.dataset.page)));
@@ -309,7 +308,6 @@ export function createReaderPdfRenderer(readerContext) {
     const renderController = new AbortController();
     shell._renderCancel = () => renderController.abort();
     shell._renderStarted = false;
-    shell._renderActivePriority = String(priority);
     const task = (async () => {
       let acquired = false;
       try {
@@ -321,7 +319,6 @@ export function createReaderPdfRenderer(readerContext) {
         readerContext.assertReaderActive();
         // The page may have become visible while it waited for a slot.
         priority = Math.max(/** @type {number} */ (priority), readerContext.pdfPagePriority(shell));
-        shell._renderActivePriority = String(priority);
         const entry = readerContext.pdfPageEntry(Number(shell.dataset.page));
         if (!entry) throw new Error("PDF page entry missing");
         const manifest = /** @type {import('../../../typings/reader-pdf-renderer-strict').PdfPageManifest} */ (readerContext.pdfPageManifest);
@@ -386,7 +383,6 @@ export function createReaderPdfRenderer(readerContext) {
       if (shell._renderPromise === task) delete shell._renderPromise;
       if (shell._renderCancel) delete shell._renderCancel;
       delete shell._renderStarted;
-      delete shell._renderActivePriority;
     });
     shell._renderPromise = task;
     return task;

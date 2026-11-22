@@ -92,7 +92,7 @@ async function fetchReaderAssetMap(deferDecode = false) {
   }
 }
 
-return { state, fetchReaderAssetMap, readBoundedReaderStream };
+return { state, fetchReaderAssetMap };
 }
 
 globalThis.VoiceOfMLReaderAssetTransport = { create };

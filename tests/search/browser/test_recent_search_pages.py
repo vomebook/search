@@ -287,24 +287,19 @@ class RecentSearchPageTests(unittest.TestCase):
           const now=Date.now(),clock=Date.now;Date.now=()=>now;
           const name='recent-pages';
           try {
-            const tx=positionStorage.database.transaction(name,'readwrite'),store=tx.objectStore(name);
-            store.clear();
-            for(let i=0;i<40;i++)store.put({id:['prune',i],savedAt:now});
-            store.put({id:['expired',0],savedAt:now-VoiceOfMLPositionPolicy.RECENT_PAGE_TTL-1});
-            VoiceOfMLPositionStorage.pruneContent(store,32,VoiceOfMLPositionPolicy.RECENT_PAGE_TTL);
-            await new Promise((resolve,reject)=>{tx.oncomplete=resolve;tx.onabort=reject});
-            const entries=await new Promise(resolve=>{
+            const ttl=VoiceOfMLPositionPolicy.RECENT_PAGE_TTL;
+            const expired={id:['expired',0],savedAt:now-ttl-1};
+            const clear=()=>{positionStorage.database.transaction(name,'readwrite').objectStore(name).clear()};
+            const read=()=>new Promise((resolve,reject)=>{
               const request=positionStorage.database.transaction(name).objectStore(name).getAll();
-              request.onsuccess=()=>resolve(request.result);
+              request.onsuccess=()=>resolve(request.result);request.onerror=()=>reject(request.error);
             });
-            const tx2=positionStorage.database.transaction(name,'readwrite'),s=tx2.objectStore(name);
-            s.clear();s.put({id:['boundary',0],savedAt:now-VoiceOfMLPositionPolicy.RECENT_PAGE_TTL});
-            s.put({id:['expired',0],savedAt:now-VoiceOfMLPositionPolicy.RECENT_PAGE_TTL-1});
-            VoiceOfMLPositionStorage.pruneContent(s,32,VoiceOfMLPositionPolicy.RECENT_PAGE_TTL);
-            await new Promise((resolve,reject)=>{tx2.oncomplete=resolve;tx2.onabort=reject});
-            const boundary=await new Promise(resolve=>{
-              const r=positionStorage.database.transaction(name).objectStore(name).getAll();r.onsuccess=()=>resolve(r.result.map(e=>e.id[0]));
-            });
+            clear();
+            positionStorage.writeContent(name,[...Array.from({length:40},(_,i)=>({id:['prune',i],savedAt:now})),expired],32,ttl);
+            const entries=await read();
+            clear();
+            positionStorage.writeContent(name,[{id:['boundary',0],savedAt:now-ttl},expired],32,ttl);
+            const boundary=(await read()).map(entry=>entry.id[0]);
             return {ids:entries.map(entry=>entry.id[1]),boundary};
           } finally {Date.now=clock;}
         }''')

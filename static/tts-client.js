@@ -972,7 +972,7 @@ if (typeof document !== "undefined") /** @type {Window & {CCRDSpeech?: unknown}}
   /** @param {SpeechSnapshot} snapshot @param {number} offset */
   function start(snapshot, offset, playing = true, skipHistory = false, exact = false, announce = false) {
     if (checkSleep()) return;
-    if (more(snapshot) && !loaded(snapshot, offset)) {
+    if (!loaded(snapshot, offset)) {
       const adapter = snapshot.adapter;
       void waitToStart(async () => {
         await adapter.ensure(offset + NEED);
@@ -1021,9 +1021,11 @@ if (typeof document !== "undefined") /** @type {Window & {CCRDSpeech?: unknown}}
     const ready = (found) => {
       // The locator may republish a rebased adapter for this same document.
       if (preview?.id !== id || checkSleep()) return;
-      const target = sentenceStart ? plan.sentence(preview.text, found).start : plan.safe(preview.text, found);
-      if (owner && sameSource(owner.snapshot, preview.snapshot) && seek(owner, target, true)) { preview.adapter.onStart?.(); return; }
-      start(preview.snapshot, target, true, false, exact || sentenceStart, true);
+      const snapshot = preview.snapshot;
+      const text = snapshot.text;
+      const target = sentenceStart ? plan.sentence(text, found).start : plan.safe(text, found);
+      if (owner && sameSource(owner.snapshot, snapshot) && seek(owner, target, true)) { preview.adapter.onStart?.(); return; }
+      start(snapshot, target, true, false, exact || sentenceStart, true);
     };
     const locator = typeof offset === "function" ? offset : offset === undefined ? locateTop : undefined;
     if (locator) void waitToStart(locator, ready, "正在定位朗读位置…");
@@ -1107,7 +1109,7 @@ if (typeof document !== "undefined") /** @type {Window & {CCRDSpeech?: unknown}}
     const {id, title, adapter, host, tools} = value;
     // Playback retains the adapter snapshot, not the preview controls.
     const snapshot = { id, title, adapter, get text() { return adapter.text; } };
-    preview = { snapshot, id, adapter, host: host ?? null, get text() { return adapter.text; } };
+    preview = { snapshot, id, adapter, host: host ?? null };
     if (tools && !tools.querySelector("[data-speech-toggle]")) {
       const button = document.createElement("button"); button.type = "button"; button.className = value.buttonClass || "icon-btn-sm preview-speech-btn";
       button.dataset.speechToggle = ""; button.setAttribute("aria-label", "朗读与设置"); button.setAttribute("aria-controls", "speech-panel");

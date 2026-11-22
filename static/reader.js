@@ -46,6 +46,7 @@ import {
   createReaderTextFormat,
   createReaderChapterFormat,
   createReaderFormatController,
+  readerSourceExtension,
   createReaderPdfEngine,
   createReaderPdfSearch
 } from "./reader/reader-components.mjs";
@@ -177,7 +178,6 @@ const readerContext = {
   get loadHtmlDocument() { return loadHtmlDocument; }, set loadHtmlDocument(value) { loadHtmlDocument = value; },
   get loadImageDocument() { return loadImageDocument; }, set loadImageDocument(value) { loadImageDocument = value; },
   get loadMarkdownDocument() { return loadMarkdownDocument; }, set loadMarkdownDocument(value) { loadMarkdownDocument = value; },
-  get loadMediaDocument() { return loadMediaDocument; }, set loadMediaDocument(value) { loadMediaDocument = value; },
   get loadPdfDocument() { return loadPdfDocument; }, set loadPdfDocument(value) { loadPdfDocument = value; },
   get loadPdfOcrManifest() { return loadPdfOcrManifest; }, set loadPdfOcrManifest(value) { loadPdfOcrManifest = value; },
   get loadPdfOcrPage() { return loadPdfOcrPage; }, set loadPdfOcrPage(value) { loadPdfOcrPage = value; },
@@ -219,7 +219,6 @@ const readerContext = {
   get pdfBookSearchPrefetchPromise() { return pdfBookSearchPrefetchPromise; }, set pdfBookSearchPrefetchPromise(value) { pdfBookSearchPrefetchPromise = value; },
   get pdfBookSearchPrefetchTimer() { return pdfBookSearchPrefetchTimer; }, set pdfBookSearchPrefetchTimer(value) { pdfBookSearchPrefetchTimer = value; },
   get pdfDocument() { return pdfDocument; }, set pdfDocument(value) { pdfDocument = value; },
-  get pdfEnginePreload() { return pdfEnginePreload; }, set pdfEnginePreload(value) { pdfEnginePreload = value; },
   get pdfFetchPolicy() { return pdfFetchPolicy; }, set pdfFetchPolicy(value) { pdfFetchPolicy = value; },
   get pdfFirstPagePreload() { return pdfFirstPagePreload; }, set pdfFirstPagePreload(value) { pdfFirstPagePreload = value; },
   get pdfFirstPagePreloadPage() { return pdfFirstPagePreloadPage; }, set pdfFirstPagePreloadPage(value) { pdfFirstPagePreloadPage = value; },
@@ -266,7 +265,6 @@ const readerContext = {
   get pdfV3Manifest() { return pdfV3Manifest; }, set pdfV3Manifest(value) { pdfV3Manifest = value; },
   get pdfV3Map() { return pdfV3Map; }, set pdfV3Map(value) { pdfV3Map = value; },
   get pdfV3Repository() { return pdfV3Repository; }, set pdfV3Repository(value) { pdfV3Repository = value; },
-  get pdfWorker() { return pdfWorker; }, set pdfWorker(value) { pdfWorker = value; },
   get pendingBookmarkSnapshot() { return pendingBookmarkSnapshot; }, set pendingBookmarkSnapshot(value) { pendingBookmarkSnapshot = value; },
   get populateIndependentTextLayer() { return populateIndependentTextLayer; },
   get populateOcrTextLayer() { return populateOcrTextLayer; },
@@ -402,11 +400,7 @@ const readerContext = {
   get adjacentTocIndex() { return adjacentTocIndex; },
   get applyPageInversion() { return applyPageInversion; }, set applyPageInversion(value) { applyPageInversion = value; },
   get applyReaderTheme() { return applyReaderTheme; }, set applyReaderTheme(value) { applyReaderTheme = value; },
-  get bookmarkEditFields() { return bookmarkEditFields; },
   get bookmarksAllButton() { return bookmarksAllButton; },
-  get bookmarksHeader() { return bookmarksHeader; },
-  get bookmarksHeaderActions() { return bookmarksHeaderActions; },
-  get bookmarksSearchButton() { return bookmarksSearchButton; },
   get canReturnWithHistory() { return canReturnWithHistory; }, set canReturnWithHistory(value) { canReturnWithHistory = value; },
   get captureBookmarkSnapshot() { return captureBookmarkSnapshot; }, set captureBookmarkSnapshot(value) { captureBookmarkSnapshot = value; },
   get captureProgressState() { return captureProgressState; }, set captureProgressState(value) { captureProgressState = value; },
@@ -435,22 +429,18 @@ const readerContext = {
   get seekProgress() { return seekProgress; }, set seekProgress(value) { seekProgress = value; },
   get setPanelSearchOpen() { return setPanelSearchOpen; }, set setPanelSearchOpen(value) { setPanelSearchOpen = value; },
   get start() { return start; }, set start(value) { start = value; },
-  get startReaderDownload() { return startReaderDownload; }, set startReaderDownload(value) { startReaderDownload = value; },
   get stopPdfManifestPrefetch() { return stopPdfManifestPrefetch; }, set stopPdfManifestPrefetch(value) { stopPdfManifestPrefetch = value; },
   get stopReaderWork() { return stopReaderWork; }, set stopReaderWork(value) { stopReaderWork = value; },
   get syncCapabilityControls() { return syncCapabilityControls; }, set syncCapabilityControls(value) { syncCapabilityControls = value; },
   get syncTocTab() { return syncTocTab; }, set syncTocTab(value) { syncTocTab = value; },
   get turnViewport() { return turnViewport; }, set turnViewport(value) { turnViewport = value; },
   get updateReadingProgressSummary() { return updateReadingProgressSummary; }, set updateReadingProgressSummary(value) { updateReadingProgressSummary = value; },
-  get appendShellsBatched() { return appendShellsBatched; }, set appendShellsBatched(value) { appendShellsBatched = value; },
   get bookmarkExcerpt() { return bookmarkExcerpt; }, set bookmarkExcerpt(value) { bookmarkExcerpt = value; },
   get cachePdfOcrPage() { return cachePdfOcrPage; }, set cachePdfOcrPage(value) { cachePdfOcrPage = value; },
   get cachePdfSearchText() { return cachePdfSearchText; }, set cachePdfSearchText(value) { cachePdfSearchText = value; },
   get cachePdfTextContent() { return cachePdfTextContent; }, set cachePdfTextContent(value) { cachePdfTextContent = value; },
   get cachedPdfOcrPage() { return cachedPdfOcrPage; }, set cachedPdfOcrPage(value) { cachedPdfOcrPage = value; },
   get cachedPdfTextContent() { return cachedPdfTextContent; }, set cachedPdfTextContent(value) { cachedPdfTextContent = value; },
-  get canPrefetchPdfImages() { return canPrefetchPdfImages; }, set canPrefetchPdfImages(value) { canPrefetchPdfImages = value; },
-  get cancelPdfManifestPrefetch() { return cancelPdfManifestPrefetch; }, set cancelPdfManifestPrefetch(value) { cancelPdfManifestPrefetch = value; },
   get createPdfShellWindow() { return createPdfShellWindow; }, set createPdfShellWindow(value) { createPdfShellWindow = value; },
   get disposeFormatResources() { return disposeFormatResources; }, set disposeFormatResources(value) { disposeFormatResources = value; },
   get ensurePdfBookSearchClient() { return ensurePdfBookSearchClient; }, set ensurePdfBookSearchClient(value) { ensurePdfBookSearchClient = value; },
@@ -459,25 +449,18 @@ const readerContext = {
   get fetchWithReaderTimeout() { return fetchWithReaderTimeout; }, set fetchWithReaderTimeout(value) { fetchWithReaderTimeout = value; },
   get getPdfPersistentTextStore() { return getPdfPersistentTextStore; }, set getPdfPersistentTextStore(value) { getPdfPersistentTextStore = value; },
   get highlightPanelItem() { return highlightPanelItem; }, set highlightPanelItem(value) { highlightPanelItem = value; },
-  get loadPdfEngine() { return loadPdfEngine; }, set loadPdfEngine(value) { loadPdfEngine = value; },
   get loadPdfSearchText() { return loadPdfSearchText; }, set loadPdfSearchText(value) { loadPdfSearchText = value; },
-  get loadPdfTaskWithTimeout() { return loadPdfTaskWithTimeout; }, set loadPdfTaskWithTimeout(value) { loadPdfTaskWithTimeout = value; },
   get loadPdfWithTimeout() { return loadPdfWithTimeout; }, set loadPdfWithTimeout(value) { loadPdfWithTimeout = value; },
   get makePdfSearchPageLoader() { return makePdfSearchPageLoader; }, set makePdfSearchPageLoader(value) { makePdfSearchPageLoader = value; },
-  get pdfManifestPrefetchConcurrency() { return pdfManifestPrefetchConcurrency; }, set pdfManifestPrefetchConcurrency(value) { pdfManifestPrefetchConcurrency = value; },
-  get pdfManifestPrefetchMaxPages() { return pdfManifestPrefetchMaxPages; }, set pdfManifestPrefetchMaxPages(value) { pdfManifestPrefetchMaxPages = value; },
   get pdfManifestSource() { return pdfManifestSource; }, set pdfManifestSource(value) { pdfManifestSource = value; },
   get pdfPixelBudget() { return pdfPixelBudget; }, set pdfPixelBudget(value) { pdfPixelBudget = value; },
   get pdfRetainedPixels() { return pdfRetainedPixels; }, set pdfRetainedPixels(value) { pdfRetainedPixels = value; },
-  get pdfStage() { return pdfStage; }, set pdfStage(value) { pdfStage = value; },
   get pdfSurfacePixels() { return pdfSurfacePixels; }, set pdfSurfacePixels(value) { pdfSurfacePixels = value; },
   get placeReadingProgress() { return placeReadingProgress; }, set placeReadingProgress(value) { placeReadingProgress = value; },
   get prefetchPdfBookSearch() { return prefetchPdfBookSearch; }, set prefetchPdfBookSearch(value) { prefetchPdfBookSearch = value; },
   get preparePdfWorker() { return preparePdfWorker; }, set preparePdfWorker(value) { preparePdfWorker = value; },
-  get preparePdfWorkerAttempt() { return preparePdfWorkerAttempt; }, set preparePdfWorkerAttempt(value) { preparePdfWorkerAttempt = value; },
   get publishPdfSearchProgress() { return publishPdfSearchProgress; }, set publishPdfSearchProgress(value) { publishPdfSearchProgress = value; },
   get readPdfOcrJson() { return readPdfOcrJson; }, set readPdfOcrJson(value) { readPdfOcrJson = value; },
-  get readerAssetObjectFamily() { return readerAssetObjectFamily; }, set readerAssetObjectFamily(value) { readerAssetObjectFamily = value; },
   get renderPdfImageShell() { return renderPdfImageShell; }, set renderPdfImageShell(value) { renderPdfImageShell = value; },
   get repairHtmlContrast() { return repairHtmlContrast; }, set repairHtmlContrast(value) { repairHtmlContrast = value; },
   get resolveReaderSource() { return resolveReaderSource; }, set resolveReaderSource(value) { resolveReaderSource = value; },
@@ -486,9 +469,7 @@ const readerContext = {
 };
 const readerBindings = createReaderBindings(readerContext);
 
-let {
-  pdfStage, measurePdf
-} = createReaderDiagnostics(readerContext);
+let { measurePdf } = createReaderDiagnostics(readerContext);
 
 let {
   readerAbortError, assertReaderActive, trackReaderResource, stopReaderWork,
@@ -501,8 +482,7 @@ let {
   readerContentUrl, readerDownloadApiUrl, readerDownloadUrl, startReaderDownload,
   normalizeSourceUrl, resolveReaderId, applyReaderMetadata, normalizeReaderReturnUrl,
   validSource,
-  readerAssetObjectFamily, trustedReaderAssetManifestUrl, trustedChapterUrl, trustedChapterReferenceUrl,
-  trustedChapterResourceUrl
+  trustedReaderAssetManifestUrl, trustedChapterUrl, trustedChapterReferenceUrl, trustedChapterResourceUrl
 } = createReaderSource(readerContext);
 
 let {
@@ -522,7 +502,6 @@ const {
 } = createReaderSearchBackends(readerContext);
 
 let {
-  pdfManifestPrefetchConcurrency, pdfManifestPrefetchMaxPages, canPrefetchPdfImages, cancelPdfManifestPrefetch,
   stopPdfManifestPrefetch, trimPdfManifestPrefetches, pdfPixelBudget, pdfSurfacePixels,
   pdfRetainedPixels, trimPdfSurfaces, clearPdfManifestPrefetches, takePdfManifestPrefetch,
   queuePdfManifestPrefetch, prioritizePdfManifestPrefetch, schedulePdfManifestPrefetch, trimPdfManifestImages,
@@ -560,11 +539,11 @@ let {
   loadScript, fetchWithReaderTimeout, retryableReaderProxyError, retryReaderProxy,
   fetchReaderUrl, fetchReaderResponse, prepareReaderDocument, readPreparedBytes,
   loadTextDocument, loadMarkdownDocument, loadHtmlDocument,
-  loadMediaDocument, loadImageDocument, loadChapterManifestDocument
+  loadImageDocument, loadChapterManifestDocument
 } = createReaderDocumentLoader(readerContext);
 
 let {
-  pdfManifestSource, pdfPageEntry, appendShellsBatched,
+  pdfManifestSource, pdfPageEntry,
   pdfSelectionIntersects, correctPdfCrossPageSelection, createPdfShellWindow,
   seedPdfPageGeometry, renderPdfPages, renderImagePages, renderPdf
 } = createReaderPdfPageWindow(readerContext);
@@ -597,8 +576,7 @@ let {
 } = createReaderFormatController(readerContext);
 
 let {
-  loadPdfTaskWithTimeout, loadPdfWithTimeout, preloadPdfEngine, preparePdfWorker,
-  preparePdfWorkerAttempt, loadPdfEngine, loadPdfDocument
+  loadPdfWithTimeout, preloadPdfEngine, preparePdfWorker, loadPdfDocument
 } = createReaderPdfEngine(readerContext);
 
 let {
@@ -630,13 +608,13 @@ readerBindings.trackStartupOwners();
 const readerAbortController = new AbortController();
 const readerResources = new Set();
 
-readerBindings.trackWorkCancellation();
+readerRuntime.track(stopReaderWork);
 const imageLoader = createReaderImageLoader({
   assertActive: assertReaderActive, abortError: readerAbortError, trackResource: trackReaderResource,
   request: fetchWithReaderTimeout, readBytes: response => VoiceOfMLReaderSecurity.readBytes(response),
   timeoutMs: READER_PROXY_TIMEOUT_MS
 });
-readerBindings.trackEarlySourceResolution();
+trackReaderResource(() => window.__VOICE_READER_RESOLVE__?.dispose());
 const pdfDiagnostics = Object.freeze({snapshot:() => ({pages:pdfPageTimings.map(row=>({...row})), requests:pdfFetchPolicy?.timings || [], cache:pdfPersistentTextStore?.stats || null})});
 readerBindings.publishDiagnosticsAndInstallCompatibility();
 // Capture the frame handoff before it can survive a failed or abandoned open.
@@ -681,10 +659,9 @@ let sourceUrl = normalizeSourceUrl(
 let contentUrl = readerContentUrl(sourceUrl);
 let downloadUrl =
   params.get("download") || (typeof selectedSourceData?.download === "string" ? selectedSourceData.download : "") || sourceUrl;
-let extension = (params.get("ext") || "").toLowerCase();
+let extension = readerSourceExtension((params.get("ext") || "").toLowerCase(), sourceUrl, location.href);
 let chapterManifestUrl = params.get("chapter_manifest") || "";
 let capability = readerRuntime.negotiate(VoiceOfMLReader.capability(extension));
-readerBindings.normalizeConvertedPdfMode();
 let resolvedReaderData = localReaderData;
 /** @type {Record<string, unknown> | null} */
 let cachedReaderData = null;
@@ -692,9 +669,7 @@ let cachedReaderData = null;
 let pdfFirstPagePreload = null;
 let pdfFirstPagePreloadPage = 1;
 /** @type {Promise<import('../typings/reader-pdf-engine-strict').PdfModule> | null} */
-let pdfEnginePreload = null;
 /** @type {import('../typings/reader-pdf-engine-strict').PdfWorker | null} */
-let pdfWorker = null;
 /** @type {(() => void) | null} */
 let releasePdfWorker = null;
 readerBindings.applySourceSessionAndCachedMetadata();
@@ -720,7 +695,7 @@ let readerRestorationLoaded = false;
 let readerHasHistory = false;
 let downloadFeedbackTimer = 0;
 
-readerBindings.bindDownloadAction();
+downloadButton.addEventListener("click", startReaderDownload);
 const sourceName = (() => {
   try {
     const name = decodeURIComponent(
@@ -867,7 +842,6 @@ const pageInput = /** @type {HTMLInputElement} */ (document.querySelector("#page
 const readerPath = /** @type {HTMLButtonElement} */ (document.querySelector("#reader-path"));
 const bookmarkRibbon = /** @type {HTMLButtonElement} */ (document.querySelector("#bookmark-ribbon"));
 const bookmarkPopover = /** @type {HTMLDivElement} */ (document.querySelector("#bookmark-popover"));
-readerBindings.labelToolbarControls();
 
 // Measure the chapter destination against the reading viewport; scrollIntoView
 // can also move ancestor scrollers.
@@ -999,20 +973,14 @@ const chapterScrollAnchors = readerRuntime.track(
   })
 );
 
-readerBindings.applyMetadataAndConfigureBookmarkPopover();
-const bookmarkLabelInput = document.createElement("input"),
-  bookmarkExcerptInput = document.createElement("textarea"),
-  bookmarkEditFields = document.createElement("div");
-readerBindings.initializeBookmarkEditor();
-const bookmarksAllButton = document.createElement("button");
-readerBindings.initializeBookmarkSearchControls();
-const bookmarksHeader = /** @type {Element} */ (document.querySelector("#bookmarks-panel .panel-view-header")),
-  bookmarksSearchButton = /** @type {Element} */ (bookmarksHeader.querySelector(".panel-search-toggle")),
-  bookmarksHeaderActions = document.createElement("span");
-readerBindings.mountBookmarkHeaderActions();
+applyReaderMetadata(resolvedReaderData);
+const bookmarkLabelInput = /** @type {HTMLInputElement} */ (document.querySelector("#bookmark-label")),
+  bookmarkExcerptInput = /** @type {HTMLTextAreaElement} */ (document.querySelector("#bookmark-excerpt-input")),
+  bookmarksAllButton = /** @type {HTMLButtonElement} */ (document.querySelector("#bookmarks-all"));
 const mediaTab = document.createElement("button"),
   mediaPanel = document.createElement("section");
 readerBindings.mountMediaPanel();
+status.hidden = true;
 // Theme, toolbar, and document navigation.
 let readerTheme = document.documentElement.dataset.theme === "light" ? "light" : "dark";
 if (!document.documentElement.dataset.theme) {
@@ -1086,7 +1054,7 @@ const domSearch = createReaderDomSearch({
     }
   }
 });
-readerBindings.ownDomSearchController();
+trackReaderResource(domSearch.dispose);
 const {
   search: fullSearchDomMatches, clearMarks: clearFullSearchMarks,
   highlight: highlightTextParts
@@ -1120,7 +1088,7 @@ const fullSearchController = createReaderSearchController({
     focus: () => { readerPanelInteractionSerial++; }
   }
 });
-readerBindings.ownSearchViewController();
+trackReaderResource(fullSearchController.dispose);
 const fullSearchSession = fullSearchController.state;
 const {
   render: renderFullSearchResults, applyChapterPage: applyChapterSearchPage,

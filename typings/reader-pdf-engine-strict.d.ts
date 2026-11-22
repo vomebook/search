@@ -40,15 +40,13 @@ export interface EngineContext {
   readerRestorationPromise: Promise<Restoration | null> | null;
   readerRuntime: { currentGeneration(kind: string): number } | null;
   pdfFetchPolicy: { prioritizeRange?(begin: number, end: number, url: string): void; add(urls: string[]): void; dispose(): void } | null;
-  pdfWorker: PdfWorker | null; releasePdfWorker: (() => void) | null; pdfEnginePreload: Promise<PdfModule> | null;
+  releasePdfWorker: (() => void) | null;
   openPdfRangeTask(pdfjs: PdfModule, options: PdfOptions, hooks: RangeHooks & { initial: Initial; boundedMetadata: boolean; ratePriority(begin: number, end: number): void; canPrefetchOpening(): boolean; onError(error: unknown): void }): Promise<PdfTask>;
   preparePdfInitialRange(options: {url: string; rangeChunkSize: number}, hooks: RangeHooks): Promise<InitialRange | null>;
   retryReaderProxy<T>(callback: () => Promise<T>): Promise<T>; retryableReaderProxyError(error: unknown): boolean;
-  loadPdfTaskWithTimeout(pdfjs: PdfModule, options: (url: string) => PdfOptions, url: string, initial?: Initial): Promise<PdfDocument>;
   loadPdfWithTimeout(pdfjs: PdfModule, options: (url: string) => PdfOptions, proxyUrl: string, takeInitial?: (url: string) => Initial): Promise<PdfDocument>;
-  preloadPdfEngine(): Promise<PdfModule>; loadPdfEngine(): Promise<PdfModule>;
+  preloadPdfEngine(): Promise<PdfModule>;
   preparePdfWorker(pdfjs: PdfModule, firstPage?: boolean, signal?: AbortSignal | null): Promise<PdfModule>;
-  preparePdfWorkerAttempt(pdfjs: PdfModule, attempt: number, firstPage?: boolean, signal?: AbortSignal | null): Promise<PdfModule>;
   awaitReader<T>(promise: Promise<T>, signal?: AbortSignal | null): Promise<T>; waitForReader(ms: number): Promise<void>;
   pdfPrimarySource(): string; readerContentUrl(target: string): string;
   createPdfFetchPolicy(): NonNullable<EngineContext['pdfFetchPolicy']>;

@@ -2,11 +2,12 @@ import { createHash } from "node:crypto";
 import { existsSync, readdirSync, renameSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, extname, join, relative } from "node:path";
 import { createRequire } from "node:module";
-import { stripBundledPrecache, stripBundledScripts } from "./compose_app.mjs";
+import { stripBundledScripts } from "./compose_app.mjs";
 const resources = createRequire(import.meta.url)(join(process.cwd(), "static/reader-resources.js"));
 
 const root = process.env.STATIC_OUTPUT_DIR || "_site";
 const replacements = new Map();
+const bundleOnlyFiles = new Set(resources.bundleOnlyFiles);
 const currentVendorAssets = new Set(Object.values(resources.vendors).map(vendor => "/search/static/" + vendor.path));
 const rewrite = (text, filename) => {
   text = text.replace(/(["'])(\.\.?\/[^"'\s]+)\1/g, (match, quote, url) => {
@@ -22,13 +23,13 @@ const rewrite = (text, filename) => {
     // URLs are release-pinned; the other formats still need graph hash rewrites.
     (_, extension, base) => `(["djvu","djv"].includes(${extension})?VoiceOfMLReaderResources.djvuSelectedAssets(${JSON.stringify(base)}):` + JSON.stringify(Object.fromEntries(["pdf", "md", "markdown", "html", "htm"].map(ext => [ext, resources.engineAssets(ext, base)]))) + `[${extension}]||[])`);
   text = text.replace(/VoiceOfMLReaderResources\.(shellAssets|runtimePaths)\("(\/search\/static\/)"\)/g,
-    (_, method, base) => JSON.stringify(resources[method](base)));
+    (_, method, base) => JSON.stringify(resources[method](base).filter(url => !bundleOnlyFiles.has(url.slice(base.length)))));
   for (const [original, versioned] of replacements) text = text.split(original).join(versioned);
   return text;
 };
 // Dependencies precede their consumers so a build pins the entire app/Worker
 // pair and Reader module graph. Publish only the current content-addressed files.
-for (const filename of resources.buildFiles("github")) {
+for (const filename of resources.releaseFiles("github")) {
   const source = join(root, "static", filename);
   const content = rewrite(readFileSync(source, "utf8"), filename);
   for (const match of content.matchAll(/(?:\/(?:search\/)?static\/|\.\/)vendor\/([A-Za-z0-9._-]+\.[0-9a-f]{12}\.(?:js|mjs|css))/g))
@@ -45,7 +46,6 @@ for (const filename of ["index.html", "static/reader.html", "sw.js"]) {
   const target = join(root, filename);
   let content = readFileSync(target, "utf8");
   if (filename === "index.html") content = stripBundledScripts(content);
-  if (filename === "sw.js") content = stripBundledPrecache(content, "/search/static/");
   content = rewrite(content, filename === "static/reader.html" ? "reader.html" : filename);
   if (filename === "sw.js") {
     content = content.replace(/CURRENT_HASHED_ASSETS\s*=\s*\[\]/,

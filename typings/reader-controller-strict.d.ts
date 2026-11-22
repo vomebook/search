@@ -27,7 +27,7 @@ export interface ReaderFormatControllerContext {
   loadMarkdownDocument(): PreparedDocument; renderMarkdownDocument(prepared: PreparedDocument): unknown;
   loadHtmlDocument(): {response: Promise<Response>; engine: Promise<unknown[]>}; renderHtml(prepared: {response: Promise<Response>; engine: Promise<unknown[]>}): unknown;
   loadChapterManifestDocument(): Promise<Response>; renderChapterManifest(prepared: Response): unknown;
-  loadMediaDocument(): Promise<null>; renderMedia(mode: string): unknown;
+  renderMedia(mode: string): unknown;
   loadSwfDocument(): Promise<unknown>; renderSwf(prepared: unknown): unknown;
   releasePdfWorker?: (() => void) | null;
   formatAdapters: { register(mode: string, adapter: Adapter): unknown; activate(mode: string): unknown; dispose(): unknown; readonly active: Adapter | null };

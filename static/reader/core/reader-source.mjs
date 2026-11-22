@@ -1,6 +1,6 @@
 /**
  * @typedef {{[key: string]: unknown}} ReaderMetadata
- * @typedef {{url: URL, prefix: string, bucket: boolean, bucketPath: string}} AssetFamily
+ * @typedef {{url: URL, prefix: string, bucketPath: string}} AssetFamily
  * @typedef {object} ReaderSourceContext
  * @property {ReaderMetadata | null} resolvedReaderData
  * @property {string} downloadUrl
@@ -27,7 +27,6 @@
  * @property {URL | null} folderNavigationTarget
  * @property {string} folderReturnUrl
  * @property {HTMLButtonElement} readerPath
- * @property {(raw: string) => AssetFamily | null} readerAssetObjectFamily
  * @param {ReaderSourceContext} readerContext
  */
 export function createReaderSource(readerContext) {
@@ -316,10 +315,10 @@ export function createReaderSource(readerContext) {
     }
   }
 
-  /** @param {string} raw @param {string} [base] */
-  function readerAssetObjectFamily(raw, base = location.href) {
+  /** @param {string} raw */
+  function readerAssetObjectFamily(raw) {
     try {
-      const url = new URL(raw, base);
+      const url = new URL(raw, location.href);
       if (url.origin !== "https://voiceofml-search.hf.space" || url.pathname !== "/api/reader-bucket-resource")
         return null;
       const bucketPath = url.searchParams.get("path") || "";
@@ -327,7 +326,7 @@ export function createReaderSource(readerContext) {
       if (url.hash || url.searchParams.getAll("path").length !== 1 ||
           [...url.searchParams.keys()].some((key) => key !== "path") || !match?.[1] ||
           !VoiceOfMLReader.isBucketPath(bucketPath, true, "vomebook/reader-assets-v2")) return null;
-      return { url, prefix: match[1], bucket: true, bucketPath };
+      return { url, prefix: match[1], bucketPath };
     } catch (_) {
       return null;
     }
@@ -345,7 +344,7 @@ export function createReaderSource(readerContext) {
   function chapterAssetFamily(raw, isManifest) {
     const cached = isManifest ? manifestFamily : chapterFamily;
     if (cached && raw === cached.raw) return cached.family;
-    const family = readerContext.readerAssetObjectFamily(raw);
+    const family = readerAssetObjectFamily(raw);
     if (family && raw === family.url.href) {
       if (isManifest) manifestFamily = { raw, family };
       else chapterFamily = { raw, family };
@@ -426,7 +425,6 @@ export function createReaderSource(readerContext) {
     applyReaderMetadata,
     normalizeReaderReturnUrl,
     validSource,
-    readerAssetObjectFamily,
     trustedReaderAssetManifestUrl,
     trustedChapterUrl,
     trustedChapterReferenceUrl,

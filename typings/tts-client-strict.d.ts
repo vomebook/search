@@ -2,7 +2,7 @@ export interface Batch { start: number; end: number; text: string; first: boolea
 export interface Part { index: number; start: number; end: number; audio_url: string; bytes?: unknown; pitch_semitones?: unknown; pause_kind?: unknown; pause_after_seconds?: unknown }
 export interface Adapter { readonly text: string; readonly done: boolean; root?: Node | null; ensure(length: number): Promise<void>; progress?(): string; locateTop?(): Promise<number | null>; selectionStart?(): (() => Promise<number | null>) | null; onStart?(): void; offsetAtTop?(): number; range?(start: number, end: number): Range | null; follow?(start: number, end: number): void | Promise<void>; reveal?(position: number): void | Promise<void>; inView?(position: number): boolean; saveView?(): { top: number; frame: number | null }; restoreView?(view: { top: number; frame: number | null }): void }
 export interface Snapshot { id: string; title: string; text: string; adapter: Adapter; growing?: Promise<void> | null }
-export interface Preview extends Pick<Snapshot, 'id' | 'text' | 'adapter'> { snapshot: Snapshot; host: HTMLElement | null }
+export interface Preview extends Pick<Snapshot, 'id' | 'adapter'> { snapshot: Snapshot; host: HTMLElement | null }
 export interface PreviewInput { id: string; title: string; adapter: Adapter; host?: HTMLElement | null; tools?: Element | null; buttonClass?: string }
 export interface History extends Batch { parts: Part[] }
 export interface Job { batch: Batch; id: unknown; nonce: string; parts: Part[]; state: unknown; retryAt: number; failures: number; deadline: number; busy?: number; message?: string; used?: boolean; cancelled?: boolean; pending?: boolean; blocked?: boolean; stale?: boolean; preloaded?: boolean; restore?: boolean }

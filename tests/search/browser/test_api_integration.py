@@ -882,10 +882,11 @@ class ApiIntegrationTest(unittest.TestCase):
         self.page.wait_for_function('STATE.dataLoaded', timeout=30000)
         result = self.page.evaluate('''async () => {
           const {worker: first, restartCount: before}=getCorpusClient().inspect();
-          getCorpusClient().terminate(VoiceOfMLCorpusClient.makeWorkerError('WORKER_TERMINATED','injected'));
+          const terminate = () => getCorpusClient().terminate(Object.assign(new Error('injected'), {code:'WORKER_TERMINATED'}));
+          terminate();
           const a=await corpusWorkerRequest('metadata', {});
           const second=getCorpusClient().inspect().worker;
-          getCorpusClient().terminate(VoiceOfMLCorpusClient.makeWorkerError('WORKER_TERMINATED','injected'));
+          terminate();
           const b=await corpusWorkerRequest('metadata', {});
           return {counts:[a.count,b.count], restarts:getCorpusClient().inspect().restartCount-before,
             workersDistinct:first!==second && second!==getCorpusClient().inspect().worker,

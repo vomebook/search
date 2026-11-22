@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import vm from 'node:vm';
 import test from 'node:test';
 import {APP_DEPENDENCIES, stripBundledScripts} from '../../../scripts/build/compose_app.mjs';
+import {installSourcePrecachePaths} from '../../support/shell_assets.mjs';
 
 const modules = ['domain/heights.js', 'presentation/rows.js', 'application/controller.js'];
 const current = fs.readFileSync('static/app.js', 'utf8');
@@ -83,14 +84,15 @@ function fixture(count = 100) {
   };
 }
 
-test('virtual modules are registered in every runtime and type entry point', () => {
+test('virtual modules are registered in every runtime and type entry point', async () => {
+  const precache = await installSourcePrecachePaths('/search/static/');
   const html = fs.readFileSync('static/index.html', 'utf8'), c = vm.createContext({});
   vm.runInContext(fs.readFileSync('static/reader-resources.js', 'utf8'), c);
   for (const file of modules.map(name => 'search/results/virtual/' + name)) {
     assert.equal(APP_DEPENDENCIES.filter(name => name === file).length, 1);
     assert.equal(html.split(file).length - 1, 1); assert.ok(html.indexOf(file) < html.indexOf('static/app.js'));
     assert.ok(!stripBundledScripts(html).includes(file));
-    assert.equal(fs.readFileSync('static/sw.js', 'utf8').split('/static/' + file).length - 1, 1);
+    assert.equal(precache.filter(path => path === file).length, 1, file);
     for (const site of ['github', 'hf']) assert.equal(c.VoiceOfMLReaderResources.buildFiles(site).filter(name => name === file).length, 1);
     for (const kind of ['check', 'strict', 'search-exact']) assert.ok(fs.readFileSync('config/types/jsconfig.' + kind + '.json', 'utf8').includes(file));
     assert.doesNotMatch(fs.readFileSync('static/' + file, 'utf8'), /\bSTATE\b|new Proxy/);
@@ -162,6 +164,24 @@ test('reconciliation and append each locate the current spacers just once', {
   lookups = 0; c.renderVisible();
   assert.equal(lookups, 2, 'recreating the missing spacer');
   assert.ok(select.call(list, '.virtual-spacer-bottom'));
+});
+
+test('render and append rebuild dirty height trees on lookup without eager checks', {
+  skip: !!process.env.VIRTUAL_BASELINE_SOURCE,
+}, () => {
+  const {c, list} = fixture(), state = c.VSCROLL;
+  const index = c.VoiceOfMLSearchHeightIndex, ensureTree = index.ensureTree;
+  let eagerChecks = 0;
+  index.ensureTree = (...args) => { eagerChecks++; return ensureTree(...args); };
+  c.renderVisible();
+  assert.equal(state.heightsDirty, false);
+  const end = state.renderEnd;
+  state.heights[end] = 80;
+  state.heightsDirty = true;
+  c.refreshVirtualAfterAppend(false);
+  assert.equal(state.heightsDirty, false);
+  assert.equal(list.querySelector('.virtual-spacer-bottom').style.height, `${(100 - end) * 60 + 20}px`);
+  assert.equal(eagerChecks, 0);
 });
 
 test('measured heights compensate one anchor and drag keeps geometry frozen', () => {
