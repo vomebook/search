@@ -3429,6 +3429,51 @@ class ReaderRefactorTest(unittest.TestCase):
         self.assertEqual(root.inner_text(), text)
         self.assertEqual(root.locator('.reader-text-padding, .reader-text-chapter-title').count(), 0)
 
+    def test_markdown_infers_outline_only_from_standalone_chapter_labels(self):
+        self.page.emulate_media(reduced_motion='reduce')
+        self.page.route('**/static/reader/core/reader-store.js*', lambda route: route.fulfill(
+            content_type='text/javascript', body='window.VoiceOfMLReaderStore={get:async()=>null,put:async()=>{},list:async()=>[]};'))
+        filler = '\n\n' + ('足够长的正文，提供真实的滚动距离。\n\n' * 70)
+        for heading in ('# 书名\n\n', ''):
+            with self.subTest(title=bool(heading)):
+                raw = (heading + '| 目录 |\n| --- |\n| [第一章 始](#101) |\n\n'
+                       '第一章 始\n\n**第二章　后续**\n\n**重要说明**\n\n'
+                       '**第三章 只是引文** 后面还有正文。\n\n第九章 不能把正文误判为标题。\n\n'
+                       '> **第四章 引文**\n\n```text\n第五章 代码\n```\n\n' + filler +
+                       '**第三章 目标**\n\n' + filler + '第四章 收尾\n\n' + filler)
+                self.serve(raw)
+                url = self.reader_url('md', 'outline-with-title' if heading else 'outline-without-title')
+                self.open(url)
+                self.page.wait_for_function("() => document.querySelector('#history').getAttribute('aria-expanded') === 'true'")
+                toc = self.page.locator('#toc-list .toc-item')
+                expected = (['书名'] if heading else []) + ['第一章 始', '第二章　后续', '第三章 目标', '第四章 收尾']
+                self.assertEqual(toc.locator('.panel-item-main').all_text_contents(), expected)
+                article = self.page.locator('.reader-markdown')
+                before = article.text_content()
+                self.page.locator('#toc-list').get_by_role('link', name='第三章 目标', exact=True).click()
+                self.page.locator('#history-panel').wait_for(state='hidden')
+                self.page.wait_for_function("() => {const p=[...document.querySelectorAll('.reader-markdown > p')].find(p=>p.textContent==='第三章 目标');return Math.abs(p.getBoundingClientRect().top-document.querySelector('#viewport').getBoundingClientRect().top)<4;}")
+                self.assertEqual(article.text_content(), before)
+                self.assertEqual(article.locator('a[href="#101"]').count(), 1)
+                self.assertEqual(self.page.url, url)
+                self.open(url)
+                self.assertEqual(self.page.locator('#history').get_attribute('aria-expanded'), 'false')
+                self.page.unroute('**/api/reader-content**')
+
+    def test_markdown_does_not_infer_when_existing_structure_is_usable(self):
+        cases = (
+            ('# 书名\n\n## 原有小节\n\n**第一章 甲**\n\n**第二章 乙**', ['书名', '原有小节']),
+            ('# 书名\n\n[第一章 甲](#one) [第二章 乙](#two)\n\n'
+             '<p id="one"><b>第一章 甲</b></p>\n\n<p id="two"><b>第二章 乙</b></p>', ['书名']),
+            ('开头\n\n**第一章 书中举例**\n\n' + '正文没有章节。\n\n' * 300, [])
+        )
+        for i, (raw, expected) in enumerate(cases):
+            with self.subTest(case=i):
+                self.serve(raw)
+                self.open(self.reader_url('md', f'authored-outline-{i}'))
+                self.assertEqual(self.page.locator('#toc-list .panel-item-main').all_text_contents(), expected)
+                self.page.unroute('**/api/reader-content**')
+
     def test_markdown_uses_authored_heading_levels_for_chapter_navigation(self):
         self.serve('# 第一卷\n\n开头\n\n## 第一节\n\n正文\n\n```text\n# 不是章节\n```')
         self.open(self.reader_url('md'))

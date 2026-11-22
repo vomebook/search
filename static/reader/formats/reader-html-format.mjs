@@ -512,6 +512,57 @@ export function createReaderHtmlFormat(readerContext) {
     }
   }
 
+  // Like Calibre's structure detection, use explicit chapter labels, not
+  // paragraph length or visual boldness alone. Keep authored structure first.
+  const numberedChapter = /^(?:第[ \u3000]*[\d０-９〇零一二三四五六七八九十百千万两]+[ \u3000]*[卷部篇章节回]|(?:chapter|book|part|section)\s+(?:\d+|[ivxlcdm]+))(?=$|[\s.．:：、—–-])/iu;
+
+  /** @param {HTMLElement} article */
+  function markdownTocEntries(article) {
+    const authored = readerContext.headingTocEntries(article);
+    const title = authored[0]?.target;
+    if (authored.length > 1 || (title && (title.localName !== "h1" || title !== article.firstElementChild))) return authored;
+    const candidates = [];
+    for (const paragraph of article.children) {
+      // Standalone prose blocks only: no code, tables, lists, block quotes,
+      // inline links, or paragraphs that merely start with a bold chapter name.
+      if (paragraph.localName !== "p") continue;
+      const label = paragraph.textContent.trim();
+      if (label.length > 72 || /[\r\n]|[。！？；!?]$/u.test(label) || !numberedChapter.test(label)) continue;
+      const only = paragraph.firstElementChild;
+      if (only && (paragraph.childElementCount !== 1 || !only.matches("strong,b") ||
+          only.childElementCount !== 0 || only.textContent.trim() !== label)) continue;
+      candidates.push({ label, target: paragraph });
+      if (candidates.length > 512) return authored;
+    }
+    if (candidates.length < 2) return authored;
+
+    // A working in-book chapter list is already a directory. Do not create a
+    // second inferred one just because its chapter destinations are not h-tags.
+    const anchors = new Set([...article.querySelectorAll("[id], a[name]")].flatMap(node =>
+      [node.id, node.localName === "a" ? node.getAttribute("name") : null]));
+    if (anchors.size > 2) {
+      /** @type {Map<string, string>} */
+      const linked = new Map();
+      const cleanLabel = (/** @type {string} */ label) => label.trim().replace(/\s+/gu, " ");
+      for (const link of article.querySelectorAll('a[href^="#"]')) {
+        const label = cleanLabel(link.textContent);
+        if (!numberedChapter.test(label)) continue;
+        const href = link.getAttribute("href");
+        if (!href || href.length < 2) continue;
+        let target = href.slice(1);
+        try { target = decodeURIComponent(target); } catch (_) {}
+        if (anchors.has(target)) linked.set(label, target);
+      }
+      const targets = candidates.map(({label}) => linked.get(cleanLabel(label)));
+      if (targets.every(Boolean) && new Set(targets).size === candidates.length) return authored;
+    }
+
+    return [...authored, ...candidates.map(({ label, target }) => ({
+      label, depth: title ? 1 : 0, target,
+      activate: () => target.scrollIntoView({ block: "start" })
+    }))];
+  }
+
   /** @param {boolean} markdown @param {import('../../../typings/reader-html-format-strict').PreparedText} prepared */
   async function renderText(markdown, prepared) {
     let response = await prepared.response;
@@ -533,7 +584,7 @@ export function createReaderHtmlFormat(readerContext) {
       prepareMarkdownLinks(article);
       wrapEbookTables(article);
       readerContext.content.appendChild(article);
-      readerContext.setToc(readerContext.headingTocEntries(article));
+      readerContext.setToc(markdownTocEntries(article));
     }
     readerContext.markReaderContentReady();
     readerContext.status.textContent = "已加载";
