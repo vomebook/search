@@ -1246,6 +1246,35 @@ body {
 .reader-markdown a {
   color: #72a7df;
 }
+.reader-content[data-mode="markdown"] > .reader-markdown {
+  overflow-wrap: anywhere;
+}
+.reader-content[data-mode="markdown"] > .reader-markdown .reader-markdown-spacing {
+  white-space: break-spaces;
+}
+.reader-content[data-mode="markdown"] > .reader-markdown :is(pre, .reader-ebook-table-scroll) {
+  box-sizing: border-box;
+  max-inline-size: 100%;
+  overflow-x: auto;
+}
+/* Plain Markdown fences are also used for transcribed prose. Soft-wrap them
+   without losing authored spaces or line breaks. Language-tagged code keeps
+   its columns and scrolls within its own block. */
+.reader-content[data-mode="markdown"] > .reader-markdown pre:has(> code:only-child:not([class*="language-"])) {
+  white-space: pre-wrap;
+}
+.reader-content[data-mode="markdown"] > .reader-markdown :is(img, video) {
+  max-inline-size: 100%;
+  block-size: auto;
+}
+.reader-content[data-mode="markdown"] > .reader-markdown .reader-ebook-table-scroll {
+  container-type: inline-size;
+}
+@supports (width: 1cqi) {
+  .reader-content[data-mode="markdown"] > .reader-markdown .reader-ebook-table-scroll :is(img, video) {
+    max-inline-size: min(100%, 100cqi);
+  }
+}
 .reader-error {
   margin: 20vh auto;
   max-width: 560px;

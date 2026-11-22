@@ -222,6 +222,81 @@ class ReaderRefactorTest(unittest.TestCase):
         self.assertEqual(urllib.parse.urlsplit(self.page.url).fragment, 'section')
         self.page.wait_for_function("() => { const n=document.querySelector('#section'), v=document.querySelector('#viewport'); return n && Math.abs(n.getBoundingClientRect().top-v.getBoundingClientRect().top)<40; }")
 
+    def test_markdown_reflows_prose_and_keeps_code_and_tables_in_reading_column(self):
+        self.page.set_viewport_size({'width': 320, 'height': 780})
+        self.page.emulate_media(reduced_motion='reduce')
+        self.page.route('**/static/reader/core/reader-store.js*', lambda route: route.fulfill(
+            content_type='text/javascript', body='window.VoiceOfMLReaderStore={get:async()=>null,put:async()=>{},list:async()=>[]};'))
+        prose = '　　' + '长段落应该在阅读栏内折行。' * 40
+        code = '  const row = "' + 'X' * 90 + '";'
+        aligned = '合计' + '\u3000' * 22 + '133.9'
+        long_link = 'https://example.invalid/' + 'part' * 95
+        dot = ('data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8'
+               '/x8AAwMB/6XWbqkAAAAASUVORK5CYII=')
+        self.serve(f'''# 小说标题
+
+## 第一节
+
+```
+{prose}
+
+    行首空格保留。
+```
+
+[{long_link}](#later)
+
+{aligned}
+
+## 第二节
+
+```js
+{code}
+```
+
+<table id="data" style="min-width:680px"><caption>数据表</caption><tr><th>栏目</th><td>42</td></tr></table>
+
+<table id="illustration"><tr><td><img src="{dot}" width="900" height="900" alt="插图"></td></tr></table>
+
+<h2 id="later">末节</h2>
+
+结尾正文。
+''', 'text/markdown')
+        url = self.reader_url('md', 'responsive-markdown')
+        self.open(url)
+        panel_button = self.page.locator('#history')
+        self.page.wait_for_function("() => document.querySelector('#history').getAttribute('aria-expanded') === 'true'")
+        self.page.get_by_role('link', name='第二节', exact=True).click()
+        self.page.locator('#history-panel').wait_for(state='hidden')
+        self.assertEqual(panel_button.get_attribute('aria-expanded'), 'false')
+        self.open(url)
+        self.page.evaluate('()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))')
+        self.assertEqual(panel_button.get_attribute('aria-expanded'), 'false')
+        article = self.page.locator('.reader-markdown')
+        self.assertEqual(article.locator('pre code').first.text_content(), prose + '\n\n    行首空格保留。\n')
+        self.assertEqual(article.locator('code.language-js').text_content(), code + '\n')
+        self.assertEqual(article.locator('p', has_text='133.9').text_content(), aligned)
+        for width, zoom in ((320, 100), (390, 150), (1200, 100)):
+            with self.subTest(width=width, zoom=zoom):
+                self.page.set_viewport_size({'width': width, 'height': 780})
+                self.page.locator('#zoom').fill(str(zoom))
+                self.page.locator('#zoom').dispatch_event('change')
+                metrics = article.evaluate('''article => {
+                    const v = document.querySelector('#viewport');
+                    const [a,b] = article.querySelectorAll('pre');
+                    const region = article.querySelector('#data').parentElement;
+                    const img = article.querySelector('#illustration img');
+                    return [v.scrollWidth - v.clientWidth, a.scrollWidth - a.clientWidth,
+                        b.scrollWidth - b.clientWidth, region.scrollWidth - region.clientWidth,
+                        region.tabIndex, img.getBoundingClientRect().width <= article.clientWidth + 1,
+                        img.getBoundingClientRect().width === img.getBoundingClientRect().height];
+                }''')
+                self.assertLessEqual(metrics[0], 1, metrics)
+                self.assertLessEqual(metrics[1], 1, metrics)
+                if width < 600:
+                    self.assertGreater(metrics[2], 40, metrics)
+                    self.assertGreater(metrics[3], 40, metrics)
+                self.assertEqual(metrics[4:], [0, True, True], metrics)
+
     def test_markdown_mounts_sanitized_nodes_without_reparsing_article(self):
         self.page.add_init_script('''(() => {
           const html = Object.getOwnPropertyDescriptor(Element.prototype, 'innerHTML');

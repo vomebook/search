@@ -487,6 +487,31 @@ export function createReaderHtmlFormat(readerContext) {
     });
   }
 
+  /** @param {HTMLElement} article */
+  function wrapMarkdownSpacing(article) {
+    // Some prose transcriptions use runs of ideographic spaces as table
+    // alignment. Expose wrap points for those runs without changing the text,
+    // soft breaks elsewhere, or the whitespace of actual code and tables.
+    const walker = document.createTreeWalker(article, NodeFilter.SHOW_TEXT);
+    for (let node; (node = /** @type {Text | null} */ (walker.nextNode()));) {
+      if (!/\u3000{4}/u.test(node.data) || node.parentElement?.closest("pre,code,table,style,textarea,svg,math")) continue;
+      const fragment = document.createDocumentFragment();
+      let start = 0;
+      for (const match of node.data.matchAll(/\u3000{4,}/gu)) {
+        fragment.append(node.data.slice(start, match.index));
+        const run = document.createElement("span");
+        run.className = "reader-markdown-spacing";
+        run.textContent = match[0];
+        fragment.append(run);
+        start = match.index + match[0].length;
+      }
+      const tail = document.createTextNode(node.data.slice(start));
+      fragment.append(tail);
+      node.replaceWith(fragment);
+      walker.currentNode = tail;
+    }
+  }
+
   /** @param {boolean} markdown @param {import('../../../typings/reader-html-format-strict').PreparedText} prepared */
   async function renderText(markdown, prepared) {
     let response = await prepared.response;
@@ -504,7 +529,9 @@ export function createReaderHtmlFormat(readerContext) {
       article.appendChild(DOMPurify.sanitize(marked.parse(stripMarkdownFrontMatter(text)), {
         USE_PROFILES: { html: true }, RETURN_DOM_FRAGMENT: true
       }));
+      if (/\u3000{4}/u.test(text)) wrapMarkdownSpacing(article);
       prepareMarkdownLinks(article);
+      wrapEbookTables(article);
       readerContext.content.appendChild(article);
       readerContext.setToc(readerContext.headingTocEntries(article));
     }
