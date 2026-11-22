@@ -64,7 +64,7 @@ await assert.rejects(scheduler.request(1), { name: "AbortError" });
     text:async n=>{work.push(`text:${n}`);return {text:'text'};},close(){}},{maxBytes:4,maxPages:1});
   const page=mixed.request(1,3);await tick();
   const text=mixed.requestMetadata('text',2,-1),geometry=mixed.requestMetadata('geometry',2,2);
-  mixed.cancelSpeculation();release(image(1));await page;
+  release(image(1));await page;
   assert.deepEqual(await geometry,{width:1});assert.deepEqual(await text,{text:'text'});
   assert.deepEqual(work,['page:1','geometry:2','text:2']);mixed.close();
 }
@@ -136,12 +136,15 @@ await assert.rejects(scheduler.request(1), { name: "AbortError" });
     text:async n=>{events.push(`text:${n}`);return {text:String(n)}},
     outline:async()=>{events.push('outline');return [{title:'ok',page:1,depth:0}]},close(){}},{maxBytes:8,maxPages:2});
   const active=s.request(1,3);await tick();
-  const dropped=s.request(2,0);dropped.catch(()=>{});
+  const speculation=new AbortController();
+  const dropped=s.request(2,0,{signal:speculation.signal});dropped.catch(()=>{});
   const kept=s.request(3,2);
   const t1=s.requestMetadata('text',4,-1),t2=s.requestMetadata('text',4,4);
   const g1=s.requestMetadata('geometry',5,1),g2=s.requestMetadata('geometry',5,3);
   const o1=s.requestOutline(),o2=s.requestOutline();
-  s.cancelSpeculation();await assert.rejects(dropped,{name:'AbortError'});
+  assert.equal(s.stats().queued,5);
+  speculation.abort();await assert.rejects(dropped,{name:'AbortError'});
+  assert.equal(s.stats().queued,4,'aborting speculation removes only its queued page');
   release(image(1));await active;
   assert.deepEqual(await t1,{text:'4'});assert.deepEqual(await t2,{text:'4'});
   assert.deepEqual(await g1,{width:5});assert.deepEqual(await g2,{width:5});

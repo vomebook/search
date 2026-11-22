@@ -2,8 +2,7 @@ declare namespace ReaderSearchBackends {
   type GenerationKind = "search" | "navigation";
   interface Snippet { text: string; matchStart: number; matchLength: number; prefix: string; suffix: string }
   interface ChapterResult { chapterIndex: number; start: number; length: number; location: string; snippet: Snippet }
-  interface DomResult { target?: HTMLElement; location: string; snippet: Snippet; activate(generation: number): Promise<boolean> }
-  interface DomTarget { target: HTMLElement | undefined }
+  interface DomResult { location: string; snippet: Snippet; activate(generation: number): Promise<boolean> }
   interface PdfResult { page: number; start: number; length: number; boxes: { box: number[]; block?: unknown; precision?: string }[]; snippet: Snippet; textGeneration?: string }
   type Result = ChapterResult | DomResult | PdfResult;
   interface Page<T = Result> { total: number; offset: number; pageSize: number; results: T[] }
@@ -25,10 +24,7 @@ declare namespace ReaderSearchBackends {
   interface Context {
     readerRuntime: { update(kind: "search", patch: SearchPatch): unknown; currentGeneration(kind: GenerationKind): number };
     isReaderGenerationCurrent(kind: GenerationKind, generation: number): boolean;
-    updateSearchState(patch: SearchPatch): unknown;
-    publishSearchResults(generation: number, results: Result[]): unknown;
     chapterSearchModulePromise: Promise<ChapterModule> | null;
-    chapterSearchModule(): Promise<ChapterModule>;
     chapterSearchConfiguration: ChapterConfiguration | null;
     chapterSearchClient: ChapterClient | null;
     applyChapterSearchPage(page: Page<ChapterResult>): void;
@@ -54,11 +50,9 @@ declare namespace ReaderSearchBackends {
     fullSearchSession: { page: Page | null; pageLoader: ((offset: number, generation?: number) => Promise<Page>) | null };
     fullSearchPageOffset(total: number, offset: number, pageSize: number): number;
     waitForReader(delay?: number, force?: boolean): Promise<unknown>;
-    fullSearchDomMatches(root: Element | ShadowRoot, fallback: string, query: string, generation: number, progressive: boolean, occurrence: number, navigationGeneration: number): Promise<DomTarget[]>;
-    fullSearchDomMatches(root: HTMLElement, fallback: string, query: string, generation: number, progressive?: boolean): Promise<DomResult[]>;
+    fullSearchDomMatches(root: HTMLElement, fallback: string, query: string, generation: number): Promise<DomResult[]>;
     fullSearchPdfMatches(query: string, generation: number): Promise<unknown>;
     searchConcentratedPdf(query: string, generation: number): Promise<DomResult[]>;
-    searchChapterBook(query: string, generation: number): Promise<void>;
   }
   interface SearchPatch { results?: Result[]; index?: number }
 }

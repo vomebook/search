@@ -1,4 +1,4 @@
-/* global document, NodeFilter */
+/* global document, Element, NodeFilter */
 // Browser-only contracts for the real DOM-search module; all data is synthetic.
 import {createReaderDomSearch, fullSearchEscape, fullSearchPageOffset, fullSearchSnippet}
   from '../../../static/reader/search/reader-dom-search.mjs';
@@ -23,7 +23,7 @@ function fixture(yieldTask = () => Promise.resolve()) {
   let publish;
   const search = createReaderDomSearch({content: root, runtime,
     isCurrent: (name, generation) => generation === runtime.currentGeneration(name),
-    yieldTask, getTocEntries: () => entries, unwrapRoot: value => value,
+    yieldTask, getTocEntries: () => entries,
     publishPage: (value, loader, progressive) => {
       publications.push({value, loader, progressive});
       publish?.(value, loader, progressive);
@@ -55,7 +55,7 @@ export async function crossNodeAndStaleNavigation() {
   try {
     const p = document.createElement('p'); p.dataset.page = '3';
     p.append(document.createTextNode('prefix nee'), document.createTextNode('dle suffix')); f.root.append(p);
-    const results = await f.search.search(f.root, '', 'needle', f.generation, false);
+    const results = await f.search.search(f.root, '', 'needle', f.generation);
     ensure(results.length === 1 && results[0].location === '第 3 页', 'cross-node page match');
     ensure(f.root.querySelectorAll('mark.full-search-highlight').length === 2, 'cross-node highlight');
     f.search.clearMarks();
@@ -71,11 +71,11 @@ export async function crossNodeAndStaleNavigation() {
         'stale navigation');
     } finally { document.createTreeWalker = original; }
     p.textContent = 'needle';
-    const stale = await f.search.search(f.root, '', 'needle', f.generation, false);
+    const stale = await f.search.search(f.root, '', 'needle', f.generation);
     f.search.clearMarks(); p.textContent = 'replacement';
     ensure(!await stale[0].activate(f.navigation) && !f.root.querySelector('mark'), 'mutated target');
     p.replaceChildren(document.createTextNode('前𐐀'), document.createTextNode('界后'));
-    const unicode = await f.search.search(f.root, '', '𐐨界', f.generation, false);
+    const unicode = await f.search.search(f.root, '', '𐐨界', f.generation);
     ensure(unicode.length === 1 && p.querySelectorAll('mark').length === 2 &&
       unicode[0].snippet.text.includes('𐐀界'), 'cross-node unicode case folding');
     f.search.clearMarks();
@@ -86,7 +86,7 @@ export async function crossNodeAndStaleNavigation() {
       ensure((await f.search.search(f.root, '', query, f.generation)).length === 0, 'block boundary: ' + query);
     }
     for (let i = 0; i < 2; i++) {
-      const inline = await f.search.search(f.root, '', 'alphabeta', f.generation, true);
+      const inline = await f.search.search(f.root, '', 'alphabeta', f.generation);
       ensure(inline.length === 1 && inline[0].location === '第 7 页', 'only inline match across adjacent blocks');
       const marks = () => Array.from(f.root.querySelectorAll('mark'), mark => mark.textContent).join('|');
       ensure(marks() === 'al|phab|eta', 'inline marks on cold and cached search');
@@ -100,7 +100,7 @@ export async function crossNodeAndStaleNavigation() {
     left.textContent = 'x'.repeat(32764) + '𐐀\r\n';
     right.textContent = '界后';
     for (let i = 0; i < 2; i++) {
-      const txt = await f.search.search(f.root, '', '𐐨\r\n界', f.generation, true);
+      const txt = await f.search.search(f.root, '', '𐐨\r\n界', f.generation);
       ensure(txt.length === 1 && txt[0].snippet.text.includes('𐐀\r\n界'), 'TXT chunk match and unchanged CRLF');
       ensure(await txt[0].activate(f.navigation) && left.querySelector('mark')?.textContent === '𐐀\r\n' &&
         right.querySelector('mark')?.textContent === '界', 'TXT chunk activation');
@@ -118,14 +118,14 @@ export async function progressivePagingAndReuse() {
       p.innerHTML = `line ${i}: <span>nee</span><b>dle</b>`;
       f.root.append(p);
     }
-    const first = await f.search.search(f.root, '', 'needle', f.generation, true);
+    const first = await f.search.search(f.root, '', 'needle', f.generation);
     ensure(first.length === 50 && f.publications.at(-1).value.total === 136 &&
       f.publications.at(-1).progressive === false, 'progressive total');
     const last = f.publications.at(-1).loader(100);
     ensure(last.offset === 100 && last.results.length === 36, 'pagination results');
     f.search.clearMarks();
     f.cancel();
-    const repeated = await f.search.search(f.root, '', 'needle', f.generation, true);
+    const repeated = await f.search.search(f.root, '', 'needle', f.generation);
     ensure(repeated.length === 50 && f.publications.at(-1).value.total === 136, 'cached progressive repeat');
     const paged = f.publications.at(-1).loader(100);
     ensure(paged.results[35].location === '第 136 页' && await paged.results[35].activate(f.navigation), 'paged activation');
@@ -151,7 +151,7 @@ async function delayedInitialSearch(mode) {
     updateSearch: patch => Object.assign(state, patch),
     backend: {mode: () => mode, clearMarks: f.search.clearMarks, chapterClient: () => null, pdfClient: () => null,
       search(query, generation) {
-        run = f.search.search(f.root, '', query, generation, true).then(results => {
+        run = f.search.search(f.root, '', query, generation).then(results => {
           if (generation === f.generation) state.results = results;
         });
         return run;
@@ -315,16 +315,23 @@ export async function synchronousSnapshotInvalidation() {
   const f = fixture();
   try {
     const p = document.createElement('p'); p.textContent = 'needle '.repeat(130); f.root.append(p);
-    await f.search.search(f.root, '', 'needle', f.generation, true);
+    await f.search.search(f.root, '', 'needle', f.generation);
     f.search.clearMarks();
-    await f.search.search(f.root, '', 'needle', f.generation, true);
+    await f.search.search(f.root, '', 'needle', f.generation);
     f.search.clearMarks();
     p.firstChild.data = 'plain';
     const replacement = document.createElement('b'); replacement.append(document.createTextNode('needle'));
     p.append(replacement); f.publications.length = 0;
-    try { await f.search.search(f.root, '', 'needle', f.generation, true); }
+    try { await f.search.search(f.root, '', 'needle', f.generation); }
     catch (error) { throw new Error('mutation invalidates cached snapshot', {cause: error}); }
     ensure(f.publications.at(-1).value.total === 1, 'mutation invalidates cached snapshot');
+
+    f.search.clearMarks();
+    replacement.textContent = 'needle '.repeat(3);
+    // Mark cleanup must drain queued external mutations before disconnecting.
+    f.search.clearMarks();
+    await f.search.search(f.root, '', 'needle', f.generation);
+    ensure(f.publications.at(-1).value.total === 3, 'mark cleanup preserves pending mutation invalidation');
   } finally { f.finish(); }
 }
 
@@ -333,7 +340,7 @@ export async function cancellation() {
   f = fixture(async () => { f.cancel(); });
   try {
     f.root.textContent = 'needle '.repeat(100);
-    const cancelled = await f.search.search(f.root, '', 'needle', f.generation, true);
+    const cancelled = await f.search.search(f.root, '', 'needle', f.generation);
     ensure(cancelled.length === 0 && f.publications.length === 1 && f.publications[0].progressive === true,
       'stale search cannot publish a final page');
     ensure(!f.root.querySelector('mark'), 'cancelled search cannot highlight');
@@ -348,7 +355,7 @@ export async function headingsAndExcludedNodes() {
       '<mark class="full-search-highlight">needle</mark><h2>Second</h2><p>needle</p>';
     const headings = f.root.querySelectorAll('h2');
     f.entries.push({target: headings[0], label: 'First label'}, {target: headings[1], label: 'Second label'});
-    const result = await f.search.search(f.root, '', 'needle', f.generation, false);
+    const result = await f.search.search(f.root, '', 'needle', f.generation);
     ensure(result.length === 3 && result[0].location.startsWith('正文 ') &&
       result[1].location === 'First label' && result[2].location === 'Second label', 'heading labels and excluded nodes');
     ensure(document.createTreeWalker(f.root, NodeFilter.SHOW_TEXT).nextNode(), 'text remains in DOM');
@@ -368,11 +375,11 @@ export async function largeHeadingOrder() {
       f.entries.push({target: heading, label: `label ${i}`});
     }
     f.root.append(fragment);
-    const first = await f.search.search(f.root, '', 'needle', f.generation, true);
+    const first = await f.search.search(f.root, '', 'needle', f.generation);
     ensure(first.length === 50 && first.every((result, i) => result.location === `label ${i}`) &&
       f.publications.at(-1).value.total === 300, 'large heading order');
     f.search.clearMarks();
-    const hot = await f.search.search(f.root, '', 'needle', f.generation, true);
+    const hot = await f.search.search(f.root, '', 'needle', f.generation);
     ensure(hot.every((result, i) => result.location === `label ${i}`), 'large heading hot snapshot');
     f.search.clearMarks();
     // Out-of-order entries must still take the legacy fallback, including
@@ -380,26 +387,41 @@ export async function largeHeadingOrder() {
     const a = document.createElement('i'), b = document.createElement('i');
     f.root.prepend(a, b);
     f.entries.unshift({target: b, label: 'b'}, {target: a, label: 'a'});
-    const unordered = await f.search.search(f.root, '', 'needle', f.generation, false);
-    ensure(unordered.length === 100 && unordered[0].location === 'label 0', 'unordered heading fallback');
+    const unordered = await f.search.search(f.root, '', 'needle', f.generation);
+    ensure(unordered.length === 50 && unordered[0].location === 'label 0' &&
+      f.publications.at(-1).value.total === 300, 'unordered heading fallback');
   } finally { f.finish(); }
 }
 
 export async function occurrenceSelection() {
   const f = fixture();
   try {
-    f.root.textContent = 'needle one needle two needle';
-    const result = await f.search.search(f.root, '', 'needle', f.generation, true, 1, f.navigation);
-    ensure(result.length === 1 && result[0].target?.textContent === 'needle' &&
-      f.root.querySelectorAll('mark.full-search-highlight').length === 1, 'occurrence selection');
+    for (let i = 1; i <= 64; i++) {
+      const row = document.createElement('p');
+      row.dataset.page = String(i);
+      row.textContent = 'needle';
+      f.root.append(row);
+    }
+    await f.search.search(f.root, '', 'needle', f.generation);
+    const {results} = f.publications.at(-1).loader(50);
+    const result = results[1], navigation = f.navigation;
+    ensure(await result.activate(navigation) &&
+      f.root.querySelectorAll('mark.full-search-highlight').length === 1 &&
+      f.root.querySelector('[data-page="52"] mark')?.textContent === 'needle', 'paged occurrence selection');
     f.search.clearMarks(); f.nextNavigation();
-    const stale = await f.search.search(f.root, '', 'needle', f.generation, true, 1, f.navigation - 1);
-    ensure(stale.length === 0 && !f.root.querySelector('mark'), 'stale occurrence selection');
+    ensure(!await result.activate(navigation) && !f.root.querySelector('mark'), 'stale occurrence selection');
     f.root.innerHTML = '<span class="reader-text-padding" hidden>          </span>needle';
     const raw = f.root.textContent;
     for (let i = 0; i < 2; i++) {
-      const matches = await f.search.search(f.root, '', '          needle', f.generation, true, 0, f.navigation);
-      ensure(matches.length === 1 && matches[0].target?.textContent === 'needle', 'visible part owns navigation');
+      await f.search.search(f.root, '', '          needle', f.generation);
+      const {results: matches} = f.publications.at(-1).loader(0);
+      const targets = [];
+      const scrollIntoView = Element.prototype.scrollIntoView;
+      Element.prototype.scrollIntoView = function () { targets.push(this.textContent); };
+      try {
+        ensure(matches.length === 1 && await matches[0].activate(f.navigation), 'exact whitespace occurrence');
+        ensure(targets.length === 1 && targets[0] === 'needle', 'visible part owns navigation');
+      } finally { Element.prototype.scrollIntoView = scrollIntoView; }
       ensure(f.root.querySelector('.reader-text-padding mark')?.textContent === '          ', 'exact whitespace matched');
       f.search.clearMarks();
       ensure(f.root.textContent === raw && !f.root.querySelector('mark'), 'padding survives highlight cleanup');

@@ -16,7 +16,7 @@ function fixture() {
   globalThis.location = new URL("https://voiceofml-search.hf.space/search/");
   globalThis.VoiceOfMLReaderSecurity = { LIMITS: { manifestBytes: 10000 } };
   globalThis.document = {
-    title: "", querySelector: () => heading,
+    title: "", querySelector: selector => selector === "#title" ? heading : null,
     createElement: () => ({ setAttribute() {}, remove() { this.removed = true; },
       addEventListener(type, fn) { if (type === "load") this.onLoad = fn; } }),
     body: { appendChild: frame => frames.push(frame) }
@@ -32,7 +32,7 @@ function fixture() {
     READER_PROXY_TIMEOUT_MS: 1000, ocrManifestUrl: "", params: new URLSearchParams(),
     readerRuntime: { update() {} }, sourceName: "Fallback", extension: "pdf",
     updateDocumentState(state) { this.documentState = state; }, isReaderOverlayFrame: () => false,
-    applyReaderPathMetadata() {}, readerPathLabel: "", folderReturnUrl: "", folderNavigationTarget: null
+    readerPath: { setAttribute() {} }, readerPathLabel: "", folderReturnUrl: "", folderNavigationTarget: null
   };
   const source = createReaderSource(context);
   globalThis.Element = class { hasAttribute() { return this.busy; }
@@ -137,9 +137,6 @@ test("optional nulls and mixed folders survive resolution and application", asyn
   assert.deepEqual(await f.source.resolveReaderId("id"), data);
   window.__VOICE_READER_RESOLVE__ = { id: "id", promise: Promise.resolve({ ok: true, status: 200, data }), dispose() {} };
   assert.deepEqual(await f.source.resolveReaderId("id"), data);
-  f.context.readerPath = { setAttribute() {} };
-  globalThis.document.querySelector = selector => selector === "#title" ? f.heading : null;
-  f.context.applyReaderPathMetadata = f.source.applyReaderPathMetadata;
   f.source.applyReaderMetadata(data);
   assert.deepEqual(f.context.resolvedReaderData, data);
   assert.equal(f.heading.title, "Fallback.pdf");

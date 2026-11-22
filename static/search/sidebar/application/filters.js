@@ -178,5 +178,11 @@ async function renderExtensionFilter(routeId) {
 
     return { render: renderFilters, renderExtensions: renderExtensionFilter, renderRepos: renderRepoFilter, retain: retainFilterRenderingForRoute, status: () => ({token: filterRenderToken, done: filterRenderDone}) };
   }
-  globalThis.VoiceOfMLSidebarFilters = { create };
+  /** @param {string[]} available @param {string[]} selected @param {boolean} invert */
+  function bulkExtensions(available, selected, invert) {
+    const current = new Set(selected);
+    if (invert) return available.filter(extension => !current.has(extension));
+    return available.every(extension => current.has(extension)) ? [] : available.slice();
+  }
+  globalThis.VoiceOfMLSidebarFilters = { create, bulkExtensions };
 })();

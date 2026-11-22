@@ -237,11 +237,6 @@ export function createDjvuScheduler(decoder, { maxBytes = 64 * 1024 * 1024, maxP
   function validMetadataRequest(operation, number) {
     return ['geometry','text'].includes(operation) && Number.isSafeInteger(number) && number >= 1;
   }
-  function cancelSpeculation() {
-    for (const [page, task] of pending) if (task.kind === 'page' && task.priority < 2) {
-      pending.delete(page); rejectClients(task, abort());
-    }
-  }
   function close() {
     if (closed) return;
     closed = true;
@@ -250,6 +245,6 @@ export function createDjvuScheduler(decoder, { maxBytes = 64 * 1024 * 1024, maxP
     if (active) rejectClients(active, abort());
     cache.clear(); retained = 0; ephemeral = null; decoder.close();
   }
-  return { request, requestOutline, requestMetadata, cancelSpeculation, close,
+  return { request, requestOutline, requestMetadata, close,
     stats: () => ({ retainedBytes: retained, pages: [...cache.keys()], queued: pending.size, active: active?.page || null }) };
 }

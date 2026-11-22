@@ -313,10 +313,8 @@ if (typeof document !== "undefined") /** @type {Window & {CCRDSpeech?: unknown}}
   let switching = false;
   let sleepDeadline = 0, finishSentence = false;
   /** @type {number | undefined} */ let sleepTimer;
-  /** @type {HTMLElement[] | null} */ let marked = null;
   /** @type {HighlightRegistry | null} */ let markedRegistry = null;
-  // Optional host adapter (paged/sectioned documents) supplies text that only
-  // grows at its end, plus DOM mapping. Without one, the preview body is used.
+  // The Reader adapter supplies append-only text and maps offsets into its DOM.
   // NEED covers one batch plus its planning context; growth targets LOOKAHEAD.
   const LOOKAHEAD = 2400, NEED = 1800;
   let starting = 0, pendingStart = false, playAttempt = 0;
@@ -347,15 +345,15 @@ if (typeof document !== "undefined") /** @type {Window & {CCRDSpeech?: unknown}}
     }
   }
   /** @param {SpeechSnapshot} snapshot */
-  function more(snapshot) { return !!snapshot.adapter && !snapshot.adapter.done; }
+  function more(snapshot) { return !snapshot.adapter.done; }
   /** @param {SpeechSnapshot} snapshot @param {number} offset */
   function loaded(snapshot, offset) { return !more(snapshot) || snapshot.text.length >= offset + NEED; }
   /** @param {SpeechSnapshot | undefined} a @param {SpeechSnapshot} b */
-  function sameSource(a, b) { return !!a && a.id === b.id && (a.adapter || b.adapter ? a.adapter === b.adapter : a.text === b.text); }
+  function sameSource(a, b) { return !!a && a.id === b.id && a.adapter === b.adapter; }
   /** @param {SpeechSnapshot} snapshot @param {number} offset @param {SpeechOwner} value */
   function grow(snapshot, offset, value) {
     if (!more(snapshot) || snapshot.growing) return;
-    snapshot.growing = Promise.resolve((/** @type {NonNullable<SpeechSnapshot['adapter']>} */ (snapshot.adapter)).ensure(offset + LOOKAHEAD)).catch(() => {
+    snapshot.growing = Promise.resolve(snapshot.adapter.ensure(offset + LOOKAHEAD)).catch(() => {
       if (value && live(value)) { value.blocked = true; notice("正文载入失败 · 点击继续重试，进度保留"); }
     }).finally(() => {
       snapshot.growing = null;
@@ -502,10 +500,7 @@ if (typeof document !== "undefined") /** @type {Window & {CCRDSpeech?: unknown}}
   function playingInView() {
     const value = owner || saved;
     if (!value || preview?.id !== value.snapshot.id) return false;
-    if (value.snapshot.adapter) return preview.adapter === value.snapshot.adapter && !!value.snapshot.adapter.inView?.(value.position);
-    const rect = sourceRange(Math.min(value.position, Math.max(0, preview.text.length - 1)))?.getBoundingClientRect();
-    const box = /** @type {HTMLElement} */ (preview.body).getBoundingClientRect();
-    return !!rect?.height && rect.bottom > Math.max(0, box.top) && rect.top < Math.min(innerHeight, box.bottom);
+    return preview.adapter === value.snapshot.adapter && !!value.snapshot.adapter.inView?.(value.position);
   }
   function updateLocate() {
     if (returnView && performance.now() > returnView.grace && !playingInView()) returnView = null;
@@ -515,14 +510,11 @@ if (typeof document !== "undefined") /** @type {Window & {CCRDSpeech?: unknown}}
   }
   function viewChanged() { clearTimeout(locateTimer); locateTimer = setTimeout(updateLocate, 120); }
   function saveView() {
-    if (preview?.adapter) return preview.adapter.saveView?.() ?? null;
-    return preview?.body ? { body: preview.body, top: preview.body.scrollTop, page: scrollY } : null;
+    return preview?.adapter.saveView?.() ?? null;
   }
   /** @param {unknown} view */
   function restoreView(view) {
-    const local = /** @type {{body?: HTMLElement, top: number, page: number} | null | undefined} */ (view);
-    if (local?.body) { local.body.scrollTop = local.top; scrollTo({ top: local.page }); }
-    else if (view !== null && view !== undefined) preview?.adapter?.restoreView?.(/** @type {{top: number, frame: number | null}} */ (view));
+    if (view !== null && view !== undefined) preview?.adapter.restoreView?.(/** @type {{top: number, frame: number | null}} */ (view));
   }
   async function toggleLocate() {
     if (returnView) {
@@ -537,8 +529,8 @@ if (typeof document !== "undefined") /** @type {Window & {CCRDSpeech?: unknown}}
   }
   document.addEventListener("scroll", viewChanged, { capture: true, passive: true });
   function show() {
-    const parent = preview?.host?.isConnected ? preview.host : preview?.body?.isConnected ? preview.body.parentElement : $("#preview-panel:not([hidden])") || document.body;
-    if (panel.parentElement !== parent) /** @type {HTMLElement} */ (parent).append(panel);
+    const parent = preview?.host?.isConnected ? preview.host : document.body;
+    if (panel.parentElement !== parent) parent.append(panel);
     panel.hidden = false;
     $("[data-speech-toggle]")?.setAttribute("aria-expanded", "true");
   }
@@ -565,109 +557,32 @@ if (typeof document !== "undefined") /** @type {Window & {CCRDSpeech?: unknown}}
       button.classList.toggle("speech-active", !!owner && owner.snapshot.id === preview?.id);
     }
   }
-  /** @param {number} start */
-  function sourceRange(start, end = start + 1) {
-    if (!preview || /** @type {HTMLElement} */ (preview.body).textContent !== preview.text) return null;
-    const range = document.createRange(), walker = document.createTreeWalker(/** @type {HTMLElement} */ (preview.body), NodeFilter.SHOW_TEXT);
-    /** @type {Text | null} */ let node;
-    let offset = 0, begun = false;
-    while ((node = /** @type {Text | null} */ (walker.nextNode()))) {
-      if (!begun && start < offset + node.length) { range.setStart(node, start - offset); begun = true; }
-      if (begun && end <= offset + node.length) { range.setEnd(node, end - offset); return range; }
-      offset += node.length;
-    }
-    return null;
-  }
   function clearMark() {
-    if (globalThis.CSS?.highlights) CSS.highlights.delete("ccrd-speech");
     if (markedRegistry) { markedRegistry.delete("ccrd-speech"); markedRegistry = null; }
-    for (const node of marked || []) {
-      const parent = node.parentElement;
-      node.replaceWith(...node.childNodes);
-      parent?.normalize(); // Older WebViews must not accumulate text nodes per clip.
-    }
-    marked = null;
   }
   function mark(retried = false) {
     clearMark();
-    if (!owner?.current || preview?.id !== owner.snapshot.id || (owner.snapshot.adapter && preview.adapter !== owner.snapshot.adapter)) return;
+    if (!owner?.current || preview?.id !== owner.snapshot.id || preview.adapter !== owner.snapshot.adapter) return;
     const start = owner.current.job.batch.start + owner.current.part.start;
     const end = owner.current.job.batch.start + owner.current.part.end;
-    const range = preview.adapter ? preview.adapter.range?.(start, end) : sourceRange(start, end);
+    const range = preview.adapter.range?.(start, end);
     if (!range) {
-      // The clip's page/section may not be rendered yet: the adapter can bring
-      // it into view, after which the same clip is highlighted once.
+      // The adapter can bring the page into view; retry the same clip once.
       const current = owner.current;
-      if (preview.adapter && !retried) Promise.resolve(preview.adapter.follow?.(start, end)).then(() => { if (owner?.current === current) mark(true); }, () => {});
+      if (!retried) Promise.resolve(preview.adapter.follow?.(start, end)).then(() => { if (owner?.current === current) mark(true); }, () => {});
       return;
     }
-    if (preview.adapter) {
-      // The range may live in an iframe document or shadow tree: register it in
-      // that realm's highlight registry and never mutate the host's DOM.
-      const realm = (range.startContainer.ownerDocument || document).defaultView || globalThis;
-      if (realm.CSS?.highlights && realm.Highlight) { realm.CSS.highlights.set("ccrd-speech", new realm.Highlight(range)); markedRegistry = realm.CSS.highlights; }
-      preview.adapter.follow?.(start, end);
-      viewChanged();
-      return;
-    }
-    if (globalThis.CSS?.highlights && globalThis.Highlight) CSS.highlights.set("ccrd-speech", new Highlight(range));
-    else {
-      const node = document.createElement("mark"); node.className = "speech-current";
-      node.append(range.extractContents()); range.insertNode(node); marked = [node];
-    }
-  }
-  /** @param {number} x @param {number} y */
-  function offsetAtPoint(x, y) {
-    if (preview?.adapter) return null;
-    const point = document.caretPositionFromPoint?.(x, y);
-    const range = point ? null : document.caretRangeFromPoint?.(x, y);
-    const node = point?.offsetNode || range?.startContainer, offset = point?.offset ?? range?.startOffset;
-    if (!node || !(/** @type {(SpeechPreview & {body: HTMLElement}) | null} */ (preview))?.body.contains(node)) return null;
-    const source = /** @type {SpeechPreview} */ (preview);
-    const prefix = document.createRange(); prefix.selectNodeContents(/** @type {HTMLElement} */ (source.body)); prefix.setEnd(node, /** @type {number} */ (offset));
-    return plan.safe(source.text, prefix.toString().length);
-  }
-  function visibleOffset() {
-    if (!preview) return 0;
-    if (preview.adapter) return plan.safe(preview.text, preview.adapter.offsetAtTop?.() || 0);
-    const body = /** @type {HTMLElement} */ (preview.body), box = body.getBoundingClientRect(), style = getComputedStyle(body);
-    const top = Math.max(box.top, 0, (/** @type {HTMLElement} */ (body.parentElement)).querySelector(".preview-header")?.getBoundingClientRect().bottom || 0);
-    const bottom = Math.min(box.bottom, innerHeight);
-    if (bottom <= top) return 0;
-    const x = Math.max(1, box.left + parseFloat(style.paddingLeft) + 1);
-    // At the top line's leading edge, not at the pointer or the document start.
-    for (let y = top + 2; y < Math.min(bottom, top + parseFloat(style.lineHeight) + parseFloat(style.paddingTop) + 8); y += 3) {
-      const offset = offsetAtPoint(x, y);
-      if (offset !== null) {
-        const range = sourceRange(offset, Math.min(preview.text.length, offset + (/** @type {number} */ (preview.text.codePointAt(offset)) > 65535 ? 2 : 1)));
-        const rect = range?.getBoundingClientRect();
-        if (rect?.height && rect.bottom > top && rect.top < bottom) return offset;
-      }
-    }
-    return 0;
+    // Use the range's own highlight registry without rewriting the Reader DOM.
+    const realm = (range.startContainer.ownerDocument || document).defaultView || globalThis;
+    if (realm.CSS?.highlights && realm.Highlight) { realm.CSS.highlights.set("ccrd-speech", new realm.Highlight(range)); markedRegistry = realm.CSS.highlights; }
+    preview.adapter.follow?.(start, end);
+    viewChanged();
   }
   async function locateSource() {
     const value = owner || saved;
-    if (!value) return;
-    const position = value.position, snapshot = value.snapshot;
-    if (snapshot.adapter) {
-      // The host may have re-based its preview while reading continued; the
-      // owning adapter navigates there and republishes itself as the preview.
-      if (!preview || preview.id === snapshot.id) { await snapshot.adapter.reveal?.(position); mark(); }
-      return;
-    }
-    if (preview?.id !== snapshot.id) {
-      if (typeof openPreview !== "function") return;
-      await openPreview(snapshot.id, "", { scroll: false });
-    }
-    if (preview?.id !== snapshot.id) return;
-    const range = sourceRange(Math.min(position, preview.text.length - 1));
-    const rect = range?.getBoundingClientRect();
-    if (rect) {
-      const body = /** @type {HTMLElement} */ (preview.body);
-      const box = body.getBoundingClientRect();
-      body.scrollTop += rect.top - box.top - Math.min(80, box.height / 3);
-      if (box.bottom < 0 || box.top > innerHeight) body.scrollIntoView({ block: "nearest" });
+    if (value && (!preview || preview.id === value.snapshot.id)) {
+      // The owning adapter can rebase its window and publish itself again.
+      await value.snapshot.adapter.reveal?.(value.position);
       mark();
     }
   }
@@ -1058,7 +973,7 @@ if (typeof document !== "undefined") /** @type {Window & {CCRDSpeech?: unknown}}
   function start(snapshot, offset, playing = true, skipHistory = false, exact = false, announce = false) {
     if (checkSleep()) return;
     if (more(snapshot) && !loaded(snapshot, offset)) {
-      const adapter = /** @type {NonNullable<SpeechSnapshot['adapter']>} */ (snapshot.adapter);
+      const adapter = snapshot.adapter;
       void waitToStart(async () => {
         await adapter.ensure(offset + NEED);
         return Math.min(offset, snapshot.text.length);
@@ -1075,9 +990,9 @@ if (typeof document !== "undefined") /** @type {Window & {CCRDSpeech?: unknown}}
     const restored = skipHistory ? undefined : history.find(batch => plan.partIndex(batch, offset) >= 0);
     const batch = restored || plan.batch(snapshot.text, offset, true, 0, exact);
     if (!batch) { notice("已到正文末尾"); controls(); return; }
-    // Offsets are only meaningful inside the same adapter window (or immutable plain text).
+    // Offsets are only meaningful inside the same adapter window.
     stop("正在准备首句…", false, sameWindow);
-    if (announce) snapshot.adapter?.onStart?.();
+    if (announce) snapshot.adapter.onStart?.();
     createAudio();
     /** @type {SpeechOwner} */
     const value = { snapshot, batch, position: restored ? offset : batch.start, part: restored ? plan.partIndex(batch, offset) : 0,
@@ -1098,21 +1013,21 @@ if (typeof document !== "undefined") /** @type {Window & {CCRDSpeech?: unknown}}
   }
   /** @param {number | SpeechStartLocator} [offset] */
   function fromPreview(offset, chosen = false, exact = false, sentenceStart = false) {
-    if (!preview || (!preview.adapter && !preview.text.trim())) { if (typeof showToast === "function") showToast("请等待预览正文加载完成"); return; }
+    if (!preview) return;
     // 听书 pressed on another article is that choice; other paths still ask.
     if (!chosen && owner && owner.snapshot.id !== preview.id && !confirm("切换到当前预览会停止原朗读，继续吗？")) return;
-    const id = preview.id, adapter = preview.adapter, locateTop = adapter?.locateTop?.bind(adapter);
+    const id = preview.id, adapter = preview.adapter, locateTop = adapter.locateTop?.bind(adapter);
     /** @param {number} found */
     const ready = (found) => {
       // The locator may republish a rebased adapter for this same document.
       if (preview?.id !== id || checkSleep()) return;
       const target = sentenceStart ? plan.sentence(preview.text, found).start : plan.safe(preview.text, found);
-      if (owner && sameSource(owner.snapshot, preview) && seek(owner, target, true)) { preview.adapter?.onStart?.(); return; }
-      start(preview.snapshot || { id, text: preview.text, title: preview.title }, target, true, false, exact || sentenceStart, true);
+      if (owner && sameSource(owner.snapshot, preview.snapshot) && seek(owner, target, true)) { preview.adapter.onStart?.(); return; }
+      start(preview.snapshot, target, true, false, exact || sentenceStart, true);
     };
     const locator = typeof offset === "function" ? offset : offset === undefined ? locateTop : undefined;
     if (locator) void waitToStart(locator, ready, "正在定位朗读位置…");
-    else ready(typeof offset === "number" ? offset : visibleOffset());
+    else ready(typeof offset === "number" ? offset : plan.safe(adapter.text, adapter.offsetAtTop?.() || 0));
   }
   /** @param {number | SpeechStartLocator} offset @param {SpeechReadOptions} [options] */
   function readFrom(offset, options) {
@@ -1134,15 +1049,15 @@ if (typeof document !== "undefined") /** @type {Window & {CCRDSpeech?: unknown}}
     if (owner.current) { playAudio(owner); armHandoff(owner); }
     advance(owner); pump(owner);
   }
-  /** @param {SpeechStartLocator | null} [selection] */
-  function launch(selection = preview?.adapter?.selectionStart?.() ?? null) {
+  /** @param {SpeechStartLocator | null} selection */
+  function launch(selection) {
     if (selection) { readFrom(selection, { exact: true }); return; }
     if (!owner) {
       // A host adapter resumes a stopped session only when it is the same
       // window; otherwise "听书" starts where the reader is looking now.
-      if (saved?.snapshot.id === preview?.id && (!preview?.adapter || /** @type {SpeechSaved} */ (saved).snapshot.adapter === preview.adapter && !preview.adapter.locateTop)) start(/** @type {SpeechSaved} */ (saved).snapshot, /** @type {SpeechSaved} */ (saved).position);
+      if (saved && preview && sameSource(saved.snapshot, preview.snapshot) && !preview.adapter.locateTop) start(saved.snapshot, saved.position);
       else fromPreview();
-    } else if (preview && !sameSource(owner.snapshot, preview)) {
+    } else if (preview && !sameSource(owner.snapshot, preview.snapshot)) {
       // 听书 on another article starts that article. It used to toggle the old
       // article's panel, so a press collapsed it and the next one showed it
       // again. The stopped article keeps its position for 继续.
@@ -1189,20 +1104,10 @@ if (typeof document !== "undefined") /** @type {Window & {CCRDSpeech?: unknown}}
   /** @param {SpeechPreviewInput} value */
   function previewLoaded(value) {
     clearMark();
-    if (value.adapter) {
-      // Host-supplied document (e.g. the Reader). One stable snapshot per
-      // adapter: its text getter grows, so offsets and history stay valid.
-      const adapter = value.adapter;
-      const snapshot = { id: value.id, title: value.title, adapter, get text() { return adapter.text; } };
-      preview = { id: value.id, title: value.title, adapter, snapshot, host: value.host || null, body: value.body || /** @type {HTMLElement | null} */ (adapter.root) || null, get text() { return adapter.text; } };
-    } else {
-      if (typeof value.text !== "string") { preview = null; return; }
-      preview = { ...value, text: value.text, body: /** @type {HTMLElement | null} */ ($("#preview-panel .preview-body")) };
-    }
-    if (!/** @type {SpeechPreview} */ (preview).body && !/** @type {SpeechPreview} */ (preview).adapter) { preview = null; return; }
-    // Older cached app.js may still produce the former three-button toolbar.
-    $(".preview-speech-tools")?.remove();
-    const tools = value.tools || $("#preview-panel .preview-tools");
+    const {id, title, adapter, host, tools} = value;
+    // Playback retains the adapter snapshot, not the preview controls.
+    const snapshot = { id, title, adapter, get text() { return adapter.text; } };
+    preview = { snapshot, id, adapter, host: host ?? null, get text() { return adapter.text; } };
     if (tools && !tools.querySelector("[data-speech-toggle]")) {
       const button = document.createElement("button"); button.type = "button"; button.className = value.buttonClass || "icon-btn-sm preview-speech-btn";
       button.dataset.speechToggle = ""; button.setAttribute("aria-label", "朗读与设置"); button.setAttribute("aria-controls", "speech-panel");
@@ -1220,11 +1125,6 @@ if (typeof document !== "undefined") /** @type {Window & {CCRDSpeech?: unknown}}
     }
   }
   function previewClosed() { cancelStart(); clearMark(); preview = null; if (panel.parentElement !== document.body) document.body.append(panel); controls(); }
-  function previewPending() {
-    cancelStart(); clearMark(); preview = null; controls();
-    // Keep the old modal preview's controls inside its focus scope while the
-    // new source is loading. Detach only immediately before replacing its DOM.
-  }
   function arrangeToggle() {
     const button = $("[data-speech-toggle]"), tools = button?.parentElement;
     if (!tools) return;
@@ -1251,15 +1151,6 @@ if (typeof document !== "undefined") /** @type {Window & {CCRDSpeech?: unknown}}
   document.addEventListener("click", event => {
     const button = /** @type {Element | null} */ (event.target)?.closest?.("[data-speech-toggle]");
     if (button) launch(consumeSelection(event, button));
-  });
-  document.addEventListener("dblclick", event => {
-    if (preview?.adapter || !preview?.body?.contains(/** @type {Node | null} */ (event.target))) return;
-    const offset = offsetAtPoint(event.clientX, event.clientY);
-    if (offset === null) return;
-    const sentence = plan.sentence(preview.text, offset);
-    const range = sourceRange(sentence.start, sentence.end);
-    if (range) { const selection = /** @type {Selection} */ (getSelection()); selection.removeAllRanges(); selection.addRange(range); }
-    fromPreview(sentence.start);
   });
   play.addEventListener("click", () => { if (pendingStart || owner?.wantsPlay) pause(); else resume(); });
   previous.addEventListener("click", () => navigate(-1));
@@ -1290,8 +1181,7 @@ if (typeof document !== "undefined") /** @type {Window & {CCRDSpeech?: unknown}}
   }
   controls();
   // readFrom: a host adapter's double-click/selection starts at a source offset.
-  return { launch, previewLoaded, previewPending, previewClosed, owns: /** @param {Node | null} node */ node => !!node && panel.contains(node), modal: () => false,
-    readFrom, pause,
+  return { previewLoaded, previewClosed, readFrom, pause,
     // Host hooks: show the playing sentence (no "回到原位置" toggle) and report
     // scrolling the player cannot observe itself (e.g. inside an iframe).
     reveal: () => { returnView = null; return locateSource().then(updateLocate); },

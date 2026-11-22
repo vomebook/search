@@ -73,6 +73,33 @@ async function downloadWithRetry(url, signal) {
   throw lastError;
 }
 
+// Both checksum-pinned npm archives use the same tar layout. Select only
+// the promised package files before constructing any output paths.
+function extractArchive(compressed, label, select) {
+  const tar = gunzipSync(compressed, { maxOutputLength: MAX_ARCHIVE_BYTES });
+  const files = new Map();
+  for (let offset = 0; offset < tar.length;) {
+    if (offset + 512 > tar.length) throw new Error(`Truncated ${label} archive`);
+    const header = tar.subarray(offset, offset + 512);
+    const name = header.subarray(0, 100).toString().replace(/\0.*$/, "");
+    if (!name) break;
+    const sizeText = header.subarray(124, 136).toString().replace(/\0.*$/, "").trim() || "0";
+    if (!/^[0-7]+$/.test(sizeText)) throw new Error(`Invalid ${label} archive entry size`);
+    const size = parseInt(sizeText, 8);
+    const next = offset + 512 + Math.ceil(size / 512) * 512;
+    if (!Number.isSafeInteger(size) || next > tar.length) throw new Error(`Truncated ${label} archive`);
+    const file = name.startsWith("package/") ? name.slice(8) : "";
+    if (select(file)) {
+      if ((header[156] !== 0 && header[156] !== 48) || files.has(file) ||
+          file.split("/").some(part => !part || part === "." || part === ".."))
+        throw new Error(`Invalid ${label} archive entry`);
+      files.set(file, tar.subarray(offset + 512, offset + 512 + size));
+    }
+    offset = next;
+  }
+  return files;
+}
+
 async function main() {
   const vendors = Object.entries(resources.vendors);
   const items = [resources.pdfArchive, ...vendors.map(([, value]) => value), resources.ruffleArchive];
@@ -103,68 +130,29 @@ async function main() {
     }
   }
   await Promise.all(Array.from({ length: Math.min(4, items.length) }, worker));
-  const ruffleTar = gunzipSync(downloaded[downloaded.length - 1], { maxOutputLength: MAX_ARCHIVE_BYTES });
   const expectedRuffle = new Set(resources.ruffleArchive.files);
-  const extractedRuffle = new Map();
-  for (let offset = 0; offset < ruffleTar.length;) {
-    if (offset + 512 > ruffleTar.length) throw new Error("Truncated Ruffle archive");
-    const header = ruffleTar.subarray(offset, offset + 512);
-    const name = header.subarray(0, 100).toString().replace(/\0.*$/, "");
-    if (!name) break;
-    const sizeText = header.subarray(124, 136).toString().replace(/\0.*$/, "").trim() || "0";
-    if (!/^[0-7]+$/.test(sizeText)) throw new Error("Invalid Ruffle archive entry size");
-    const size = parseInt(sizeText, 8);
-    if (!Number.isSafeInteger(size) || offset + 512 + Math.ceil(size / 512) * 512 > ruffleTar.length) throw new Error("Truncated Ruffle archive");
-    const file = name.startsWith("package/") ? name.slice(8) : "";
-    if (expectedRuffle.has(file)) {
-      if ((header[156] !== 0 && header[156] !== 48) || extractedRuffle.has(file)) throw new Error("Invalid Ruffle archive entry");
-      extractedRuffle.set(file, ruffleTar.subarray(offset + 512, offset + 512 + size));
-    }
-    offset += 512 + Math.ceil(size / 512) * 512;
+  const ruffle = extractArchive(downloaded.at(-1), "Ruffle", file => expectedRuffle.has(file));
+  if (ruffle.size !== expectedRuffle.size) throw new Error("Ruffle archive missing required files");
+  const pdfGroups = new Set(["cmaps", "standard_fonts", "wasm"]);
+  const pdf = extractArchive(downloaded[0], "PDF", file => {
+    const slash = file.indexOf("/");
+    return slash > 0 && pdfGroups.has(file.slice(0, slash)) && !file.endsWith("/");
+  });
+  for (const group of pdfGroups) {
+    if (![...pdf.keys()].some(file => file.startsWith(group + "/")))
+      throw new Error(`PDF archive missing required files: ${group}`);
   }
-  if (extractedRuffle.size !== expectedRuffle.size) throw new Error("Ruffle archive missing required files");
-  // Prepare every operation before touching existing output. Disk errors during the
-  // commit below can still leave partial updates; this is not an atomic rollback.
-  const writes = [];
+  // Write nothing until every input and both archive inventories were validated.
   const ruffleOutput = join(output, resources.ruffleArchive.directory.slice("vendor/".length));
-  for (const [file, bytes] of extractedRuffle) writes.push([join(ruffleOutput, file), bytes]);
-  const tar = gunzipSync(downloaded[0], { maxOutputLength: MAX_ARCHIVE_BYTES });
-const pdfGroups = new Set(["cmaps", "standard_fonts", "wasm"]);
-const pdfFiles = new Set();
-for (let offset = 0; offset < tar.length;) {
-  if (offset + 512 > tar.length) throw new Error("Truncated PDF archive");
-  const header = tar.subarray(offset, offset + 512), name = header.subarray(0, 100).toString().replace(/\0.*$/, "");
-  if (!name) break;
-  const sizeText = header.subarray(124, 136).toString().replace(/\0.*$/, "").trim() || "0";
-  if (!/^[0-7]+$/.test(sizeText)) throw new Error("Invalid PDF archive entry size");
-  const size = parseInt(sizeText, 8);
-  if (!Number.isSafeInteger(size) || offset + 512 + Math.ceil(size / 512) * 512 > tar.length)
-    throw new Error("Truncated PDF archive");
-  const relative = name.startsWith("package/") ? name.slice(8) : "";
-  const parts = relative.split("/");
-  if (pdfGroups.has(parts[0]) && parts.length > 1 && !relative.endsWith("/")) {
-    if ((header[156] !== 0 && header[156] !== 48) || parts.some(part => !part || part === "." || part === "..") || pdfFiles.has(relative))
-      throw new Error("Invalid PDF archive entry");
-    pdfFiles.add(relative);
-    const target = join(output, relative);
-    const bytes = tar.subarray(offset + 512, offset + 512 + size);
-    writes.push([target, bytes]);
+  const writes = [
+    ...[...ruffle].map(([file, bytes]) => [join(ruffleOutput, file), bytes]),
+    ...[...pdf].map(([file, bytes]) => [join(output, file), bytes]),
+    ...vendors.map(([, {path}], index) => [join(output, path.slice("vendor/".length)), downloaded[index + 1]])
+  ];
+  for (const [target, bytes] of writes) {
+    mkdirSync(dirname(target), { recursive: true });
+    writeFileSync(target, bytes);
   }
-  offset += 512 + Math.ceil(size / 512) * 512;
-}
-for (const group of pdfGroups) {
-  if (![...pdfFiles].some(file => file.startsWith(group + "/")))
-    throw new Error(`PDF archive missing required files: ${group}`);
-}
-for (const [index, [, {path}]] of vendors.entries()) {
-  const bytes = downloaded[index + 1];
-  const versioned = path.slice("vendor/".length);
-  writes.push([join(output, versioned), bytes]);
-}
-for (const [target, bytes] of writes) {
-  mkdirSync(dirname(target), { recursive: true });
-  writeFileSync(target, bytes);
-}
 }
 
 main().catch((error) => { console.error(error); process.exitCode = 1; });

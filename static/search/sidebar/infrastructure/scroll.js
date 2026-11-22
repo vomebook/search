@@ -120,7 +120,7 @@ function install() {
     if (document.visibilityState === "hidden") flushSidebarScroll();
   });
 }
-    return { keyFor: sidebarScrollKeyFor, activate: activateSidebarScrollKey, remember: rememberSidebarScroll, restore: restoreSidebarScroll, flush: flushSidebarScroll, install, positions: sidebarScrollPositions, get activeKey() { return activeSidebarScrollKey; }, get restoring() { return sidebarScrollRestoring; } };
+    return { keyFor: sidebarScrollKeyFor, activate: activateSidebarScrollKey, remember: rememberSidebarScroll, restore: restoreSidebarScroll, install, positions: sidebarScrollPositions, get activeKey() { return activeSidebarScrollKey; }, get restoring() { return sidebarScrollRestoring; } };
   }
   /** @type {typeof globalThis & {VoiceOfMLSidebarScroll: typeof VoiceOfMLSidebarScroll}} */
   const globals = globalThis;

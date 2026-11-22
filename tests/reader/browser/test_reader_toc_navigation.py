@@ -53,11 +53,7 @@ class TocNavigationTests(unittest.TestCase):
                 setPage:page=>{updateDocumentState({page});updateTocCurrentMark()},
                 setCurrent:index=>{updateNavigationState({currentChapterIndex:index});updateTocCurrentMark()},
                 state:()=>tocVirtualState,
-                align:(selector, offset)=>alignReaderDestination(document.querySelector(selector), offset || 0),
-                hold:(target, offset)=>holdReaderDestination(target, offset),
-                hasHold:()=>!!activeReaderDestinationHold,
-                reassert:landing=>reassertReaderDestination(landing),
-                scrollTop:()=>viewport.scrollTop};
+                hasHold:()=>!!activeReaderDestinationHold};
             ''')
         self.page.route('**/static/reader.js*', instrument)
         self.page.on('pageerror', lambda error: self.errors.append(f'page:{error}'))
@@ -1288,36 +1284,25 @@ class TocNavigationTests(unittest.TestCase):
         self.page.wait_for_function("()=>document.documentElement.dataset.readerPhase==='disposed'")
         self.assertFalse(self.page.evaluate("()=>__toc.hasHold()"))
 
-    def test_landing_is_reasserted_after_a_late_layout_shift(self):
-        self.open_chapters(40)
-        self.click_entry(19)
-        result = self.page.evaluate("""() => {
-            const anchor = document.querySelector('#chapter-20');
-            const landing = __toc.align('#chapter-20');
+    def test_fragment_landing_corrects_a_late_layout_shift(self):
+        self.open_chapters(40, fragments=True)
+        self.click_entry(59)  # Chapter 20, second section.
+        self.page.wait_for_function("()=>__toc.hasHold()")
+        result = self.page.evaluate("""async () => {
+            const anchor = document.querySelector('#sec-20-b');
+            const viewport = document.querySelector('#viewport');
+            viewport.style.overflowAnchor = 'none';
+            const offset = () => anchor.getBoundingClientRect().top - viewport.getBoundingClientRect().top;
+            const before = offset();
             const spacer = document.createElement('p');
             spacer.style.height = '600px';
-            anchor.parentElement.insertBefore(spacer, anchor);
-            const shifted = document.querySelector('#chapter-20').getBoundingClientRect().top -
-                document.querySelector('#viewport').getBoundingClientRect().top;
-            __toc.reassert(landing);
-            return {shifted: Math.round(shifted), fixed: Math.round(document.querySelector('#chapter-20')
-                .getBoundingClientRect().top - document.querySelector('#viewport').getBoundingClientRect().top)};
+            anchor.before(spacer);
+            const shifted = offset();
+            await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+            return {before, shifted, fixed: offset()};
         }""")
-        self.assertGreater(abs(result["shifted"]), 400, "the fixture must actually shift the anchor")
-        self.assertLess(abs(result["fixed"]), 2, "a settled layout must be re-asserted")
-
-    def test_landing_is_not_reasserted_after_a_reader_scroll(self):
-        self.open_chapters(40)
-        self.click_entry(4)
-        result = self.page.evaluate("""() => {
-            const landing = __toc.align('#chapter-5');
-            document.querySelector('#viewport').scrollTop += 2000;
-            const before = __toc.scrollTop();
-            __toc.reassert(landing);
-            return {before, after: __toc.scrollTop()};
-        }""")
-        self.assertEqual(result["before"], result["after"],
-                         "re-assertion must not pull a reader who scrolled away back")
+        self.assertGreater(abs(result["shifted"] - result["before"]), 400, "the spacer must shift the fragment")
+        self.assertLess(abs(result["fixed"]), 2, "the active landing hold must correct the shift")
 
     # ---- opening hint ----
 

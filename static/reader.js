@@ -118,7 +118,7 @@ const readerContext = {
   get classifyReaderError() { return classifyReaderError; }, set classifyReaderError(value) { classifyReaderError = value; },
   get clearFullSearchMarks() { return clearFullSearchMarks; },
   get clearPdfManifestPrefetches() { return clearPdfManifestPrefetches; }, set clearPdfManifestPrefetches(value) { clearPdfManifestPrefetches = value; },
-  get clearSearchHighlights() { return clearSearchHighlights; }, set clearSearchHighlights(value) { clearSearchHighlights = value; },
+  get clearSearchHighlights() { return clearSearchHighlights; },
   get consumeBookmarkHandoff() { return consumeBookmarkHandoff; }, set consumeBookmarkHandoff(value) { consumeBookmarkHandoff = value; },
   get content() { return content; },
   get contentUrl() { return contentUrl; }, set contentUrl(value) { contentUrl = value; },
@@ -365,7 +365,6 @@ const readerContext = {
   get alignReaderDestination() { return alignReaderDestination; },
   get holdReaderDestination() { return holdReaderDestination; },
   get cancelReaderDestinationHold() { return cancelReaderDestinationHold; },
-  get reassertReaderDestination() { return reassertReaderDestination; },
   get showDownloadFeedback() { return showDownloadFeedback; }, set showDownloadFeedback(value) { showDownloadFeedback = value; },
   get sourceName() { return sourceName; },
   get sourceUrl() { return sourceUrl; }, set sourceUrl(value) { sourceUrl = value; },
@@ -387,7 +386,7 @@ const readerContext = {
   get updateNavigationState() { return updateNavigationState; }, set updateNavigationState(value) { updateNavigationState = value; },
   get updatePanelState() { return updatePanelState; }, set updatePanelState(value) { updatePanelState = value; },
   get updateProgressTools() { return updateProgressTools; }, set updateProgressTools(value) { updateProgressTools = value; },
-  get updateSearchState() { return updateSearchState; }, set updateSearchState(value) { updateSearchState = value; },
+  get updateSearchState() { return updateSearchState; },
   get updateTocCurrentMark() { return updateTocCurrentMark; }, set updateTocCurrentMark(value) { updateTocCurrentMark = value; },
   get v3ResourceUrl() { return v3ResourceUrl; }, set v3ResourceUrl(value) { v3ResourceUrl = value; },
   get validSource() { return validSource; }, set validSource(value) { validSource = value; },
@@ -444,7 +443,6 @@ const readerContext = {
   get turnViewport() { return turnViewport; }, set turnViewport(value) { turnViewport = value; },
   get updateReadingProgressSummary() { return updateReadingProgressSummary; }, set updateReadingProgressSummary(value) { updateReadingProgressSummary = value; },
   get appendShellsBatched() { return appendShellsBatched; }, set appendShellsBatched(value) { appendShellsBatched = value; },
-  get applyReaderPathMetadata() { return applyReaderPathMetadata; }, set applyReaderPathMetadata(value) { applyReaderPathMetadata = value; },
   get bookmarkExcerpt() { return bookmarkExcerpt; }, set bookmarkExcerpt(value) { bookmarkExcerpt = value; },
   get cachePdfOcrPage() { return cachePdfOcrPage; }, set cachePdfOcrPage(value) { cachePdfOcrPage = value; },
   get cachePdfSearchText() { return cachePdfSearchText; }, set cachePdfSearchText(value) { cachePdfSearchText = value; },
@@ -453,7 +451,6 @@ const readerContext = {
   get cachedPdfTextContent() { return cachedPdfTextContent; }, set cachedPdfTextContent(value) { cachedPdfTextContent = value; },
   get canPrefetchPdfImages() { return canPrefetchPdfImages; }, set canPrefetchPdfImages(value) { canPrefetchPdfImages = value; },
   get cancelPdfManifestPrefetch() { return cancelPdfManifestPrefetch; }, set cancelPdfManifestPrefetch(value) { cancelPdfManifestPrefetch = value; },
-  get chapterSearchModule() { return chapterSearchModule; }, set chapterSearchModule(value) { chapterSearchModule = value; },
   get createPdfShellWindow() { return createPdfShellWindow; }, set createPdfShellWindow(value) { createPdfShellWindow = value; },
   get disposeFormatResources() { return disposeFormatResources; }, set disposeFormatResources(value) { disposeFormatResources = value; },
   get ensurePdfBookSearchClient() { return ensurePdfBookSearchClient; }, set ensurePdfBookSearchClient(value) { ensurePdfBookSearchClient = value; },
@@ -479,13 +476,11 @@ const readerContext = {
   get preparePdfWorker() { return preparePdfWorker; }, set preparePdfWorker(value) { preparePdfWorker = value; },
   get preparePdfWorkerAttempt() { return preparePdfWorkerAttempt; }, set preparePdfWorkerAttempt(value) { preparePdfWorkerAttempt = value; },
   get publishPdfSearchProgress() { return publishPdfSearchProgress; }, set publishPdfSearchProgress(value) { publishPdfSearchProgress = value; },
-  get publishSearchResults() { return publishSearchResults; }, set publishSearchResults(value) { publishSearchResults = value; },
   get readPdfOcrJson() { return readPdfOcrJson; }, set readPdfOcrJson(value) { readPdfOcrJson = value; },
   get readerAssetObjectFamily() { return readerAssetObjectFamily; }, set readerAssetObjectFamily(value) { readerAssetObjectFamily = value; },
   get renderPdfImageShell() { return renderPdfImageShell; }, set renderPdfImageShell(value) { renderPdfImageShell = value; },
   get repairHtmlContrast() { return repairHtmlContrast; }, set repairHtmlContrast(value) { repairHtmlContrast = value; },
   get resolveReaderSource() { return resolveReaderSource; }, set resolveReaderSource(value) { resolveReaderSource = value; },
-  get searchChapterBook() { return searchChapterBook; }, set searchChapterBook(value) { searchChapterBook = value; },
   get trimPdfManifestPrefetches() { return trimPdfManifestPrefetches; }, set trimPdfManifestPrefetches(value) { trimPdfManifestPrefetches = value; },
   get trimPdfSurfaces() { return trimPdfSurfaces; }, set trimPdfSurfaces(value) { trimPdfSurfaces = value; },
 };
@@ -505,7 +500,7 @@ let {
 let {
   readerContentUrl, readerDownloadApiUrl, readerDownloadUrl, startReaderDownload,
   normalizeSourceUrl, resolveReaderId, applyReaderMetadata, normalizeReaderReturnUrl,
-  applyReaderPathMetadata, validSource,
+  validSource,
   readerAssetObjectFamily, trustedReaderAssetManifestUrl, trustedChapterUrl, trustedChapterReferenceUrl,
   trustedChapterResourceUrl
 } = createReaderSource(readerContext);
@@ -522,10 +517,8 @@ let {
   navigateTocEntry, setToc, updateTocCurrentMark, syncTocTab
 } = createReaderToc(readerContext);
 
-let {
-  updateSearchState, publishSearchResults, clearSearchHighlights, chapterSearchModule,
-  searchChapterBook, navigateChapterSearchResult,
-  searchReaderText
+const {
+  updateSearchState, clearSearchHighlights, navigateChapterSearchResult, searchReaderText
 } = createReaderSearchBackends(readerContext);
 
 let {
@@ -876,29 +869,14 @@ const bookmarkRibbon = /** @type {HTMLButtonElement} */ (document.querySelector(
 const bookmarkPopover = /** @type {HTMLDivElement} */ (document.querySelector("#bookmark-popover"));
 readerBindings.labelToolbarControls();
 
-// A demanded TOC/search destination lands on the viewport's top edge. Measuring the
-// element keeps that landing exact (scrollIntoView can also move ancestor scrollers),
-// and it can be re-asserted once for a late layout shift.
-/** @param {Element | null} target @param {number} [offset] */
-const alignReaderDestination = (target, offset = 0) => {
-  if (!target?.isConnected) return null;
-  const delta = target.getBoundingClientRect().top - viewport.getBoundingClientRect().top - offset;
+// Measure the chapter destination against the reading viewport; scrollIntoView
+// can also move ancestor scrollers.
+/** @param {Element | null} target */
+const alignReaderDestination = (target) => {
+  if (!target?.isConnected) return;
+  const delta = target.getBoundingClientRect().top - viewport.getBoundingClientRect().top;
   if (Math.abs(delta) > 0.5) viewport.scrollTop += delta;
-  return { target, offset, scrollTop: viewport.scrollTop };
 };
-const READER_REASSERT_SCROLL_LIMIT = 200;
-/** @param {{ target: Element, offset: number, scrollTop: number } | null} landing */
-const reassertReaderDestination = (landing) => {
-  if (!landing?.target?.isConnected) return;
-  if (Math.abs(viewport.scrollTop - landing.scrollTop) > READER_REASSERT_SCROLL_LIMIT) return;
-  alignReaderDestination(landing.target, landing.offset);
-};
-// Chapters, images and placeholders above the destination keep changing height for a
-// moment after a jump (a large book can double its height), so one correction is not
-// enough: hold the destination on the landing line until the layout settles, a short
-// budget ends, or the reader scrolls. User input is the only release signal: the browser
-// adjusts scrollTop by itself while content above grows, so a scrollTop delta cannot
-// distinguish that from a reader scroll.
 // A jump has to survive slow layout: chapter images and lazy placeholders can take
 // seconds to change height above the destination. Keep the destination on the landing
 // line until the content box stops changing for a real pause, a hold budget ends, or the
@@ -1098,7 +1076,6 @@ readerBindings.bindProgressActions();
 const domSearch = createReaderDomSearch({
   content, runtime: readerRuntime, isCurrent: isReaderGenerationCurrent,
   yieldTask: waitForReader, getTocEntries: () => navigationState.tocEntries,
-  unwrapRoot: root => root,
   publishPage: (page, loader, partial) => {
     fullSearchSession.pageLoader = async offset => loader(offset);
     fullSearchSession.page = page;

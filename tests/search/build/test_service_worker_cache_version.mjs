@@ -24,7 +24,7 @@ const READER_SHELL_INTEGRITY = "development";
 const SEARCH_SHELL_INTEGRITY = "development";
 const CORPUS_INTEGRITY = "development";
 const PDF_SUPPORT_INTEGRITY = {};
-const READER_SHELL_ASSETS = readerPrecacheResources.shellAssets("${base}static/");
+const READER_SHELL_ASSETS = VoiceOfMLReaderResources.shellAssets("${base}static/");
 const PRECACHE_URLS = [
   "${base}static/${bundledHost}",
   '${base}static/${readerContract}',

@@ -7,7 +7,7 @@ function fixture() {
   const context = vm.createContext({});
   vm.runInContext(fs.readFileSync('static/search/sidebar/application/filters.js', 'utf8'), context);
   const view = {mode: 'repo', repo: 'A', repoFull: 'VoiceOfML/A', routeId: 1,
-    repos: [], extensions: [], selectedRepos: [], selectedExtensions: [], tree: [], apiAvailable: true, dataLoaded: false};
+    repos: [], selectedRepos: [], selectedExtensions: [], tree: [], apiAvailable: true, dataLoaded: false};
   const pending = [], pendingRepos = [], published = [], retained = [];
   const elements = Object.fromEntries(['repoSection','repoList','folderSection','folderTree','extList'].map(key => [key, {style: {}, innerHTML: ''}]));
   const cache = new Map();
@@ -20,7 +20,7 @@ function fixture() {
     fetchExtensions: async () => [],
     fetchFolders: repo => new Promise(resolve => pending.push({repo, resolve})),
     localFolders: async () => null, hasExtensionCounts: () => false, extensionCounts: () => ({}),
-    publishRepos: repos => { view.repos = repos; }, publishExtensions: extensions => { view.extensions = extensions; },
+    publishExtensions() {},
     publishTree: tree => { view.tree = tree; published.push(tree); }, selectRepos() {}, selectExtensions() {},
   });
   return {controller, view, elements, pending, pendingRepos, published, retained, cache};

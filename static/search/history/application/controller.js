@@ -117,7 +117,7 @@
       store.save(list);
       renderDropdown();
     }
-    return { addHistoryItem, renderDropdown, hideSearchHistory, setupSearchHistory, removeHistoryItem };
+    return { addHistoryItem, renderDropdown, hideSearchHistory, setupSearchHistory };
   }
   globalThis.VoiceOfMLSearchHistory = { create };
 })();

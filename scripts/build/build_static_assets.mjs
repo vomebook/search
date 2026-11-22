@@ -21,7 +21,7 @@ const rewrite = (text, filename) => {
     // DjVu selection belongs to the browser, never the build host. Its vendor
     // URLs are release-pinned; the other formats still need graph hash rewrites.
     (_, extension, base) => `(["djvu","djv"].includes(${extension})?VoiceOfMLReaderResources.djvuSelectedAssets(${JSON.stringify(base)}):` + JSON.stringify(Object.fromEntries(["pdf", "md", "markdown", "html", "htm"].map(ext => [ext, resources.engineAssets(ext, base)]))) + `[${extension}]||[])`);
-  text = text.replace(/(?:VoiceOfMLReaderResources|readerPrecacheResources)\.(shellAssets|runtimePaths)\("(\/search\/static\/)"\)/g,
+  text = text.replace(/VoiceOfMLReaderResources\.(shellAssets|runtimePaths)\("(\/search\/static\/)"\)/g,
     (_, method, base) => JSON.stringify(resources[method](base)));
   for (const [original, versioned] of replacements) text = text.split(original).join(versioned);
   return text;

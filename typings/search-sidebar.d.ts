@@ -38,7 +38,7 @@ interface VoiceOfMLFilterList {
 }
 interface VoiceOfMLFilterView {
   mode: string; repo: string | null; repoFull: string | null; routeId: number;
-  repos: VoiceOfMLFilterCount[]; extensions: VoiceOfMLFilterCount[];
+  repos: VoiceOfMLFilterCount[];
   selectedRepos: string[]; selectedExtensions: string[]; tree: VoiceOfMLFilterFolder[];
   apiAvailable: boolean; dataLoaded: boolean;
 }
@@ -54,7 +54,7 @@ interface VoiceOfMLFilterDependencies {
   localFolders(repo: string | null): Promise<{tree?: VoiceOfMLFilterFolder[]} | null>;
   extensionCounts(repo: string | null): Record<string, number>;
   hasExtensionCounts(): boolean;
-  publishRepos(repos: VoiceOfMLFilterCount[]): void; publishExtensions(extensions: VoiceOfMLFilterCount[]): void;
+  publishExtensions(extensions: VoiceOfMLFilterCount[]): void;
   publishTree(tree: VoiceOfMLFilterFolder[] | null, resetCollapsed?: boolean): void;
   selectRepos(values: string[]): void; selectExtensions(values: string[]): void;
 }
@@ -65,7 +65,10 @@ interface VoiceOfMLFilterController {
 }
 declare var VoiceOfMLSidebarFolderTree: {create(deps: VoiceOfMLFolderTreeDependencies): VoiceOfMLFolderTree};
 declare var VoiceOfMLSidebarFilterList: {create(deps: VoiceOfMLFilterListDependencies): VoiceOfMLFilterList};
-declare var VoiceOfMLSidebarFilters: {create(deps: VoiceOfMLFilterDependencies): VoiceOfMLFilterController};
+declare var VoiceOfMLSidebarFilters: {
+  create(deps: VoiceOfMLFilterDependencies): VoiceOfMLFilterController;
+  bulkExtensions(available: string[], selected: string[], invert: boolean): string[];
+};
 
 interface VoiceOfMLSidebarEntries {
   folders?: VoiceOfMLSidebarFolder[] | null; files?: VoiceOfMLSidebarFile[] | null;
@@ -74,7 +77,7 @@ interface VoiceOfMLSidebarEntries {
 interface VoiceOfMLSidebarScrollDependencies {content(): HTMLElement; storageKey: string}
 interface VoiceOfMLSidebarScrollController {
   keyFor(repo: string | null, path: string): string;
-  activate(key: string): void; remember(): void; restore(): void; flush(): void; install(): void;
+  activate(key: string): void; remember(): void; restore(): void; install(): void;
   readonly activeKey: string; readonly restoring: boolean; readonly positions: Map<string, number>;
 }
 interface VoiceOfMLSidebarDirectoryViewDependencies {
@@ -91,7 +94,6 @@ interface VoiceOfMLSidebarDirectoryPresentation {
 interface VoiceOfMLSidebarDirectoryView {
   mode: string; repo: string | null; repoFull: string | null; browserPath: string; routeId: number;
   repos: VoiceOfMLFilterCount[]; apiAvailable: boolean; useLocalMode: boolean; dataLoaded: boolean;
-  tree: VoiceOfMLFilterFolder[] | null;
 }
 interface VoiceOfMLSidebarDirectoryDependencies {
   readView(): VoiceOfMLSidebarDirectoryView;
@@ -99,7 +101,6 @@ interface VoiceOfMLSidebarDirectoryDependencies {
   renderRepos(repos: VoiceOfMLFilterCount[]): void; updateHeader(): void;
   initial(repo: string | null): Promise<VoiceOfMLSidebarEntries | null>;
   fetchRepos(): Promise<VoiceOfMLFilterCount[] | null>;
-  publishRepos(repos: VoiceOfMLFilterCount[] | null): void;
   fetchContents(repo: string | null, path: string): Promise<VoiceOfMLSidebarEntries | null | undefined>;
   localContents(repo: string | null, path: string): Promise<VoiceOfMLSidebarEntries | null | undefined>;
   ensureLocal(force: boolean, silent: boolean): Promise<boolean>;

@@ -30,6 +30,7 @@ function fixture() {
   const records = [{File: 'one', Extension: 'txt'}, undefined, {File: 'three', Extension: 'pdf'}];
   const c = vm.createContext({DOM, STATE: {results: records, repo: 'Repo', query: 'one', searchFolders: true, mode: 'global'},
     resultInteractions: null, resultRows: null, selectedIndices: {}, lastSelectedIndex: -1, resultSnapshots: {cloneTask: null},
+    readerAssetController: {state: {assets: {}}},
     VSCROLL: {templateCache: new Map(), contentVersion: 7}, resultRowRecords: new WeakMap(),
     document: {createElement: () => node(), body: node(), hidden: false},
     window: {location: {hash: ''}}, history: {pushState(_a, _b, url) { navigated.push(url); }},
@@ -56,7 +57,7 @@ function fixture() {
     }, applySnapshotCloneHeights() { c.heightsApplied++; }, heightsApplied: 0,
   });
   for (const name of names) vm.runInContext(fs.readFileSync('static/' + name, 'utf8'), c);
-  installHost(c, ['getResultRows', 'getResultInteractions', 'setupResultDelegation', 'updateSelectionUI', 'updateVisibleSelection', 'getSelectedFiles']);
+  installHost(c, ['getResultRows', 'selectResultReaderAction', 'readerActionForRefresh', 'getResultInteractions', 'setupResultDelegation', 'updateSelectionUI', 'updateVisibleSelection', 'getSelectedFiles']);
   c.getResultInteractions().installSelection(); c.setupResultDelegation();
   async function click(host, target, shiftKey = false) {
     const event = {target, shiftKey, preventDefault() {}, stopPropagation() { this.stopped = true; }};
@@ -101,6 +102,38 @@ test('row clone identity, live hooks, escaping, cache LRU and placeholders retai
   c.VSCROLL.templateCache.clear(); c.VSCROLL.contentVersion++;
   assert.equal(rows.createRow(rec, 1).dataset.contentVersion, '8');
   assert.equal(rows.createRow(undefined, 999).placeholder, 999);
+});
+
+test('initial markup and asset refresh agree on the playable, native fallback and unavailable Reader actions', () => {
+  const {c} = fixture(), rows = c.getResultRows(), links = [];
+  const converted = {File: 'book', ReaderExtension: 'audio'};
+  c.VoiceOfMLReader.capability = extension => ({mode: extension === 'audio' ? 'audio' : 'text'});
+  c.isReadableRecord = rec => rec === converted;
+  c.isDefaultReadableRecord = rec => rec.Extension === 'txt';
+  c.getReaderLink = (...args) => { links.push(args); return 'reader.html'; };
+  for (const [extension, enriched, label] of [
+    ['bin', true, '在线播放'], ['txt', false, '在线阅读'], ['bin', false, ''],
+  ]) {
+    const original = {File: 'book', Extension: extension};
+    c.applyReaderAsset = (_rec, _repo, _path, link) => {
+      assert.equal(link, 'link:book');
+      return enriched ? converted : original;
+    };
+    const expected = enriched ? converted : label ? original : null;
+    links.length = 0;
+    const refreshed = c.readerActionForRefresh(original);
+    assert.equal(refreshed.record, expected);
+    assert.equal(refreshed.label, label);
+    assert.deepEqual(links, []); // Geometry checks must not build URLs.
+    const html = rows.buildHTML(original, 0);
+    if (label) {
+      assert.ok(html.includes(`data-action="read" data-reader-url="reader.html">${label}</button>`));
+      assert.deepEqual(links, [[expected, undefined, false]]);
+    } else {
+      assert.doesNotMatch(html, /data-action="read"/);
+      assert.deepEqual(links, []);
+    }
+  }
 });
 
 test('deep breadcrumb builds each escaped path prefix once without slicing folders', () => {

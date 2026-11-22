@@ -1045,20 +1045,34 @@ test("ledger restore filters records, tolerates storage failure and preserves ac
   assert.equal(fresh.uncertain.length, 0);
 });
 
-test("legacy launch scheduler preserves pacing, cancellation and recovery after throws", async () => {
-  let throwNext = false;
-  const f = fixture({triggerDownload(url) { if (throwNext) { throwNext = false; throw new Error("handoff"); } f.launches.push(url); }});
-  assert.equal(await f.controller.scheduleDownloadLaunch("cancelled", "a", () => true), false);
-  assert.equal(await f.controller.scheduleDownloadLaunch("first", "a", () => false), true);
-  let cancelled = false;
-  const delayed = f.controller.scheduleDownloadLaunch("cancelled", "b", () => cancelled);
+test("download handoffs preserve pacing, cancellation and recovery after throws", async () => {
+  const attempts = [];
+  const f = fixture({triggerDownload(url) {
+    attempts.push(url);
+    if (url === "throw|c") throw new Error("handoff");
+    f.launches.push(url);
+  }});
+  const {controller: c} = f;
+  const options = {skipCheck: true, quiet: true};
+  const cancelled = new AbortController();
+  cancelled.abort();
+  assert.equal(await c.downloadFileDetailed("cancelled", "a", {...options, batch: {abortController: cancelled}}), "cancelled");
+  assert.equal(await c.downloadFileDetailed("first", "a", options), "started");
+  const owner = new AbortController();
+  const delayed = c.downloadFileDetailed("cancelled", "b", {...options, batch: {abortController: owner}});
   await flush();
-  cancelled = true;
+  assert.deepEqual(attempts, ["first|a"]);
+  owner.abort();
   f.advance(300);
   f.fireDelay(300);
-  assert.equal(await delayed, false);
-  throwNext = true;
-  await assert.rejects(f.controller.scheduleDownloadLaunch("throw", "c", () => false), /handoff/);
-  assert.equal(await f.controller.scheduleDownloadLaunch("after", "d", () => false), true);
+  assert.equal(await delayed, "cancelled");
+  assert.equal(await c.downloadFileDetailed("throw", "c", options), "uncertain");
+  const next = c.downloadFileDetailed("after", "d", options);
+  await flush();
+  assert.deepEqual(attempts, ["first|a", "throw|c"]);
+  f.advance(300);
+  f.fireDelay(300);
+  assert.equal(await next, "started");
+  assert.deepEqual(attempts, ["first|a", "throw|c", "after|d"]);
   assert.deepEqual(f.launches, ["first|a", "after|d"]);
 });

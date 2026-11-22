@@ -54,7 +54,7 @@ export function isChapterSearchIndex(value) {
 }
 
 /** @param {unknown} value */
-export function chapterOptionalText(value) {
+function chapterOptionalText(value) {
   return typeof value === "string" ? value : "";
 }
 

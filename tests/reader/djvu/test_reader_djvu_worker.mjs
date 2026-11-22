@@ -515,10 +515,8 @@ for(const type of ['error','messageerror','cancel']) {
     await tick();
     const independent=pdf.getPage(3).then(page=>page.getTextContent());
     independent.catch(()=>{});
-    assert.equal(pdf.scheduler.stats().queued,3);
     stale.shell._renderCancel();shared.shell._renderCancel();
     await Promise.all([assert.rejects(stale.promise,{name:'AbortError'}),assert.rejects(shared.promise,{name:'AbortError'})]);
-    assert.equal(pdf.scheduler.stats().queued,2,'aborting the only render consumer must remove its queued read');
     const destination=render(5,3);
     await tick();
     assert.deepEqual(geometryReads(),[1],'a render abort must not interrupt the active worker command');

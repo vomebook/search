@@ -51,7 +51,7 @@ export default [
   } } },
   { files: ["static/**/*.mjs", "static/**/reader.js", "static/**/reader-pdf-text.js", "static/**/reader-book-text.js"],
     languageOptions: { sourceType: "module" } },
-  { files: ["static/**/tts-client.js"], languageOptions: { globals: { CCRDSpeechPlan: "readonly", openPreview: "readonly", showToast: "readonly" } } },
+  { files: ["static/**/tts-client.js"], languageOptions: { globals: { CCRDSpeechPlan: "readonly" } } },
   {
     files: ["{scripts,tests}/**/*.{js,mjs}"],
     languageOptions: { ecmaVersion: "latest", globals: { ...globals.node } },

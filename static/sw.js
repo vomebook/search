@@ -11,6 +11,7 @@ const PDF_SUPPORT_INTEGRITY = {}; // Pinned support files keep their public URLs
 /** @type {string[]} */
 const CURRENT_HASHED_ASSETS = []; // Filled by the static build.
 const currentAssetPaths = new Set(CURRENT_HASHED_ASSETS);
+const HASHED_ASSET_PATTERN = /\.[0-9a-f]{12}\.(?:js|mjs|css)$/;
 /** @type {Promise<void> | null} */
 let cachePruning = null;
 let cachePruningDirty = false;
@@ -60,9 +61,9 @@ function isRemovedReaderAsset(pathname) {
 }
 /** @param {string} pathname @returns {boolean} */
 function isRetiredAsset(pathname) {
-  if (currentAssetPaths.size && (isDjvuDecoderAsset(pathname) || isRuffleAsset(pathname))) return !currentAssetPaths.has(pathname);
   return currentAssetPaths.size > 0 &&
-    (/\.[0-9a-f]{12}\.(js|mjs|css)$/.test(pathname) || /^\/search\/static\/(?:(?:reader|search)\/[^?]+|[^/]+)\.(js|mjs|css)$/.test(pathname)) &&
+    (isDjvuDecoderAsset(pathname) || isRuffleAsset(pathname) || HASHED_ASSET_PATTERN.test(pathname) ||
+      /^\/search\/static\/(?:(?:reader|search)\/[^?]+|[^/]+)\.(js|mjs|css)$/.test(pathname)) &&
     !currentAssetPaths.has(pathname);
 }
 // Retain a bounded history of serving generations for older open clients.
@@ -70,7 +71,7 @@ function isRetiredAsset(pathname) {
 const RETAINED_GENERATIONS = 3;
 const METADATA_CACHE = CACHE_PREFIX + "metadata";
 const ACTIVE_KEY = "/search/.sw-active-generation";
-/** @typedef {{ active: string, previous: string | null, history: string[] }} GenerationState */
+/** @typedef {{ active: string, history: string[] }} GenerationState */
 /** @param {unknown} name @returns {name is string} */
 function isGenerationName(name) {
   return typeof name === "string" && name.startsWith(CACHE_PREFIX) && name !== METADATA_CACHE;
@@ -83,8 +84,9 @@ async function activeGeneration() {
     const state = await response.json();
     if (!state || !isGenerationName(state.active)) return null;
     const history = Array.isArray(state.history) ? state.history.filter(isGenerationName) : [];
+    // Older stored metadata may have only the previous pointer.
     if (isGenerationName(state.previous)) history.unshift(state.previous);
-    return { active: state.active, previous: isGenerationName(state.previous) ? state.previous : null,
+    return { active: state.active,
       history: [...new Set(history)].filter(name => name !== state.active).slice(0, RETAINED_GENERATIONS) };
   } catch (_) { return null; }
 }
@@ -92,7 +94,7 @@ async function activeGeneration() {
 function isImmutableURL(url) {
   return url.origin === self.location.origin && !url.searchParams.has("sw-retained-generation") && url.pathname.startsWith("/search/static/") &&
     !isRemovedReaderAsset(url.pathname) &&
-    (/\.[0-9a-f]{12}\.(?:js|mjs|css)$/.test(url.pathname) || isDjvuDecoderAsset(url.href) || isRuffleAsset(url.href));
+    (HASHED_ASSET_PATTERN.test(url.pathname) || isDjvuDecoderAsset(url.href) || isRuffleAsset(url.href));
 }
 /** @param {URL} url @returns {Promise<Response | undefined>} */
 async function previousAsset(url) {
@@ -165,7 +167,7 @@ function pruneHashedAssets(cache) {
 /** @param {Request | string} request @returns {Request | string} */
 function revalidatedRequest(request) {
   const url = typeof request === "string" ? request : request.url;
-  if (/\.[0-9a-f]{12}\.(?:js|mjs|css)$/.test(url) || isDjvuDecoderAsset(url) || isRuffleAsset(url) || typeof Request !== "function") return request;
+  if (HASHED_ASSET_PATTERN.test(url) || isDjvuDecoderAsset(url) || isRuffleAsset(url) || typeof Request !== "function") return request;
   // Pin both installation and background refresh: a concurrent deploy must
   // not put HTML that references a different graph into this generation.
   if (READER_SHELL_INTEGRITY !== "development" && new URL(url, self.location.origin).pathname === "/search/static/reader.html") {
@@ -259,13 +261,11 @@ const PRECACHE_URLS = [
   "/search/icons/icon-512.png"
 ];
 const READER_RUNTIME_PATHS = new Set(VoiceOfMLReaderResources.runtimePaths("/search/static/"));
-const readerPrecacheResources = /** @type {{shellAssets(base: string): string[], readerComponentFiles: readonly string[]}} */
-  (/** @type {unknown} */ (VoiceOfMLReaderResources));
-const READER_SHELL_ASSETS = readerPrecacheResources.shellAssets("/search/static/");
+const READER_SHELL_ASSETS = VoiceOfMLReaderResources.shellAssets("/search/static/");
 if (READER_SHELL_INTEGRITY === "development") {
   // The production Reader entry bundles these static imports.
   READER_SHELL_ASSETS.push("/search/static/reader/reader-components.mjs",
-    ...readerPrecacheResources.readerComponentFiles.map(file => "/search/static/" + file));
+    ...VoiceOfMLReaderResources.readerComponentFiles.map(file => "/search/static/" + file));
 }
 for (const url of READER_SHELL_ASSETS) if (!PRECACHE_URLS.includes(url)) PRECACHE_URLS.push(url);
 // Keep the chapter search graph across updates without warming or importing
@@ -349,7 +349,7 @@ readerWorkerScope.addEventListener("fetch", (event) => {
   const generatedData = url.pathname.startsWith("/search/data/");
   const networkFirst = !readerShell && (searchNavigation || generatedData || READER_RUNTIME_PATHS.has(url.pathname));
   const cacheKey = readerShell ? "/search/static/reader.html" : searchNavigation ? "/search/" : event.request;
-  const immutable = /\.[0-9a-f]{12}\.(?:js|mjs|css)$/.test(url.pathname) || isDjvuDecoderAsset(url.href) || isRuffleAsset(url.href);
+  const immutable = HASHED_ASSET_PATTERN.test(url.pathname) || isDjvuDecoderAsset(url.href) || isRuffleAsset(url.href);
   // Assign order before any asynchronous work, using the actual normalized key.
   const mutableKey = new URL(typeof cacheKey === "string" ? cacheKey : cacheKey.url, self.location.origin).href;
   // Online navigations may see the next release before its worker activates.
@@ -370,7 +370,7 @@ readerWorkerScope.addEventListener("fetch", (event) => {
     const cached = cache ? await cache.match(cacheKey, { ignoreVary: immutable }) : undefined;
     if (cached || !immutable) return cached;
     const previous = await previousAsset(url);
-    if (cache && previous && previous.ok && previous.status !== 206) {
+    if (cache && previous) {
       // Promote only requested current assets so the next release can retain
       // them. The event lifetime covers persistence without delaying delivery.
       cacheWrite = cache.put(cacheKey, previous.clone()).then(() => pruneHashedAssets(cache)).catch(() => {});

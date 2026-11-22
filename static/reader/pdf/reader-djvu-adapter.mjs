@@ -246,7 +246,6 @@ export async function openDjvuDocument({ workerUrl, bytes, pageMap, signal, cach
       getOutline, getPageIndex:async (/** @type {number} */ page)=>page-1,
       outlineNeedsFullSource:worker.outlineNeedsFullSource,
       readerRenderScaleLimit: Infinity, readerMaxCanvasPixels: 16_000_000,
-      destroy(){if(!closed){closed=true;geometries.clear();scheduler.close();}},
-      scheduler};
+      destroy(){if(!closed){closed=true;geometries.clear();scheduler.close();}}};
   } catch(error) {worker.close();throw error;}
 }

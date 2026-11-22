@@ -23,7 +23,6 @@ interface VoiceOfMLSearchTransportDependencies {
 }
 interface VoiceOfMLSearchTransport {
   pending: Map<string, VoiceOfMLSearchRequestEntry>;
-  createRequest(key: string, url: string, body: VoiceOfMLSearchRequestBody, timeout: number): VoiceOfMLSearchRequestEntry;
   fetchPage(key: string, url: string, body: VoiceOfMLSearchRequestBody, signal: AbortSignal | null | undefined, timeout: number): Promise<unknown>;
   expire(): void;
 }
@@ -479,9 +478,6 @@ interface DownloadControllerApi {
     downloadCheckQueue: unknown[];
     pendingDownloads: Map<string, unknown>;
     checkDownload(link: string, speculative?: boolean, signal?: AbortSignal): Promise<unknown>;
-    runDownloadCheck(item: {link: string; entry: {users: number; controller: AbortController; promise: Promise<unknown>; expires: number}; resolve(value: unknown): void}): Promise<void>;
-    pumpDownloadChecks(): void;
-    scheduleDownloadLaunch(filename: string, link: string, cancelled: () => boolean): Promise<boolean>;
     downloadFile(filename: string, link: string, options?: {button?: HTMLElement; quiet?: boolean; skipCheck?: boolean; batch?: {cancelled?: boolean; abortController?: AbortController}}): Promise<boolean>;
     downloadFileDetailed(filename: string, link: string, options?: {button?: HTMLElement; quiet?: boolean; skipCheck?: boolean; batch?: {cancelled?: boolean; abortController?: AbortController}}): Promise<"started" | "failed" | "uncertain" | "cancelled">;
     readonly activeDownloadChecks: number;
@@ -534,7 +530,6 @@ declare var CCRDSpeechPlan: {
   partIndex(...args: any[]): number;
   previousSentence(...args: any[]): number;
 };
-declare function openPreview(id: string, query: string, options: {scroll: boolean}): Promise<unknown>;
 declare function showToast(message: string): void;
 
 interface Math { sumPrecise(values: Iterable<number>): number }

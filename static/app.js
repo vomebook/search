@@ -1179,7 +1179,6 @@ const STATE = {
   hasMore: false,
   browserPath: "",
   extensionList: [],
-  extensionOtherCollapsed: true,
   folderTree: null,
   folderTreeCollapsed: {},
   searchFolders: true,
@@ -2990,7 +2989,6 @@ function doSearch(append, fromStart = false, restorePosition = false, allowFallb
   if (!append && prepareSearchPositionNavigation({ fromStart, restorePosition })) return;
   if (owner !== searchId) return;
   if (append && STATE.isLoading) return;
-  if (append && !STATE._loadedPage) append = false;
   if (!append) STATE.page = 1;
   if (filterSearchTimer !== null) clearTimeout(filterSearchTimer);
   filterSearchTimer = null;
@@ -3152,12 +3150,8 @@ function getResultRows() {
     getRecordPath: record => getRecordPath(record), getPreviewLink: path => getPreviewLink(path), icons: ICONS,
     readerAction(rec, recordLink) {
       const readerRecord = applyReaderAsset(rec, rec.Repo || "", buildRecordRelativePath(rec), recordLink);
-      const record = isReadableRecord(readerRecord) ? readerRecord : (isDefaultReadableRecord(rec) ? rec : null);
-      const readerMode = record ? VoiceOfMLReader.capability(record.ReaderExtension || record.Extension).mode : null;
-      return {
-        url: record ? getReaderLink(record, undefined, false) : "",
-        label: record && readerMode && ["audio", "video", "swf"].includes(readerMode) ? "在线播放" : "在线阅读",
-      };
+      const { record, label } = selectResultReaderAction(rec, readerRecord);
+      return { url: record ? getReaderLink(record, undefined, false) : "", label };
     },
     templates: VSCROLL.templateCache,
     contentVersion: () => VSCROLL.contentVersion,
@@ -3170,6 +3164,14 @@ function getResultRows() {
   return resultRows;
 }
 
+/** @param {PagesSearchRecord} original @param {PagesSearchRecord} readerRecord */
+function selectResultReaderAction(original, readerRecord) {
+  const record = isReadableRecord(readerRecord) ? readerRecord : (isDefaultReadableRecord(original) ? original : null);
+  if (!record) return { record, label: "" };
+  const mode = VoiceOfMLReader.capability(record.ReaderExtension || record.Extension).mode;
+  return { record, label: ["audio", "video", "swf"].includes(mode || "") ? "在线播放" : "在线阅读" };
+}
+
 /** @type {ReaderAssetMap | null} */
 let refreshedReaderAssets = null;
 /** @param {PagesSearchRecord} record @param {ReaderAssetMap | null} [assets] */
@@ -3180,10 +3182,7 @@ function readerActionForRefresh(record, assets = readerAssetController.state.ass
   const readerRecord = assets === readerAssetController.state.assets
     ? applyReaderAsset(record, record.Repo || "", buildRecordRelativePath(record), getRecordLink(record))
     : (fields ? Object.assign({}, record, fields, { DownloadLink: getRecordLink(record) }) : record);
-  const actionRecord = isReadableRecord(readerRecord) ? readerRecord : (isDefaultReadableRecord(record) ? record : null);
-  const readerMode = actionRecord ? VoiceOfMLReader.capability(actionRecord.ReaderExtension || actionRecord.Extension).mode : null;
-  const label = actionRecord ? (readerMode && ["audio", "video", "swf"].includes(readerMode) ? "在线播放" : "在线阅读") : "";
-  return { record: actionRecord, label };
+  return selectResultReaderAction(record, readerRecord);
 }
 
 function refreshResultReaderActions() {
@@ -3495,13 +3494,13 @@ function getSidebarDirectory() {
   return sidebarDirectory || (sidebarDirectory = VoiceOfMLSidebarDirectory.create({
     readView: () => ({mode: STATE.mode, repo: STATE.repo, repoFull: STATE.repoFull,
       browserPath: STATE.browserPath, routeId: routeRenderId, repos: repoList,
-      apiAvailable: apiAvailable, useLocalMode: STATE.useLocalMode, dataLoaded: STATE.dataLoaded, tree: STATE.folderTree}),
+      apiAvailable: apiAvailable, useLocalMode: STATE.useLocalMode, dataLoaded: STATE.dataLoaded}),
     view: getSidebarDirectoryView(), scroll: getSidebarScroll(),
     renderRepos: repos => renderRepoListItems(repos), updateHeader: () => updateSidebarHeader(),
     initial: repo => loadSidebarInitial(repo), fetchRepos: () => fetchRepos(),
     fetchContents: (repo, path) => fetchFolderContents(repo, path),
     localContents: (repo, path) => getFolderContents(repo, path), ensureLocal: (force, silent) => ensureLocalDataLoaded(force, silent),
-    cache: folderContentsCache, publishRepos: repos => { if (repos) repoList = repos; },
+    cache: folderContentsCache,
     refreshAssets: refreshSidebarReaderAssets,
   }));
 }
@@ -3578,7 +3577,7 @@ function getSidebarFilters() {
   });
   sidebarFilters = VoiceOfMLSidebarFilters.create({
     readView: () => ({ mode: STATE.mode, repo: STATE.repo, repoFull: STATE.repoFull, routeId: routeRenderId,
-      repos: repoList || [], extensions: [], selectedRepos: STATE.filterRepos,
+      repos: repoList || [], selectedRepos: STATE.filterRepos,
       selectedExtensions: STATE.filterExtensions, tree: STATE.folderTree || [],
       apiAvailable: apiAvailable, dataLoaded: STATE.dataLoaded }),
     elements: {repoSection: DOM.filterRepoSection, repoList: DOM.filterRepoList,
@@ -3591,7 +3590,6 @@ function getSidebarFilters() {
     localFolders: repo => /** @type {Promise<{tree?: VoiceOfMLFilterFolder[]} | null>} */ (corpusWorkerRequest("folder-tree", {repo}, WORKER_REQUEST_TIMEOUT)),
     hasExtensionCounts: () => !!(extensionList && extensionList.length),
     extensionCounts: repo => repo ? Object.fromEntries((repoExtensionCounts[repo] || []).map(item => [item.name, item.count || 0])) : extensionCounts,
-    publishRepos: repos => { repoList = repos; },
     publishExtensions: extensions => { STATE.extensionList = extensions.map(item => item.name); },
     publishTree: (tree, resetCollapsed = false) => {
       STATE.folderTree = tree;
@@ -3613,6 +3611,17 @@ function retainFilterRenderingForRoute(routeId) { return getSidebarFilters().ret
 function renderRepoFilter(routeId) { return getSidebarFilters().renderRepos(routeId); }
 /** @param {number} [routeId] */
 function renderExtensionFilter(routeId) { return getSidebarFilters().renderExtensions(routeId); }
+function setupExtensionBulkSelection() {
+  /** @param {boolean} invert */
+  const apply = invert => {
+    STATE.filterExtensions = VoiceOfMLSidebarFilters.bulkExtensions(STATE.extensionList, STATE.filterExtensions, invert);
+    saveStoredExtensionFilters();
+    renderExtensionFilter(routeRenderId);
+    scheduleFilterSearch();
+  };
+  DOM.extSelectAll.addEventListener("click", () => apply(false));
+  DOM.extDeselectAll.addEventListener("click", () => apply(true));
+}
 function refreshFilterFolderSelectionState() { getSidebarFilters(); sidebarFolderTree?.refresh(); }
 /** @param {boolean} collapsed */
 function setAllFoldersCollapsed(collapsed) { getSidebarFilters(); sidebarFolderTree?.setAllCollapsed(collapsed); }
@@ -4256,22 +4265,7 @@ async function init() {
   if (DOM.randomTxtBtn) DOM.randomTxtBtn.addEventListener("click", randomTxt);
   DOM.emptyRandomBtn.addEventListener("click", randomTxt);
   setupSizeFilterControls();
-  DOM.extSelectAll.addEventListener("click", function() {
-    var allExtensions = STATE.extensionList.slice();
-    var selected = new Set(STATE.filterExtensions);
-    STATE.filterExtensions = allExtensions.length > 0 && allExtensions.every(function(extension) { return selected.has(extension); }) ? [] : allExtensions;
-    saveStoredExtensionFilters();
-    renderExtensionFilter(routeRenderId);
-    scheduleFilterSearch();
-  });
-  DOM.extDeselectAll.addEventListener("click", function() {
-    var allExtNames = STATE.extensionList.slice();
-    var currentSet = new Set(STATE.filterExtensions);
-    STATE.filterExtensions = allExtNames.filter(function(e) { return !currentSet.has(e); });
-    saveStoredExtensionFilters();
-    renderExtensionFilter(routeRenderId);
-    scheduleFilterSearch();
-  });
+  setupExtensionBulkSelection();
   if (DOM.folderToggleAll) DOM.folderToggleAll.addEventListener("click", () =>
     setAllFoldersCollapsed(DOM.folderToggleAll.getAttribute("aria-expanded") === "true"));
   DOM.folderSelectAll.addEventListener("click", () => { getSidebarFilters(); sidebarFolderTree?.selectAll(); });

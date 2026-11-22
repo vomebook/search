@@ -1,7 +1,7 @@
 """Small, deterministic metadata catalog; no source-body downloads or search changes.
 
-The same file is copied to Pages' scripts/build/seo.py. Pages owns the indexable
-catalog; new HF catalog pages are noindex mirrors because HF appends a Hub canonical.
+Pages owns the indexable catalog. The catalog policy also describes noindex
+mirrors for HF, which adds its own canonical.
 """
 from __future__ import annotations
 
@@ -83,23 +83,6 @@ def metadata(title: str, description: str, url: str, *, canonical: bool, noindex
                        ("twitter:image:alt", "VoiceOfML 文库")]:
         values.append(f'<meta name="{key}" content="{escape(value, quote=True)}">')
     return "\n".join(values)
-
-
-def enrich_search_shell(html: str, repo: str | None = None, count: int | None = None) -> str:
-    """HF-only: retain the platform's single HTTP canonical, never add a rival."""
-    title = "VoiceOfML Search"
-    description = (f"检索 {repo} 的 {count:,} 条资料记录，按文件名、路径和格式查找，在线阅读或下载。"
-                   if repo and count is not None else DESCRIPTION)
-    url = HF + (quote(repo.split("/")[-1], safe="") + "/" if repo else "")
-    start, end = "<!-- SEO:HEAD -->", "<!-- /SEO:HEAD -->"
-    if start in html and end in html:
-        head = metadata(title, description, url, canonical=False)
-        head += '\n<script type="application/ld+json">' + json_script({
-            "@context": "https://schema.org", "@type": "WebSite", "name": "VoiceOfML",
-            "url": HF, "description": DESCRIPTION, "inLanguage": "zh-CN",
-        }) + '</script>'
-        html = html.split(start, 1)[0] + start + "\n" + head + "\n" + end + html.split(end, 1)[1]
-    return html
 
 
 def decode_corpus(payload: object) -> list[CatalogRecord]:

@@ -12,7 +12,7 @@ interface VoiceOfMLSearchHistoryDependencies {
 }
 declare var VoiceOfMLSearchHistoryStore: {create(storage: () => Storage): VoiceOfMLSearchHistoryStorePort};
 declare var VoiceOfMLSearchHistory: {create(deps: VoiceOfMLSearchHistoryDependencies): {
-  addHistoryItem(query: string): void; removeHistoryItem(query: string): void;
+  addHistoryItem(query: string): void;
   renderDropdown(): void; hideSearchHistory(restoreFocus?: boolean): void; setupSearchHistory(): void;
 }};
 interface VoiceOfMLQuotationState {

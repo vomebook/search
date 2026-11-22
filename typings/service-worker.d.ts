@@ -1,2 +1,5 @@
-declare var VoiceOfMLReaderResources: { runtimePaths(base: string): string[] };
-interface WorkerNavigator { readonly deviceMemory?: number }
+declare var VoiceOfMLReaderResources: {
+  runtimePaths(base: string): string[];
+  shellAssets(base: string): string[];
+  readonly readerComponentFiles: readonly string[];
+};

@@ -42,7 +42,7 @@ const required = [
   "uncertain feedback belongs to each live non-quiet shared subscriber",
   "single uncertain handoff is retained and a later batch failure is visible but not retried",
   "all batch workers recheck uncertainty when consuming queued items",
-  "legacy launch scheduler preserves pacing, cancellation and recovery after throws",
+  "download handoffs preserve pacing, cancellation and recovery after throws",
   "batch owns two quiet workers, deduplicates in order and cancels queued work",
   "cancelled batch retries only the retained subset, never started items",
   "ledger restore filters records, tolerates storage failure and preserves acknowledgement order"

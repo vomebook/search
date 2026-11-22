@@ -94,4 +94,26 @@ assert.deepEqual(await retry, layer);
 assert.deepEqual(await reader.loadPdfOcrPage(1), layer);
 assert.deepEqual(requests, [index.path, partition.path, ...Array(4).fill(page.path)]);
 reader.pdfTextLayerRepository.dispose();
+
+// Exercise the OCR cache with both record shapes, separately from transport.
+reader.pdfOcrPageCache.clear();
+reader.pdfOcrPageCacheBytes = 0;
+const legacy = {kind: 'pdf-ocr-page', blocks: [{t: 'legacy'}]};
+const legacyBytes = reader.estimatePdfOcrPageBytes(legacy);
+const layerBytes = reader.estimatePdfOcrPageBytes(layer);
+reader.PDF_OCR_PAGE_CACHE_BYTES = layerBytes + legacyBytes;
+reader.cachePdfOcrPage(1, layer);
+reader.cachePdfOcrPage(2, legacy);
+assert.strictEqual(reader.cachedPdfOcrPage(1), layer);
+reader.cachePdfOcrPage(3, legacy);
+assert.deepEqual([...reader.pdfOcrPageCache.keys()], [1, 3]);
+assert.equal(reader.cachedPdfOcrPage(2), null);
+assert.equal(reader.pdfOcrPageCacheBytes, layerBytes + legacyBytes);
+reader.cachePdfOcrPage(1, {...layer, text: 'x'.repeat(layerBytes)});
+assert.deepEqual([...reader.pdfOcrPageCache.keys()], [1, 3]);
+assert.strictEqual(reader.pdfOcrPageCache.get(1).payload, layer);
+assert.equal(reader.pdfOcrPageCacheBytes, layerBytes + legacyBytes);
+reader.cachePdfOcrPage(1, legacy);
+assert.deepEqual([...reader.pdfOcrPageCache.keys()], [3, 1]);
+assert.equal(reader.pdfOcrPageCacheBytes, 2 * legacyBytes);
 console.log('Independent OCR text, accepted corrections and SHA-256 checks remain available', root);

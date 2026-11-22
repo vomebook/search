@@ -1004,6 +1004,29 @@ for (const [site, workerSource, prefix] of [
     assert.strictEqual(third.stores.get(cacheName(thirdSource)).get(url).body, 'unchanged bytes');
     assert.deepStrictEqual(third.operations.fetch, []);
   });
+  test(`${site} retained fallback skips partial and non-ok responses before promotion`, async () => {
+    const path = prefix + 'reader/unchanged.111111111111.mjs';
+    const url = 'https://example.test' + path;
+    const configured = workerSource.replace('const CURRENT_HASHED_ASSETS = []',
+      'const CURRENT_HASHED_ASSETS = ' + JSON.stringify([path]));
+    const current = cacheName(configured);
+    const names = ['partial', 'failed', 'complete'].map(version => current.replace('development', version));
+    // Recovery visits caches newest first, so the invalid entries precede the complete one.
+    const instance = harness({source: configured, oldCaches: [...names].reverse(),
+      fetch: () => Promise.reject(new Error('offline'))});
+    await lifecycle(instance.listeners.install);
+    await lifecycle(instance.listeners.activate);
+    instance.stores.get(names[0]).set(url, response('partial', {status: 206}));
+    instance.stores.get(names[1]).set(url, response('failed', {ok: false, status: 404}));
+    await assert.rejects(dispatchFetch(instance, url), /Network unavailable/);
+    await Promise.all(instance.operations.lifetimes);
+    assert.ok(!instance.stores.get(current).has(url), 'invalid retained responses are not promoted');
+    instance.stores.get(names[2]).set(url, response('complete'));
+    assert.strictEqual((await dispatchFetch(instance, url)).body, 'complete');
+    await Promise.all(instance.operations.lifetimes);
+    assert.strictEqual(instance.stores.get(current).get(url).body, 'complete');
+    assert.deepStrictEqual(instance.operations.fetch, [url]);
+  });
   test(`${site} immutable promotion does not block delivery and stays in the event lifetime`, async () => {
     const path = prefix + 'reader/unchanged.111111111111.mjs';
     const url = 'https://example.test' + path;

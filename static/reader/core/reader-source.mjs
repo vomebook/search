@@ -23,7 +23,6 @@
  * @property {string} extension
  * @property {(state: {title: string}) => void} updateDocumentState
  * @property {() => boolean} isReaderOverlayFrame
- * @property {(data: ReaderMetadata | null) => void} applyReaderPathMetadata
  * @property {string} readerPathLabel
  * @property {URL | null} folderNavigationTarget
  * @property {string} folderReturnUrl
@@ -215,7 +214,7 @@ export function createReaderSource(readerContext) {
     document.title = displayName;
     if (readerContext.isReaderOverlayFrame())
       window.parent.postMessage({ type: "voice-reader-title", title: document.title }, location.origin);
-    readerContext.applyReaderPathMetadata(readerContext.resolvedReaderData);
+    applyReaderPathMetadata(readerContext.resolvedReaderData);
   }
 
   /** @param {string | null | undefined} rawUrl */
@@ -426,7 +425,6 @@ export function createReaderSource(readerContext) {
     resolveReaderId,
     applyReaderMetadata,
     normalizeReaderReturnUrl,
-    applyReaderPathMetadata,
     validSource,
     readerAssetObjectFamily,
     trustedReaderAssetManifestUrl,

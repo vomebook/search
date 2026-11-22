@@ -11,7 +11,7 @@ const local = value => JSON.parse(JSON.stringify(value));
 function fixture(data, selected = []) {
   const changes = [];
   const state = {mode: 'global', repo: '', repoFull: '', filterExtensions: selected.slice(),
-    extensionList: data, extensionOtherCollapsed: true};
+    extensionList: data};
   const container = {innerHTML: ''};
   const c = vm.createContext({STATE: state, DOM: {filterExtList: container}, extensionFilterRenderId: 0,
     routeRenderId: 7, extensionList: [], extensionCounts: {}, repoExtensionCounts: {}, apiAvailable: true,
@@ -27,7 +27,7 @@ function fixture(data, selected = []) {
   const controller = c.VoiceOfMLSidebarFilters.create({
     readView: () => ({mode: state.mode, repo: state.repo, repoFull: state.repoFull,
       routeId: c.routeRenderId, selectedExtensions: state.filterExtensions,
-      extensions: state.extensionList, apiAvailable: c.apiAvailable}),
+      apiAvailable: c.apiAvailable}),
     elements: {extList: container}, lists: {renderExtensionTree: c.renderExtensionTree},
     orderedExtensions: c.VoiceOfMLSearchFileTypes.orderedExtensions,
     hasExtensionCounts: () => false, fetchExtensions: () => c.fetchExtensions(),
@@ -51,6 +51,7 @@ test('known order, unknown grouping, selected-only entries and change callbacks'
   assert.deepEqual(f.c.capture.rest, [{name: 'z', count: 3}, {name: 'PDF', count: 5}, {name: 'z9', count: 0}]);
   assert.deepEqual(f.c.capture.selected, ['md', 'z9']);
   assert.equal(data.length, 9);
+  assert.deepEqual(local(f.state.extensionList), ['z', 'pdf', 'aac', 'PDF', 'txt']);
   f.c.capture.callback(['pdf', 'z']);
   assert.deepEqual(local(f.state.filterExtensions), ['pdf', 'z']);
   assert.deepEqual(f.changes, ['save', 'buttons', 'search']);
@@ -61,6 +62,29 @@ test('empty input follows each original rendering path', async () => {
   await f.run();
   assert.deepEqual(f.c.capture.items, []);
   assert.deepEqual(f.c.capture.rest, []);
+});
+
+test('bulk controls preserve inventory order, selection semantics and side-effect order', () => {
+  const f = fixture([]);
+  const inventory = ['txt', 'pdf', 'txt'];
+  f.state.extensionList = inventory;
+  f.state.filterExtensions = ['pdf', 'selected-only'];
+  const click = {};
+  for (const key of ['extSelectAll', 'extDeselectAll']) {
+    f.c.DOM[key] = {addEventListener(_name, handler) { click[key] = handler; }};
+  }
+  f.c.renderExtensionFilter = route => { assert.equal(route, 7); f.changes.push('render'); };
+  const setup = source.match(/^function setupExtensionBulkSelection\(\) \{[^]*?^}/m);
+  assert.ok(setup);
+  vm.runInContext(setup[0] + '\nsetupExtensionBulkSelection();', f.c);
+  click.extDeselectAll();
+  assert.deepEqual(local(f.state.filterExtensions), ['txt', 'txt']);
+  click.extSelectAll();
+  assert.deepEqual(local(f.state.filterExtensions), inventory);
+  assert.notEqual(f.state.filterExtensions, inventory);
+  click.extSelectAll();
+  assert.deepEqual(local(f.state.filterExtensions), []);
+  assert.deepEqual(f.changes, ['save', 'render', 'search', 'save', 'render', 'search', 'save', 'render', 'search']);
 });
 
 test('duplicate known items and zero counts retain original ordering', async () => {

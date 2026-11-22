@@ -2970,8 +2970,8 @@ class ReaderRefactorTest(unittest.TestCase):
     def test_pending_text_result_cannot_highlight_after_new_search(self):
         def hold_activation(route):
             response = route.fetch()
-            needle = ("let currentNodes = await fullSearchTextNodes("
-                      "root, searchGeneration, end, checkpoint, collectMatch, respectBlocks);")
+            needle = ("let collected = await fullSearchTextNodes("
+                      "root, searchGeneration, end, checkpoint, collectMatch);")
             script = response.text()
             self.assertIn(needle, script)
             route.fulfill(response=response, body=script.replace(needle,
@@ -3052,13 +3052,10 @@ class ReaderRefactorTest(unittest.TestCase):
               window.__headingOracle = async entries => {
                 const root = htmlFrame.contentDocument.body;
                 setToc(entries.map(entry => ({label:entry.label, target:root.querySelector(entry.selector)})));
-                const nodes = await window.__domSearchTools.textNodes(root, readerRuntime.currentGeneration('search'));
-                let length = 0;
-                const offsets = nodes.map(node => {
-                  const part = {node, start:length, end:length + node.data.length};
-                  length = part.end;
-                  return part;
-                });
+                const offsets = [];
+                await window.__domSearchTools.textNodes(root, readerRuntime.currentGeneration('search'), Infinity, null,
+                  (node, start, end) => offsets.push({node, start, end}));
+                const length = offsets.at(-1)?.end || 0;
                 const lookup = window.__domSearchTools.headingLookup(root, offsets);
                 const compare = () => offsets.map(part => {
                   const heading = [...navigationState.tocEntries].reverse().find(entry => entry.target &&

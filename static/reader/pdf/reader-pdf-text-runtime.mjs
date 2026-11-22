@@ -1,3 +1,31 @@
+/** @template T @param {Map<number, T>} cache @param {number} page */
+function touchPageCache(cache, page) {
+  const record = cache.get(page);
+  if (record !== undefined) {
+    cache.delete(page);
+    cache.set(page, record);
+  }
+  return record;
+}
+
+/** @template {{bytes: number}} T @param {Map<number, T>} cache @param {number} page
+ * @param {T} record @param {number} total @param {number} limit */
+function storePageCache(cache, page, record, total, limit) {
+  // An oversized result must not evict valid cached pages, including its own.
+  if (record.bytes > limit) return total;
+  total += record.bytes - (cache.get(page)?.bytes ?? 0);
+  cache.delete(page);
+  cache.set(page, record);
+  if (total > limit) {
+    for (const [oldest, entry] of cache) {
+      total -= entry.bytes;
+      cache.delete(oldest);
+      if (total <= limit) break;
+    }
+  }
+  return total;
+}
+
 /** @param {import('../../../typings/reader-pdf-text-runtime-strict').Context} readerContext */
 export function createReaderPdfTextRuntime(readerContext) {
   // Remounts and visibility changes must not spin on a failed OCR object.
@@ -164,35 +192,21 @@ export function createReaderPdfTextRuntime(readerContext) {
 
   /** @param {number} page @param {import('../../../typings/reader-pdf-text-runtime-strict').TextContent} content */
   function cachePdfTextContent(page, content) {
-    const previous = readerContext.pdfTextContentCache.get(page);
+    const cache = readerContext.pdfTextContentCache;
     // Render may re-touch the same read-only extraction result. Keep its LRU
     // refresh, but only reuse the accounting if that exact result is resident.
-    if (previous && previous.content === content) {
-      readerContext.pdfTextContentCache.delete(page);
-      readerContext.pdfTextContentCache.set(page, previous);
+    if (cache.get(page)?.content === content) {
+      touchPageCache(cache, page);
       return;
     }
     const bytes = readerContext.estimatePdfTextContentBytes(content);
-    if (bytes > readerContext.PDF_TEXT_CONTENT_CACHE_BYTES) return;
-    if (previous) readerContext.pdfTextContentCacheBytes -= previous.bytes;
-    readerContext.pdfTextContentCache.delete(page);
-    readerContext.pdfTextContentCache.set(page, { content, bytes });
-    readerContext.pdfTextContentCacheBytes += bytes;
-    while (readerContext.pdfTextContentCacheBytes > readerContext.PDF_TEXT_CONTENT_CACHE_BYTES) {
-      const oldest = /** @type {number} */ (readerContext.pdfTextContentCache.keys().next().value);
-      const removed = /** @type {{content: import('../../../typings/reader-pdf-text-runtime-strict').TextContent; bytes: number}} */ (readerContext.pdfTextContentCache.get(oldest));
-      readerContext.pdfTextContentCacheBytes -= removed.bytes;
-      readerContext.pdfTextContentCache.delete(oldest);
-    }
+    readerContext.pdfTextContentCacheBytes = storePageCache(cache, page, { content, bytes },
+      readerContext.pdfTextContentCacheBytes, readerContext.PDF_TEXT_CONTENT_CACHE_BYTES);
   }
 
   /** @param {number} page */
   function cachedPdfTextContent(page) {
-    const record = readerContext.pdfTextContentCache.get(page);
-    if (!record) return null;
-    readerContext.pdfTextContentCache.delete(page);
-    readerContext.pdfTextContentCache.set(page, record);
-    return record.content;
+    return touchPageCache(readerContext.pdfTextContentCache, page)?.content ?? null;
   }
 
   /** @param {number} page @param {import('../../../typings/reader-pdf-text-runtime-strict').PdfPage} pdfPage @param {number | null} [generation] */
@@ -245,27 +259,13 @@ export function createReaderPdfTextRuntime(readerContext) {
   /** @param {number} page @param {import('../../../typings/reader-pdf-text-runtime-strict').OcrPayload} payload */
   function cachePdfOcrPage(page, payload) {
     const bytes = readerContext.estimatePdfOcrPageBytes(payload);
-    if (bytes > readerContext.PDF_OCR_PAGE_CACHE_BYTES) return;
-    const previous = readerContext.pdfOcrPageCache.get(page);
-    if (previous) readerContext.pdfOcrPageCacheBytes -= previous.bytes;
-    readerContext.pdfOcrPageCache.delete(page);
-    readerContext.pdfOcrPageCache.set(page, { payload, bytes });
-    readerContext.pdfOcrPageCacheBytes += bytes;
-    while (readerContext.pdfOcrPageCacheBytes > readerContext.PDF_OCR_PAGE_CACHE_BYTES) {
-      const oldest = /** @type {number} */ (readerContext.pdfOcrPageCache.keys().next().value);
-      const removed = /** @type {{payload: import('../../../typings/reader-pdf-text-runtime-strict').OcrPayload; bytes: number}} */ (readerContext.pdfOcrPageCache.get(oldest));
-      readerContext.pdfOcrPageCacheBytes -= removed.bytes;
-      readerContext.pdfOcrPageCache.delete(oldest);
-    }
+    readerContext.pdfOcrPageCacheBytes = storePageCache(readerContext.pdfOcrPageCache, page, { payload, bytes },
+      readerContext.pdfOcrPageCacheBytes, readerContext.PDF_OCR_PAGE_CACHE_BYTES);
   }
 
   /** @param {number} page */
   function cachedPdfOcrPage(page) {
-    const record = readerContext.pdfOcrPageCache.get(page);
-    if (!record) return null;
-    readerContext.pdfOcrPageCache.delete(page);
-    readerContext.pdfOcrPageCache.set(page, record);
-    return record.payload;
+    return touchPageCache(readerContext.pdfOcrPageCache, page)?.payload ?? null;
   }
 
   /** @param {import('../../../typings/reader-pdf-text-runtime-strict').Shell} shell @param {import('../../../typings/reader-pdf-text-runtime-strict').OcrPayload} [loaded] */

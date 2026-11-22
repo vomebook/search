@@ -17,7 +17,7 @@ export function createReaderSearchBackends(readerContext) {
 
   /** @param {number} generation @param {ReaderSearchBackends.Result[]} results */
   function publishSearchResults(generation, results) {
-    return readerContext.isReaderGenerationCurrent("search", generation) && readerContext.updateSearchState({ results });
+    return readerContext.isReaderGenerationCurrent("search", generation) && updateSearchState({ results });
   }
 
   /** @param {HTMLElement} view */
@@ -45,7 +45,7 @@ export function createReaderSearchBackends(readerContext) {
   /** @param {string} query @param {number} generation */
   async function searchChapterBook(query, generation) {
     if (!readerContext.chapterSearchConfiguration) throw new Error("本书暂无完整全文搜索索引");
-    const module = await readerContext.chapterSearchModule();
+    const module = await chapterSearchModule();
     if (!readerContext.isReaderGenerationCurrent("search", generation)) return;
     if (readerContext.chapterSearchClient?.failed) {
       readerContext.chapterSearchClient.dispose();
@@ -68,7 +68,7 @@ export function createReaderSearchBackends(readerContext) {
   async function navigateChapterSearchResult(result, generation) {
     const article = await readerContext.chapterManifestLoader?.(result.chapterIndex);
     if (!article || !readerContext.isReaderGenerationCurrent("navigation", generation)) return false;
-    const module = await readerContext.chapterSearchModule();
+    const module = await chapterSearchModule();
     if (!readerContext.isReaderGenerationCurrent("navigation", generation)) return false;
     readerContext.clearFullSearchMarks();
     const textProfile = readerContext.chapterSearchConfiguration?.index.text_profile;
@@ -143,24 +143,23 @@ export function createReaderSearchBackends(readerContext) {
         }
         return;
       }
-      readerContext.publishSearchResults(generation, results);
+      publishSearchResults(generation, results);
     }
-    else if (readerContext.capability.mode === "epub-chapters") await readerContext.searchChapterBook(query, generation);
+    else if (readerContext.capability.mode === "epub-chapters") await searchChapterBook(query, generation);
     else if (readerContext.capability.mode === "text" || readerContext.capability.mode === "markdown")
-      readerContext.publishSearchResults(
+      publishSearchResults(
         generation,
-        await readerContext.fullSearchDomMatches(readerContext.content, "阅读位置", query, generation, true)
+        await readerContext.fullSearchDomMatches(readerContext.content, "阅读位置", query, generation)
       );
     else if (readerContext.capability.mode === "html")
-      readerContext.publishSearchResults(
+      publishSearchResults(
         generation,
         readerContext.htmlFrame?.contentDocument?.body
           ? await readerContext.fullSearchDomMatches(
               readerContext.htmlFrame.contentDocument.body,
               "HTML 阅读位置",
               query,
-              generation,
-              true
+              generation
             )
           : []
       );
@@ -169,10 +168,7 @@ export function createReaderSearchBackends(readerContext) {
 
   return {
     updateSearchState,
-    publishSearchResults,
     clearSearchHighlights,
-    chapterSearchModule,
-    searchChapterBook,
     navigateChapterSearchResult,
     searchReaderText
   };

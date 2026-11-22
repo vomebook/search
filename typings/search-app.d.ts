@@ -33,7 +33,7 @@ interface PagesSearchState extends Omit<VoiceOfMLRouteState, 'wide'> {
   repoFull: string | null; page: number; pageSize: number; total: number;
   results: (PagesSearchRecord | null | undefined)[];
   isMobile: boolean; isDark: boolean; isLoading: boolean; hasMore: boolean;
-  extensionList: string[]; extensionOtherCollapsed: boolean; folderTree: VoiceOfMLFilterFolder[] | null;
+  extensionList: string[]; folderTree: VoiceOfMLFilterFolder[] | null;
   folderTreeCollapsed: Record<string, boolean>; sessionRestored: boolean; dataLoaded: boolean;
   resultsSkeletonActive: boolean; _pendingPage: number; _loadedPage: number;
   _pageCache: Record<number, (VoiceOfMLResultRecord | null | undefined)[]>;

@@ -79,7 +79,7 @@
       const now = Date.now();
       pending.forEach(entry => { if (now >= entry.deadline) entry.expire(); });
     }
-    return { pending, createRequest, fetchPage, expire };
+    return { pending, fetchPage, expire };
   }
   globalThis.VoiceOfMLSearchTransport = { create };
 })();

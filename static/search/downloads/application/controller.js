@@ -145,21 +145,6 @@
         }
       }
 
-      /** @param {string} filename @param {string} link @param {() => boolean} cancelled */
-      function scheduleDownloadLaunch(filename, link, cancelled) {
-        const launch = downloadLaunchTail.then(async () => {
-          if (cancelled()) return false;
-          const delay = Math.max(0, 300 - (Date.now() - lastDownloadLaunch));
-          if (delay) await new Promise(resolve => setTimeout(resolve, delay));
-          if (cancelled()) return false;
-          triggerDownload(buildDownloadUrl(filename, link));
-          lastDownloadLaunch = Date.now();
-          return true;
-        });
-        downloadLaunchTail = launch.then(() => {}, () => {});
-        return launch;
-      }
-
       /** @param {string} filename @param {string} link @param {() => boolean} cancelled @param {() => void} onHandoff
        * @returns {Promise<DownloadResult>} */
       function scheduleDetailedLaunch(filename, link, cancelled, onHandoff) {
@@ -266,9 +251,6 @@
         downloadCheckQueue,
         pendingDownloads,
         checkDownload,
-        runDownloadCheck,
-        pumpDownloadChecks,
-        scheduleDownloadLaunch,
         downloadFile,
         downloadFileDetailed,
         get activeDownloadChecks() { return activeDownloadChecks; },

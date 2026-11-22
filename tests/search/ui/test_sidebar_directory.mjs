@@ -18,7 +18,7 @@ function fixture(overrides = {}) {
   const context = vm.createContext({setTimeout(fn, delay) { timers.push({fn, delay}); }});
   vm.runInContext(fs.readFileSync('static/search/sidebar/application/directory.js', 'utf8'), context);
   const view = {mode: 'repo', repo: 'A', repoFull: 'VoiceOfML/A', browserPath: '', routeId: 1,
-    repos: [], apiAvailable: true, useLocalMode: false, dataLoaded: false, tree: null};
+    repos: [], apiAvailable: true, useLocalMode: false, dataLoaded: false};
   const lists = [];
   let cache;
   const ports = {
@@ -34,7 +34,6 @@ function fixture(overrides = {}) {
       items: (list, data, repo, path) => draws.push({list, data, repo, path}), message() {},
     },
     initial: async () => null, fetchRepos: async () => [], renderRepos: repos => draws.push({repos}), updateHeader() {},
-    publishRepos: repos => { view.repos = repos; },
     fetchContents: (repo, path) => new Promise((resolve, reject) => requests.push({repo, path, resolve, reject})),
     localContents: async () => null, ensureLocal: async () => false,
     refreshAssets: (...args) => assets.push(args), ...overrides,
