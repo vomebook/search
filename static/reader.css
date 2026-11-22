@@ -1228,9 +1228,11 @@ body {
 .reader-text-block:focus-within {
   content-visibility: visible;
 }
-.reader-content--compact-text .reader-text {
-  white-space: pre-line;
-  line-height: 1.55;
+.reader-text .reader-text-padding {
+  display: none;
+}
+.reader-text .reader-text-chapter-title {
+  font-weight: 700;
 }
 .reader-markdown {
   margin: 0 auto;

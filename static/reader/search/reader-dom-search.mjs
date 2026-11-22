@@ -39,6 +39,11 @@ export function fullSearchPageOffset(total, requestedOffset, pageSize = 50) {
   )) * pageSize;
 }
 
+/** @param {HTMLElement} mark */
+function visibleTextMark(mark) {
+  return !mark.closest(".reader-text-padding");
+}
+
 /** @param {DomSearch.Options} options */
 export function createReaderDomSearch({
   content, runtime, isCurrent, yieldTask, getTocEntries, unwrapRoot, publishPage
@@ -480,9 +485,9 @@ export function createReaderDomSearch({
           if (!currentNodes || !isCurrent("search", searchGeneration) ||
               !isCurrent("navigation", navigationGeneration)) return false;
           if (parts.map(part => part.node.data.slice(part.start, part.end)).join("") !== match.value) return false;
-          const [target] = highlightTextParts(parts);
-          target?.scrollIntoView({ block: "center" });
-          return !!target;
+          const marks = highlightTextParts(parts);
+          marks.find(visibleTextMark)?.scrollIntoView({ block: "center" });
+          return marks.length > 0;
         }
       };
     };
@@ -539,7 +544,7 @@ export function createReaderDomSearch({
       const matchedPage = page(occurrence);
       const result = matchedPage.results[occurrence - matchedPage.offset];
       if (!result || !await result.activate(navigationGeneration)) return [];
-      return [{ target: fullSearchActiveMarks[0] }];
+      return [{ target: fullSearchActiveMarks.find(visibleTextMark) }];
     }
     const fallbackResults = progressive ? null : firstHits.map(resultFor);
     if (cached && !/** @type {DomSearch.Snapshot} */ (snapshot).current())

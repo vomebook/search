@@ -3319,19 +3319,48 @@ class ReaderRefactorTest(unittest.TestCase):
         self.assertEqual(frame.locator('script').count(), 0)
         self.assertNotIn('legacyPayload', frame.locator('body').inner_text())
 
-    def test_legacy_txt_compacts_only_the_view(self):
-        path = 'documents/text/txt/63fa4ecf73e28346a33704c8adbacebaec293f6f649d96590f066fd42187d97c/document.txt'
+    def test_txt_layout_preserves_text_spaces_and_two_blank_lines_and_builds_toc(self):
+        path = 'documents/text/txt/' + '2' * 64 + '/document.txt'
         source = 'https://voiceofml-search.hf.space/api/reader-bucket-resource?path=' + urllib.parse.quote(path, safe='')
-        text = '正文\r\n                  旧网页导出的段落\r\n\r\n             第二段'
+        line = '            这是一段完整的正文。保留行内   空格。'
+        text = ('第一卷 总览\r\n' + (line + '\r\n') * 5 + ' \r\n\r\n　\r\n\t\r\n' +
+                '第二节 续读\r\n' + (line + '\r\n') * 8 + '第一章结束了。')
         self.page.route('https://voiceofml-search.hf.space/api/reader-bucket-resource**',
                         lambda route: route.fulfill(content_type='text/plain', body=text))
         self.serve(text)
-        for url, expected in [(source, 'pre-line'), (None, 'pre-wrap')]:
-            with self.subTest(white_space=expected):
+        for url in (source, None):
+            with self.subTest(url=url):
                 self.open(self.reader_url('txt', **({'url': url} if url else {})))
-                block = self.page.locator('.reader-text-block')
-                self.assertEqual(block.text_content(), text)
-                self.assertEqual(block.evaluate('n => getComputedStyle(n).whiteSpace'), expected)
+                root = self.page.locator('.reader-text')
+                self.assertEqual(root.text_content(), text)
+                rendered = root.inner_text().replace('\r\n', '\n')
+                self.assertIn('\n  这是一段完整的正文。保留行内   空格。', rendered)
+                self.assertIn('空格。\n \n\n第二节 续读', rendered)
+                if self.page.locator('#history').get_attribute('aria-expanded') != 'true':
+                    support.open_reader_panel(self.page)
+                self.page.locator('.toc-item', has_text='第二节 续读').click()
+                self.assertEqual(root.locator('.reader-text-chapter-title').last.inner_text(), '第二节 续读')
+                self.search('行内   空格')
+                self.page.locator('.full-search-result').first.click()
+                self.assertEqual(root.locator('.full-search-highlight').inner_text(), '行内   空格')
+                self.assertEqual(root.text_content(), text)
+
+    def test_txt_layout_does_not_reformat_preformatted_lines_or_invent_headings(self):
+        text = '配置说明\n  第一行\n\n第二行\n\n\n            col    value\n第一章结束了。'
+        self.serve(text)
+        self.open(self.reader_url('txt'))
+        root = self.page.locator('.reader-text')
+        self.assertEqual(root.text_content(), text)
+        self.assertEqual(root.inner_text(), text)
+        self.assertEqual(root.locator('.reader-text-padding, .reader-text-chapter-title').count(), 0)
+
+    def test_markdown_uses_authored_heading_levels_for_chapter_navigation(self):
+        self.serve('# 第一卷\n\n开头\n\n## 第一节\n\n正文\n\n```text\n# 不是章节\n```')
+        self.open(self.reader_url('md'))
+        support.open_reader_panel(self.page)
+        self.assertEqual(self.page.locator('.toc-item').all_inner_texts(), ['第一卷', '第一节'])
+        self.page.locator('.toc-item', has_text='第一节').click()
+        self.assertTrue(self.page.locator('.reader-markdown h2').is_visible())
 
     def test_offline_html_keeps_layout_attributes_and_enforces_frame_csp(self):
         dot = ("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8"

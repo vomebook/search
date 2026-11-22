@@ -4,6 +4,8 @@ import {hasCompleteFlatTapReport, hasPassingTapContracts} from '../check_tap_con
 
 const minimum = [100, 91.89, 90.91];
 const required = [
+  'TXT layout retains raw text across streaming chunks, including hidden whitespace and chapters',
+  'TXT layout leaves ordinary indents and one or two blank lines alone, and caps decoration',
   'encoding detection handles BOMs, valid UTF-8, UTF-16 heuristics and legacy hints',
   'plain fallback preserves Unicode replacement characters and enforces actual byte limit',
   'stream handles split UTF-8 BOM and codepoints and releases its resource',

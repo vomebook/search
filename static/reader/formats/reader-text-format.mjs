@@ -15,16 +15,22 @@
  * @property {(bytes: Uint8Array, hint?: string, leading?: boolean) => string} detectTextEncoding
  * @property {{title: string}} documentState
  * @property {ReaderTextRenderer} renderText
+ * @property {(entries: {label: string; depth: number; target: HTMLElement; activate(): void}[]) => void} setToc
  * @typedef {ReaderTextHost & ReaderOriginalFormat} ReaderTextContext
  */
 
 const VCARD_PREVIEW_BYTES = 64 * 1024;
 
 /** @param {ReaderOriginalFormat} context */
-export function isReaderVCard(context) {
+function originalTextExtension(context) {
   const original = context.resolvedReaderData?.original_extension;
   const extension = typeof original === "string" && original ? original : context.extension;
-  return extension?.toLowerCase().replace(/^\./, "") === "vcf";
+  return extension?.toLowerCase().replace(/^\./, "");
+}
+
+/** @param {ReaderOriginalFormat} context */
+export function isReaderVCard(context) {
+  return originalTextExtension(context) === "vcf";
 }
 
 const vCardLabels = new Map([
@@ -78,6 +84,89 @@ function formatVCard(text) {
   return fields.filter(field => !hasFullName || field.key !== "N").map(field => field.text).join("\n");
 }
 
+// Apply layout only to bounded TXT documents, after decoding and before restoring
+// the position. Never replace the text used by search, speech or the original download.
+const TXT_LAYOUT_BYTES = 128 * 1024;
+const TXT_LAYOUT_EDITS = 1024;
+const TXT_CHAPTER = /^第[ \u3000]*[\d０-９〇零一二三四五六七八九十百千万两]+[ \u3000]*([卷部篇章节回])(?:$|[ \t\u3000.．:：、—–-]+[^\r\n]+$)/u;
+
+/** @typedef {{ start: number; end: number; heading?: string; depth?: number }} TextLayoutEdit */
+/** @param {string} text */
+function planTextLayout(text) {
+  /** @type {TextLayoutEdit[]} */
+  const indents = [], gaps = [], headings = [];
+  let total = 0, padded = 0, prose = 0, blankLines = 0;
+  /** @type {TextLayoutEdit | null} */
+  let gap = null;
+  for (const line of text.matchAll(/[^\r\n]*(?:\r\n|\r|\n|$)/g)) {
+    const raw = line[0], start = line.index;
+    if (!raw) break;
+    const label = raw.trim();
+    if (!label) {
+      if (gap) gap.end = start + raw.length;
+      else if (++blankLines === 3) {
+        gap = { start, end: start + raw.length };
+        gaps.push(gap);
+      }
+    } else {
+      blankLines = 0;
+      gap = null;
+      total++;
+      if (label.length >= 16 && /[。！？；，、]|[.!?;](?:\s|$)/u.test(label)) prose++;
+      const indent = /^[ \u3000]{8,}/u.exec(raw)?.[0];
+      if (indent) {
+        padded++;
+        indents.push({ start: start + 2, end: start + indent.length });
+      }
+      const kind = label.length <= 72 ? TXT_CHAPTER.exec(label)?.[1] : null;
+      if (kind && !/[。！？；!?]$/u.test(label)) {
+        const titleStart = start + raw.indexOf(label);
+        headings.push({ start: titleStart, end: titleStart + label.length, heading: label, depth: kind === "节" ? 1 : 0 });
+      }
+    }
+    if (indents.length + gaps.length + headings.length > TXT_LAYOUT_EDITS) return [];
+  }
+  // A few indented lines are not a padding convention. Require recurring long
+  // indents and sentence-like prose; keep meaningful whitespace in code/tables.
+  const compact = total >= 8 && padded * 4 >= total * 3 && prose >= 3;
+  return [...(compact ? indents : []), ...gaps, ...headings].sort((a, b) => a.start - b.start);
+}
+
+/** @param {HTMLElement} root */
+function typesetPlainText(root) {
+  const edits = planTextLayout(root.textContent ?? "");
+  /** @type {{label: string; depth: number; target: HTMLElement; activate(): void}[]} */
+  const toc = [];
+  let from = 0, editIndex = 0;
+  for (const block of root.children) {
+    const text = block.textContent ?? "", to = from + text.length;
+    if ((edits[editIndex]?.start ?? Infinity) < to) {
+      /** @type {Node[]} */
+      const nodes = [];
+      let cursor = from;
+      for (let edit; (edit = edits[editIndex]) && edit.start < to;) {
+        const begin = Math.max(from, edit.start), end = Math.min(to, edit.end);
+        if (cursor < begin) nodes.push(document.createTextNode(text.slice(cursor - from, begin - from)));
+        const span = document.createElement("span");
+        span.className = edit.heading ? "reader-text-chapter-title" : "reader-text-padding";
+        span.textContent = text.slice(begin - from, end - from);
+        nodes.push(span);
+        if (edit.heading && edit.start >= from) {
+          toc.push({ label: edit.heading, depth: edit.depth ?? 0, target: span,
+            activate: () => span.scrollIntoView({ block: "start" }) });
+        }
+        cursor = end;
+        if (edit.end > to) break;
+        editIndex++;
+      }
+      if (cursor < to) nodes.push(document.createTextNode(text.slice(cursor - from)));
+      block.replaceChildren(...nodes);
+    }
+    from = to;
+  }
+  return toc;
+}
+
 /** @param {ReaderTextContext} readerContext */
 export function createReaderTextFormat(readerContext) {
   /** @param {Response} response */
@@ -124,7 +213,15 @@ export function createReaderTextFormat(readerContext) {
         }
       }
     };
-    const finishVCard = async () => {
+    /** @param {number} length */
+    const finishText = async (length) => {
+      if (!vCard) {
+        if (length <= TXT_LAYOUT_BYTES && originalTextExtension(readerContext) === "txt") {
+          const toc = typesetPlainText(pre);
+          if (toc.length) readerContext.setToc(toc);
+        }
+        return;
+      }
       readerContext.assertReaderActive();
       const summary = formatVCard(pre.textContent ?? "");
       if (summary !== null) {
@@ -162,7 +259,7 @@ export function createReaderTextFormat(readerContext) {
       const decoder = new TextDecoder(readerContext.detectTextEncoding(bytes.subarray(start, start + sampleLimit),
         readerContext.documentState.title, start === 0));
       await appendDecoded(decoder.decode(bytes), decoder.encoding);
-      if (vCard) await finishVCard();
+      await finishText(bytes.byteLength);
       return;
     }
     const reader = response.body.getReader(),
@@ -321,7 +418,7 @@ export function createReaderTextFormat(readerContext) {
       // startDecoder assigns one even for an empty sample. A failure is caught.
       if (!decoder) await startDecoder();
       await appendDecoded((/** @type {TextDecoder} */ (/** @type {unknown} */ (decoder))).decode(), (/** @type {TextDecoder} */ (/** @type {unknown} */ (decoder))).encoding);
-      if (vCard) await finishVCard();
+      await finishText(length);
     } catch (reason) {
       clearUtf8Preview();
       try {

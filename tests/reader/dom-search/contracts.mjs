@@ -395,5 +395,14 @@ export async function occurrenceSelection() {
     f.search.clearMarks(); f.nextNavigation();
     const stale = await f.search.search(f.root, '', 'needle', f.generation, true, 1, f.navigation - 1);
     ensure(stale.length === 0 && !f.root.querySelector('mark'), 'stale occurrence selection');
+    f.root.innerHTML = '<span class="reader-text-padding" hidden>          </span>needle';
+    const raw = f.root.textContent;
+    for (let i = 0; i < 2; i++) {
+      const matches = await f.search.search(f.root, '', '          needle', f.generation, true, 0, f.navigation);
+      ensure(matches.length === 1 && matches[0].target?.textContent === 'needle', 'visible part owns navigation');
+      ensure(f.root.querySelector('.reader-text-padding mark')?.textContent === '          ', 'exact whitespace matched');
+      f.search.clearMarks();
+      ensure(f.root.textContent === raw && !f.root.querySelector('mark'), 'padding survives highlight cleanup');
+    }
   } finally { f.finish(); }
 }

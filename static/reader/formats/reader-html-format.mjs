@@ -487,24 +487,12 @@ export function createReaderHtmlFormat(readerContext) {
     });
   }
 
-  function readingAssetPath() {
-    try {
-      const url = new URL(readerContext.sourceUrl, location.href);
-      return url.searchParams.get("path") || url.pathname.replace(/^\//, "");
-    } catch (_) { return ""; }
-  }
-
   /** @param {boolean} markdown @param {import('../../../typings/reader-html-format-strict').PreparedText} prepared */
   async function renderText(markdown, prepared) {
     let response = await prepared.response;
     if (!response.ok) response = await readerContext.fetchReaderResponse();
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     if (!markdown) {
-      // This legacy article pads nearly every line with 12–26 spaces. Compact
-      // only its presentation, keeping search, text offsets and download intact.
-      readerContext.content.classList.toggle("reader-content--compact-text", readingAssetPath() ===
-        "documents/text/txt/63fa4ecf73e28346a33704c8adbacebaec293f6f649d96590f066fd42187d97c/document.txt"
-      );
       await readerContext.renderPlainText(response);
     } else {
       const bytes = await readerContext.readPreparedBytes(response, prepared.engines);

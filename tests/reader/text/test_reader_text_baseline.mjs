@@ -12,6 +12,7 @@ class FakeText {
 class FakeElement {
   constructor(tag) { this.tag=tag;this.children=[];this.className='';this.dataset={}; }
   appendChild(node) { this.children.push(node);return node; }
+  replaceChildren(...nodes) { this.children=nodes; }
   get lastChild() { return this.children.at(-1) ?? null; }
   get textContent() { return this.children.map(child=>child.textContent).join(''); }
   set textContent(value) { this.children=value ? [new FakeText(value)] : []; }
@@ -28,7 +29,7 @@ function fixture({limit=1_000_000, waits=()=>Promise.resolve()}={}) {
     assertReaderActive(){},markReaderContentReady(){events.push('ready');},waitForReader:waits,
     trackReaderResource(cleanup){events.push('track');this.cleanup=cleanup;return()=>events.push('untrack');},
     readerAbortError:()=>new DOMException('closed','AbortError'),awaitReader:promise=>Promise.resolve(promise),
-    renderText:(mode,prepared)=>({mode,prepared})};
+    renderText:(mode,prepared)=>({mode,prepared}), setToc(toc){this.toc=toc;}};
   Object.assign(context,createReaderTextFormat(context));
   return {context,events,restore(){globalThis.document=old.document;globalThis.Node=old.Node;
     globalThis.VoiceOfMLReaderSecurity=old.security;}};
@@ -37,6 +38,44 @@ function responseChunks(chunks) {
   const stream = new ReadableStream({start(controller){for(const chunk of chunks)controller.enqueue(chunk);controller.close();}});
   return new Response(stream);
 }
+
+test('TXT layout retains raw text across streaming chunks, including hidden whitespace and chapters', async t => {
+  const f=fixture(); t.after(f.restore);
+  f.context.extension='txt';
+  const line='            这是一段完整的正文。保留行内   空格。\r\n';
+  const text='第一卷 总览\r\n'+line.repeat(5)+' \r\n\r\n　\r\n\t\r\n'+
+    '第二节 续读\r\n'+line.repeat(8)+'第一章结束了。';
+  const raw=encode(text), chunks=[];
+  for(let i=0;i<raw.length;i+=43) chunks.push(raw.subarray(i,i+43));
+  await f.context.renderPlainText(responseChunks(chunks));
+  const root=f.context.content.children[0];
+  assert.equal(root.textContent,text);
+  const pieces=root.children.flatMap(block=>block.children);
+  const hidden=pieces.filter(node=>node.className==='reader-text-padding');
+  assert.equal(hidden.filter(node=>node.textContent===' '.repeat(10)).length,13);
+  assert.ok(hidden.some(node=>node.textContent==='　\r\n\t\r\n'));
+  assert.deepEqual(f.context.toc.map(({label,depth})=>[label,depth]),[['第一卷 总览',0],['第二节 续读',1]]);
+  let activated=false;
+  f.context.toc[1].target.scrollIntoView=()=>{activated=true;};
+  f.context.toc[1].activate(); assert.ok(activated);
+});
+
+test('TXT layout leaves ordinary indents and one or two blank lines alone, and caps decoration', async t => {
+  const f=fixture(); t.after(f.restore);
+  f.context.extension='txt';
+  const ordinary='标题\n  第一段。\n\n第二段\n\n\n          单行对齐';
+  const large='第一章 绪论\n'+('字'.repeat(45000))+'\n\n\n\n结束';
+  const dense='第一章 绪论\n'+('            这是测试段落。\n'.repeat(1030));
+  const crossBlock='第一段\n'+'\n'.repeat(32800)+'第二段\n';
+  for (const raw of [ordinary,large,dense,crossBlock]) {
+    await f.context.renderPlainText(buffered(raw));
+    const root=f.context.content.children.at(-1);
+    assert.equal(root.textContent,raw);
+    const hidden=root.children.flatMap(block=>block.children).filter(node=>node.className==='reader-text-padding');
+    assert.equal(hidden.map(node=>node.textContent).join(''),raw===crossBlock?'\n'.repeat(32798):'');
+  }
+  assert.equal(f.context.toc,undefined);
+});
 
 const vCard = [
   'BEGIN:VCARD', 'VERSION:3.0', 'N:Example;Test;;;', 'FN:测试 Example', 'TITLE:Example role',

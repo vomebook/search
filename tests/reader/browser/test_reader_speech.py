@@ -507,6 +507,29 @@ class ReaderSpeechTest(unittest.TestCase):
                 finally:
                     context.close()
 
+    def test_txt_reveal_inside_hidden_indent_uses_visible_sentence_without_changing_offset(self):
+        line = '            这是正常段落，朗读时必须能找到可见的一行。\n'
+        text = line * 180
+        context, page, posts, errors = self.open('txt', text.encode(), 'text/plain; charset=utf-8')
+        try:
+            offset = len(line) * 120 + 5
+            self.play(page, posts)
+            self.stop(page)
+            before, after, raw, painted = page.evaluate('''async offset => {
+              const a = CCRDSpeech.state().adapter;
+              await a.ensure(offset + 1);
+              const viewport = document.querySelector('#viewport');
+              const before = viewport.scrollTop;
+              await a.reveal(offset);
+              return [before, viewport.scrollTop, a.range(offset, offset + 1).toString(), a.inView(offset)];
+            }''', offset)
+            self.assertEqual(raw, ' ')
+            self.assertGreater(after, before + 500)
+            self.assertTrue(painted)
+            self.assertFalse(errors, errors)
+        finally:
+            context.close()
+
     def test_scrolling_away_is_not_undone_by_the_next_sentence(self):
         body = "".join(f"第{index}句。\n" for index in range(400)).encode()
         context, page, posts, errors = self.open("txt", body, "text/plain; charset=utf-8")

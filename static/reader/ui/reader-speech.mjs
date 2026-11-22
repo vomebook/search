@@ -243,6 +243,27 @@ export function createReaderSpeech(readerContext, loadPlayer, handoffPayload) {
         if (next >= sourceInfo.units) done = true;
       });
     }
+    /** @param {number} offset */
+    function positionRange(offset) {
+      const range = self.range(offset, offset + 1);
+      const padding = range?.startContainer.parentElement?.closest(".reader-text-padding");
+      if (!range || !padding) return range;
+      // Keep saved/spoken offsets exact. Only the scrolling rectangle needs a
+      // painted character; follow the next text after any hidden padding.
+      const root = self.root;
+      if (!root) return range;
+      const walker = padding.ownerDocument.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+      walker.currentNode = range.startContainer;
+      for (let node; (node = walker.nextNode());) {
+        if (node.parentElement?.closest(".reader-text-padding") || !node.textContent?.trim()) continue;
+        const target = padding.ownerDocument.createRange();
+        const start = node.textContent.search(/\S/u);
+        target.setStart(node, start);
+        target.setEnd(node, start + 1);
+        return target;
+      }
+      return range;
+    }
     /** @type {import('../../../typings/reader-speech-strict').SpeechAdapter} */
     const self = {
       base, source: sourceInfo,
@@ -324,7 +345,7 @@ export function createReaderSpeech(readerContext, loadPlayer, handoffPayload) {
         self.current = start;
         // Parked in the background (Reader closed while reading): no layout to follow.
         if (!self.following || !readerContext.viewport.getClientRects().length) return undefined;
-        const range = self.range(start, start + 1);
+        const range = positionRange(start);
         if (!range) {
           // An unrendered page/section: navigate there and wait for its text.
           if (sourceInfo.root(part.unit) || !sourceInfo.locate) return undefined;
@@ -341,7 +362,7 @@ export function createReaderSpeech(readerContext, loadPlayer, handoffPayload) {
       },
       following: true, current: null, autoUntil: 0,
       // null when the clip has no rendered range; otherwise whether it is in view.
-      visible(start, range = self.range(start, start + 1)) {
+      visible(start, range = positionRange(start)) {
         const rect = range?.getBoundingClientRect();
         if (!rect || !rect.height) return null;
         const box = readerContext.viewport.getBoundingClientRect();
@@ -374,7 +395,7 @@ export function createReaderSpeech(readerContext, loadPlayer, handoffPayload) {
         try {
           await sourceInfo.locate?.(part.unit);
           if (adapter !== self) publish(self);
-          const range = self.range(offset, offset + 1);
+          const range = positionRange(offset);
           if (range) scrollToRange(range, "auto");
           self.following = true;
         } finally { self.autoUntil = performance.now() + 600; }
