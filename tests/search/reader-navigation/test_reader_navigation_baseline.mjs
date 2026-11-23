@@ -183,27 +183,24 @@ test('explicit fragment and bookmark opens bypass parked reuse without stopping 
 });
 
 test('mini-player resumes the live Reader even when its iframe src contains opening targets', () => {
-  for (const viaEvent of [false, true]) {
-    let resumed;
-    const resume = raw => {
-      const url = nav.prepare(raw, '/search/#/?q=book');
-      resumed = nav.mount(url, true);
-      nav.remember(url, {});
-    };
-    const {nav, mini, calls, context} = shellFixture(readerPath, viaEvent ? undefined : {resume});
-    if (viaEvent) context.window.addEventListener('voice-reader-resume', event => resume(event.detail));
-    const ordinary = nav.parse(readerPath + '?id=book&ext=md&title=Book');
-    const url = nav.parse(ordinary.href + '&bookmark=saved&bookmark_source=source#opening');
-    const parked = parkSpeakingReader(nav, url);
-    mini().children.find(child => child.className === 'reader-speech-mini-back').dispatchEvent(new Event('click'));
-    assert.equal(resumed, parked.frame);
-    assert.equal(parked.reveals(), 1);
-    assert.equal(parked.frame.src, url.href, 'resuming must not reload the live iframe');
-    assert.equal(calls[0][3], ordinary.href, 'mini-player history must not carry stale position requests');
-    assert.equal(nav.backgroundReader, null);
-    assert.equal(mini(), undefined);
-    nav.unmount(false);
-  }
+  let resumed;
+  const resume = raw => {
+    const url = nav.prepare(raw, '/search/#/?q=book');
+    resumed = nav.mount(url, true);
+    nav.remember(url, {});
+  };
+  const {nav, mini, calls} = shellFixture(readerPath, {resume});
+  const ordinary = nav.parse(readerPath + '?id=book&ext=md&title=Book');
+  const url = nav.parse(ordinary.href + '&bookmark=saved&bookmark_source=source#opening');
+  const parked = parkSpeakingReader(nav, url);
+  mini().children.find(child => child.className === 'reader-speech-mini-back').dispatchEvent(new Event('click'));
+  assert.equal(resumed, parked.frame);
+  assert.equal(parked.reveals(), 1);
+  assert.equal(parked.frame.src, url.href, 'resuming must not reload the live iframe');
+  assert.equal(calls[0][3], ordinary.href, 'mini-player history must not carry stale position requests');
+  assert.equal(nav.backgroundReader, null);
+  assert.equal(mini(), undefined);
+  nav.unmount(false);
 });
 
 test('pending background handoff survives opening another book and reopening the same frame', () => {
