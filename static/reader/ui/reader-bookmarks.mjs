@@ -1,3 +1,5 @@
+import { captureHtmlDisclosure } from "./reader-progress.mjs";
+
 /** @param {import('../../../typings/reader-bookmarks-strict').BookmarkContext} readerContext */
 export function createReaderBookmarks(readerContext) {
   /** @param {import('../../../typings/reader-progress-strict').ProgressState | null} entry */
@@ -262,6 +264,7 @@ export function createReaderBookmarks(readerContext) {
       ...(pageOffsetFraction === undefined ? {} : { pageOffsetFraction }),
       scrollTop,
       htmlScrollTop,
+      ...captureHtmlDisclosure(readerContext.htmlFrame),
       ...(chapterPosition || {})
     };
   }

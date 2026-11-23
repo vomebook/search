@@ -26,7 +26,10 @@ export function createReaderToc(readerContext) {
         label: target.textContent.trim(),
         depth: Number(target.tagName.slice(1)) - 1,
         target,
-        activate: () => target.scrollIntoView({ block: "start" })
+        activate: () => {
+          target.closest("details.reader-clean-web-reply")?.setAttribute("open", "");
+          target.scrollIntoView({ block: "start" });
+        }
       }));
   }
 

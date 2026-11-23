@@ -78,7 +78,7 @@ export function createReaderNavigation(readerContext) {
     // Panel lists scroll independently. Inspect the composed path so a control
     // inside a chapter Shadow DOM is not mistaken for the reading surface.
     if ((event.composedPath?.() || [event.target]).some(node => /** @type {Element} */ (node).closest?.(
-      '#history-panel,input,textarea,select,button,a,audio,video,[role="button"],[role="link"],[contenteditable]:not([contenteditable=false])'
+      '#history-panel,input,textarea,select,button,summary,a,audio,video,[role="button"],[role="link"],[contenteditable]:not([contenteditable=false])'
     )))
       return;
     if ((event.key === "Home" || event.key === "End") && readerContext.pdfShellWindow?.opening)

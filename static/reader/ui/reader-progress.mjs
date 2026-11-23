@@ -1,3 +1,12 @@
+/** @param {HTMLIFrameElement | null | undefined} frame */
+export function captureHtmlDisclosure(frame) {
+  const thread = frame?.contentDocument?.querySelector("article[data-reader-reviewed-thread]");
+  if (!thread) return {};
+  return { htmlReplySource: thread.getAttribute("data-reader-reviewed-thread") || "",
+    htmlOpenReplies: Array.from(thread.querySelectorAll("details.reader-clean-web-reply"),
+      (reply, i) => reply.hasAttribute("open") ? i + 1 : 0).filter(Boolean).slice(0, 256) };
+}
+
 /** @param {number | undefined} index @param {number} count @returns {index is number} */
 export function chapterIndexInRange(index, count) {
   return index !== undefined && Number.isInteger(index) && index >= 1 && index <= count;
@@ -84,6 +93,7 @@ export function createReaderProgress(readerContext) {
         readerContext.mediaElement && Number.isFinite(readerContext.mediaElement.currentTime) ? readerContext.mediaElement.currentTime : 0,
       scrollTop: readerContext.viewport.scrollTop,
       htmlScrollTop,
+      ...captureHtmlDisclosure(readerContext.htmlFrame),
       zoom: Math.round(readerContext.documentState.zoom * 100),
       ...(chapterPosition || {})
     };
@@ -404,7 +414,7 @@ export function createReaderProgress(readerContext) {
         : readerContext.mediaElement
           ? { mediaTime: readerContext.mediaElement.currentTime }
           : readerContext.htmlFrame && readerContext.htmlFrame.contentWindow
-            ? { htmlScrollTop: readerContext.htmlFrame.contentWindow.scrollY }
+            ? { htmlScrollTop: readerContext.htmlFrame.contentWindow.scrollY, ...captureHtmlDisclosure(readerContext.htmlFrame) }
             : { scrollTop: readerContext.viewport.scrollTop };
   }
 
@@ -437,9 +447,17 @@ export function createReaderProgress(readerContext) {
           }));
         if (!readerContext.isReaderGenerationCurrent("navigation", generation)) return false;
         media.currentTime = /** @type {number} */ (state.mediaTime);
-      } else if (readerContext.htmlFrame && readerContext.htmlFrame.contentWindow && Number.isFinite(state.htmlScrollTop))
-        readerContext.htmlFrame.contentWindow.scrollTo(0, /** @type {number} */ (state.htmlScrollTop));
-      else if (Number.isFinite(state.scrollTop)) {
+      } else if (readerContext.htmlFrame?.contentWindow && Number.isFinite(state.htmlScrollTop)) {
+        const { htmlFrame } = readerContext;
+        const thread = htmlFrame.contentDocument?.querySelector("article[data-reader-reviewed-thread]");
+        if (thread && thread.getAttribute("data-reader-reviewed-thread") === state.htmlReplySource &&
+            Array.isArray(state.htmlOpenReplies) && state.htmlOpenReplies.length <= 256) {
+          const open = new Set(state.htmlOpenReplies.filter(i => Number.isInteger(i) && i > 0));
+          thread.querySelectorAll("details.reader-clean-web-reply")
+            .forEach((reply, i) => reply.toggleAttribute("open", open.has(i + 1)));
+        }
+        htmlFrame.contentWindow?.scrollTo(0, /** @type {number} */ (state.htmlScrollTop));
+      } else if (Number.isFinite(state.scrollTop)) {
         if (readerContext.capability.mode === "text") {
           let measured = 0, batch = 0, started = performance.now();
           for (const block of /** @type {NodeListOf<HTMLElement>} */ (readerContext.content.querySelectorAll(".reader-text-block"))) {

@@ -7,6 +7,8 @@ export interface ProgressState {
   zoom?: number;
   mediaTime?: number;
   htmlScrollTop?: number;
+  htmlReplySource?: string;
+  htmlOpenReplies?: number[];
   scrollTop?: number;
   chapterIndex?: number;
   chapterManifest?: string;

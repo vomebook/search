@@ -1,5 +1,5 @@
 import { bindReaderScrollIntent } from "../core/reader-bindings.mjs";
-import { HTML_PROSE_STYLE, LEGACY_ARTICLE_HTML_STYLE, PHPWIND_HTML_STYLE, wrapEbookTables } from "../ui/reader-document-styles.mjs";
+import { CLEAN_WEB_HTML_STYLE, HTML_PROSE_STYLE, LEGACY_ARTICLE_HTML_STYLE, PHPWIND_HTML_STYLE, wrapEbookTables } from "../ui/reader-document-styles.mjs";
 
 /** @param {string | null | undefined} markdown */
 export function stripMarkdownFrontMatter(markdown) {
@@ -127,6 +127,7 @@ export function createReaderHtmlFormat(readerContext) {
       [...root.querySelectorAll("a[name]")].find(node => node.getAttribute("name") === name);
     if (target) {
       readerContext.beginReaderNavigation(event);
+      target.closest("details.reader-clean-web-reply")?.setAttribute("open", "");
       target.scrollIntoView({ block: "start" });
     } else if (!name || name.toLowerCase() === "top") {
       readerContext.beginReaderNavigation(event);
@@ -590,8 +591,8 @@ export function createReaderHtmlFormat(readerContext) {
     readerContext.status.textContent = "已加载";
   }
 
-  /** @param {string} text @param {boolean} [phpwind] */
-  function sanitizeOfflineHtml(text, phpwind = false) {
+  /** @param {string} text @param {boolean} [phpwind] @param {string} [reviewedView] */
+  function sanitizeOfflineHtml(text, phpwind = false, reviewedView = "") {
     // A global ALLOWED_URI_REGEXP would also strip every non-allow-listed plain
     // attribute (colspan/rowspan/width), so scope the inline-image rule to URLs.
     // Use the original document URL, not the proxy, srcdoc, or a supplied <base>.
@@ -640,7 +641,7 @@ export function createReaderHtmlFormat(readerContext) {
         RETURN_DOM_FRAGMENT: true,
         ADD_TAGS: ["style"],
         FORBID_TAGS: ["base", "embed", "form", "iframe", "object", "script"],
-        FORBID_ATTR: ["action", "formaction", "srcdoc", "data-reader-phpwind", "data-reader-legacy-article"]
+        FORBID_ATTR: ["action", "formaction", "srcdoc", "data-reader-phpwind", "data-reader-legacy-article", "data-reader-reviewed-thread", "data-reader-word-inset"]
       });
     } finally {
       DOMPurify.removeHook("uponSanitizeAttribute", restrict);
@@ -668,17 +669,124 @@ export function createReaderHtmlFormat(readerContext) {
       }
       if (stripped !== value) element.setAttribute("style", stripped);
     }
-    const layoutStyle = phpwind && markPhpwindLayout(template.content) ? PHPWIND_HTML_STYLE :
-      markLegacyArticleLayout(template.content) ? LEGACY_ARTICLE_HTML_STYLE : "";
+    // Scope the mobile fix to known Word HTML, a large authored absolute
+    // indent and a short text-only line, never code or table cells.
+    for (const line of template.content.querySelectorAll("p.MsoNormal[style]")) {
+      if (!(line instanceof HTMLElement) || line.closest("table") || line.querySelector("br,img,pre,code") ||
+          line.textContent.trim().length > 24) continue;
+      const match = /^(\d+(?:\.\d+)?)(px|pt)$/.exec(line.style.textIndent);
+      if (!match || Number(match[1]) * (match[2] === "pt" ? 4 / 3 : 1) < 240) continue;
+      line.style.setProperty("--reader-word-indent", line.style.textIndent);
+      line.setAttribute("data-reader-word-inset", "");
+    }
+    if (!phpwind && reviewedView === "article" && buildLegacyReadingArticle(template.content))
+      return template.innerHTML + CLEAN_WEB_HTML_STYLE;
+    if (phpwind && markPhpwindLayout(template.content, reviewedView === "thread")) {
+      return template.innerHTML + (template.content.querySelector(".reader-clean-web") ? CLEAN_WEB_HTML_STYLE : PHPWIND_HTML_STYLE);
+    }
+    const layoutStyle = markLegacyArticleLayout(template.content) ? LEGACY_ARTICLE_HTML_STYLE : "";
     return template.innerHTML + layoutStyle;
+  }
+
+  const legacyArticleCell = "table.center_tdbgall > tbody > tr > td.main_tdbgall > table.tdbg_top_left_right > tbody > tr > td.main_tdbg_760";
+
+  /** @param {DocumentFragment} root */
+  function buildLegacyReadingArticle(root) {
+    // Extract a known single-article CMS template, not an arbitrary element
+    // whose id happens to include “article”. Preserve the full sanitized body.
+    const bodies = root.querySelectorAll("#ArticleContent");
+    const body = bodies[0];
+    const cell = body?.parentElement;
+    if (bodies.length !== 1 || !body?.matches("div") || !cell?.matches(`${legacyArticleCell}#fontzoom`) ||
+        !body.querySelector("p") || !body.textContent.trim()) return false;
+    const table = cell.closest("table");
+    const headline = table?.querySelector("td#txt_title.main_ArticleTitle");
+    if (!table || !headline?.textContent.trim()) return false;
+    const headlineRow = headline.closest("tr");
+    const bodyRow = cell.closest("tr");
+    if (!headlineRow || !bodyRow || headlineRow.parentElement !== bodyRow.parentElement) return false;
+    const rows = [...table.rows];
+    const titleIndex = rows.indexOf(headlineRow);
+    const bodyIndex = rows.indexOf(bodyRow);
+    if (titleIndex < 0 || bodyIndex <= titleIndex) return false;
+    const source = table.querySelector(".Article_tdbgall a#txt_info");
+    const metadata = source?.closest("td.Article_tdbgall");
+    // If this archive contains actual comments or other unrecognized addenda,
+    // retain the existing view instead of silently discarding them.
+    for (const row of rows.slice(bodyIndex + 1)) {
+      const text = row.textContent.replace(/\s+/g, " ").trim();
+      const commentsTitle = /^网友评论：\s*（只显示最新50条。评论内容只代表网友观点，与本站立场无关！）$/.test(text);
+      const login = /^只有注册登录的用户才可以发表评论！\s*发表评论\s*请遵守《互联网电子公告服务管理规定》及中华人民共和国其他各项有关法律法规。 用户需对自己在使用本站服务过程中的行为承担法律责任（直接或间接导致的）。 评论内容只代表网友个人观点，与本网站立场无关。$/.test(text);
+      if ([...row.querySelectorAll("img,video,audio,pre,blockquote,figure,[id],a[name]")].some(node =>
+        !(commentsTitle && node.matches("img:not([id])") && !(node.getAttribute("alt") || "").trim()) &&
+        !(login && node.matches("span#UserLogin")))) return false;
+      if (text && !commentsTitle && !login && !/^(?:文章录入：.{0,60}责任编辑：.{0,60}|上一篇文章：.{0,180}下一篇文章：.{0,60}|【复制本文】.{0,160}【关闭窗口】)$/.test(text)) return false;
+    }
+    const targetIds = new Set([...body.querySelectorAll("[id],a[name]")].flatMap(node =>
+      [node.id, node.getAttribute("name")].filter(Boolean)));
+    targetIds.add(body.id);
+    targetIds.add(headline.id);
+    targetIds.add(cell.id);
+    for (const link of body.querySelectorAll('a[href^="#"]')) {
+      let target = link.getAttribute("href")?.slice(1);
+      if (!target) continue;
+      try { target = decodeURIComponent(target); } catch (_) {}
+      if (target.toLowerCase() !== "top" && !targetIds.has(target)) return false;
+    }
+    const doc = root.ownerDocument;
+    const article = doc.createElement("article");
+    article.id = cell.id;
+    article.className = "reader-clean-web";
+    const heading = doc.createElement("h1");
+    heading.id = headline.id;
+    heading.append(...headline.childNodes);
+    article.append(heading);
+    if (metadata) {
+      const text = metadata.textContent.replace(/\s+/g, " ").trim();
+      const fields = /^作者：\s*(.*?)\s*文章发于：\s*(.*?)\s*点击数：.*?更新时间：\s*([0-9-]+)$/.exec(text);
+      if (fields) {
+        const line = doc.createElement("p");
+        line.className = "reader-clean-web-byline";
+        line.textContent = [fields[1], fields[2], fields[3] && `更新于 ${fields[3]}`].filter(Boolean).join(" · ");
+        article.append(line);
+      }
+    }
+    // Title and article nodes have already passed our existing URL sanitizer.
+    // Ignore site typography classes and style sheets; retain authored inline
+    // content, real tables, internal fragment IDs and the download unchanged.
+    article.append(body);
+    normalizeArticleImageTables(body);
+    root.replaceChildren(article);
+    return true;
+  }
+
+  /** @param {Element} body */
+  function normalizeArticleImageTables(body) {
+    // The common photo box is exactly a single image row plus a caption row.
+    // Never flatten a data table, a nested table, or a fragment target.
+    for (const table of body.querySelectorAll("table")) {
+      if (table.querySelector("table,th,caption,thead,tfoot,colgroup") || table.closest("table table") || table.rows.length !== 2) continue;
+      const [photoRow, captionRow] = table.rows;
+      const photo = photoRow?.cells[0], caption = captionRow?.cells[0];
+      const image = photo?.querySelector("img[src]");
+      if (photoRow?.cells.length !== 1 || captionRow?.cells.length !== 1 || !photo || !caption || !image ||
+          photo.querySelectorAll("img").length !== 1 || photo.textContent.trim() ||
+          !caption.textContent.trim() || caption.querySelector("img,video,audio,pre,svg") ||
+          [table, photoRow, captionRow, photo, caption].some(node => node.hasAttribute("id")) ||
+          table.querySelector("tbody[id],a[name]")) continue;
+      const figure = body.ownerDocument.createElement("figure");
+      const label = body.ownerDocument.createElement("figcaption");
+      label.append(...caption.childNodes);
+      figure.append(...photo.childNodes, label);
+      table.replaceWith(figure);
+    }
   }
 
   /** @param {DocumentFragment} root */
   function markLegacyArticleLayout(root) {
-    // Legacy CMS exports put Word paragraphs inside fixed-width layout tables.
-    // Reflow only the ancestor chain of this known article shell, not its
-    // actual content tables, other page regions, or arbitrary Word documents.
-    const shell = "table.center_tdbgall > tbody > tr > td.main_tdbgall > table.tdbg_top_left_right > tbody > tr > td.main_tdbg_760";
+    // Legacy Word exports: retain this conservative layout fallback when
+    // there is no independently identified article body.
+    const shell = legacyArticleCell;
     let marked = false;
     for (const cell of root.querySelectorAll(shell)) {
       const article = cell.querySelector(":scope > .Section1, :scope > div > .Section1");
@@ -695,8 +803,8 @@ export function createReaderHtmlFormat(readerContext) {
     return marked;
   }
 
-  /** @param {DocumentFragment} root */
-  function markPhpwindLayout(root) {
+  /** @param {DocumentFragment} root @param {boolean} extract */
+  function markPhpwindLayout(root, extract) {
     const posts = [...root.querySelectorAll(".tpc_content")];
     if (posts.length < 2) return false;
     // Validate every post before marking anything. This is the legacy two-table
@@ -719,6 +827,46 @@ export function createReaderHtmlFormat(readerContext) {
           shells.has(outer)) return false;
       shells.add(outer);
       layouts.push({ post, cell, inner, main, outer, author });
+    }
+
+    const title = layouts[0]?.cell.querySelector(":scope > .tpc_title");
+    // Without a definite thread title, preserve the existing layout (e.g.
+    // print views or fixtures whose surrounding context may be content).
+    if (extract && title?.textContent.trim()) {
+      const doc = root.ownerDocument;
+      const article = doc.createElement("article");
+      article.className = "reader-clean-web";
+      const heading = doc.createElement("h1");
+      heading.textContent = title.textContent.trim();
+      article.append(heading);
+      for (const [i,{ post, cell, outer }] of layouts.entries()) {
+        const container = doc.createElement(i ? "details" : "section");
+        if (i) {
+          container.className = "reader-clean-web-reply";
+          const toggle = doc.createElement("summary");
+          const lead = cell.querySelector(":scope > .tpc_title")?.textContent.trim() ||
+            post.firstChild?.textContent?.trim().split(/\s*\n\s*/)[0] || "";
+          toggle.textContent = `${i} 楼${lead ? ` · ${lead.slice(0, 84)}${lead.length > 84 ? "…" : ""}` : ""}`;
+          container.append(toggle);
+        }
+        // Keep links to pre-post named anchors and the table's own target,
+        // leaving every node inside the actual post intact.
+        const ids = new Set([...post.querySelectorAll("[id],a[name]")].flatMap(node =>
+          [node.id, node.getAttribute("name")].filter(Boolean)));
+        for (const anchor of [outer, ...cell.querySelectorAll(":scope > [id], :scope > a[name]")]) {
+          if (anchor === post) continue;
+          const id = anchor.id || anchor.getAttribute("name");
+          if (!id || ids.has(id)) continue;
+          const target = doc.createElement("span");
+          target.id = id;
+          container.append(target);
+          ids.add(id);
+        }
+        container.append(post);
+        article.append(container);
+      }
+      root.replaceChildren(article);
+      return true;
     }
 
     // Never hide a possible fragment target, live link, or non-text content.
@@ -798,18 +946,20 @@ export function createReaderHtmlFormat(readerContext) {
     }
   }
 
-  /** @param {string} text */
-  function prepareHtmlDocument(text) {
-    const discourse = buildDiscourseDocument(text);
+  /** @param {string} text @param {boolean} [archiveView] @param {string} [reviewedView] */
+  function prepareHtmlDocument(text, archiveView = false, reviewedView = "") {
+    const discussion = buildDiscourseDocument(text);
+    const discourse = !archiveView && discussion;
     // The sanitizer returns body content; check the actual title before it is
     // discarded, but recognize and annotate only the sanitized DOM.
-    const phpwind = !discourse && /tpc_content/i.test(text) && /phpwind\.net/i.test(text) &&
+    const phpwind = !discussion && /tpc_content/i.test(text) && /phpwind\.net/i.test(text) &&
       /\bpowered\s+by\s+phpwind\.net\s*$/i.test(new DOMParser().parseFromString(text, "text/html").title);
-    const html = sanitizeOfflineHtml(discourse || text, phpwind);
+    const html = sanitizeOfflineHtml(discourse || text, phpwind, discussion ? "" : reviewedView);
     return {
       html,
       discourse: !!discourse,
-      spreadsheet: !discourse && html.includes("reader-spreadsheet-sheet")
+      discourseArchive: !!discussion,
+      spreadsheet: !discussion && html.includes("reader-spreadsheet-sheet")
     };
   }
 
@@ -835,7 +985,37 @@ export function createReaderHtmlFormat(readerContext) {
     const bytes = await readerContext.readPreparedBytes(prepared.response, prepared.engine);
     const text = new TextDecoder(detectHtmlEncoding(bytes, readerContext.documentState.title)).decode(bytes);
     readerContext.assertReaderActive();
-    const documentData = prepareHtmlDocument(text);
+    let reviewedView = "", archiveDigest = "";
+    const openUrl = new URL(location.href);
+    const reading = openUrl.searchParams.get("view") === "reading";
+    // Restrict extraction to exactly reviewed bytes. A template match or
+    // reused Reader ID alone cannot approve new content.
+    if (globalThis.crypto?.subtle && (text.includes("ArticleContent") || text.includes("tpc_content"))) {
+      archiveDigest = Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", new Uint8Array(bytes))),
+        value => value.toString(16).padStart(2, "0")).join("");
+      if (archiveDigest === "c5c214029407e94ccb2ecb4047285077ac01e5b39ef2ad65ef724724136e4749") reviewedView = "article";
+      if (archiveDigest === "9ddff06d033c44900801a44937334194a4500103816aafda52b837f9f71765d9") reviewedView = "thread";
+      readerContext.assertReaderActive();
+    }
+    const archiveView = openUrl.searchParams.get("view") === "archive";
+    const documentData = prepareHtmlDocument(text, archiveView, reading ? reviewedView : "");
+    if (documentData.discourseArchive || reviewedView) {
+      const archiveNext = documentData.discourseArchive ? !archiveView : reading;
+      if (archiveNext && documentData.discourseArchive) openUrl.searchParams.set("view", "archive");
+      else if (!archiveNext && reviewedView && !documentData.discourseArchive) openUrl.searchParams.set("view", "reading");
+      else openUrl.searchParams.delete("view");
+      const link = document.createElement("a");
+      link.className = "text-action";
+      link.textContent = archiveNext ? "存档视图" : documentData.discourseArchive ? "纯帖子" : "纯阅读";
+      link.href = openUrl.href;
+      link.addEventListener("click", event => {
+        if (event.button || event.metaKey || event.ctrlKey || event.altKey || event.shiftKey) return;
+        event.preventDefault();
+        readerContext.navigateReader(link.href);
+      });
+      document.querySelector("#history-panel > header")?.append(link);
+      readerContext.trackReaderResource(() => { link.remove(); });
+    }
     const frame = document.createElement("iframe");
     readerContext.htmlFrame = frame;
     frame.className = "html-frame";
@@ -860,6 +1040,9 @@ export function createReaderHtmlFormat(readerContext) {
         try {
           readerContext.assertReaderActive();
           const doc = frame.contentDocument;
+          if (reading && reviewedView === "thread") {
+            doc.querySelector("article.reader-clean-web")?.setAttribute("data-reader-reviewed-thread", archiveDigest);
+          }
           if (!documentData.spreadsheet) {
             doc.documentElement.dataset.readerTheme = document.documentElement.dataset.theme || "dark";
             wrapEbookTables(doc.body);
@@ -871,16 +1054,26 @@ export function createReaderHtmlFormat(readerContext) {
             passive: true
           });
            doc.addEventListener("keydown", readerContext.handleReaderKeydown);
+           /** @param {Event} event */
+           const replyToggle = (event) => {
+             const target = /** @type {Element | null} */ (event.target);
+             if (target?.matches("details.reader-clean-web-reply")) readerContext.handleReaderPositionChange(event);
+           };
+           doc.addEventListener("toggle", replyToggle, true);
            /** @param {MouseEvent} event */
            const jump = (event) => {
              const href = clickedLink(event)?.getAttribute("href")?.trim() || "";
              if (!event.defaultPrevented && isLocalFragment(href)) jumpWithoutHistory(doc, href, event);
+             else if (!event.defaultPrevented && event.type === "click" && event.isTrusted &&
+                 (/** @type {Element | null} */ (event.target))?.closest?.("details.reader-clean-web-reply > summary"))
+               readerContext.beginReaderNavigation(event);
            };
            doc.addEventListener("click", jump);
            doc.addEventListener("auxclick", jump);
            doc.addEventListener("click", readerContext.handleReaderOutsideClick);
            readerContext.trackReaderResource(() => {
              doc.removeEventListener("click", jump);
+             doc.removeEventListener("toggle", replyToggle, true);
              doc.removeEventListener("auxclick", jump);
              doc.removeEventListener("click", readerContext.handleReaderOutsideClick);
            });

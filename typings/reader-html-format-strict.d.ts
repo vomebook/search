@@ -1,5 +1,5 @@
 export interface CssOptions { strict?: boolean }
-export interface HtmlDocumentData { html: string; discourse: boolean; spreadsheet: boolean }
+export interface HtmlDocumentData { html: string; discourse: boolean; discourseArchive: boolean; spreadsheet: boolean }
 export interface HeadingTocEntry { label: string; depth: number; target: Element; activate(): void }
 export interface PreparedText { response: Response | Promise<Response>; engines?: Promise<unknown> }
 export interface PreparedHtml { response: Promise<Response>; engine: Promise<unknown> }
