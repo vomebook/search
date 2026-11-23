@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import argparse
 from collections import Counter, defaultdict
+from collections.abc import Iterable
 import gzip
 import hashlib
 from html import escape
@@ -143,6 +144,10 @@ def source_id(record: CatalogRecord) -> str:
     return result.rjust(13, "0")
 
 
+def mirror_repo_routes(catalog: str, repositories: Iterable[str]) -> set[str]:
+    return {catalog + repo.split("/")[-1] + "/" for repo in repositories}
+
+
 def build_catalog(records: list[CatalogRecord], *, project: str, corpus_identity: str, pilot: Pilot | None = None) -> CatalogResult:
     if project not in ("pages", "hf"):
         raise ValueError("Unknown project")
@@ -185,6 +190,7 @@ def build_catalog(records: list[CatalogRecord], *, project: str, corpus_identity
     folder_route = catalog + "folders/" + folder_id + "/"
     pages: dict[str, str] = {}
     page_urls: list[str] = []
+    repo_routes = mirror_repo_routes(catalog, grouped)
 
     def anchor(route: str, label: str) -> str:
         return f'<a href="{escape(origin + route, quote=True)}">{escape(label)}</a>'
@@ -207,7 +213,7 @@ def build_catalog(records: list[CatalogRecord], *, project: str, corpus_identity
         mirror = ""
         # Mirror links use explicit route correspondence, not title-derived guesses.
         if not primary:
-            main_route = route.removeprefix(catalog) if route.startswith(catalog + "book/") or route in {catalog + repo.split("/")[-1] + "/" for repo in grouped} else route
+            main_route = route.removeprefix(catalog) if route.startswith(catalog + "book/") or route in repo_routes else route
             mirror = '<p class="note">这是 HF 导航镜像；<a href="' + escape(PAGES + main_route, quote=True) + '">打开对应的主目录页</a>。</p>'
         html = ('<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">'
                 '<meta name="viewport" content="width=device-width,initial-scale=1">'
