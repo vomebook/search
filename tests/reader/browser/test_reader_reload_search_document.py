@@ -48,7 +48,7 @@ def source_server():
             # synthetic corpus manifests/data; production SW/assets stay intact.
             if path.startswith(PREFIX + '/data/') and path.endswith('.json'):
                 body, content_type = b'{}', 'application/json'
-            elif path.startswith(('/api/reader-content', '/api/reader-resource')):
+            elif path.startswith('/api/reader-content'):
                 body, content_type = TEXT.encode(), 'text/plain; charset=utf-8'
             else:
                 return super().do_GET()
@@ -142,7 +142,7 @@ class ReaderReloadSearchDocumentCases:
             content_type='application/json',
             body='[]' if route.request.url.endswith(('/repos', '/extensions')) else '{}'))
         self.page.route('https://vomebook-hitokoto.hf.space/**', lambda route: route.fulfill(body='{}'))
-        for pattern in ('**/api/reader-content**', '**/api/reader-resource**', SOURCE):
+        for pattern in ('**/api/reader-content**', SOURCE):
             self.page.route(pattern, lambda route: route.fulfill(
                 content_type='text/plain; charset=utf-8', body=TEXT,
                 headers={'Access-Control-Allow-Origin': '*'}))
@@ -263,7 +263,7 @@ class ReaderReloadSearchDocumentCases:
         markdown = ('[Direct fragment](#section) · [Same file](anchors.md#section) · '
                     '[Missing fragment](#missing) · [Unsupported relative](../archive.chm?dl=1#ref)\n\n'
                     + 'Filler paragraph.\n\n' * 150 + '<a id="section"></a>\n\n## End\n\n' + 'More.\n\n' * 60)
-        for pattern in ('**/api/reader-content**', '**/api/reader-resource**', source):
+        for pattern in ('**/api/reader-content**', source):
             self.page.route(pattern, lambda route: route.fulfill(
                 content_type='text/markdown', body=markdown, headers={'Access-Control-Allow-Origin': '*'}))
         target = PREFIX + '/static/reader.html?' + urlencode({'ext': 'md', 'url': source})
@@ -424,7 +424,7 @@ class ReaderReloadSearchDocumentCases:
             self.assertEqual(self.page.evaluate('history.length'), length)
         # Fail the actual content transport on the user reload. Production
         # fail() cancels book work but leaves the Reader error document alive.
-        for pattern in ('**/api/reader-content**', '**/api/reader-resource**', SOURCE):
+        for pattern in ('**/api/reader-content**', SOURCE):
             self.page.route(pattern, lambda route: route.fulfill(
                 status=404, content_type='text/plain', body='Book unavailable',
                 headers={'Access-Control-Allow-Origin': '*'}))
@@ -603,7 +603,7 @@ class ReaderTrueOfflineCases:
         self.page.set_default_navigation_timeout(15000)
         # Only warm-up book bytes are synthetic. Remove every route before
         # set_offline; neither fetch nor navigator.onLine is overridden.
-        for pattern in ('**/api/reader-content**', '**/api/reader-resource**', SOURCE):
+        for pattern in ('**/api/reader-content**', SOURCE):
             self.page.route(pattern, lambda route: route.fulfill(
                 content_type='text/plain; charset=utf-8', body=TEXT,
                 headers={'Access-Control-Allow-Origin': '*', 'Cache-Control': 'no-store'}))

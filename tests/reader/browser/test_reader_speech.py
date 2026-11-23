@@ -13,7 +13,7 @@ from urllib.parse import urlparse
 
 from tests.performance import test_reader_performance as perf
 
-PlaywrightError, epub_with_navigation, minimal_pdf, sync_playwright = perf.PlaywrightError, perf.epub_with_navigation, perf.minimal_pdf, perf.sync_playwright
+PlaywrightError, minimal_pdf, sync_playwright = perf.PlaywrightError, perf.minimal_pdf, perf.sync_playwright
 
 ROOT = Path(__file__).resolve().parents[3]
 SPEECH = "https://vomebook-hitokoto.hf.space"

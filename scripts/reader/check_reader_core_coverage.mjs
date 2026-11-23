@@ -7,8 +7,9 @@ import {hasPassingTapContracts} from "../check_tap_contracts.mjs";
 const gates = [
   { source:"reader-section-virtualizer.js", directory:"formats", lines:100, branches:100, functions:100,
     tests:["tests/reader/layout/test_reader_section_virtualizer.js"] },
-  { source:"reader-chapter-repository.js", directory:"formats", lines:100, branches:98.86, functions:100,
-    tests:["tests/reader/chapters/test_reader_chapter_repository.js", "tests/reader/chapters/test_reader_chapter_scheduler.js", "tests/reader/chapters/test_reader_chapter_preload.js"] },
+  // Scheduler-only branch baseline after retiring the repository (Node v26.13.1).
+  { source:"reader-chapter-repository.js", directory:"formats", lines:100, branches:95.92, functions:100,
+    tests:["tests/reader/chapters/test_reader_chapter_scheduler.js", "tests/reader/chapters/test_reader_chapter_preload.js"] },
   { source:"reader-scroll-anchor.js", directory:"ui", lines:100, branches:89.61, functions:100,
     tests:["tests/reader/layout/test_reader_scroll_anchor.js"] }
 ];
@@ -70,7 +71,6 @@ for (const gate of gates) {
   const values = rows.length === 1 ? rows[0].split("|").slice(1,4).map(value=>Number(value.trim())) : [];
   const text = result.stdout || "";
   const expected = {"tests/reader/layout/test_reader_section_virtualizer.js": "reader section virtualizer contracts passed",
-    "tests/reader/chapters/test_reader_chapter_repository.js": "reader chapter repository contracts passed",
     "tests/reader/chapters/test_reader_chapter_scheduler.js": "reader chapter scheduler contracts passed",
     "tests/reader/chapters/test_reader_chapter_preload.js": "chapter manifest preload validation, reuse, body deadline and disposal passed",
     "tests/reader/layout/test_reader_scroll_anchor.js": "reader scroll anchor contracts passed"};

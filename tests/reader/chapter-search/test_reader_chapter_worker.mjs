@@ -69,7 +69,7 @@ async function search(query = "needle") { await send({type:"search", id:++id, qu
 async function buildConfiguration(data, chapters = [{index:1, path:"one", title:"First"}]) {
   packed = gzipSync(Buffer.from(JSON.stringify(data)));
   const sha256 = Buffer.from(await crypto.subtle.digest("SHA-256", packed)).toString("hex");
-  return {index:{url:proxyOrigin + "/api/reader-content?url=source", bytes:packed.length, sha256}, chapters};
+  return {index:{url:`${proxyOrigin}/api/reader-bucket-resource?path=chapters/ebook/epub/${"a".repeat(64)}/${"b".repeat(16)}/epub-search-index.json.gz`, bytes:packed.length, sha256}, chapters};
 }
 // Legacy manifests may use non-string titles and version-1 filters represented
 // as array-like JSON. Neither was rejected by the previous implementation.

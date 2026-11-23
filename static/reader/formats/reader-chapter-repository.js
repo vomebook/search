@@ -3,120 +3,6 @@
 
   /**
    * @template T
-   * @typedef {{ status: "idle" | "loading" | "ready" | "error", attempts: number,
-   *   value: T | null, error: unknown, promise: Promise<T | null> | null }} ChapterRecord
-   */
-  /**
-   * @template T
-   * @param {{count: number, find: (index: number) => T | null | undefined,
-   *   create: (index: number) => T | Promise<T>, commit?: (index: number, value: T) => T}} options
-   */
-  function createChapterRepository({ count, find, create, commit = (_index, value) => value }) {
-    /** @type {ChapterRecord<T>[]} */
-    const records = Array.from({ length: count }, () => ({
-      status: "idle",
-      attempts: 0,
-      value: null,
-      error: null,
-      promise: null
-    }));
-    let disposed = false;
-
-    /** @param {number} index @returns {Promise<T | null>} */
-    function load(index) {
-      if (disposed)
-        return Promise.reject(new DOMException("Chapter repository disposed", "AbortError"));
-      if (!Number.isInteger(index) || index < 0 || index >= records.length)
-        return Promise.resolve(null);
-      // With the standard Array.from, records is dense and never resized.
-      const record = /** @type {ChapterRecord<T>} */ (records[index]);
-      const existing = find(index);
-      if (existing) {
-        record.status = "ready";
-        record.value = existing;
-        record.error = null;
-        return Promise.resolve(existing);
-      }
-      if (record.promise) return record.promise;
-      record.status = "loading";
-      record.attempts += 1;
-      record.error = null;
-      const promise = Promise.resolve()
-        .then(() => (disposed ? null : create(index)))
-        .then((value) => {
-          if (disposed) return null;
-          record.status = "ready";
-          // The earlier null sentinel requires disposed=true, and dispose is
-          // monotonic, so it cannot reach commit after the guard above.
-          record.value = find(index) || commit(index, /** @type {T} */ (value));
-          return record.value;
-        })
-        .catch((error) => {
-          if (!disposed) {
-            record.status = "error";
-            record.error = error;
-          }
-          throw error;
-        })
-        .finally(() => {
-          if (record.promise === promise) record.promise = null;
-        });
-      record.promise = promise;
-      return promise;
-    }
-
-    /** @param {number} index */
-    function state(index) {
-      const record = records[index];
-      return record
-        ? Object.freeze({
-            status: record.status,
-            attempts: record.attempts,
-            value: record.value,
-            error: record.error
-          })
-        : null;
-    }
-
-    /** @param {number} index */
-    function release(index) {
-      if (disposed || !Number.isInteger(index) || index < 0 || index >= records.length)
-        return false;
-      // The same dense-array and bounds invariant used by load applies here.
-      const record = /** @type {ChapterRecord<T>} */ (records[index]);
-      if (record.promise) return false;
-      record.status = "idle";
-      record.value = null;
-      record.error = null;
-      return true;
-    }
-
-    function dispose() {
-      if (disposed) return;
-      disposed = true;
-      for (const record of records) {
-        record.status = "idle";
-        record.value = null;
-        record.error = null;
-      }
-    }
-
-    return Object.freeze({
-      load,
-      state,
-      release,
-      dispose,
-      get pending() {
-        return records.flatMap((record) => (record.promise ? [record.promise] : []));
-      },
-      get disposed() {
-        return disposed;
-      }
-    });
-  }
-
-  /**
-   * @template T
    * @typedef {{index: number, demand: boolean, started: boolean, controller: AbortController,
    *   promise: Promise<T>, resolve: (value: T | PromiseLike<T>) => void, reject: (reason: unknown) => void}} SchedulerRecord
    */
@@ -211,5 +97,5 @@
     });
   }
 
-  root.VoiceOfMLReaderChapters = Object.freeze({ createChapterRepository, createChapterScheduler });
+  root.VoiceOfMLReaderChapters = Object.freeze({ createChapterScheduler });
 })(typeof self !== "undefined" ? self : globalThis);

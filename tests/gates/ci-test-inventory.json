@@ -246,17 +246,9 @@
       "kind": "script",
       "source": "scripts/reader/check_reader_core_coverage.mjs"
     },
-    "tests/reader/chapters/test_reader_chapter_repository.js": {
-      "kind": "script",
-      "source": "scripts/reader/check_reader_core_coverage.mjs"
-    },
     "tests/reader/chapters/test_reader_chapter_scheduler.js": {
       "kind": "script",
       "source": "scripts/reader/check_reader_core_coverage.mjs"
-    },
-    "tests/reader/chapters/test_reader_feynman_toc_reviewed.mjs": {
-      "kind": "direct",
-      "source": ".github/workflows/reader-refactor.yml"
     },
     "tests/reader/core/test_pdf_text_context.js": {
       "kind": "script",

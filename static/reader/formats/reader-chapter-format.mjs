@@ -1,50 +1,6 @@
 import { EBOOK_LAYOUT_STYLE, wrapEbookTables } from "../ui/reader-document-styles.mjs";
 import { chapterIndexInRange, matchesChapterManifest } from "../ui/reader-progress.mjs";
 
-// The current MOBI chapter manifest for this five-volume edition contains
-// cross-volume sidebar targets that point back into volume 1. Its own verified
-// "总目录" links and each volume's adjacent "书名页" independently identify
-// these destinations. Never apply this correction to another manifest version.
-/** @type {Map<string, [number, string, number, string, number, string, number][]>} */
-const REVIEWED_TOC_CORRECTIONS = new Map([
-  ["7b150f1ba768d3bf4380b805676a32b8b2c18d7a8b4efb75be49a38da1dbf3a8", [
-    [1, "费曼物理学讲义：新千年版．第1卷", 4, "", 4, "chapter", 3],
-    [2, "封面", 4, "", 4, "chapter", 3],
-    [355, "费曼物理学讲义：新千年版．第2卷", 50, "2NI-3c4a5b77066c4db48850b1e309e1eb0b", 306, "chapter", 357],
-    [356, "封面", 50, "2NI-3c4a5b77066c4db48850b1e309e1eb0b", 306, "chapter", 357],
-    [684, "费曼物理学讲义：新千年版．第3卷", 84, "68C-3c4a5b77066c4db48850b1e309e1eb0b", 595, "chapter", 686],
-    [685, "封面", 84, "68C-3c4a5b77066c4db48850b1e309e1eb0b", 595, "chapter", 686],
-    [855, "费曼物理学讲义补编", 109, "88V-3c4a5b77066c4db48850b1e309e1eb0b", 744, "chapter", 857],
-    [856, "封面", 109, "88V-3c4a5b77066c4db48850b1e309e1eb0b", 744, "chapter", 857],
-    [875, "费曼物理学讲义习题集：新千年版", 118, "9LP-3c4a5b77066c4db48850b1e309e1eb0b", 763, "chapter", 877],
-    [876, "封面", 118, "9LP-3c4a5b77066c4db48850b1e309e1eb0b", 763, "chapter", 877]
-  ]]
-]);
-const REVIEWED_MOBI_SOURCE = "chapters/ebook/mobi/046c991cc6fb1b05e4c95e24fea7dd34112a9ba239ff4e2f22d68221bb8fd6aa/6df0c142735b1a1a/chapter-manifest.json";
-
-/** @param {import("../../../typings/reader-chapter-format-strict").ChapterManifest} manifest
- * @param {Uint8Array<ArrayBuffer>} bytes @param {string} manifestUrl */
-export function applyReviewedTocCorrections(manifest, bytes, manifestUrl) {
-  const url = new URL(manifestUrl, location.href);
-  const path = url.searchParams.get("path") || decodeURIComponent(url.pathname);
-  if (!path.endsWith(REVIEWED_MOBI_SOURCE) || !globalThis.crypto?.subtle || !Array.isArray(manifest.toc)) return manifest;
-  const tocEntries = manifest.toc;
-  return crypto.subtle.digest("SHA-256", bytes).then((digest) => {
-    const hex = [...new Uint8Array(digest)].map(n => n.toString(16).padStart(2, "0")).join("");
-    const corrections = REVIEWED_TOC_CORRECTIONS.get(hex);
-    if (!corrections) return manifest;
-    for (const [index, title, chapter, fragment, target, , titleIndex] of corrections) {
-      const entry = tocEntries[index], titlePage = tocEntries[titleIndex];
-      if (!entry || entry.title !== title || entry.chapter !== chapter || entry.fragment !== fragment ||
-          !titlePage || titlePage.title !== "书名页" || titlePage.chapter !== target ||
-          !manifest.chapters[target - 1]) return manifest;
-    }
-    const toc = tocEntries.map(entry => ({ ...entry }));
-    for (const [index, , , , chapter, fragment] of corrections) Object.assign(/** @type {import("../../../typings/reader-chapter-format-strict").TocItem} */ (toc[index]), { chapter, fragment });
-    return { ...manifest, toc };
-  }).catch(() => manifest);
-}
-
 /** @param {unknown} value @returns {value is {path: string, bytes: number, sha256: string, [key: string]: unknown}} */
 export function isChapterSearchIndex(value) {
   if (!value || typeof value !== "object") return false;
@@ -147,9 +103,7 @@ export function createReaderChapterFormat(readerContext) {
     const response = await prepared;
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const manifestBytes = await VoiceOfMLReaderSecurity.readBytes(response, VoiceOfMLReaderSecurity.LIMITS.manifestBytes);
-    let manifest = VoiceOfMLReaderSecurity.validateChapterManifest(JSON.parse(new TextDecoder().decode(manifestBytes)));
-    manifest = await applyReviewedTocCorrections(manifest, manifestBytes,
-      readerContext.chapterManifestUrl || readerContext.sourceUrl);
+    const manifest = VoiceOfMLReaderSecurity.validateChapterManifest(JSON.parse(new TextDecoder().decode(manifestBytes)));
     readerContext.assertReaderActive();
     const frame = document.createElement("div");
     frame.className = "epub-frame";
@@ -533,11 +487,11 @@ export function createReaderChapterFormat(readerContext) {
         }
       }
     });
-    /** @param {import("../../../typings/reader-chapter-format-strict").Chapter} chapter @param {boolean} [demand] @param {boolean} [exclusive] */
-    const fetchChapter = (chapter, demand = true, exclusive = false) => {
+    /** @param {import("../../../typings/reader-chapter-format-strict").Chapter} chapter @param {boolean} [exclusive] */
+    const fetchChapter = (chapter, exclusive = false) => {
       readerContext.assertReaderActive();
       if (loaded.has(chapter.index)) return Promise.resolve();
-      return chapterScheduler.load(chapter.index, demand, exclusive).then(() => {
+      return chapterScheduler.load(chapter.index, true, exclusive).then(() => {
         readerContext.chapterScrollAnchors.whenIdle(trimChapterWindow);
       }).catch(error => {
         if (error.name !== "AbortError" && !readerContext.readerAbortController.signal.aborted) {
@@ -558,7 +512,7 @@ export function createReaderChapterFormat(readerContext) {
       chapterNavigating++;
       let landingProtected = false;
       try {
-        await fetchChapter(chapter, true, chapterWindowReady);
+        await fetchChapter(chapter, chapterWindowReady);
         if (!readerContext.isReaderGenerationCurrent("navigation", generation)) return false;
         const node = frame.querySelector(`.reader-epub-chapter[data-chapter="${chapter.index}"]`);
         const id = decodeChapterFragment(typeof destination === "string" ? destination : destination.fragment || "");
@@ -801,7 +755,7 @@ export function createReaderChapterFormat(readerContext) {
       if (!chapter) return null;
       chapterFocusIndex = index;
       chapterNavigating++;
-      try { await fetchChapter(chapter, true, chapterWindowReady); }
+      try { await fetchChapter(chapter, chapterWindowReady); }
       finally { chapterNavigating--; }
       return /** @type {import("../../../typings/reader-chapter-format-strict").ChapterArticle | null} */ (
         frame.querySelector(`.reader-epub-chapter[data-chapter="${index}"]`));

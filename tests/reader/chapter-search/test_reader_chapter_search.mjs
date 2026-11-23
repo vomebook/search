@@ -7,7 +7,7 @@ import {isSearchIndexProxyURL} from "../../../static/reader/search/reader-chapte
 const origin = "https://voiceofml-search.hf.space";
 const indexURL = path => new URL(origin + "/api/reader-bucket-resource?path=" + encodeURIComponent(path));
 const prefix = "chapters/ebook/epub/" + "a".repeat(64) + "/" + "b".repeat(16) + "/";
-assert.ok(isSearchIndexProxyURL(new URL(origin + "/api/reader-content?url=source"), origin));
+assert.equal(isSearchIndexProxyURL(new URL(origin + "/api/reader-content?url=source"), origin), false);
 assert.equal(isSearchIndexProxyURL(new URL(origin + "/api/unrelated?path=book"), origin), false);
 for (const extension of ["epub", "mobi", "azw3", "fb2", "chm"])
   assert.ok(isSearchIndexProxyURL(indexURL(prefix.replace("/epub/", "/" + extension + "/") + "epub-search-index.json.gz"), origin));

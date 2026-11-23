@@ -10,6 +10,44 @@ class EbookFlowTests(unittest.TestCase):
     setUpClass = classmethod(support.PdfFollowupTests.setUpClass.__func__)
     setUp = support.PdfFollowupTests.setUp
 
+    def test_generated_volume_toc_lands_on_published_fragment(self):
+        source = ('https://voiceofml-search.hf.space/api/reader-bucket-resource?path=chapters/ebook/mobi/'
+                  + 'b' * 64 + '/1234567890abcdef/chapter-manifest.json')
+        body = ['<h1>Opening</h1><p style="height:1200px">Earlier volume</p>',
+                '<p id="wrong-but-valid">Earlier anchor</p>',
+                '<p style="height:1100px">Title page offset</p><h1 id="volume:2">New volume</h1>'
+                '<p style="height:1400px">Later text</p>']
+        manifest = {'version': 1, 'kind': 'epub-chapters', 'chapters': [
+            {'index': i, 'path': f'chapters/chapter-{i:04d}.xhtml', 'bytes': len(raw)}
+            for i, raw in enumerate(body, 1)], 'toc': [
+            dict(title='Volume II', chapter=3, fragment='volume:2', depth=0),
+            dict(title='Cover', chapter=3, fragment='volume:2', depth=1),
+            dict(title='Title page', chapter=3, fragment='', depth=1)]}
+
+        def resource(route):
+            path = unquote(route.request.url)
+            if path.endswith('chapter-manifest.json'):
+                route.fulfill(json=manifest)
+            else:
+                i = int(path.rsplit('chapter-', 1)[1].split('.', 1)[0])
+                route.fulfill(content_type='text/html', body=body[i - 1])
+
+        self.expose()
+        self.page.route('**/api/reader-bucket-resource**', resource)
+        self.page.goto(self.origin + support.PREFIX + '/static/reader.html?' + urlencode(
+            dict(url=source, ext='epub-chapters')))
+        self.page.wait_for_function("()=>document.documentElement.dataset.readerPhase==='ready'")
+        self.assertEqual(self.page.evaluate('() => __ebook.toc().map(e => [e.chapterIndex, e.fragment, e.depth])'),
+                         [[3, 'volume:2', 0], [3, 'volume:2', 1], [3, '', 1]])
+        for entry in (1, 2):
+            self.assertTrue(self.page.evaluate('__ebook.chapter', entry))
+            self.page.wait_for_function('''() => {
+              const target = document.getElementById('volume:2');
+              const viewport = document.querySelector('#viewport');
+              return target && Math.abs(target.getBoundingClientRect().top -
+                viewport.getBoundingClientRect().top) < 12;
+            }''')
+
     def open_with_saved_chapter(self, index, manifest_revision, bookmark=False):
         source = 'https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/restore.epub'
         endpoint = 'https://voiceofml-search.hf.space/api/reader-bucket-resource?'

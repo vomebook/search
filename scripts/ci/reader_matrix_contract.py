@@ -239,6 +239,14 @@ def execution_policy(job, records, historical_steps):
         name = record.get('fields', {}).get('name')
         if name == chapter:
             continue
+        if name == 'Check TOC landing ownership and cancellation':
+            run = original[name]['run']
+            retired = 'node tests/reader/chapters/test_reader_feynman_toc_reviewed.mjs\n'
+            require(run.startswith(retired), 'unexpected historical TOC regression command')
+            successor = ('python3 -B -m unittest -v tests.reader.browser.test_reader_ebook_flow.'
+                         'EbookFlowTests.test_generated_volume_toc_lands_on_published_fragment\n')
+            adjusted_run = successor + run.removeprefix(retired)
+            record = {**record, 'run_sha256': hashlib.sha256(adjusted_run.encode()).hexdigest()}
         if job == 'github-search' and name == 'Run Reader flow and cleanup regressions':
             earlier = 'Run multi-format preparation and navigation gates'
             toc = 'tests.performance.test_reader_toc_latency'

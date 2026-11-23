@@ -132,9 +132,8 @@ assertCode(reader, 'frame.insertBefore(article, row)')
 assert.doesNotMatch(reader, /^let navigationGeneration\b/m)
 assert.doesNotMatch(reader, /syncReaderState/)
 assert.doesNotMatch(reader, /^(?:let|var|const)\s+title\b/m)
-// These locals read existing TOC data; neither creates a parallel navigation state.
+// This accessor reads runtime state without mirroring it.
 const readerWithoutTocLocals = reader
-  .replace(codePattern('const tocEntries = manifest.toc;'), '')
   .replace(/const\s+tocEntries\s*=\s*\(\)\s*=>\s*\/\*[\s\S]*?\*\/\s*\(navigationState\.tocEntries\);/, '')
 for (const mirror of ['zoom', 'currentPage', 'pageCount', 'restoredEntry', 'restorationReady', 'tocEntries', 'currentChapterIndex', 'fullSearchResults', 'fullSearchIndex', 'fullSearchGeneration', 'showingAllBookmarks', 'editingBookmark', 'pdfRenderGeneration']) assert.doesNotMatch(mirror === 'tocEntries' ? readerWithoutTocLocals : reader, new RegExp(`(?:let|var|const)\\s+${mirror}\\b`), mirror)
 assert.doesNotMatch(reader, /readerRuntime\.updateFormat\(/)

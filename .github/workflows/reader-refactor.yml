@@ -219,7 +219,7 @@ jobs:
       - name: Check TOC landing ownership and cancellation
         if: ${{ !cancelled() && steps.setup-complete.outputs.ready == 'true' && matrix.shard == 'navigation' }}
         run: |
-          node tests/reader/chapters/test_reader_feynman_toc_reviewed.mjs
+          python3 -B -m unittest -v tests.reader.browser.test_reader_ebook_flow.EbookFlowTests.test_generated_volume_toc_lands_on_published_fragment
           python3 -B -m unittest -v \
             tests.reader.browser.test_reader_toc_navigation.TocNavigationTests.test_new_navigation_supersedes_the_previous_landing_hold \
             tests.reader.browser.test_reader_toc_navigation.TocNavigationTests.test_landing_hold_is_cancelled_on_disposal \
@@ -800,7 +800,7 @@ jobs:
         if: ${{ !cancelled() && steps.setup-complete.outputs.ready == 'true' && matrix.shard == 'navigation' }}
         working-directory: huggingface-search
         run: |
-          node tests/reader/chapters/test_reader_feynman_toc_reviewed.mjs
+          python3 -B -m unittest -v tests.reader.browser.test_reader_ebook_flow.EbookFlowTests.test_generated_volume_toc_lands_on_published_fragment
           python3 -B -m unittest -v \
             tests.reader.browser.test_reader_toc_navigation.TocNavigationTests.test_new_navigation_supersedes_the_previous_landing_hold \
             tests.reader.browser.test_reader_toc_navigation.TocNavigationTests.test_landing_hold_is_cancelled_on_disposal \

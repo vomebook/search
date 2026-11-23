@@ -9,7 +9,6 @@ import time
 import unittest
 import urllib.parse
 import wave
-import zipfile
 
 from tests.support.browser_support import local_server
 from tests.support.reader_native_fixture import install as install_native_djvu, separated_pages
@@ -110,14 +109,6 @@ window.VoiceOfMLReaderStore = Object.freeze({
 """
 MARKED_SCRIPT = "window.marked = { parse: (text) => '<p>' + text + '</p>' };"
 PURIFY_SCRIPT = "window.DOMPurify = { addHook() {}, removeHook() {}, sanitize: (html, options) => { if (!options?.RETURN_DOM_FRAGMENT) return html; const template = document.createElement('template'); template.innerHTML = html; return template.content; } };"
-EPUB_SCRIPT = """
-window.ePub = () => ({ renderTo: (frame) => ({
-  on() {}, prev() {}, next() {}, themes: { register() {}, select() {}, fontSize(value) { window.__epubFontSize = value; } },
-  display: () => new Promise((resolve) => setTimeout(() => {
-    frame.textContent = 'EPUB readable'; resolve();
-  }, 20)),
-}) });
-"""
 PNG_BYTES = bytes.fromhex(
     "89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c489"
     "0000000d49444154789c6360f8cfc000000301010018dd8db10000000049454e44ae426082"
@@ -148,61 +139,6 @@ def minimal_pdf():
     for offset in offsets[1:]: payload.extend(f"{offset:010d} 00000 n \n".encode())
     payload.extend(f"trailer\n<< /Size {len(objects) + 1} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n".encode())
     return bytes(payload)
-
-
-def zip_bytes(files, stored_first=None):
-    output = io.BytesIO()
-    with zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED) as archive:
-        if stored_first:
-            archive.writestr(stored_first[0], stored_first[1], compress_type=zipfile.ZIP_STORED)
-        for name, body in files.items(): archive.writestr(name, body)
-    return output.getvalue()
-
-
-def minimal_epub():
-    return zip_bytes({
-        "META-INF/container.xml": '<?xml version="1.0"?><container xmlns="urn:oasis:names:tc:opendocument:xmlns:container" version="1.0"><rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>',
-        "OEBPS/content.opf": '<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="id"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:identifier id="id">reader</dc:identifier><dc:title>Reader</dc:title><dc:language>en</dc:language></metadata><manifest><item id="chapter" href="chapter.xhtml" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="chapter"/></spine></package>',
-        "OEBPS/chapter.xhtml": '<html xmlns="http://www.w3.org/1999/xhtml"><head><title>Reader</title></head><body><p>EPUB readable</p></body></html>',
-    }, ("mimetype", "application/epub+zip"))
-
-
-def epub_with_navigation():
-    return zip_bytes({
-        "META-INF/container.xml": '<?xml version="1.0"?><container xmlns="urn:oasis:names:tc:opendocument:xmlns:container" version="1.0"><rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>',
-        "OEBPS/content.opf": '<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="id"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:identifier id="id">reader-e2e</dc:identifier><dc:title>Reader E2E</dc:title><dc:language>zh</dc:language></metadata><manifest><item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/><item id="one" href="chapter-1.xhtml" media-type="application/xhtml+xml"/><item id="two" href="chapter-2.xhtml" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="nav"/><itemref idref="one"/><itemref idref="two"/></spine></package>',
-        "OEBPS/nav.xhtml": '<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><head><title>目录</title><style>a{color:#000} body{margin-top:900px}</style></head><body><nav epub:type="toc"><h1>目录</h1><ol><li><a href="chapter-1.xhtml#one">第一章</a></li><li><a href="chapter-2.xhtml#two">第二章</a></li></ol></nav></body></html>',
-        "OEBPS/chapter-1.xhtml": '<html xmlns="http://www.w3.org/1999/xhtml"><body><h1 id="one">第一章</h1><p style="height:900px">第一章正文</p></body></html>',
-        "OEBPS/chapter-2.xhtml": '<html xmlns="http://www.w3.org/1999/xhtml"><body><h1 id="two">第二章</h1><p style="height:900px">第二章正文</p></body></html>',
-    }, ("mimetype", "application/epub+zip"))
-
-
-def epub_with_legacy_chm_markup():
-    return zip_bytes({
-        "META-INF/container.xml": '<?xml version="1.0"?><container xmlns="urn:oasis:names:tc:opendocument:xmlns:container" version="1.0"><rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>',
-        "OEBPS/content.opf": '<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" version="2.0" unique-identifier="id"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:identifier id="id">legacy-chm</dc:identifier><dc:title>Legacy CHM</dc:title><dc:language>C</dc:language></metadata><manifest><item id="chapter" href="chapter.xhtml" media-type="application/xhtml+xml"/><item id="style" href="style.css" media-type="text/css"/><item id="image" href="picture.svg" media-type="image/svg+xml"/></manifest><spine><itemref idref="chapter"/></spine></package>',
-        "OEBPS/style.css": "p { color: rgb(1, 2, 3); }",
-        "OEBPS/picture.svg": '<svg xmlns="http://www.w3.org/2000/svg" width="32" height="16"><rect width="32" height="16" fill="red"/></svg>',
-        "OEBPS/chapter.xhtml": '<html:html xmlns:html="http://www.w3.org/1999/xhtml"><html:head><html:link rel="stylesheet" href="style.css"/></html:head><html:body><html:p id="legacy">Legacy CHM content</html:p><html:img src="picture.svg"/></html:body></html:html>',
-    }, ("mimetype", "application/epub+zip"))
-
-
-def epub_with_many_chapters(count=14):
-    manifest = '<item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>'
-    spine = '<itemref idref="nav"/>'
-    links = []
-    files = {}
-    for index in range(1, count + 1):
-        manifest += f'<item id="chapter-{index}" href="chapter-{index}.xhtml" media-type="application/xhtml+xml"/>'
-        spine += f'<itemref idref="chapter-{index}"/>'
-        links.append(f'<li><a href="chapter-{index}.xhtml#chapter-{index}">章节 {index}</a></li>')
-        files[f"OEBPS/chapter-{index}.xhtml"] = f'<html xmlns="http://www.w3.org/1999/xhtml"><body><h1 id="chapter-{index}">章节 {index}</h1><p style="height:1200px">正文 {index}</p></body></html>'
-    files.update({
-        "META-INF/container.xml": '<?xml version="1.0"?><container xmlns="urn:oasis:names:tc:opendocument:xmlns:container" version="1.0"><rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>',
-        "OEBPS/content.opf": f'<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="id"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:identifier id="id">reader-race</dc:identifier><dc:title>Reader Race</dc:title><dc:language>zh</dc:language></metadata><manifest>{manifest}</manifest><spine>{spine}</spine></package>',
-        "OEBPS/nav.xhtml": f'<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><body><nav epub:type="toc"><ol>{"".join(links)}</ol></nav></body></html>',
-    })
-    return zip_bytes(files, ("mimetype", "application/epub+zip"))
 
 
 def minimal_wav():
@@ -1864,7 +1800,6 @@ class ReaderPerformanceTest(unittest.TestCase):
                 page.route("**/static/reader/core/reader-store.js", lambda route: route.fulfill(status=200, content_type="text/javascript", body=held_store))
                 page.route("**/static/vendor/marked.min.*.js", timed("marked", "text/javascript", MARKED_SCRIPT))
                 page.route("**/static/vendor/purify.min.*.js", timed("purify", "text/javascript", PURIFY_SCRIPT))
-                page.route("**/static/vendor/epub.min.06eae1574510.js", timed("epub", "text/javascript", EPUB_SCRIPT))
                 content_type = "image/png" if extension == "png" else "application/octet-stream"
                 body = PNG_BYTES if extension == "png" else b"Reader benchmark content"
                 page.route("https://voiceofml-search.hf.space/api/reader-content**", timed("content", content_type, body))
@@ -1919,7 +1854,6 @@ class ReaderPerformanceTest(unittest.TestCase):
                     page.wait_for_function("expected => document.querySelector('#status').textContent === expected", arg=ready_status, timeout=30000)
                     page.locator(selector).wait_for(state="attached", timeout=30000)
                     if extension in {"txt", "md"}: self.assertTrue(page.locator(selector).inner_text().strip())
-                    elif extension == "epub": self.assertIn("EPUB readable", page.locator(selector).content_frame.locator("body").inner_text())
                     elif extension == "png": self.assertTrue(page.locator(selector).evaluate("image => image.naturalWidth > 0"))
                     elif extension == "pdf": self.assertGreater(page.locator(selector).evaluate("canvas => canvas.width * canvas.height"), 0)
                     elapsed = (time.perf_counter() - started) * 1000

@@ -2095,7 +2095,7 @@ keepValue(1, 2);
                  "static/reader/formats/reader-chapter-repository.js",
                  "static/reader/ui/reader-scroll-anchor.js", "static/reader/core/reader-contract.js",
                  "static/reader/core/reader-security.js", "scripts/reader/check_reader_core_coverage.mjs",
-                 "tests/reader/layout/test_reader_section_virtualizer.js", "tests/reader/chapters/test_reader_chapter_repository.js",
+                 "tests/reader/layout/test_reader_section_virtualizer.js",
                  "tests/reader/chapters/test_reader_chapter_scheduler.js", "tests/reader/chapters/test_reader_chapter_preload.js",
                  "tests/reader/layout/test_reader_scroll_anchor.js"]
         boundary_paths = ["static/reader/pdf/reader-djvu-loader.mjs",
@@ -2126,14 +2126,14 @@ keepValue(1, 2);
         boundary.write_text(boundary_source)
         gate = self.root / paths[5]
         original_gate = gate.read_text()
-        first = 'tests/reader/chapters/test_reader_chapter_repository.js'
-        second = 'tests/reader/chapters/test_reader_chapter_scheduler.js'
-        list_anchor = '"' + first + '", "' + second + '",'
+        scheduler = 'tests/reader/chapters/test_reader_chapter_scheduler.js'
+        preload = 'tests/reader/chapters/test_reader_chapter_preload.js'
+        list_anchor = f'"{scheduler}", "{preload}"'
         self.assertEqual(original_gate.count(list_anchor), 1)
-        gate.write_text(original_gate.replace(list_anchor, '"' + first + '", "' + first + '",'))
+        gate.write_text(original_gate.replace(list_anchor, f'"{scheduler}", "{scheduler}"'))
         self.assert_check(self.run_check(*check), False, "passing named tests")
         gate.write_text(original_gate)
-        chapter_test = self.root / first
+        chapter_test = self.root / scheduler
         original_test = chapter_test.read_text()
         chapter_test.write_text(original_test + '\nrequire("node:test").skip("unrelated skipped check", () => {});\n')
         self.assert_check(self.run_check(*check), False, "passing named tests")
@@ -2144,14 +2144,15 @@ keepValue(1, 2);
                       'console.log("skipped 0");', 'console.log("todo 0");'):
             chapter_test.write_text(original_test + "\n" + extra + "\n")
             self.assert_check(self.run_check(*check), False, "passing named tests")
-        chapter_test.write_text(original_test.replace('reader chapter repository contracts passed', 'renamed success marker'))
+        marker = 'reader chapter scheduler contracts passed'
+        self.assertEqual(original_test.count(marker), 1)
+        chapter_test.write_text(original_test.replace(marker, 'renamed success marker'))
         self.assert_check(self.run_check(*check), False, "passing named tests")
         chapter_test.write_text(original_test)
-        (self.root / paths[10]).write_text(
-            'const test = require("node:test"); test("empty", () => {});\n')
+        scroll_test = self.root / paths[-1]
+        scroll_test.write_text('const test = require("node:test"); test("empty", () => {});\n')
         self.assert_check(self.run_check(*check), False, "reader-scroll-anchor.js")
-        (self.root / paths[10]).write_text(
-            'require("../../../static/reader/ui/reader-scroll-anchor.js");\n')
+        scroll_test.write_text('require("../../../static/reader/ui/reader-scroll-anchor.js");\n')
         self.assert_check(self.run_check(*check), False, "coverage")
 
     def test_pdf_network_safety_mutation_gate_rejects_unexpected_failure(self):
@@ -2200,29 +2201,23 @@ keepValue(1, 2);
         self.assert_check(self.run_check(*check), False, "TS2345")
 
     def test_strict_chapter_repository_and_scheduler_contracts(self):
+        # Keep the frozen shard ID; the surviving contract is the scheduler.
         source = self.root / "static/chapter-strict-usage.js"
         config = self.root / "jsconfig.json"
         config.write_text(json.dumps({"compilerOptions": {"allowJs": True, "checkJs": True, "noEmit": True,
             "strict": True, "target": "esnext"},
             "files": [str(ROOT / "typings/reader-globals.d.ts"), "static/chapter-strict-usage.js"]}))
         check = ["node", ROOT / "node_modules/typescript/bin/tsc", "--project", config]
-        valid = ('const repository = VoiceOfMLReaderChapters.createChapterRepository({count: 2, '
-                 'find: index => index === 0 ? "cached" : undefined, create: async index => `chapter-${index}`, '
-                 'commit: (_index, value) => value.toUpperCase()});\n'
-                 'repository.load(0).then(value => value?.toUpperCase());\n'
-                 'const state = repository.state(0); if (state && state.status === "ready") state.value?.toUpperCase();\n'
-                 'const chapters = VoiceOfMLReaderChapters.createChapterScheduler({create: async '
+        valid = ('const chapters = VoiceOfMLReaderChapters.createChapterScheduler({create: async '
                  '(index, signal, priority) => { signal.throwIfAborted(); return `${index}:${priority}`; }});\n'
                  'chapters.load(0).then(value => value.toUpperCase()); chapters.prefetch([1, 2]);\n')
         source.write_text(valid)
         self.assert_check(self.run_check(*check), True, "")
         for bad, diagnostic in (
-            ('repository.load("wrong");', "TS2345"),
-            ('VoiceOfMLReaderChapters.createChapterRepository({count: 1, find: () => null});', "TS2741"),
-            ('repository.state(0).status;', "TS2531"),
+            ('chapters.load("wrong");', "TS2345"),
+            ('VoiceOfMLReaderChapters.createChapterScheduler({concurrency: 1});', "TS2741"),
             ('chapters.load(1).then(value => value.toFixed());', "TS2551"),
-            ('VoiceOfMLReaderChapters.createChapterRepository({count: 1, find: () => "x", '
-             'create: () => "x", commit: (_index, value) => value - 1});', "TS2362"),
+            ('chapters.prefetch(["wrong"]);', "TS2322"),
         ):
             with self.subTest(bad=bad):
                 source.write_text(valid + bad + "\n")
@@ -3494,15 +3489,16 @@ syncBuiltinESMExports();
         self.assert_check(self.run_check(*check), False, "TS2769")
 
     def test_reader_chapter_exact_gate_checks_original_bounds_invariant(self):
+        # Keep the frozen shard ID; probe the scheduler's record initialization instead.
         config = self.materialize_reader_exact_project(load_type_config("jsconfig.reader-exact.json"))
         check = ["node", ROOT / "node_modules/typescript/bin/tsc", "--project", config]
         self.assert_check(self.run_check(*check), True, "")
         module = self.root / "static/reader/formats/reader-chapter-repository.js"
         source = module.read_text()
-        assertion = '/** @type {ChapterRecord<T>} */ (records[index])'
-        self.assertEqual(source.count(assertion), 2)
-        module.write_text(source.replace(assertion, 'records[index]'))
-        self.assert_check(self.run_check(*check), False, "TS18048")
+        assertion = '/** @type {SchedulerRecord<T>} */ (/** @type {unknown} */ ('
+        self.assertEqual(source.count(assertion), 1)
+        module.write_text(source.replace(assertion, '(('))
+        self.assert_check(self.run_check(*check), False, "TS2739")
 
     def test_reader_image_request_signal_shape_is_exact(self):
         config = self.root / "jsconfig.json"
