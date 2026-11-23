@@ -1,5 +1,5 @@
 import { bindReaderScrollIntent } from "../core/reader-bindings.mjs";
-import { HTML_PROSE_STYLE, wrapEbookTables } from "../ui/reader-document-styles.mjs";
+import { HTML_PROSE_STYLE, PHPWIND_HTML_STYLE, wrapEbookTables } from "../ui/reader-document-styles.mjs";
 
 /** @param {string | null | undefined} markdown */
 export function stripMarkdownFrontMatter(markdown) {
@@ -590,8 +590,8 @@ export function createReaderHtmlFormat(readerContext) {
     readerContext.status.textContent = "已加载";
   }
 
-  /** @param {string} text */
-  function sanitizeOfflineHtml(text) {
+  /** @param {string} text @param {boolean} [phpwind] */
+  function sanitizeOfflineHtml(text, phpwind = false) {
     // A global ALLOWED_URI_REGEXP would also strip every non-allow-listed plain
     // attribute (colspan/rowspan/width), so scope the inline-image rule to URLs.
     // Use the original document URL, not the proxy, srcdoc, or a supplied <base>.
@@ -640,7 +640,7 @@ export function createReaderHtmlFormat(readerContext) {
         RETURN_DOM_FRAGMENT: true,
         ADD_TAGS: ["style"],
         FORBID_TAGS: ["base", "embed", "form", "iframe", "object", "script"],
-        FORBID_ATTR: ["action", "formaction", "srcdoc"]
+        FORBID_ATTR: ["action", "formaction", "srcdoc", "data-reader-phpwind"]
       });
     } finally {
       DOMPurify.removeHook("uponSanitizeAttribute", restrict);
@@ -668,7 +668,79 @@ export function createReaderHtmlFormat(readerContext) {
       }
       if (stripped !== value) element.setAttribute("style", stripped);
     }
-    return template.innerHTML;
+    const layoutStyle = phpwind && markPhpwindLayout(template.content) ? PHPWIND_HTML_STYLE : "";
+    return template.innerHTML + layoutStyle;
+  }
+
+  /** @param {DocumentFragment} root */
+  function markPhpwindLayout(root) {
+    const posts = [...root.querySelectorAll(".tpc_content")];
+    if (posts.length < 2) return false;
+    // Validate every post before marking anything. This is the legacy two-table
+    // thread template, not a rule for arbitrary layout tables or quoted tables.
+    const shells = new Set();
+    const layouts = [];
+    for (const post of posts) {
+      if (post.localName !== "span") return false;
+      const cell = post.parentElement, row = cell?.parentElement, group = row?.parentElement;
+      const inner = group?.parentElement, main = inner?.parentElement, outerRow = main?.parentElement;
+      const outerGroup = outerRow?.parentElement, outer = outerGroup?.parentElement;
+      const author = outerRow?.firstElementChild;
+      if (!cell?.matches("td") || !row?.matches("tr") || row.childElementCount !== 1 ||
+          !group?.matches("tbody") || group.childElementCount !== 3 || group.firstElementChild !== row ||
+          !inner?.matches("table") || inner.childElementCount !== 1 ||
+          !main?.matches("td") || main.childElementCount !== 1 ||
+          !outerRow?.matches("tr") || outerRow.childElementCount !== 2 || main !== outerRow.lastElementChild ||
+          !author?.matches("td") || !outerGroup?.matches("tbody") || outerGroup.childElementCount !== 1 ||
+          !outer?.matches("table") || outer.childElementCount !== 1 || outer.parentElement?.closest("table") ||
+          shells.has(outer)) return false;
+      shells.add(outer);
+      layouts.push({ post, cell, inner, main, outer, author });
+    }
+
+    // Never hide a possible fragment target, live link, or non-text content.
+    const keepVisible = "[id],a[name],a[href],img,video,audio,svg,math,input,button,select,textarea,[tabindex]";
+    /** @param {Element} element */
+    const canHide = (element) => !element.matches(keepVisible) && !element.querySelector(keepVisible);
+    /** @param {Element} element @param {string} role */
+    const mark = (element, role) => element.setAttribute("data-reader-phpwind", role);
+    const toolbar = ["查看作者资料", "发送短消息", "发送邮件", "推荐此帖", "引用回复这个帖子"];
+    for (const { post, cell, inner, main, outer, author } of layouts) {
+      mark(outer, "shell");
+      mark(main, "main");
+      mark(inner, "inner");
+      mark(post, "post");
+      mark(author, canHide(author) ? "profile" : "profile-in-place");
+
+      const lead = [...cell.children];
+      if (toolbar.every((label, index) => {
+        const control = lead[index];
+        return control?.matches("a:not([href])") && control.textContent.trim() === label && canHide(control);
+      })) {
+        for (const control of lead.slice(0, toolbar.length)) mark(control, "inert");
+        for (const next of lead.slice(toolbar.length, toolbar.length + 3)) {
+          if (!next.matches("br,a:empty") || !canHide(next)) break;
+          mark(next, "inert");
+        }
+      }
+    }
+
+    const navigation = ["控制面板", "短消息", "搜索", "会员", "帮助", "社区", "首页", "无图版"];
+    for (const container of root.children) {
+      if (container.querySelector('[data-reader-phpwind="shell"]') || shells.has(container)) break;
+      if (!container.matches("div") || !container.querySelector(":scope > table")) continue;
+      const links = [...container.querySelectorAll("a:not([href])")];
+      const labels = links.map(link => link.textContent.trim()).filter(Boolean);
+      // Suppress the navigation box only if its entire text is this inactive
+      // menu, and leave adjacent topic information and real navigation alone.
+      if (labels.length === navigation.length && labels.every((label, index) => label === navigation[index]) &&
+          container.textContent.replace(/[\s|]/g, "") === navigation.join("") && canHide(container))
+        mark(container, "inert");
+      for (const link of links) {
+        if (link.textContent.trim() === "加为IE收藏" && canHide(link)) mark(link, "inert");
+      }
+    }
+    return true;
   }
 
   /** @param {string} text */
@@ -706,7 +778,11 @@ export function createReaderHtmlFormat(readerContext) {
   /** @param {string} text */
   function prepareHtmlDocument(text) {
     const discourse = buildDiscourseDocument(text);
-    const html = sanitizeOfflineHtml(discourse || text);
+    // The sanitizer returns body content; check the actual title before it is
+    // discarded, but recognize and annotate only the sanitized DOM.
+    const phpwind = !discourse && /tpc_content/i.test(text) && /phpwind\.net/i.test(text) &&
+      /\bpowered\s+by\s+phpwind\.net\s*$/i.test(new DOMParser().parseFromString(text, "text/html").title);
+    const html = sanitizeOfflineHtml(discourse || text, phpwind);
     return {
       html,
       discourse: !!discourse,

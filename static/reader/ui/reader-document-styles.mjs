@@ -39,9 +39,29 @@ body :is(img,video){max-inline-size:100%!important;block-size:auto!important}
 .reader-ebook-table-scroll{container-type:inline-size}
 @supports (width:1cqi){.reader-ebook-table-scroll :is(img,video){max-inline-size:min(100%,100cqi)!important}}
 body :is(pre,.reader-ebook-table-scroll){box-sizing:border-box!important;max-inline-size:100%!important;overflow-x:auto!important}
-body a{color:var(--link)}
+body a[href]{color:var(--link)}
+body a:not([href]){color:inherit}
 @media (prefers-contrast:more){:root{--paper:#fff;--ink:#111}:root[data-reader-theme="dark"]{--paper:#101214;--ink:#fff}}
-@media (forced-colors:active){html,body{background:Canvas!important;color:CanvasText!important}body a{color:LinkText!important}}
+@media (forced-colors:active){html,body{background:Canvas!important;color:CanvasText!important}body a[href]{color:LinkText!important}}
+</style>`;
+
+// Reflow only the validated post shells; authored tables inside posts stay tables.
+export const PHPWIND_HTML_STYLE = `<style>
+[data-reader-phpwind="shell"]{margin:1rem 0;border-block-end:1px solid currentColor}
+[data-reader-phpwind="shell"], [data-reader-phpwind="shell"] > tbody,
+[data-reader-phpwind="main"], [data-reader-phpwind="inner"],
+[data-reader-phpwind="inner"] > tbody, [data-reader-phpwind="inner"] > tbody > tr,
+[data-reader-phpwind="inner"] > tbody > tr > td, [data-reader-phpwind="post"],
+[data-reader-phpwind="profile"], [data-reader-phpwind="profile-in-place"]{
+  display:block;box-sizing:border-box;inline-size:100%;min-inline-size:0;block-size:auto;
+}
+[data-reader-phpwind="shell"] > tbody > tr{display:flex;flex-direction:column}
+[data-reader-phpwind="profile"], [data-reader-phpwind="profile-in-place"],
+[data-reader-phpwind="inner"] > tbody > tr:not(:first-child) > td{font-size:.85em}
+[data-reader-phpwind="profile"]{order:1;padding-block:.25em}
+[data-reader-phpwind="profile"] > :first-child ~ br{display:none}
+[data-reader-phpwind="post"]{font-size:1rem}
+[data-reader-phpwind="inert"]{display:none!important}
 </style>`;
 
 export const DISCOURSE_POST_SELECTOR = ".topic-post .cooked";
@@ -106,7 +126,7 @@ body{box-sizing:border-box;padding:clamp(18px,4vw,48px);font:16px/1.8 system-ui,
 .reader-forum-post{margin:0 0 2.5em;padding:0 0 2em;border-bottom:1px solid #e1e5ea}
 .reader-forum-post:last-child{margin-bottom:0;border-bottom:0}
 .reader-forum-post p{margin:.8em 0}
-.reader-forum-post a{color:#185abc}
+.reader-forum-post a[href]{color:#185abc}
 .reader-forum-post img,.reader-forum-post svg,.reader-forum-post video{max-width:100%;height:auto}
 .reader-forum-post table{display:block;max-width:100%;overflow-x:auto;border-collapse:collapse}
 .reader-forum-post blockquote{margin:1em 0;padding:.5em 1em;border-left:3px solid #c5ccd6;background:#f6f8fa}

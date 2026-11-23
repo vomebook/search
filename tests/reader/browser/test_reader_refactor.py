@@ -3821,6 +3821,50 @@ class ReaderRefactorTest(unittest.TestCase):
         # the probe's call site instead of expecting a particular wrapper.
         self.assertFalse(self.page.evaluate("()=>window.__parsedHtml.some(stack=>stack?.includes('buildDiscourseDocument'))"))
 
+    def test_html_inactive_anchors_are_not_painted_as_links(self):
+        html = ('<!doctype html><meta charset="utf-8"><p><a id="kept">无链接词</a> '
+                '<a href="#kept">真实跳转</a></p>')
+        self.serve(html, 'text/html')
+        self.open(self.reader_url('html', name='inert-anchors'))
+        p = self.page.frame_locator('.html-frame').locator('p')
+        for forced in ('none', 'active'):
+            with self.subTest(forced=forced):
+                self.page.emulate_media(forced_colors=forced)
+                colors = p.evaluate('p => [p, ...p.querySelectorAll("a")].map(n => getComputedStyle(n).color)')
+                self.assertEqual(colors[0], colors[1])
+                self.assertNotEqual(colors[0], colors[2])
+        self.assertEqual(p.locator('#kept').inner_text(), '无链接词')
+        self.assertEqual(p.locator('a[href]').get_attribute('href'), '#kept')
+
+    def test_phpwind_reflows_post_shells_without_changing_content_tables(self):
+        def shell(author, body):
+            return (f'<div><table width="98%"><tr><td width="20%">{author}</td><td width="80%">'
+                    '<table><tr><td><a>查看作者资料</a><a>发送短消息</a><a>发送邮件</a>'
+                    '<a>推荐此帖</a><a>引用回复这个帖子</a><br><br>'
+                    f'<span class="tpc_content">{body}</span></td></tr><tr><td>发表时间</td></tr>'
+                    '<tr><td>签名</td></tr></table></td></tr></table></div>')
+
+        posts = (shell('第一位作者', '<p id="posted">首帖</p><table><caption>数据</caption>'
+                       '<tr><th>年份</th><td>2026</td></tr></table>') +
+                 shell('第二位作者', '<p>次帖<a href="#posted">跳回首帖</a></p><pre>  保留缩进</pre>'))
+        self.page.set_viewport_size({'width': 390, 'height': 844})
+        for name, powered in (('phpwind', ' - powered by phpwind.net'), ('ordinary', '')):
+            with self.subTest(template=name):
+                self.serve(f'<!doctype html><meta charset="utf-8"><title>讨论{powered}</title>{posts}', 'text/html')
+                self.open(self.reader_url('html', name=name))
+                frame = self.page.frame_locator('.html-frame')
+                self.assertEqual(frame.locator('[data-reader-phpwind="shell"]').count(), 2 if powered else 0)
+                self.assertEqual(frame.locator('.tpc_content').count(), 2)
+                self.assertEqual(frame.locator('.tpc_content table').evaluate('t => getComputedStyle(t).display'), 'table')
+                self.assertEqual(frame.locator('caption').inner_text(), '数据')
+                self.assertEqual(frame.locator('pre').text_content(), '  保留缩进')
+                self.assertEqual(frame.locator('a[href="#posted"]').count(), 1)
+                self.assertEqual(frame.locator('#posted').inner_text(), '首帖')
+                self.assertEqual(frame.get_by_text('发送短消息', exact=True).first.is_visible(), not powered)
+                if powered:
+                    metrics = frame.locator('.tpc_content').evaluate_all('xs => xs.map(x => x.getBoundingClientRect().width)')
+                    self.assertGreaterEqual(min(metrics), 310)
+
     def test_discourse_probe_keeps_encoded_and_quirks_mode_class_names(self):
         for name, prefix, cls, extracted in [('decimal', '<!doctype html>', 'post&#45;stream', True),
                                              ('hex', '<!doctype html>', 'post&#x2D;stream', True),
