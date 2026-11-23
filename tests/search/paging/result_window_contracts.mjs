@@ -81,7 +81,7 @@ test('promotion during an in-flight fetch enables recovery and abort during wait
   await assert.rejects(pending, {name: 'AbortError'}); assert.equal(calls, 1);
 });
 
-test('a plain preview disk promise is reused and marked demanded', async () => {
+test('foreground demand joins a preview read without promoting it to transport', async () => {
   let resolve;
   const disk = new Promise(done => { resolve = done; });
   const owner = new AbortController();
@@ -94,7 +94,7 @@ test('a plain preview disk promise is reused and marked demanded', async () => {
   const requestPage = (window, page, prefetch) => c.VoiceOfMLResultWindowLoader.requestPage(deps, window, page, prefetch);
   const returned = requestPage(window, 2, false);
   assert.strictEqual(returned, disk);
-  assert.equal(disk.demanded, true);
+  assert.equal(Object.hasOwn(disk, 'demanded'), false);
   assert.equal(owner.signal.aborted, false);
   const payload = {results: [], page: 2};
   resolve(payload);
@@ -204,18 +204,25 @@ test('preview disk requests deduplicate, fill holes only and cannot publish afte
   f.restore(true); f.open('A', 2);
   const row = {File: 'already visible'};
   f.results[2] = row; f.windows.current.count = 1;
+  f.results.length = 6;
   const range = (start, end) => f.windows.demandRange(start, end, start, end, 1);
   range(2, 4); range(2, 4);
   assert.deepEqual(waits.map(w => w.page), [2]); assert.equal(waits[0].delay, 150);
   let request = f.windows.current.pending.get(2);
-  waits[0].resolve({results: [{File: 'stale'}, {File: 'hole'}]}); await request; await flushWindow();
+  const preview = {results: [{File: 'stale'}, {File: 'hole'}]};
+  waits[0].resolve(preview); await request; await flushWindow();
   assert.equal(f.results[2], row); assert.equal(f.results[3].File, 'hole');
   assert.equal(f.windows.current.count, 2); assert.equal(f.accepted.length, 1);
-  range(2, 4); range(4, 6); assert.deepEqual(waits.map(w => w.page), [2, 3]);
+  assert.deepEqual([...f.accepted[0].indices], [3]); assert.equal(f.accepted[0].preview, preview);
+  range(2, 4); range(6, 8); assert.deepEqual(waits.map(w => w.page), [2, 4]);
+  waits[1].resolve({results: [{File: 'outside preview'}]}); await flushWindow();
+  assert.equal(f.results.length, 6); assert.equal(f.windows.current.pages.has(4), false);
+  assert.equal(f.windows.current.count, 2); assert.equal(f.accepted.length, 1);
+  range(4, 6); assert.deepEqual(waits.map(w => w.page), [2, 4, 3]);
   request = f.windows.current.pending.get(3);
   f.restore(false); f.results = new Array(1000); f.open('B', 2);
-  assert.equal(waits[1].signal.aborted, true);
-  waits[1].resolve({results: [{File: 'late'}]}); await request; await flushWindow();
+  assert.equal(waits[2].signal.aborted, true);
+  waits[2].resolve({results: [{File: 'late'}]}); await request; await flushWindow();
   assert.equal(f.results[4], undefined); assert.equal(f.accepted.length, 1);
 });
 
@@ -225,9 +232,11 @@ test('joined foreground demand publishes a prefetched page only once', async () 
   f.open();
   await f.windows.load(2, true);
   assert.equal(f.results[1], undefined);
+  f.results[1] = {File: 'unverified'};
   await Promise.all([f.windows.load(2), f.windows.load(2)]);
   await f.windows.load(2, true);
   assert.equal(f.results[1].File, 'r2'); assert.equal(f.accepted.length, 1);
+  assert.deepEqual([...f.accepted[0].indices], [1]); assert.equal(Object.hasOwn(f.accepted[0], 'preview'), false);
   assert.equal(f.windows.current.count, 1); assert.equal(calls, 1);
 });
 

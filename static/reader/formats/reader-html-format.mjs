@@ -668,8 +668,12 @@ export function createReaderHtmlFormat(readerContext) {
       }
       if (stripped !== value) element.setAttribute("style", stripped);
     }
-    const layoutStyle = phpwind && markPhpwindLayout(template.content) ? PHPWIND_HTML_STYLE :
-      markLegacyArticleLayout(template.content) ? LEGACY_ARTICLE_HTML_STYLE : "";
+    const thread = phpwind ? findPhpwindThread(template.content) : null;
+    if (thread) {
+      reflowPhpwindArchive(template.content, thread);
+      return template.innerHTML + PHPWIND_HTML_STYLE;
+    }
+    const layoutStyle = markLegacyArticleLayout(template.content) ? LEGACY_ARTICLE_HTML_STYLE : "";
     return template.innerHTML + layoutStyle;
   }
 
@@ -695,32 +699,43 @@ export function createReaderHtmlFormat(readerContext) {
     return marked;
   }
 
-  /** @param {DocumentFragment} root */
-  function markPhpwindLayout(root) {
-    const posts = [...root.querySelectorAll(".tpc_content")];
-    if (posts.length < 2) return false;
-    // Validate every post before marking anything. This is the legacy two-table
-    // thread template, not a rule for arbitrary layout tables or quoted tables.
+  /** @typedef {{post: Element, cell: HTMLElement, inner: HTMLElement, main: HTMLElement,
+   * outer: HTMLElement, author: Element}} PhpwindPostLayout */
+  /** @typedef {{layouts: PhpwindPostLayout[], shells: Set<Element>}} PhpwindThread */
+
+  /** @param {DocumentFragment} root @returns {PhpwindThread | null} */
+  function findPhpwindThread(root) {
+    const posts = root.querySelectorAll(".tpc_content");
+    if (posts.length < 2) return null;
+    // Validate all posts before changing the DOM. These are two specific
+    // nested layout tables, not a rule for the post's own content tables.
+    /** @type {Set<Element>} */
     const shells = new Set();
     const layouts = [];
     for (const post of posts) {
-      if (post.localName !== "span") return false;
-      const cell = post.parentElement, row = cell?.parentElement, group = row?.parentElement;
-      const inner = group?.parentElement, main = inner?.parentElement, outerRow = main?.parentElement;
-      const outerGroup = outerRow?.parentElement, outer = outerGroup?.parentElement;
-      const author = outerRow?.firstElementChild;
-      if (!cell?.matches("td") || !row?.matches("tr") || row.childElementCount !== 1 ||
-          !group?.matches("tbody") || group.childElementCount !== 3 || group.firstElementChild !== row ||
-          !inner?.matches("table") || inner.childElementCount !== 1 ||
-          !main?.matches("td") || main.childElementCount !== 1 ||
-          !outerRow?.matches("tr") || outerRow.childElementCount !== 2 || main !== outerRow.lastElementChild ||
-          !author?.matches("td") || !outerGroup?.matches("tbody") || outerGroup.childElementCount !== 1 ||
-          !outer?.matches("table") || outer.childElementCount !== 1 || outer.parentElement?.closest("table") ||
-          shells.has(outer)) return false;
+      if (!post.matches("table > tbody > tr:only-child > td + td > table:only-child > tbody:only-child > tr:first-child > td:only-child > span.tpc_content"))
+        return null;
+      // The selector establishes the ancestor chain and single-cell rows.
+      const cell = /** @type {HTMLElement} */ (post.parentElement);
+      const row = /** @type {HTMLElement} */ (cell.parentElement);
+      const group = /** @type {HTMLElement} */ (row.parentElement);
+      const inner = /** @type {HTMLElement} */ (group.parentElement);
+      const main = /** @type {HTMLElement} */ (inner.parentElement);
+      const outerRow = /** @type {HTMLElement} */ (main.parentElement);
+      const outerGroup = /** @type {HTMLElement} */ (outerRow.parentElement);
+      const outer = /** @type {HTMLElement} */ (outerGroup.parentElement);
+      const author = /** @type {Element} */ (outerRow.firstElementChild);
+      if (!author.matches("td") || outerRow.childElementCount !== 2 ||
+          group.childElementCount !== 3 || outer.childElementCount !== 1 ||
+          outer.closest("table table") || shells.has(outer)) return null;
       shells.add(outer);
       layouts.push({ post, cell, inner, main, outer, author });
     }
+    return { layouts, shells };
+  }
 
+  /** @param {DocumentFragment} root @param {PhpwindThread} thread */
+  function reflowPhpwindArchive(root, { layouts, shells }) {
     // Never hide a possible fragment target, live link, or non-text content.
     const keepVisible = "[id],a[name],a[href],img,video,audio,svg,math,input,button,select,textarea,[tabindex]";
     /** @param {Element} element */
@@ -763,7 +778,6 @@ export function createReaderHtmlFormat(readerContext) {
         if (link.textContent.trim() === "加为IE收藏" && canHide(link)) mark(link, "inert");
       }
     }
-    return true;
   }
 
   /** @param {string} text */
@@ -785,10 +799,9 @@ export function createReaderHtmlFormat(readerContext) {
         heading.textContent = title;
         article.appendChild(heading);
       }
-      posts.forEach((post, index) => {
+      posts.forEach((post) => {
         const section = source.createElement("section");
         section.className = "reader-forum-post";
-        section.dataset.post = String(index + 1);
         section.innerHTML = post.innerHTML;
         article.appendChild(section);
       });

@@ -1,6 +1,8 @@
 // Owns the displayed sparse window and its page lifecycle. The host supplies
 // transport, persistence and the presentation of accepted pages.
 (function () {
+  const MAX_PENDING = 3;
+
   /** @param {AbortSignal} signal @param {number} delay @param {boolean | number | undefined} local */
   function waitForRecovery(signal, delay, local) {
     return /** @type {Promise<void>} */ (new Promise((resolve, reject) => {
@@ -44,14 +46,15 @@
     if (window.prefetched?.has(page)) return Promise.resolve(window.prefetched.get(page));
     const pending = window.pending.get(page);
     if (pending) {
-      if (!prefetch && !("demanded" in pending && pending.demanded)) {
-        Object.assign(pending, {demanded: true});
-        if ("diskWait" in pending) pending.diskWait?.abort();
+      // A preview only reads disk; it has no transport or retry to promote.
+      if (!prefetch && "demanded" in pending && !pending.demanded) {
+        pending.demanded = true;
+        pending.diskWait.abort();
       }
       return pending;
     }
     if (prefetch && window.prefetchFailures?.has(page)) return Promise.resolve(null);
-    if (window.pending.size >= 3 || window.failures.has(page) || window.invalid) return Promise.resolve(null);
+    if (window.pending.size >= MAX_PENDING || window.failures.has(page) || window.invalid) return Promise.resolve(null);
     const diskWait = new AbortController();
     const releaseDisk = () => diskWait.abort();
     window.controller.signal.addEventListener("abort", releaseDisk, { once: true });
@@ -82,7 +85,7 @@
     window.retrying = true;
     try {
       for (const page of [...window.failures.keys()]) {
-        while (window.pending.size >= 3 && current() && !window.invalid)
+        while (window.pending.size >= MAX_PENDING && current() && !window.invalid)
           await Promise.race([...window.pending.values()].map(request => request.catch(() => null)));
         if (!current() || window.invalid) break;
         if (!window.failures.delete(page)) continue;
@@ -130,29 +133,41 @@
         page >= 1 && page <= Math.ceil(owner.total / owner.query.pageSize);
     }
 
+    /** @param {VoiceOfMLManagedResultWindow} owner @param {number} page
+     * @param {unknown[]} records @param {VoiceOfMLCachedWindowPage} [preview] */
+    function acceptPage(owner, page, records, preview) {
+      const { pageSize } = owner.query;
+      const start = (page - 1) * pageSize;
+      // Preview pages can fill holes in the displayed prefix, never replace it.
+      if (preview && start + records.length > owner.results.length) return;
+      /** @type {number[]} */
+      const indices = [];
+      records.forEach((record, offset) => {
+        const index = start + offset;
+        if (preview && owner.results[index]) return;
+        owner.results[index] = record;
+        indices.push(index);
+      });
+      owner.pages.add(page);
+      if (!preview) {
+        owner.prefetched?.delete(page);
+        owner.failures.delete(page);
+      }
+      owner.count += preview ? indices.length : records.length;
+      host.accepted({ page, indices, pageSize, ...(preview ? {preview} : {}) });
+    }
+
     /** @param {VoiceOfMLManagedResultWindow} owner @param {number} page */
     async function loadPreview(owner, page) {
       if (!canRequest(owner, page) || !owner.generation || owner.pending.has(page) ||
-          owner.pending.size >= 3 || owner.missingPages?.has(page)) return;
+          owner.pending.size >= MAX_PENDING || owner.missingPages?.has(page)) return;
       const request = host.readRecent(owner.key, page, owner, 150, owner.controller.signal);
       owner.pending.set(page, request);
       try {
         const data = await request;
         if (!canRequest(owner, page) || !host.isPreview() || host.isDragging()) return;
         if (!data) { (owner.missingPages ||= new Set()).add(page); return; }
-        const start = (page - 1) * owner.query.pageSize;
-        if (start + data.results.length > owner.results.length) return;
-        /** @type {number[]} */
-        const indices = [];
-        data.results.forEach((record, offset) => {
-          const index = start + offset;
-          if (owner.results[index]) return;
-          owner.results[index] = record;
-          indices.push(index);
-        });
-        owner.count += indices.length;
-        owner.pages.add(page);
-        host.accepted({ page, indices, pageSize: owner.query.pageSize, preview: data });
+        acceptPage(owner, page, data.results, data);
       } finally {
         owner.pending.delete(page);
         if (isCurrent(owner)) host.scheduleRender();
@@ -188,19 +203,7 @@
         for (const oldest of prefetched.keys()) { if (prefetched.size <= 3) break; prefetched.delete(oldest); }
         return true;
       }
-      const start = (page - 1) * owner.query.pageSize;
-      /** @type {number[]} */
-      const indices = [];
-      data.results.forEach((record, offset) => {
-        const index = start + offset;
-        owner.results[index] = record;
-        indices.push(index);
-      });
-      owner.pages.add(page);
-      owner.prefetched?.delete(page);
-      owner.failures.delete(page);
-      owner.count += data.results.length;
-      host.accepted({page, indices, pageSize: owner.query.pageSize});
+      acceptPage(owner, page, data.results);
       return true;
     }
 

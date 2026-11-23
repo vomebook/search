@@ -182,6 +182,35 @@ class SidebarKeyboardTests(unittest.TestCase):
         self.assertEqual(self.page.evaluate('STATE.filterMinSize'),1025)
         self.assertEqual(self.page.evaluate("sizeFilterBodies.find(b=>b.page===1 && b.sort==='name').min_size"),1025)
 
+    def test_other_extension_checkbox_tracks_partial_and_bulk_selection(self):
+        self.await_initial_extension_metadata()
+        self.page.emulate_media(reduced_motion='reduce')
+        result = self.page.evaluate('''async () => {
+          extensionList=['txt','unknown-a','unknown-b'];
+          extensionCounts={txt:2,'unknown-a':3,'unknown-b':4};
+          STATE.filterExtensions=['txt','unknown-a'];
+          await renderExtensionFilter(routeRenderId);
+          const list=DOM.filterExtList, parent=list.querySelector('.ext-other-row input'),
+            child=list.querySelector('input[value="unknown-b"]'), toggle=list.querySelector('.ext-other-toggle');
+          const state=()=>[parent.checked,parent.indeterminate,child.checked,[...STATE.filterExtensions]];
+          const initial=state();
+          toggle.click();
+          const expanded=[toggle.getAttribute('aria-expanded'),document.getElementById(toggle.getAttribute('aria-controls')).inert];
+          child.click();
+          const full=state();
+          parent.click();
+          const none=state();
+          parent.click();
+          return {initial,expanded,full,none,all:state()};
+        }''')
+        self.assertEqual(result, {
+            'initial': [False, True, False, ['txt', 'unknown-a']],
+            'expanded': ['true', False],
+            'full': [True, False, True, ['txt', 'unknown-a', 'unknown-b']],
+            'none': [False, False, False, ['txt']],
+            'all': [True, False, True, ['txt', 'unknown-a', 'unknown-b']],
+        })
+
     def test_pending_size_filter_composes_with_extension_and_query(self):
         self.page.clock.install()
         self.page.locator('#settings-btn').click()

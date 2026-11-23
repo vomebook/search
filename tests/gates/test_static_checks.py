@@ -2109,7 +2109,6 @@ keepValue(1, 2);
                           "tests/reader/core/test_reader_contract_pdf_document.js",
                           "tests/reader/core/test_reader_format_controller_boundary.mjs",
                           "tests/reader/core/test_reader_source_boundary.mjs",
-                          "static/reader/core/reader-web-aliases.mjs",
                           "tests/reader/security/test_reader_security_boundary.js"]
         for path in [*paths, *boundary_paths, "scripts/check_tap_contracts.mjs"]:
             target = self.root / path

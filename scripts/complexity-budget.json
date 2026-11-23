@@ -1,0 +1,456 @@
+{
+  "version": 1,
+  "scope": "frontend",
+  "limit": 12,
+  "branches": 16350,
+  "files": {
+    "scripts/benchmarks/benchmark_djvu.py": {
+      "peak": 49,
+      "excess": 69
+    },
+    "scripts/benchmarks/benchmark_local_search.mjs": {
+      "peak": 29,
+      "excess": 39
+    },
+    "scripts/benchmarks/benchmark_pdf_ranges.py": {
+      "peak": 28,
+      "excess": 31
+    },
+    "scripts/benchmarks/benchmark_staged_pdf.py": {
+      "peak": 20,
+      "excess": 8
+    },
+    "scripts/benchmarks/compare_djvu.py": {
+      "peak": 26,
+      "excess": 14
+    },
+    "scripts/build/check_reader_release.mjs": {
+      "peak": 20,
+      "excess": 14
+    },
+    "scripts/build/copy_reader_vendor.mjs": {
+      "peak": 14,
+      "excess": 2
+    },
+    "scripts/build/seo.py": {
+      "peak": 48,
+      "excess": 44
+    },
+    "scripts/check_complexity.py": {
+      "peak": 14,
+      "excess": 2
+    },
+    "scripts/check_markup.mjs": {
+      "peak": 27,
+      "excess": 15
+    },
+    "scripts/check_strict_inventory.py": {
+      "peak": 19,
+      "excess": 8
+    },
+    "scripts/check_tap_contracts.mjs": {
+      "peak": 13,
+      "excess": 1
+    },
+    "scripts/check_test_inventory.py": {
+      "peak": 48,
+      "excess": 36
+    },
+    "scripts/ci/check_pages_freshness.py": {
+      "peak": 13,
+      "excess": 1
+    },
+    "scripts/ci/ci_ubuntu_mirror.py": {
+      "peak": 20,
+      "excess": 8
+    },
+    "scripts/ci/pages_artifact_proof.py": {
+      "peak": 13,
+      "excess": 1
+    },
+    "scripts/ci/pages_release.py": {
+      "peak": 27,
+      "excess": 62
+    },
+    "scripts/ci/reader_matrix_contract.py": {
+      "peak": 38,
+      "excess": 53
+    },
+    "scripts/ci/run_static_gate_shards.py": {
+      "peak": 36,
+      "excess": 48
+    },
+    "scripts/ci/run_unittest_suite.py": {
+      "peak": 18,
+      "excess": 6
+    },
+    "scripts/ci/wait_pages_artifact.py": {
+      "peak": 16,
+      "excess": 4
+    },
+    "scripts/data/fetch_reader_assets.mjs": {
+      "peak": 19,
+      "excess": 12
+    },
+    "scripts/data/fetch_search_generation.mjs": {
+      "peak": 34,
+      "excess": 22
+    },
+    "scripts/reader/check_pdf_text_store_mutations.mjs": {
+      "peak": 18,
+      "excess": 6
+    },
+    "scripts/reader/check_reader_dom_search_contracts.py": {
+      "peak": 21,
+      "excess": 9
+    },
+    "scripts/select_hf_history.py": {
+      "peak": 13,
+      "excess": 1
+    },
+    "static/app.js": {
+      "peak": 53,
+      "excess": 171
+    },
+    "static/reader.js": {
+      "peak": 20,
+      "excess": 8
+    },
+    "static/reader/core/reader-bindings.mjs": {
+      "peak": 32,
+      "excess": 59
+    },
+    "static/reader/core/reader-contract.js": {
+      "peak": 79,
+      "excess": 147
+    },
+    "static/reader/core/reader-document-loader.mjs": {
+      "peak": 16,
+      "excess": 4
+    },
+    "static/reader/core/reader-lifecycle.mjs": {
+      "peak": 20,
+      "excess": 9
+    },
+    "static/reader/core/reader-request-manager.js": {
+      "peak": 22,
+      "excess": 11
+    },
+    "static/reader/core/reader-security.js": {
+      "peak": 63,
+      "excess": 143
+    },
+    "static/reader/core/reader-source.mjs": {
+      "peak": 31,
+      "excess": 42
+    },
+    "static/reader/core/reader-store.js": {
+      "peak": 15,
+      "excess": 3
+    },
+    "static/reader/formats/reader-chapter-format.mjs": {
+      "peak": 37,
+      "excess": 53
+    },
+    "static/reader/formats/reader-chapter-repository.js": {
+      "peak": 16,
+      "excess": 4
+    },
+    "static/reader/formats/reader-format-controller.mjs": {
+      "peak": 42,
+      "excess": 53
+    },
+    "static/reader/formats/reader-html-format.mjs": {
+      "peak": 60,
+      "excess": 173
+    },
+    "static/reader/formats/reader-image-loader.mjs": {
+      "peak": 23,
+      "excess": 11
+    },
+    "static/reader/formats/reader-text-format.mjs": {
+      "peak": 60,
+      "excess": 98
+    },
+    "static/reader/pdf/pdf-first-page-worker-adapter.mjs": {
+      "peak": 31,
+      "excess": 19
+    },
+    "static/reader/pdf/reader-djvu-engine-worker.mjs": {
+      "peak": 124,
+      "excess": 113
+    },
+    "static/reader/pdf/reader-djvu-range.mjs": {
+      "peak": 57,
+      "excess": 59
+    },
+    "static/reader/pdf/reader-engine-preload.js": {
+      "peak": 16,
+      "excess": 8
+    },
+    "static/reader/pdf/reader-pdf-engine.mjs": {
+      "peak": 41,
+      "excess": 38
+    },
+    "static/reader/pdf/reader-pdf-network.mjs": {
+      "peak": 48,
+      "excess": 158
+    },
+    "static/reader/pdf/reader-pdf-page-window.mjs": {
+      "peak": 76,
+      "excess": 224
+    },
+    "static/reader/pdf/reader-pdf-range-cache.mjs": {
+      "peak": 15,
+      "excess": 4
+    },
+    "static/reader/pdf/reader-pdf-range-hints.mjs": {
+      "peak": 54,
+      "excess": 116
+    },
+    "static/reader/pdf/reader-pdf-renderer.mjs": {
+      "peak": 35,
+      "excess": 81
+    },
+    "static/reader/pdf/reader-pdf-scheduler.mjs": {
+      "peak": 26,
+      "excess": 32
+    },
+    "static/reader/pdf/reader-pdf-search.mjs": {
+      "peak": 33,
+      "excess": 68
+    },
+    "static/reader/pdf/reader-pdf-text-runtime.mjs": {
+      "peak": 30,
+      "excess": 65
+    },
+    "static/reader/pdf/reader-pdf-text.js": {
+      "peak": 33,
+      "excess": 47
+    },
+    "static/reader/pdf/reader-v3.mjs": {
+      "peak": 54,
+      "excess": 106
+    },
+    "static/reader/search/reader-book-text.js": {
+      "peak": 38,
+      "excess": 43
+    },
+    "static/reader/search/reader-chapter-search.mjs": {
+      "peak": 16,
+      "excess": 6
+    },
+    "static/reader/search/reader-dom-search.mjs": {
+      "peak": 44,
+      "excess": 53
+    },
+    "static/reader/search/reader-pdf-hit-projection.mjs": {
+      "peak": 18,
+      "excess": 6
+    },
+    "static/reader/search/reader-search-backends.mjs": {
+      "peak": 27,
+      "excess": 17
+    },
+    "static/reader/search/reader-search-controller.mjs": {
+      "peak": 28,
+      "excess": 35
+    },
+    "static/reader/search/workers/reader-pdf-book-search-worker.mjs": {
+      "peak": 32,
+      "excess": 24
+    },
+    "static/reader/ui/reader-bookmarks.mjs": {
+      "peak": 23,
+      "excess": 20
+    },
+    "static/reader/ui/reader-navigation.mjs": {
+      "peak": 33,
+      "excess": 35
+    },
+    "static/reader/ui/reader-progress.mjs": {
+      "peak": 31,
+      "excess": 60
+    },
+    "static/reader/ui/reader-scroll-anchor.js": {
+      "peak": 13,
+      "excess": 1
+    },
+    "static/reader/ui/reader-speech.mjs": {
+      "peak": 27,
+      "excess": 70
+    },
+    "static/reader/ui/reader-toc.mjs": {
+      "peak": 34,
+      "excess": 45
+    },
+    "static/reader/ui/reader-ui.mjs": {
+      "peak": 20,
+      "excess": 26
+    },
+    "static/search/ambient/application/quotation.js": {
+      "peak": 15,
+      "excess": 3
+    },
+    "static/search/bootstrap/application/controller.js": {
+      "peak": 15,
+      "excess": 4
+    },
+    "static/search/bootstrap/domain/initial-payload.js": {
+      "peak": 13,
+      "excess": 1
+    },
+    "static/search/corpus/application/client.js": {
+      "peak": 19,
+      "excess": 7
+    },
+    "static/search/discovery/application/random.js": {
+      "peak": 16,
+      "excess": 7
+    },
+    "static/search/downloads/application/controller.js": {
+      "peak": 15,
+      "excess": 3
+    },
+    "static/search/downloads/presentation/queue.js": {
+      "peak": 18,
+      "excess": 6
+    },
+    "static/search/execution/application/controller.js": {
+      "peak": 20,
+      "excess": 8
+    },
+    "static/search/execution/application/session.js": {
+      "peak": 24,
+      "excess": 12
+    },
+    "static/search/history/application/controller.js": {
+      "peak": 16,
+      "excess": 7
+    },
+    "static/search/index-worker.js": {
+      "peak": 97,
+      "excess": 196
+    },
+    "static/search/positions/application/persistence.js": {
+      "peak": 23,
+      "excess": 20
+    },
+    "static/search/positions/application/restoration.js": {
+      "peak": 51,
+      "excess": 43
+    },
+    "static/search/positions/domain/policy.js": {
+      "peak": 32,
+      "excess": 30
+    },
+    "static/search/positions/infrastructure/indexed-db.js": {
+      "peak": 13,
+      "excess": 1
+    },
+    "static/search/reader-assets/application/snapshot.js": {
+      "peak": 13,
+      "excess": 1
+    },
+    "static/search/reader-assets/infrastructure/sidecar.js": {
+      "peak": 17,
+      "excess": 5
+    },
+    "static/search/reader-host/application/host.js": {
+      "peak": 47,
+      "excess": 38
+    },
+    "static/search/reader-host/application/navigation.js": {
+      "peak": 31,
+      "excess": 33
+    },
+    "static/search/reader-host/presentation/return-position.js": {
+      "peak": 24,
+      "excess": 17
+    },
+    "static/search/requests/application/prefetch-controller.js": {
+      "peak": 16,
+      "excess": 4
+    },
+    "static/search/results/application/interactions.js": {
+      "peak": 17,
+      "excess": 5
+    },
+    "static/search/results/application/paging-controller.js": {
+      "peak": 16,
+      "excess": 7
+    },
+    "static/search/results/presentation/row.js": {
+      "peak": 16,
+      "excess": 4
+    },
+    "static/search/results/snapshots/application/store.js": {
+      "peak": 20,
+      "excess": 14
+    },
+    "static/search/results/snapshots/domain/copy-budget.js": {
+      "peak": 19,
+      "excess": 13
+    },
+    "static/search/results/virtual/application/controller.js": {
+      "peak": 45,
+      "excess": 58
+    },
+    "static/search/results/virtual/domain/heights.js": {
+      "peak": 14,
+      "excess": 2
+    },
+    "static/search/results/virtual/presentation/rows.js": {
+      "peak": 22,
+      "excess": 10
+    },
+    "static/search/results/window/application/page-loader.js": {
+      "peak": 21,
+      "excess": 14
+    },
+    "static/search/results/window/presentation/status.js": {
+      "peak": 13,
+      "excess": 1
+    },
+    "static/search/routing/domain/route.js": {
+      "peak": 19,
+      "excess": 7
+    },
+    "static/search/shell/presentation/view.js": {
+      "peak": 14,
+      "excess": 2
+    },
+    "static/search/sidebar/application/directory.js": {
+      "peak": 66,
+      "excess": 59
+    },
+    "static/search/sidebar/application/filters.js": {
+      "peak": 45,
+      "excess": 56
+    },
+    "static/search/sidebar/domain/folder-selection.js": {
+      "peak": 24,
+      "excess": 12
+    },
+    "static/search/sidebar/presentation/filter-list.js": {
+      "peak": 15,
+      "excess": 3
+    },
+    "static/search/sidebar/presentation/folder-tree.js": {
+      "peak": 21,
+      "excess": 30
+    },
+    "static/search/worker/domain/intersection.js": {
+      "peak": 25,
+      "excess": 13
+    },
+    "static/sw.js": {
+      "peak": 25,
+      "excess": 13
+    },
+    "static/tts-client.js": {
+      "peak": 51,
+      "excess": 204
+    }
+  }
+}

@@ -3848,20 +3848,27 @@ class ReaderRefactorTest(unittest.TestCase):
                        '<tr><th>年份</th><td>2026</td></tr></table>') +
                  shell('第二位作者', '<p>次帖<a href="#posted">跳回首帖</a></p><pre>  保留缩进</pre>'))
         self.page.set_viewport_size({'width': 390, 'height': 844})
-        for name, powered in (('phpwind', ' - powered by phpwind.net'), ('ordinary', '')):
+        malformed = ''.join(posts.rsplit('<tr><td>签名</td></tr>', 1))
+        for name, powered, body, layout in (
+            ('phpwind', ' - powered by phpwind.net', posts, True),
+            ('ordinary', '', posts, False),
+            ('malformed-thread', ' - powered by phpwind.net', malformed, False),
+        ):
             with self.subTest(template=name):
-                self.serve(f'<!doctype html><meta charset="utf-8"><title>讨论{powered}</title>{posts}', 'text/html')
+                self.serve(f'<!doctype html><meta charset="utf-8"><title>讨论{powered}</title>{body}', 'text/html')
                 self.open(self.reader_url('html', name=name))
                 frame = self.page.frame_locator('.html-frame')
-                self.assertEqual(frame.locator('[data-reader-phpwind="shell"]').count(), 2 if powered else 0)
+                self.assertEqual(frame.locator('[data-reader-phpwind="shell"]').count(), 2 if layout else 0)
+                if not layout:
+                    self.assertEqual(frame.locator('[data-reader-phpwind]').count(), 0)
                 self.assertEqual(frame.locator('.tpc_content').count(), 2)
                 self.assertEqual(frame.locator('.tpc_content table').evaluate('t => getComputedStyle(t).display'), 'table')
                 self.assertEqual(frame.locator('caption').inner_text(), '数据')
                 self.assertEqual(frame.locator('pre').text_content(), '  保留缩进')
                 self.assertEqual(frame.locator('a[href="#posted"]').count(), 1)
                 self.assertEqual(frame.locator('#posted').inner_text(), '首帖')
-                self.assertEqual(frame.get_by_text('发送短消息', exact=True).first.is_visible(), not powered)
-                if powered:
+                self.assertEqual(frame.get_by_text('发送短消息', exact=True).first.is_visible(), not layout)
+                if layout:
                     metrics = frame.locator('.tpc_content').evaluate_all('xs => xs.map(x => x.getBoundingClientRect().width)')
                     self.assertGreaterEqual(min(metrics), 310)
 
