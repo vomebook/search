@@ -96,7 +96,7 @@
       el.rightSidebar.classList.toggle("collapsed", !state.rightSidebarOpen);
       el.rightSidebar.classList.toggle("open", state.rightSidebarOpen);
       el.overlay.style.display = "";
-      el.overlay.classList.toggle("open", state.isMobile && (state.leftSidebarOpen || state.rightSidebarOpen));
+      el.overlay.classList.toggle("open", covered);
       if (focusCovered) focusSearchSidebar(state.rightSidebarOpen ? el.rightSidebar : el.leftSidebar);
     }
 

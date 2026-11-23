@@ -2,7 +2,7 @@
   "version": 1,
   "scope": "frontend",
   "limit": 12,
-  "branches": 16080,
+  "branches": 16078,
   "files": {
     "scripts/benchmarks/benchmark_djvu.py": {
       "peak": 49,
@@ -415,10 +415,6 @@
     "static/search/routing/domain/route.js": {
       "peak": 19,
       "excess": 7
-    },
-    "static/search/shell/presentation/view.js": {
-      "peak": 14,
-      "excess": 2
     },
     "static/search/sidebar/application/directory.js": {
       "peak": 34,
