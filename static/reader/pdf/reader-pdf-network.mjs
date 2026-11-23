@@ -632,7 +632,7 @@ export function createPdfFetchPolicy({idleMs = 15000, attemptMs = 45000,
   // Shared per-document admission activates only after HTTP 429. The 100ms
   // recovery spacing is a conservative retry policy, not a claimed origin
   // limit; normal traffic is unaffected and all waiters remain cancellable.
-  let throttled = false, throttleUntil = 0, nextRateStart = 0, recovering = false, rateGeneration = 0;
+  let throttled = false, throttleUntil = 0, nextRateStart = 0, rateGeneration = 0;
   /** @type {Map<string, number>} */
   const blockedUntil = new Map();
   /** @type {(Bounds & {url: string | null})[]} */
@@ -685,17 +685,16 @@ export function createPdfFetchPolicy({idleMs = 15000, attemptMs = 45000,
       return false;
     }
     throttled = true;
-    recovering = true;
     throttleUntil = Math.max(throttleUntil, now() + Math.max(delay,rateLimitDelayMs));
     return true;
   };
   /** @param {number} generation */
   const noteRateSuccess = generation => {
-    if (!recovering || !throttled || generation !== rateGeneration) return;
+    if (!throttled || generation !== rateGeneration) return;
     clearTimeout(recoveryIdle);
     recoveryIdle = setTimeout(() => {
       if (now() >= throttleUntil && normalRecoveryAdmissions > 0 && !rateAdmissions.length) {
-        throttled = false;recovering = false;clearTimeout(rateTimer);rateTimer=0;
+        throttled = false;clearTimeout(rateTimer);rateTimer=0;
       }
     },rateLimitRecoveryMs);
   };
@@ -780,6 +779,7 @@ export function createPdfFetchPolicy({idleMs = 15000, attemptMs = 45000,
       }
     };
     const initialRecovery = method === "GET" && !headers.has("Range") && !conditional;
+    const recoveryEligible = eligible || initialRecovery;
     const initialAt = performance.now();
     const admissionRemaining = () => Math.max(0, (initialRecovery ? initialTotalMs : attemptMs * 2) -
       (performance.now()-initialAt));
@@ -838,7 +838,7 @@ export function createPdfFetchPolicy({idleMs = 15000, attemptMs = 45000,
     }
     async function open() {
       signal.throwIfAborted();
-      if (eligible || initialRecovery) {
+      if (recoveryEligible) {
         const remaining=admissionRemaining();
         if (!remaining) throw new DOMException("PDF recovery deadline elapsed", "TimeoutError");
         const admissionSignal=AbortSignal.any([signal,AbortSignal.timeout(Math.ceil(remaining))]);
@@ -851,7 +851,7 @@ export function createPdfFetchPolicy({idleMs = 15000, attemptMs = 45000,
       const owner = new AbortController();
       record = {owner, active:AbortSignal.any([signal,owner.signal]), generation:rateGeneration,
         row:{at:performance.now(),attempt,range:match?[start,end]:null,headersMs:0,bodyMs:0,bytes:0}};
-      if (eligible || initialRecovery) arm();
+      if (recoveryEligible) arm();
       const received = await abortable(Promise.resolve(nativeFetch.call(globalThis,input,{...init,cache:"no-store",signal:record.active}))
         .then(value => {
           if (owner.signal.aborted || signal.aborted) {value.body?.cancel().catch(() => {});throw record.active.reason;}
@@ -861,17 +861,19 @@ export function createPdfFetchPolicy({idleMs = 15000, attemptMs = 45000,
       record.row.headersMs = performance.now()-record.row.at;
       record.row.status = received.status;
       record.row.serverTiming = (received.headers.get("Server-Timing") || "").slice(0,512);
-      if ((eligible || initialRecovery) && received.status === 429) {
-        const retryable = noteRateLimit(received,url);
-        throw Object.assign(new Error("PDF rate limited"),{retryable,status:429,code:"READER_PDF_RATE_LIMIT"});
+      if (recoveryEligible) {
+        if (received.status === 429) {
+          const retryable = noteRateLimit(received,url);
+          throw Object.assign(new Error("PDF rate limited"),{retryable,status:429,code:"READER_PDF_RATE_LIMIT"});
+        }
+        if ([408,500,502,503,504].includes(received.status))
+          throw Object.assign(new Error("PDF temporary upstream failure"),{retryable:true});
       }
-      if ((eligible || initialRecovery) && [408,500,502,503,504].includes(received.status))
-        throw Object.assign(new Error("PDF temporary upstream failure"),{retryable:true});
       // PDF.js needs headers immediately to cancel the full GET and demand ranges.
       // Initial recovery must not read or wait for this potentially large body.
       if (received.ok) {
         remember(received,url);
-        if (eligible || initialRecovery) noteRateSuccess(record.generation);
+        if (recoveryEligible) noteRateSuccess(record.generation);
       }
       if (!eligible || received.status !== 206) {
         if (delivered) throw new Error("PDF_RANGE_INVALID");
