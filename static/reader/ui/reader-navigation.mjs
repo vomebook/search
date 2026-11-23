@@ -50,11 +50,11 @@ export function createReaderNavigation(readerContext) {
     if (readerContext.pdfShellWindow?.opening) readerContext.pdfUserHasScrolled = true;
     readerContext.pageNavigationLockUntil = 0;
     readerContext.beginReaderNavigation();
-    const target = readerContext.htmlFrame?.contentWindow || readerContext.viewport;
+    const frameWindow = readerContext.htmlFrame?.contentWindow;
+    const target = frameWindow || readerContext.viewport;
+    const height = frameWindow?.innerHeight || readerContext.viewport.clientHeight;
     target.scrollBy({
-      top:
-        Math.max(160, (readerContext.htmlFrame?.contentWindow?.innerHeight || readerContext.viewport.clientHeight) * 0.86) *
-        direction,
+      top: Math.max(160, height * 0.86) * direction,
       behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "instant" : "smooth"
     });
   }
@@ -133,28 +133,27 @@ export function createReaderNavigation(readerContext) {
         await readerContext.pdfShellsReady;
         shell = findShell();
       }
-      if (!readerContext.isReaderGenerationCurrent("navigation", generation)) return false;
-      if (!shell) return false;
+      if (!readerContext.isReaderGenerationCurrent("navigation", generation) || !shell) return false;
       const imagePage = readerContext.capability.mode === "image-pages";
-      if (imagePage && shell.dataset.renderState !== "rendered")
+      // findShell already restricts the node to .reader-page. PDF starts the
+      // render before scrolling; image pages need the new viewport first.
+      let pendingRender = null;
+      if (!imagePage) pendingRender = readerContext.renderPdfInBackground(shell, false, true);
+      else if (shell.dataset.renderState !== "rendered")
         readerContext.prioritizePdfManifestPrefetch(readerContext.pdfPageManifest?.pageUrl(page));
-      const pendingPdf =
-        !imagePage && shell.classList.contains("reader-page")
-          ? readerContext.renderPdfInBackground(shell, false, true)
-          : null;
       if (!readerContext.isReaderGenerationCurrent("navigation", generation)) return false;
       readerContext.viewport.scrollTop = readerContext.readerPageScrollTop(shell);
       if (imagePage && shell.dataset.renderState === "rendered") readerContext.renderPdfOcrText(shell);
       readerContext.pageNavigationLockUntil = performance.now() + 500;
-      if (pendingPdf) readerContext.cancelSpeculativePdfRenders(shell);
-      const pendingImage = imagePage ? readerContext.renderPdfInBackground(shell, false, true) : null;
-      if (imagePage && shell.dataset.renderState !== "rendered") readerContext.cancelSpeculativePdfRenders(shell);
+      if (imagePage) {
+        pendingRender = readerContext.renderPdfInBackground(shell, false, true);
+        if (shell.dataset.renderState !== "rendered") readerContext.cancelSpeculativePdfRenders(shell);
+      } else if (pendingRender) readerContext.cancelSpeculativePdfRenders(shell);
       readerContext.updateDocumentState({ page });
       readerContext.pageInput.value = String(page);
       readerContext.updateTocCurrentMark();
       readerContext.updateProgressTools();
-      pendingPdf?.catch(() => {});
-      pendingImage?.catch(() => {});
+      pendingRender?.catch(() => {});
       if (!readerContext.isReaderGenerationCurrent("navigation", generation)) return false;
       readerContext.scheduleSave();
       return true;
