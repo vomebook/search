@@ -229,6 +229,17 @@ function typesetPlainText(blocks, edits, emphasize) {
   return toc;
 }
 
+/** @param {Uint8Array} bytes @param {number} limit */
+function nonNullAsciiPrefix(bytes, limit) {
+  let end = 0;
+  while (end < limit) {
+    const byte = /** @type {number} */ (bytes[end]);
+    if (byte === 0 || byte >= 128) break;
+    end++;
+  }
+  return end;
+}
+
 /** @param {ReaderTextContext} readerContext */
 export function createReaderTextFormat(readerContext) {
   /** @param {Response} response */
@@ -337,13 +348,9 @@ export function createReaderTextFormat(readerContext) {
       }
       readerContext.assertReaderActive();
       let start = 0;
-      if (bytes.length >= sampleLimit) {
-        let ascii = 0;
-        while (ascii < sampleLimit && (bytes[ascii] ?? 0) > 0 && (bytes[ascii] ?? 128) < 128) ascii++;
-        if (ascii === sampleLimit) {
-          start = ascii;
-          while (start < bytes.length && (bytes[start] ?? 128) < 128) start++;
-        }
+      if (bytes.length >= sampleLimit && nonNullAsciiPrefix(bytes, sampleLimit) === sampleLimit) {
+        start = sampleLimit;
+        while (start < bytes.length && (/** @type {number} */ (bytes[start])) < 128) start++;
       }
       const decoder = new TextDecoder(readerContext.detectTextEncoding(bytes.subarray(start, start + sampleLimit),
         readerContext.documentState.title, start === 0));
@@ -362,11 +369,8 @@ export function createReaderTextFormat(readerContext) {
       sampleLength = 0,
       committedAscii = false,
       displayedSampleSize = 0,
-      previewChunkIndex = 0,
-      previewChunkOffset = 0,
       /** @type {TextDecoder | null} */ decoder = null,
-      asciiPreviewPossible = true,
-      asciiPrefixLength = 0,
+      previewLeadingAscii = true,
       /** @type {TextDecoder | null} */ utf8Preview = new TextDecoder("utf-8", { fatal: true }),
       previewText = "";
     const clearUtf8Preview = () => {
@@ -395,8 +399,9 @@ export function createReaderTextFormat(readerContext) {
     };
     const startDecoder = async () => {
       // Use the fixed sample bytes without copying a contiguous view.
-      let sample = sampleChunks.length === 1 ? sampleChunks[0] : undefined;
-      if (!sample) {
+      let sample;
+      if (sampleChunks.length === 1) sample = /** @type {Uint8Array} */ (sampleChunks[0]);
+      else {
         sample = new Uint8Array(sampleLength);
         let offset = 0;
         for (const chunk of sampleChunks) {
@@ -436,13 +441,12 @@ export function createReaderTextFormat(readerContext) {
           // Pure ASCII cannot distinguish UTF-8 from a legacy code page.
           // Render it as it arrives and start a fresh bounded sample at the
           // first high byte, regardless of where the response is split.
-          if (committedAscii && asciiPreviewPossible) {
+          if (committedAscii && sampleLength === 0) {
             let skip = 0;
-            while (skip < pending.length && (pending[skip] ?? 128) < 128) skip++;
+            while (skip < pending.length && (/** @type {number} */ (pending[skip])) < 128) skip++;
             if (skip) await appendDecoded(previewDecoder.decode(pending.subarray(0, skip)));
             if (skip === pending.length) break;
             pending = pending.subarray(skip);
-            asciiPreviewPossible = false;
           }
           const take = Math.min(pending.length, sampleLimit - sampleLength);
           const value = take === pending.length ? pending : pending.subarray(0, take);
@@ -458,41 +462,32 @@ export function createReaderTextFormat(readerContext) {
             await startDecoder();
             continue;
           }
-          if (asciiPreviewPossible) {
-            let asciiLength = 0;
-            while (asciiLength < value.length && (/** @type {number} */ (value[asciiLength])) > 0 && (/** @type {number} */ (value[asciiLength])) < 128)
-              asciiLength++;
-            asciiPrefixLength += asciiLength;
+          if (previewLeadingAscii) {
+            const asciiLength = nonNullAsciiPrefix(value, value.length);
+            previewLeadingAscii = asciiLength === value.length;
+            // While previewing, every earlier sample byte was non-NUL ASCII.
+            const prefixLength = sampleLength - value.length + asciiLength;
             if (value[asciiLength] === 0) {
               // A split UTF-16 prefix must not leave an ASCII preview behind.
               resetText();
               displayedSampleSize = 0;
-              asciiPrefixLength = 0;
-              asciiPreviewPossible = false;
-            } else if (asciiLength < value.length) asciiPreviewPossible = false;
-          }
-          if (asciiPrefixLength >= 4 && asciiPrefixLength > displayedSampleSize) {
-            // The full sample remains for encoding detection; preview only its
-            // unseen ASCII prefix instead of revisiting all previous chunks.
-            while (displayedSampleSize < asciiPrefixLength) {
-              // The preview cursor advances through the retained sample until
-              // it has consumed precisely the accumulated ASCII prefix.
-              const chunk = /** @type {Uint8Array} */ (sampleChunks[previewChunkIndex]);
-              const end = Math.min(chunk.length, previewChunkOffset + asciiPrefixLength - displayedSampleSize);
-              await appendDecoded(previewDecoder.decode(chunk.subarray(previewChunkOffset, end)));
-              displayedSampleSize += end - previewChunkOffset;
-              previewChunkOffset = end;
-              if (end === chunk.length) {
-                previewChunkIndex++;
-                previewChunkOffset = 0;
+            } else if (asciiLength && prefixLength >= 4) {
+              // Replay only the small chunks held back by the four-byte
+              // threshold. After that, preview just the new chunk's prefix.
+              if (!displayedSampleSize) {
+                for (let i = 0; i < sampleChunks.length - 1; i++)
+                  await appendDecoded(previewDecoder.decode(sampleChunks[i]));
               }
+              await appendDecoded(previewDecoder.decode(value.subarray(0, asciiLength)));
+              displayedSampleSize = prefixLength;
             }
           }
           if (sampleLength < sampleLimit) { showUtf8Preview(value); continue; }
-          if (!committedAscii && asciiPreviewPossible) {
+          if (previewLeadingAscii) {
             committedAscii = true;
+            previewLeadingAscii = false;
             sampleChunks.length = 0;
-            sampleLength = displayedSampleSize = asciiPrefixLength = 0;
+            sampleLength = displayedSampleSize = 0;
             clearUtf8Preview();
             continue;
           }

@@ -544,6 +544,31 @@ test('long ASCII preface does not force UTF-8 and encoding is independent of pac
   } finally {f.restore();}
 });
 
+test('a committed ASCII stream samples only the suffix and skips post-commit NULs for detection',async t=>{
+  const f=fixture(); t.after(f.restore);
+  const prefix='a'.repeat(65540)+'more\0ASCII';
+  const cases=[
+    [encode('\ufeff😀尾'),'\ufeff😀尾'],
+    [Uint8Array.of(0xcf,0xf0,0xe8,0xe2,0xe5,0xf2),'Привет'],
+    [new Uint8Array(),'']
+  ];
+  const detect=f.context.detectTextEncoding, samples=[];
+  f.context.documentState.title='Русский';
+  f.context.detectTextEncoding=(sample,title,leading)=>{
+    samples.push([[...sample],title,leading]);
+    return detect(sample,title,leading);
+  };
+  for(const [tail,text] of cases){
+    f.context.content.children.length=0;samples.length=0;
+    const bytes=encode(prefix);
+    const response=responseChunks([bytes.subarray(0,3),bytes.subarray(3),...Array.from(tail,byte=>Uint8Array.of(byte))]);
+    await f.context.renderPlainText(response);
+    assert.equal(f.context.content.textContent,prefix+text);
+    assert.deepEqual(samples,[[[...tail],'Русский',false]]);
+    assert.equal(response.body.locked,false);
+  }
+});
+
 test('Chinese UTF-8 preview is bounded and keeps authoritative stream text exact',async()=>{
   const f=fixture();
   const encode=text=>new TextEncoder().encode(text);

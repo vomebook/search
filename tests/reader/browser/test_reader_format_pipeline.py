@@ -305,6 +305,37 @@ class ReaderFormatPipelineTests(unittest.TestCase):
         }''')
         self.assertEqual(self.page.locator('.reader-text').text_content(),self.page.evaluate('window.__txtRaw'))
 
+    def test_streaming_ascii_commit_keeps_late_nul_and_internal_bom(self):
+        self.page.add_init_script(r'''(()=>{
+          const native=fetch;window.fetch=(input,init)=>String(input).includes('/api/reader-content?')
+            ?Promise.resolve(new Response(new ReadableStream({start(c){
+              const bytes=text=>new TextEncoder().encode(text);
+              c.enqueue(bytes('h'));c.enqueue(bytes('ea'));
+              window.__finishAsciiPreview=()=>c.enqueue(bytes('d'));
+              window.__commitAscii=()=>c.enqueue(bytes('x'.repeat(65536)));
+              window.__appendAscii=()=>c.enqueue(bytes('\0more'));
+              window.__finishAsciiStream=()=>{
+                const tail=bytes('\ufeff😀后续');
+                c.enqueue(tail.slice(0,1));c.enqueue(tail.slice(1,5));c.enqueue(tail.slice(5));c.close();
+              };
+            }}),{headers:{'Content-Type':'text/plain'}})):native(input,init);
+        })();''')
+        self.page.goto(self.origin+support.PREFIX+'/static/reader.html?'+urlencode(dict(
+            url='https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/ascii-stream.txt',ext='txt')),wait_until='domcontentloaded')
+        text = self.page.locator('.reader-text')
+        self.page.wait_for_function('()=>!!window.__finishAsciiPreview')
+        self.assertEqual(text.text_content(),'')
+        self.page.evaluate('window.__finishAsciiPreview()')
+        self.page.wait_for_function("()=>document.querySelector('.reader-text')?.textContent==='head'")
+        self.page.evaluate('window.__commitAscii(); window.__appendAscii()')
+        prefix = 'head' + 'x' * 65536 + '\0more'
+        self.page.wait_for_function("text=>document.querySelector('.reader-text')?.textContent===text",arg=prefix)
+        self.assertNotEqual(self.page.locator('html').get_attribute('data-reader-phase'),'ready')
+        self.page.evaluate('window.__finishAsciiStream()')
+        self.page.locator('html[data-reader-phase="ready"]').wait_for()
+        self.assertEqual(text.text_content(),prefix+'\ufeff😀后续')
+        self.assertIsNone(text.get_attribute('data-text-preview'))
+
     def test_bomless_chinese_text_is_visible_before_charset_sample_finishes(self):
         self.page.add_init_script(r'''(()=>{
           const native=fetch;window.fetch=(input,init)=>String(input).includes('/api/reader-content?')
