@@ -79,13 +79,13 @@ export function createReaderToc(readerContext) {
           // Source CSS may pin headings while scrolling; keep their live geometry.
           live = targets.some(row => row.connected && row.target && scrollDependent(row.target));
           positions = targets.flatMap(row => row.connected && row.target ? [{index:row.index,
-            top:row.target.getBoundingClientRect().top + scroll - marker}] : []).sort((a,b) => a.top-b.top || a.index-b.index);
+            top:row.target.getBoundingClientRect().top + scroll}] : []).sort((a,b) => a.top-b.top || a.index-b.index);
           width = root.clientWidth; extent = root.scrollHeight; zoom = nextZoom;
         }
         let low = 0, high = positions.length;
         while (low < high) {
           const middle = (low + high) >> 1;
-          if ((positions[middle]?.top ?? Infinity) <= scroll) low = middle + 1;
+          if ((positions[middle]?.top ?? Infinity) <= scroll + marker) low = middle + 1;
           else high = middle;
         }
         return positions[low - 1]?.index ?? -1;
@@ -107,7 +107,9 @@ export function createReaderToc(readerContext) {
       }
       return;
     }
-    const marker = readerContext.htmlFrame ? 8 : readerContext.viewport.getBoundingClientRect().top + 8;
+    const viewport = readerContext.viewport;
+    const viewTop = readerContext.htmlFrame ? 0 : viewport.getBoundingClientRect().top;
+    const marker = viewTop + 8;
     const root = readerContext.htmlFrame?.contentDocument?.body || readerContext.content;
     const mode = readerContext.capability.mode;
     if (mode === "pdf" || mode === "pdf-pages" || mode === "image-pages") return;
@@ -116,7 +118,14 @@ export function createReaderToc(readerContext) {
         readerContext.headingLocationCache?.dispose();
         readerContext.headingLocationCache = createHeadingLocationCache(root, tocEntries());
       }
-      const current = readerContext.headingLocationCache.at(marker, readerContext.htmlFrame ? /** @type {Window} */ (readerContext.htmlFrame.contentWindow).scrollY : readerContext.viewport.scrollTop);
+      const scroller = readerContext.htmlFrame?.contentDocument?.scrollingElement || viewport;
+      const { scrollTop: scroll, clientHeight: height, scrollHeight } = scroller;
+      const end = scrollHeight - height;
+      // At the scroll limit, a short final section cannot reach the normal
+      // top marker. Include headings visible through the bottom of the viewport.
+      const atEnd = scroll > 0 && end > 1 && end - scroll <= 1;
+      const bottom = viewTop + (scroller === viewport ? viewport.clientTop : 0) + height;
+      const current = readerContext.headingLocationCache.at(atEnd ? bottom - 1 : marker, scroll);
       if (current !== readerContext.navigationState.currentChapterIndex) {
         readerContext.updateNavigationState({currentChapterIndex:current});
         readerContext.updateTocCurrentMark();
