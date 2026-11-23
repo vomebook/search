@@ -33,7 +33,7 @@ function renderRepoListItems(repos) {
 
 /** @param {HTMLElement} list @param {VoiceOfMLSidebarEntries} data @param {string} currentRepo @param {string} path */
 function renderBrowserListItems(list, data, currentRepo, path) {
-  list.innerHTML = VoiceOfMLSearchSidebarRender.browserMarkup(data, currentRepo, path, deps.surface, deps.markup);
+  list.innerHTML = VoiceOfMLSearchSidebarRender.browserMarkup(data, currentRepo, path, deps.markup);
   deps.scroll.restore();
 }
 

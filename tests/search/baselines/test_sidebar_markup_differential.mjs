@@ -39,7 +39,7 @@ function run(candidate, makeData) {
       const ports={icon:key=>c.sidebarIconMarkup(key),escape:value=>c.escapeHTML(value),iconType:value=>c.getFileIconType(value),
         formatSize:value=>c.formatSize(value),name:file=>c.getBrowserFileName(file),link:(...args)=>c.getBrowserFileLink(...args),
         reader:(...args)=>site==='pages'?c.getBrowserReaderUrl(...args):c.getBrowserFileReadUrl(...args)};
-      list.innerHTML=c.VoiceOfMLSearchSidebarRender.browserMarkup(data,'Repo','folder',site,ports);
+      list.innerHTML=c.VoiceOfMLSearchSidebarRender.browserMarkup(data,'Repo','folder',ports);
       c.restoreSidebarScroll();
     }
   } catch (failure) {error={name:failure.name,message:failure.message};}

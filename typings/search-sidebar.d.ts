@@ -82,9 +82,9 @@ interface VoiceOfMLSidebarScrollController {
 }
 interface VoiceOfMLSidebarDirectoryViewDependencies {
   content: HTMLElement; sidebar: HTMLElement; scroll: VoiceOfMLSidebarScrollController;
-  surface: 'pages' | 'space'; escape(value: unknown): string | undefined;
+  escape(value: unknown): string | undefined;
   updateHeader(): void; navigate(path: string | undefined): void; setPath(path: string): void;
-  markup: Parameters<typeof VoiceOfMLSearchSidebarRender.browserMarkup>[4];
+  markup: Parameters<typeof VoiceOfMLSearchSidebarRender.browserMarkup>[3];
 }
 interface VoiceOfMLSidebarDirectoryPresentation {
   repos(repos: VoiceOfMLFilterCount[]): void;

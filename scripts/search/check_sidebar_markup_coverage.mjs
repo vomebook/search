@@ -26,7 +26,7 @@ const required=[
   "array getters and site-specific iterator semantics remain unchanged",
   "object-valued escaped labels preserve coercion and callback order",
   "exceptions leave the original DOM intact and do not restore scroll",
-  "both surfaces preserve folder and reader attribute distinctions",
+  "the deployed surface preserves its folder and reader attributes",
   "null families and empty data leave no markup",
   "dynamic lists use the original surface iteration behavior",
   "input and injected presentation failures propagate"

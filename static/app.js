@@ -3228,7 +3228,7 @@ let sidebarDirectoryView;
 function getSidebarDirectoryView() {
   return sidebarDirectoryView || (sidebarDirectoryView = VoiceOfMLSidebarDirectoryView.create({
     content: DOM.sidebarContent, sidebar: DOM.leftSidebar, scroll: getSidebarScroll(),
-    surface: "pages", escape: escapeHTML, updateHeader: () => updateSidebarHeader(),
+    escape: escapeHTML, updateHeader: () => updateSidebarHeader(),
     navigate: path => ROUTER.navigate("repo", STATE.repo, path),
     setPath: path => { STATE.browserPath = path; syncStateToURL(); },
     markup: {
