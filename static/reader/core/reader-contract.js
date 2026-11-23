@@ -270,7 +270,6 @@
   const assetOcr = String.raw`(?:ocr-manifest\.json|ocr/(?:page-[0-9]{6}\.json\.gz|book-text\.json\.gz))`;
   const v2ChapterPathPattern = new RegExp(`^chapters/ebook/(?:epub|mobi|azw3|fb2|chm)/[0-9a-f]{64}/[0-9a-f]{16}/(?:chapter-manifest\\.json|epub-search-index\\.json\\.gz|chapters/chapter-[0-9]{4}\\.xhtml|resources/(?!\\.{1,2}(?:/|$))[^/]+(?:/(?!\\.{1,2}(?:/|$))[^/]+)*)$`);
   const bucketPathPattern = new RegExp(`^${assetRoot}${assetVersion}(?:${assetPages}|${assetOcr})$`);
-  const v2ObjectPathPattern = new RegExp(`^${assetRoot}${assetVersion}(?:${assetPages}|${assetOcr})$`);
   const staticBucketPathPattern = new RegExp(`^(?:${assetRoot}(?:[0-9a-f]{16}/)?(?:[a-z0-9-]+/)?(?:document\\.(?:html|txt|md|webp|jpg|jpeg|png|gif|bmp|swf)|audio\\.(?:mp3|wav|m4a|flac|mpga)|video\\.(?:mp4|mov))|documents/(?:text|web|spreadsheet|office|pdf)/[a-z0-9_-]+/[0-9a-f]{64}/document\\.(?:txt|md|html|pdf|vcf|ini)|media/(?:audio|video|swf)/[a-z0-9_-]+/[0-9a-f]{64}/(?:audio\\.[a-z0-9]+|video\\.[a-z0-9]+|document\\.swf)|pages/image/(?:jpg|jpeg|png|bmp|tif|tiff|webp|gif)/[0-9a-f]{64}/(?:document\\.webp|page-manifest\\.json|pages/page-[0-9]{6}\\.webp)|derived/[A-Za-z0-9._-]+/[a-z0-9]{32}/document\\.pdf|chapters/ebook/(?:epub|mobi|azw3|fb2|chm)/[0-9a-f]{64}/[0-9a-f]{16}/(?:chapter-manifest\\.json|epub-search-index\\.json\\.gz))$`);
   const imageRoot = String.raw`pages/image/(?:jpg|jpeg|png|bmp|tif|tiff|webp|gif)/[0-9a-f]{64}/`;
   const imageAvifDocumentPathPattern = new RegExp(`^${imageRoot}document\\.avif$`);
@@ -292,14 +291,12 @@
   /** @param {string} path @param {boolean} [versioned] @param {string} [bucket] */
   function isBucketPath(path, versioned = false, bucket = "vomebook/pdf-pages-v2") {
     if (bucket === "vomebook/reader-assets-v2") return staticBucketPathPattern.test(path) || v2ChapterPathPattern.test(path) ||
-      v2ObjectPathPattern.test(path) || imageAvifDocumentPathPattern.test(path);
+      bucketPathPattern.test(path) || imageAvifDocumentPathPattern.test(path);
     if (bucket !== "vomebook/pdf-pages-v2") return false;
     return /^objects\/([0-9a-f]{2})\/\1[0-9a-f]{62}\/[0-9a-f]{16}\/document\.djvu$/.test(path) ||
       /^objects\/[0-9a-f]{2}\/[0-9a-f]{64}\/[0-9a-f]{16}\/document\.pdf$/.test(path) ||
       (versioned ? versionedBucketPathPattern : bucketPathPattern).test(path) ||
-      v3BucketPathPattern.test(path) ||
-      staticBucketPathPattern.test(path) ||
-      false;
+      v3BucketPathPattern.test(path) || staticBucketPathPattern.test(path);
   }
 
   // One parser for opening preload, manifest validation and page navigation.
@@ -319,13 +316,12 @@
         if (url.searchParams.getAll("path").length !== 1 ||
             [...url.searchParams.keys()].some((key) => key !== "path")) return null;
         path = url.searchParams.get("path") || "";
-        if (!isBucketPath(path, true, bucketName)) return null;
       } else if (directBucket) {
         path = decodeURIComponent(url.pathname.slice(bucketPrefix.length));
-        if (!isBucketPath(path, true, bucketName)) return null;
       } else {
         return null;
       }
+      if (!isBucketPath(path, true, bucketName)) return null;
       if (!["page-manifest.json", "ocr-manifest.json", "reading-manifest.json"].includes(filename) ||
           !path.endsWith(`/${filename}`)) return null;
       const rootPath = path.slice(0, -filename.length - 1);
