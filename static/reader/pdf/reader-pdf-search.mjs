@@ -452,7 +452,8 @@ export function createReaderPdfSearch(readerContext) {
       throw Object.assign(new Error(verified ? "此文件没有可搜索文字" : "当前未能找到可搜索文字"),
         {code:verified ? "READER_NO_SEARCHABLE_TEXT" : "READER_TEXT_UNCONFIRMED"});
     }
-    readerContext.publishPdfSearchProgress(generation, groups, total, pattern, firstPage, pdf.numPages, pdf.numPages);
+    // The last page already published the complete results. The controller
+    // marks the search complete and renders its final status on return.
     return firstPage;
   }
 
