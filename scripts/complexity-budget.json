@@ -2,7 +2,7 @@
   "version": 1,
   "scope": "frontend",
   "limit": 12,
-  "branches": 16114,
+  "branches": 16097,
   "files": {
     "scripts/benchmarks/benchmark_djvu.py": {
       "peak": 49,
@@ -205,8 +205,8 @@
       "excess": 4
     },
     "static/reader/pdf/reader-pdf-range-hints.mjs": {
-      "peak": 54,
-      "excess": 116
+      "peak": 47,
+      "excess": 97
     },
     "static/reader/pdf/reader-pdf-renderer.mjs": {
       "peak": 35,
@@ -357,8 +357,8 @@
       "excess": 5
     },
     "static/search/reader-host/application/host.js": {
-      "peak": 47,
-      "excess": 38
+      "peak": 43,
+      "excess": 34
     },
     "static/search/reader-host/application/navigation.js": {
       "peak": 31,

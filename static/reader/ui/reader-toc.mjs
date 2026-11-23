@@ -182,7 +182,8 @@ export function createReaderToc(readerContext) {
     const row = document.createElement("div");
     row.className = "panel-item toc-item";
     row.dataset.tocIndex = String(index);
-    row.style.setProperty("--toc-depth", String(entry.depth || 0));
+    const depth = entry.depth || 0;
+    row.style.setProperty("--toc-depth", String(depth));
     const link = document.createElement("div");
     link.className = "panel-item-main";
     link.textContent = entry.label;
@@ -196,7 +197,7 @@ export function createReaderToc(readerContext) {
     if (entry.group) {
       row.classList.add("toc-group");
       link.setAttribute("role", "heading");
-      link.setAttribute("aria-level", String(Math.min(6, (entry.depth || 0) + 1)));
+      link.setAttribute("aria-level", String(Math.min(6, depth + 1)));
       return row;
     }
     link.tabIndex = 0;

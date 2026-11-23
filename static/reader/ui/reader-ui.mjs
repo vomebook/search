@@ -195,13 +195,6 @@ export function createReaderUi(readerContext) {
     status.hidden = count > 0 || !!view.querySelector(".panel-list > .panel-empty");
   }
 
-  /** @param {string} state */
-  function notifyReaderUiState(state) {
-    readerContext.readerUiHistoryState = state;
-    if (readerContext.isReaderOverlayFrame())
-      window.parent.postMessage({ type: "voice-reader-ui-state", state }, location.origin);
-  }
-
   /** @param {boolean} open @param {boolean} [restoreFocus] @param {boolean} [focusPanel] */
   function setReaderPanelOpen(open, restoreFocus = false, focusPanel = false) {
     readerContext.readerRuntime.update("panel", { open });
@@ -217,7 +210,7 @@ export function createReaderUi(readerContext) {
       panel.classList.add("is-open");
       readerContext.selectPanel(readerContext.panelState.selected === "full-search" ? "full-search" : readerContext.mediaElement ? "media" : "toc");
       readerContext.updateTocCurrentMark();
-      notifyReaderUiState(readerContext.panelState.selected === "full-search" ? "full-search" : "panel");
+      readerContext.readerUiHistoryState = readerContext.panelState.selected === "full-search" ? "full-search" : "panel";
       // Only an explicit keyboard/assistive activation moves focus. Automatic
       // directory discovery and ordinary pointer opening leave reading alone.
       if (focusPanel) /** @type {HTMLElement} */ (panel.querySelector('#full-search-view:not([hidden]) input') ||
@@ -230,7 +223,7 @@ export function createReaderUi(readerContext) {
     readerContext.panelAnimationTimer = setTimeout(() => {
       if (!panel.classList.contains("is-open")) panel.hidden = true;
     }, matchMedia("(prefers-reduced-motion: reduce)").matches ? 0 : 190);
-    notifyReaderUiState("base");
+    readerContext.readerUiHistoryState = "base";
     if (restoreFocus || focusWasInside) /** @type {HTMLElement} */ (document.querySelector("#history")).focus({ preventScroll: true });
   }
 
@@ -275,8 +268,8 @@ export function createReaderUi(readerContext) {
     }
     for (const view of /** @type {NodeListOf<HTMLElement>} */ (document.querySelectorAll(".reader-panel-view")))
       view.hidden = view.dataset.panelView !== name;
-    if (name === "full-search") notifyReaderUiState("full-search");
-    else if (readerContext.panelState.open) notifyReaderUiState("panel");
+    if (name === "full-search") readerContext.readerUiHistoryState = "full-search";
+    else if (readerContext.panelState.open) readerContext.readerUiHistoryState = "panel";
     if (name === "bookmarks") readerContext.renderBookmarks();
     if (name === "history") readerContext.renderHistory();
     if (name === "media" && readerContext.mediaElement)
