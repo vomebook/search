@@ -2,7 +2,7 @@
   "version": 1,
   "scope": "frontend",
   "limit": 12,
-  "branches": 16198,
+  "branches": 16173,
   "files": {
     "scripts/benchmarks/benchmark_djvu.py": {
       "peak": 49,
@@ -197,8 +197,8 @@
       "excess": 158
     },
     "static/reader/pdf/reader-pdf-page-window.mjs": {
-      "peak": 76,
-      "excess": 224
+      "peak": 64,
+      "excess": 199
     },
     "static/reader/pdf/reader-pdf-range-cache.mjs": {
       "peak": 15,
