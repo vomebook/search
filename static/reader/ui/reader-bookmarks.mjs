@@ -17,12 +17,7 @@ export function createReaderBookmarks(readerContext) {
       if (typeof raw !== "string" || !raw) return null;
       try {
         const url = new URL(raw, location.origin);
-        if (
-          url.origin !== location.origin ||
-          url.pathname !== opening.pathname ||
-          shareKey(url) !== shareKey(opening)
-        )
-          return null;
+        if (shareKey(url) !== shareKey(opening)) return null;
         url.searchParams.delete("bookmark");
         url.searchParams.delete("bookmark_source");
         // A matched bookmark takes precedence over a Markdown opening anchor.

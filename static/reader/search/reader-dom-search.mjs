@@ -245,13 +245,13 @@ export function createReaderDomSearch({
         mark.textContent = selected.data;
         selected.replaceWith(mark);
         fullSearchActiveMarks.push(mark);
-        marks.unshift(mark);
+        marks.push(mark);
       }
     } finally {
       fullSearchDomLocator?.resume();
       fullSearchDomSnapshot?.resume();
     }
-    return marks;
+    return marks.reverse();
   }
 
   /** @param {unknown} entry @returns {entry is DomSearch.TocEntry} */
@@ -340,8 +340,7 @@ export function createReaderDomSearch({
     if (page) return `第 ${/** @type {HTMLElement} */ (page).dataset.page} 页`;
     const indexed = headingLookup?.(offset);
     if (indexed?.label !== undefined) return indexed.label;
-    if (indexed) return `正文 ${Math.min(100, Math.floor(offset / Math.max(1, total) * 100))}%`;
-    if (getTocEntries().length) {
+    if (!indexed && getTocEntries().length) {
       const heading = getTocEntries().filter(isTocEntry).reverse().find(entry => entry.target &&
         (entry.target === node.parentElement || !!(entry.target.compareDocumentPosition(node) & Node.DOCUMENT_POSITION_FOLLOWING)));
       if (heading) return heading.label;

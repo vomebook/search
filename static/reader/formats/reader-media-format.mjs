@@ -57,7 +57,8 @@ export function createReaderMediaFormat(readerContext) {
     const media = /** @type {(HTMLAudioElement | HTMLVideoElement) & {_readerSourceRetry?: boolean, playsInline: boolean}} */ (document.createElement(mode));
     media.className = mode === "audio" ? "reader-audio" : "reader-video";
     media.controls = true;
-    media.setAttribute("aria-label", `${readerContext.documentState.title} ${mode === "audio" ? "音频" : "视频"}`);
+    const mediaLabel = mode === "audio" ? "音频" : "视频";
+    media.setAttribute("aria-label", `${readerContext.documentState.title} ${mediaLabel}`);
     media.preload = "metadata";
     if (mode === "video") media.playsInline = true;
     const refresh = () => {
@@ -171,7 +172,7 @@ export function createReaderMediaFormat(readerContext) {
     await readerContext.awaitReader(metadata);
     readerContext.assertReaderActive();
     readerContext.markReaderContentReady();
-    readerContext.status.textContent = mode === "audio" ? "音频" : "视频";
+    readerContext.status.textContent = mediaLabel;
   }
 
   async function loadSwfDocument() {
