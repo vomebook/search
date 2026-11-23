@@ -158,3 +158,40 @@ test("early lookup retries timeout and rethrows null rejection", async () => {
   window.__VOICE_READER_RESOLVE__ = { id: "id", promise: Promise.reject(null), dispose() {} };
   await assert.rejects(f.source.resolveReaderId("id"), error => error === null);
 });
+
+test("lookup retries share the same delay and attempt budget after cleanup", async () => {
+  const data = {url: "https://example.test/book"};
+  const earlyEvents = ["track", "untrack", "dispose"];
+  for (const [early, statuses, expectedError, expected] of [
+    [503, [200], null, [...earlyEvents, "wait:350", "request:200", "json"]],
+    [404, [], "HTTP 404", earlyEvents],
+    [null, [503, 200], null, ["request:503", "cancel:503", "wait:350", "request:200", "json"]],
+    [null, [408, 429], "HTTP 429", ["request:408", "cancel:408", "wait:350", "request:429", "cancel:429"]],
+    [null, [403], "HTTP 403", ["request:403", "cancel:403"]],
+    [500, [502], "HTTP 502", [...earlyEvents, "wait:350", "request:502", "cancel:502"]],
+    [new TypeError("early network failure"), [200], null, ["track", "active", "untrack", "dispose", "request:200", "json"]],
+    [new Error("early failure"), [], "early failure", ["track", "active", "untrack", "dispose"]],
+  ]) {
+    const events = [];
+    const f = fixture();
+    f.context.trackReaderResource = () => { events.push("track"); return () => events.push("untrack"); };
+    f.context.assertReaderActive = () => events.push("active");
+    f.context.waitForReader = async delay => { events.push(`wait:${delay}`); };
+    const pending = [...statuses];
+    f.context.readerRequestManager.requestBuffered = async () => {
+      const status = pending.shift();
+      events.push(`request:${status}`);
+      return {status, ok: status === 200, body: {cancel: async () => { events.push(`cancel:${status}`); }},
+        json: async () => { events.push("json"); return data; }};
+    };
+    if (early !== null) {
+      const promise = early instanceof Error ? Promise.reject(early) : Promise.resolve({status: early, ok: false});
+      window.__VOICE_READER_RESOLVE__ = {id: "id", promise, dispose: () => events.push("dispose")};
+    }
+    if (expectedError) await assert.rejects(f.source.resolveReaderId("id"), {message: expectedError});
+    else assert.deepEqual(await f.source.resolveReaderId("id"), data);
+    assert.deepEqual(events, expected);
+    assert.equal(pending.length, 0);
+    assert.equal(window.__VOICE_READER_RESOLVE__, null);
+  }
+});
