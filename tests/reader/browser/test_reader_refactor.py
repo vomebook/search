@@ -3819,7 +3819,7 @@ class ReaderRefactorTest(unittest.TestCase):
         self.assertEqual(body.locator('script').count(), 0)
         # DOMPurify may also call DOMParser with the original document. Check
         # the probe's call site instead of expecting a particular wrapper.
-        self.assertFalse(self.page.evaluate("()=>window.__parsedHtml.some(stack=>stack?.includes('isDiscourseArchive'))"))
+        self.assertFalse(self.page.evaluate("()=>window.__parsedHtml.some(stack=>stack?.includes('buildDiscourseDocument'))"))
 
     def test_html_inactive_anchors_are_not_painted_as_links(self):
         html = ('<!doctype html><meta charset="utf-8"><p><a id="kept">无链接词</a> '
@@ -3865,6 +3865,31 @@ class ReaderRefactorTest(unittest.TestCase):
                     metrics = frame.locator('.tpc_content').evaluate_all('xs => xs.map(x => x.getBoundingClientRect().width)')
                     self.assertGreaterEqual(min(metrics), 310)
 
+    def test_legacy_word_article_reflows_without_flattening_data_tables(self):
+        article = ('<div class="Section1"><p class="MsoNormal" style="white-space:nowrap">' + '这段文字必须在屏幕内换行。' * 20 +
+                   '<br>原始换行</p><table id="data"><caption>数据</caption><tr><td><pre>' + '1234567890' * 30 +
+                   '</pre></td></tr></table></div>')
+        html = ('<!doctype html><meta charset="utf-8"><table class="center_tdbgall" width="960"><tr>'
+                '<td class="main_tdbgall" width="720"><table class="tdbg_top_left_right" width="715">'
+                f'<tr><td class="main_tdbg_760">{article}</td></tr></table></td><td>侧栏</td></tr></table>')
+        self.page.set_viewport_size({'width':390,'height':844})
+        self.serve(html, 'text/html')
+        self.open(self.reader_url('html', name='legacy-article'))
+        frame = self.page.frame_locator('.html-frame')
+        p = frame.locator('p.MsoNormal')
+        self.assertTrue(p.evaluate('p => p.getBoundingClientRect().width <= p.ownerDocument.documentElement.clientWidth'))
+        self.assertTrue(p.evaluate('p => p.scrollWidth <= p.clientWidth + 1'))
+        self.assertEqual(p.locator('br').count(),1)
+        self.assertTrue(p.inner_text().endswith('原始换行'))
+        self.assertEqual(frame.locator('#data').evaluate('n => getComputedStyle(n).display'), 'table')
+        self.assertEqual(frame.locator('#data caption').inner_text(),'数据')
+        self.assertTrue(frame.locator('#data').evaluate('t => t.parentElement.scrollWidth > t.parentElement.clientWidth'))
+        nested = html.replace(article, '<table id="intervening"><tr><td>' + article + '</td></tr></table>')
+        self.serve(nested, 'text/html')
+        self.open(self.reader_url('html', name='legacy-intervening-table'))
+        self.assertEqual(frame.locator('[data-reader-legacy-article]').count(), 0)
+        self.assertEqual(frame.locator('#intervening').evaluate('t => getComputedStyle(t).display'), 'table')
+
     def test_discourse_probe_keeps_encoded_and_quirks_mode_class_names(self):
         for name, prefix, cls, extracted in [('decimal', '<!doctype html>', 'post&#45;stream', True),
                                              ('hex', '<!doctype html>', 'post&#x2D;stream', True),
@@ -3877,10 +3902,10 @@ class ReaderRefactorTest(unittest.TestCase):
                 self.open(self.reader_url('html', name='forum-' + name))
                 frame = self.page.frame_locator('.html-frame')
                 self.assertEqual(frame.locator('.reader-forum-post' if extracted else '.cooked').inner_text(), '论坛正文')
-                self.assertEqual(frame.locator('header').count(), 1)
+                self.assertEqual(frame.locator('header').count(), 0 if extracted else 1)
                 self.assertEqual(frame.locator('script').count(), 0)
 
-    def test_discourse_html_styles_posts_without_discarding_archive_content(self):
+    def test_discourse_html_extracts_posts_without_forum_shell(self):
         html = """<!doctype html><html><head><title>论坛标题</title></head><body>
         <header class="d-header">论坛顶部</header>
         <div id="topic-title"><a class="fancy-title">论坛标题</a></div>
@@ -3890,8 +3915,6 @@ class ReaderRefactorTest(unittest.TestCase):
           <article class="topic-post"><div class="cooked"><p>第二段正文</p></div></article>
         </div>
         <div class="suggested-topics">推荐主题</div>
-        <aside id="archive-note"><table><tr><td>附表</td></tr></table><pre>  原始空格</pre></aside>
-        <a href="#archive-note">跳到附注</a>
         </body></html>"""
         self.serve(html, "text/html")
         self.open(self.reader_url("html", name="forum"))
@@ -3900,10 +3923,7 @@ class ReaderRefactorTest(unittest.TestCase):
         self.assertIn("第一段正文", frame.locator("body").inner_text())
         self.assertIn("第二段正文", frame.locator("body").inner_text())
         self.assertEqual(frame.locator("s").inner_text(), "删除的文字")
-        self.assertEqual(frame.locator(".d-header, .topic-timeline, .suggested-topics").count(), 3)
-        self.assertEqual(frame.locator("#archive-note td").inner_text(), "附表")
-        self.assertEqual(frame.locator("#archive-note pre").text_content(), "  原始空格")
-        self.assertEqual(frame.locator('a[href="#archive-note"]').count(), 1)
+        self.assertEqual(frame.locator(".d-header, .topic-timeline, .suggested-topics").count(), 0)
 
     def test_html_keyboard_turns_use_iframe_and_reduced_motion(self):
         self.context.clear_permissions()

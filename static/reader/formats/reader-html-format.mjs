@@ -1,5 +1,5 @@
 import { bindReaderScrollIntent } from "../core/reader-bindings.mjs";
-import { HTML_PROSE_STYLE, PHPWIND_HTML_STYLE, wrapEbookTables } from "../ui/reader-document-styles.mjs";
+import { HTML_PROSE_STYLE, LEGACY_ARTICLE_HTML_STYLE, PHPWIND_HTML_STYLE, wrapEbookTables } from "../ui/reader-document-styles.mjs";
 
 /** @param {string | null | undefined} markdown */
 export function stripMarkdownFrontMatter(markdown) {
@@ -590,8 +590,8 @@ export function createReaderHtmlFormat(readerContext) {
     readerContext.status.textContent = "已加载";
   }
 
-  /** @param {string} text @param {boolean} [phpwind] @param {boolean} [discourse] */
-  function sanitizeOfflineHtml(text, phpwind = false, discourse = false) {
+  /** @param {string} text @param {boolean} [phpwind] */
+  function sanitizeOfflineHtml(text, phpwind = false) {
     // A global ALLOWED_URI_REGEXP would also strip every non-allow-listed plain
     // attribute (colspan/rowspan/width), so scope the inline-image rule to URLs.
     // Use the original document URL, not the proxy, srcdoc, or a supplied <base>.
@@ -640,7 +640,7 @@ export function createReaderHtmlFormat(readerContext) {
         RETURN_DOM_FRAGMENT: true,
         ADD_TAGS: ["style"],
         FORBID_TAGS: ["base", "embed", "form", "iframe", "object", "script"],
-        FORBID_ATTR: ["action", "formaction", "srcdoc", "data-reader-phpwind"]
+        FORBID_ATTR: ["action", "formaction", "srcdoc", "data-reader-phpwind", "data-reader-legacy-article"]
       });
     } finally {
       DOMPurify.removeHook("uponSanitizeAttribute", restrict);
@@ -668,13 +668,31 @@ export function createReaderHtmlFormat(readerContext) {
       }
       if (stripped !== value) element.setAttribute("style", stripped);
     }
-    if (discourse) {
-      for (const post of template.content.querySelectorAll(readerContext.DISCOURSE_POST_SELECTOR)) {
-        post.classList.add("reader-forum-post");
-      }
-    }
-    const layoutStyle = phpwind && markPhpwindLayout(template.content) ? PHPWIND_HTML_STYLE : "";
+    const layoutStyle = phpwind && markPhpwindLayout(template.content) ? PHPWIND_HTML_STYLE :
+      markLegacyArticleLayout(template.content) ? LEGACY_ARTICLE_HTML_STYLE : "";
     return template.innerHTML + layoutStyle;
+  }
+
+  /** @param {DocumentFragment} root */
+  function markLegacyArticleLayout(root) {
+    // Legacy CMS exports put Word paragraphs inside fixed-width layout tables.
+    // Reflow only the ancestor chain of this known article shell, not its
+    // actual content tables, other page regions, or arbitrary Word documents.
+    const shell = "table.center_tdbgall > tbody > tr > td.main_tdbgall > table.tdbg_top_left_right > tbody > tr > td.main_tdbg_760";
+    let marked = false;
+    for (const cell of root.querySelectorAll(shell)) {
+      const article = cell.querySelector(":scope > .Section1, :scope > div > .Section1");
+      if (!article?.querySelector("p.MsoNormal")) continue;
+      const outer = cell.closest("td.main_tdbgall")?.closest("table.center_tdbgall");
+      if (!outer) continue;
+      /** @type {Element | null} */
+      let node = cell;
+      for (; node && outer.contains(node); node = node.parentElement) {
+        node.setAttribute("data-reader-legacy-article", "");
+      }
+      marked = true;
+    }
+    return marked;
   }
 
   /** @param {DocumentFragment} root */
@@ -749,26 +767,48 @@ export function createReaderHtmlFormat(readerContext) {
   }
 
   /** @param {string} text */
-  function isDiscourseArchive(text) {
-    // Keep browser parsing for encoded classes and quirks-mode matching.
-    if (!/post-stream/i.test(text) && !text.includes("&#")) return false;
-    const source = new DOMParser().parseFromString(text, "text/html");
-    return !!source.querySelector(".post-stream") && !!source.querySelector(readerContext.DISCOURSE_POST_SELECTOR);
+  function buildDiscourseDocument(text) {
+    // The class may be case-insensitive in quirks mode or contain numeric
+    // character references. Let the HTML parser decide either case.
+    if (!/post-stream/i.test(text) && !text.includes("&#")) return null;
+    try {
+      const source = new DOMParser().parseFromString(text, "text/html");
+      if (!source.querySelector(".post-stream")) return null;
+      const posts = [...source.querySelectorAll(readerContext.DISCOURSE_POST_SELECTOR)];
+      if (!posts.length) return null;
+      const article = source.createElement("article");
+      article.className = "reader-forum-document";
+      const titleNode = source.querySelector(readerContext.DISCOURSE_TITLE_SELECTOR);
+      const title = titleNode?.textContent?.trim();
+      if (title) {
+        const heading = source.createElement("h1");
+        heading.textContent = title;
+        article.appendChild(heading);
+      }
+      posts.forEach((post, index) => {
+        const section = source.createElement("section");
+        section.className = "reader-forum-post";
+        section.dataset.post = String(index + 1);
+        section.innerHTML = post.innerHTML;
+        article.appendChild(section);
+      });
+      return article.outerHTML;
+    } catch (_) {
+      return null;
+    }
   }
 
   /** @param {string} text */
   function prepareHtmlDocument(text) {
-    const discourse = isDiscourseArchive(text);
+    const discourse = buildDiscourseDocument(text);
     // The sanitizer returns body content; check the actual title before it is
     // discarded, but recognize and annotate only the sanitized DOM.
     const phpwind = !discourse && /tpc_content/i.test(text) && /phpwind\.net/i.test(text) &&
       /\bpowered\s+by\s+phpwind\.net\s*$/i.test(new DOMParser().parseFromString(text, "text/html").title);
-    // Style sanitized posts in place: text, images and anchor targets can
-    // live outside the cooked subtree and must not be thrown away.
-    const html = sanitizeOfflineHtml(text, phpwind, discourse);
+    const html = sanitizeOfflineHtml(discourse || text, phpwind);
     return {
       html,
-      discourse,
+      discourse: !!discourse,
       spreadsheet: !discourse && html.includes("reader-spreadsheet-sheet")
     };
   }

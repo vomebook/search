@@ -45,6 +45,14 @@ body a:not([href]){color:inherit}
 @media (forced-colors:active){html,body{background:Canvas!important;color:CanvasText!important}body a[href]{color:LinkText!important}}
 </style>`;
 
+// The recognized article's fixed-width archive shell is not a data table.
+export const LEGACY_ARTICLE_HTML_STYLE = `<style>
+[data-reader-legacy-article]{display:block!important;box-sizing:border-box!important;
+  inline-size:100%!important;min-inline-size:0!important;max-inline-size:100%!important;float:none!important}
+table.center_tdbgall[data-reader-legacy-article]{overflow-x:auto!important}
+[data-reader-legacy-article] > td:not([data-reader-legacy-article]){max-inline-size:100%!important;overflow-wrap:anywhere}
+</style>`;
+
 // Reflow only the validated post shells; authored tables inside posts stay tables.
 export const PHPWIND_HTML_STYLE = `<style>
 [data-reader-phpwind="shell"]{margin:1rem 0;border-block-end:1px solid currentColor}
@@ -107,7 +115,8 @@ export const EBOOK_LAYOUT_STYLE = `
 /** @param {HTMLElement} body */
 export function wrapEbookTables(body) {
   for (const table of body.querySelectorAll("table")) {
-    if (table.parentElement?.closest("table")) continue;
+    if (table.matches("[data-reader-legacy-article]") ||
+        table.parentElement?.closest("table:not([data-reader-legacy-article])")) continue;
     const region = body.ownerDocument.createElement("div");
     region.className = "reader-ebook-table-scroll";
     region.tabIndex = 0;
@@ -121,9 +130,8 @@ export function wrapEbookTables(body) {
 export const DISCOURSE_HTML_STYLE = `<style>
 html,body{min-height:100%;margin:0;background:#fff;color:#202124}
 body{box-sizing:border-box;padding:clamp(18px,4vw,48px);font:16px/1.8 system-ui,-apple-system,"Segoe UI","Noto Sans SC",sans-serif;overflow-wrap:anywhere}
-.post-stream, .topic-post, .reader-forum-post{box-sizing:border-box!important;min-inline-size:0!important;max-inline-size:100%!important}
-.post-stream, .topic-post, .reader-forum-post{inline-size:100%!important;float:none!important}
-#topic-title .fancy-title{font-size:clamp(1.5rem,3vw,2.25rem);line-height:1.35}
+.reader-forum-document{max-width:900px;margin:0 auto}
+.reader-forum-document>h1{margin:0 0 1.8em;padding:0 0 .7em;border-bottom:1px solid #d9dde3;font-size:clamp(1.5rem,3vw,2.25rem);line-height:1.35}
 .reader-forum-post{margin:0 0 2.5em;padding:0 0 2em;border-bottom:1px solid #e1e5ea}
 .reader-forum-post:last-child{margin-bottom:0;border-bottom:0}
 .reader-forum-post p{margin:.8em 0}
@@ -132,7 +140,7 @@ body{box-sizing:border-box;padding:clamp(18px,4vw,48px);font:16px/1.8 system-ui,
 .reader-forum-post table{display:block;max-width:100%;overflow-x:auto;border-collapse:collapse}
 .reader-forum-post blockquote{margin:1em 0;padding:.5em 1em;border-left:3px solid #c5ccd6;background:#f6f8fa}
 .reader-forum-post pre{max-width:100%;overflow:auto;white-space:pre-wrap}
-@media(max-width:600px){body{padding:16px 14px}}
+@media(max-width:600px){body{padding:16px 14px}.reader-forum-document>h1{font-size:1.5rem}}
 </style>`;
 
 export const SPREADSHEET_HTML_STYLE = `<style>
