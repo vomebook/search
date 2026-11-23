@@ -2,7 +2,7 @@
   "version": 1,
   "scope": "frontend",
   "limit": 12,
-  "branches": 16133,
+  "branches": 16125,
   "files": {
     "scripts/benchmarks/benchmark_djvu.py": {
       "peak": 49,
@@ -450,7 +450,7 @@
     },
     "static/tts-client.js": {
       "peak": 51,
-      "excess": 204
+      "excess": 197
     }
   }
 }

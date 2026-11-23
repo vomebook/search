@@ -370,7 +370,7 @@ if (typeof document !== "undefined") /** @type {Window & {CCRDSpeech?: unknown}}
   const CLIP_RETRY_MS = 2000;
   /** @type {WeakMap<SpeechJob, number[]>} */
   const clipRetryAt = new WeakMap();
-  let clipBytes = 0, clipEpoch = 0, clipLoads = 0;
+  let clipBytes = 0, clipLoads = 0;
 
   /** @param {string} text */
   function notice(text) { status.textContent = text; }
@@ -397,7 +397,7 @@ if (typeof document !== "undefined") /** @type {Window & {CCRDSpeech?: unknown}}
     entry.controller?.abort();
     if (entry.url) { URL.revokeObjectURL(entry.url); clipBytes -= entry.bytes; }
   }
-  function clearClips() { clipEpoch += 1; for (const key of Array.from(clips.keys())) dropClip(key); }
+  function clearClips() { for (const key of Array.from(clips.keys())) dropClip(key); }
   /** @param {string} key */
   function clipUrl(key) {
     const entry = clips.get(key);
@@ -418,7 +418,7 @@ if (typeof document !== "undefined") /** @type {Window & {CCRDSpeech?: unknown}}
     const key = clipKey(value, job, part);
     if (clips.has(key) || clipLoads >= CLIP_LOADS || !part.audio_url || (clipRetryAt.get(job)?.[part.index] ?? 0) > performance.now()) return;
     /** @type {SpeechClip} */
-    const entry = { url: "", bytes: 0, controller: new AbortController() }, epoch = clipEpoch;
+    const entry = { url: "", bytes: 0, controller: new AbortController() };
     const miss = () => {
       if (clips.get(key) !== entry) return; // Aborted or superseded preloads don't count.
       // Both the completion refill and the playback pump honor this; advance still uses the audio URL.
@@ -431,7 +431,8 @@ if (typeof document !== "undefined") /** @type {Window & {CCRDSpeech?: unknown}}
     fetch(ORIGIN + part.audio_url, { credentials: "omit", signal: /** @type {AbortController} */ (entry.controller).signal })
       .then(response => response.ok && (response.headers.get("Content-Type") || "").startsWith("audio/mpeg") ? response.blob() : null)
       .then(blob => {
-        if (epoch !== clipEpoch || clips.get(key) !== entry) return;
+        // Clearing removes the entry; a new fetch for the same key has a different entry.
+        if (clips.get(key) !== entry) return;
         entry.controller = null;
         if (!blob || blob.size !== part.bytes) miss();
         else storeClip(key, entry, blob);
@@ -473,6 +474,13 @@ if (typeof document !== "undefined") /** @type {Window & {CCRDSpeech?: unknown}}
     value.jobs.delete(job.batch.start);
     release(job.id);
   }
+  /** @param {SpeechOwner} value */
+  function discardUnready(value, keepFollowing = false) {
+    const { start, end } = value.batch;
+    for (const job of Array.from(value.jobs.values())) {
+      if (job.batch.start !== start && (!keepFollowing || job.batch.start !== end) && job.state !== "ready") discard(value, job);
+    }
+  }
   function playbackSettings() { return { rate: Number(speed.value), timer: timer.value, deadline: sleepDeadline }; }
   function clearSleep() {
     clearTimeout(sleepTimer); sleepDeadline = 0; finishSentence = false; timer.value = "off";
@@ -487,7 +495,7 @@ if (typeof document !== "undefined") /** @type {Window & {CCRDSpeech?: unknown}}
     finishSentence = timer.value === "clip";
     if (finishSentence && owner) {
       cancelHandoff(); clearPreload();
-      for (const job of Array.from(owner.jobs.values())) if (job.batch.start !== owner.batch.start && job.state !== "ready") discard(owner, job);
+      discardUnready(owner);
     }
     function tickSleep() { if (!checkSleep() && sleepDeadline) sleepTimer = setTimeout(tickSleep, Math.min(1000, sleepDeadline - Date.now())); }
     tickSleep();
@@ -592,7 +600,7 @@ if (typeof document !== "undefined") /** @type {Window & {CCRDSpeech?: unknown}}
     if (!owner) { if (restart) { retryStart = restart; notice("已暂停"); controls(); } return; }
     owner.wantsPlay = false;
     clearPreload();
-    for (const job of Array.from(owner.jobs.values())) if (job.batch.start !== owner.batch.start && job.state !== "ready") discard(owner, job);
+    discardUnready(owner);
     /** @type {HTMLAudioElement} */ (audio).pause(); cancelHandoff(); if (retiring) retire(); notice("已暂停"); controls();
     if ("mediaSession" in navigator) navigator.mediaSession.playbackState = "paused";
   }
@@ -1086,10 +1094,7 @@ if (typeof document !== "undefined") /** @type {Window & {CCRDSpeech?: unknown}}
     value.position = offset; value.batch = job.batch; value.part = index; value.wantsPlay = playing;
     value.blocked = false;
     // Do not let synthesis of a now irrelevant batch hold up the target job.
-    for (const other of Array.from(value.jobs.values())) {
-      if (other !== job && other.batch.start !== job.batch.end && other.state !== "ready") discard(value, other);
-      else if (!playing && other !== job && other.state !== "ready") discard(value, other);
-    }
+    discardUnready(value, playing);
     const player = /** @type {HTMLAudioElement} */ (audio);
     if (current?.job === job && current.part.index === index && player.readyState >= 1 && !player.error) {
       player.currentTime = 0;
