@@ -590,8 +590,8 @@ export function createReaderHtmlFormat(readerContext) {
     readerContext.status.textContent = "已加载";
   }
 
-  /** @param {string} text @param {boolean} [phpwind] */
-  function sanitizeOfflineHtml(text, phpwind = false) {
+  /** @param {string} text @param {boolean} [phpwind] @param {boolean} [discourse] */
+  function sanitizeOfflineHtml(text, phpwind = false, discourse = false) {
     // A global ALLOWED_URI_REGEXP would also strip every non-allow-listed plain
     // attribute (colspan/rowspan/width), so scope the inline-image rule to URLs.
     // Use the original document URL, not the proxy, srcdoc, or a supplied <base>.
@@ -667,6 +667,11 @@ export function createReaderHtmlFormat(readerContext) {
         if (cacheable && inlineStyles.size < 128) inlineStyles.set(value, stripped);
       }
       if (stripped !== value) element.setAttribute("style", stripped);
+    }
+    if (discourse) {
+      for (const post of template.content.querySelectorAll(readerContext.DISCOURSE_POST_SELECTOR)) {
+        post.classList.add("reader-forum-post");
+      }
     }
     const layoutStyle = phpwind && markPhpwindLayout(template.content) ? PHPWIND_HTML_STYLE : "";
     return template.innerHTML + layoutStyle;
@@ -744,48 +749,26 @@ export function createReaderHtmlFormat(readerContext) {
   }
 
   /** @param {string} text */
-  function buildDiscourseDocument(text) {
-    // The class may be case-insensitive in quirks mode or contain numeric
-    // character references. Let the HTML parser decide either case.
-    if (!/post-stream/i.test(text) && !text.includes("&#")) return null;
-    try {
-      const source = new DOMParser().parseFromString(text, "text/html");
-      if (!source.querySelector(".post-stream")) return null;
-      const posts = [...source.querySelectorAll(readerContext.DISCOURSE_POST_SELECTOR)];
-      if (!posts.length) return null;
-      const article = source.createElement("article");
-      article.className = "reader-forum-document";
-      const titleNode = source.querySelector(readerContext.DISCOURSE_TITLE_SELECTOR);
-      const title = titleNode?.textContent?.trim();
-      if (title) {
-        const heading = source.createElement("h1");
-        heading.textContent = title;
-        article.appendChild(heading);
-      }
-      posts.forEach((post, index) => {
-        const section = source.createElement("section");
-        section.className = "reader-forum-post";
-        section.dataset.post = String(index + 1);
-        section.innerHTML = post.innerHTML;
-        article.appendChild(section);
-      });
-      return article.outerHTML;
-    } catch (_) {
-      return null;
-    }
+  function isDiscourseArchive(text) {
+    // Keep browser parsing for encoded classes and quirks-mode matching.
+    if (!/post-stream/i.test(text) && !text.includes("&#")) return false;
+    const source = new DOMParser().parseFromString(text, "text/html");
+    return !!source.querySelector(".post-stream") && !!source.querySelector(readerContext.DISCOURSE_POST_SELECTOR);
   }
 
   /** @param {string} text */
   function prepareHtmlDocument(text) {
-    const discourse = buildDiscourseDocument(text);
+    const discourse = isDiscourseArchive(text);
     // The sanitizer returns body content; check the actual title before it is
     // discarded, but recognize and annotate only the sanitized DOM.
     const phpwind = !discourse && /tpc_content/i.test(text) && /phpwind\.net/i.test(text) &&
       /\bpowered\s+by\s+phpwind\.net\s*$/i.test(new DOMParser().parseFromString(text, "text/html").title);
-    const html = sanitizeOfflineHtml(discourse || text, phpwind);
+    // Style sanitized posts in place: text, images and anchor targets can
+    // live outside the cooked subtree and must not be thrown away.
+    const html = sanitizeOfflineHtml(text, phpwind, discourse);
     return {
       html,
-      discourse: !!discourse,
+      discourse,
       spreadsheet: !discourse && html.includes("reader-spreadsheet-sheet")
     };
   }

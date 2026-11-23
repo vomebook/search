@@ -3819,7 +3819,7 @@ class ReaderRefactorTest(unittest.TestCase):
         self.assertEqual(body.locator('script').count(), 0)
         # DOMPurify may also call DOMParser with the original document. Check
         # the probe's call site instead of expecting a particular wrapper.
-        self.assertFalse(self.page.evaluate("()=>window.__parsedHtml.some(stack=>stack?.includes('buildDiscourseDocument'))"))
+        self.assertFalse(self.page.evaluate("()=>window.__parsedHtml.some(stack=>stack?.includes('isDiscourseArchive'))"))
 
     def test_html_inactive_anchors_are_not_painted_as_links(self):
         html = ('<!doctype html><meta charset="utf-8"><p><a id="kept">无链接词</a> '
@@ -3877,10 +3877,10 @@ class ReaderRefactorTest(unittest.TestCase):
                 self.open(self.reader_url('html', name='forum-' + name))
                 frame = self.page.frame_locator('.html-frame')
                 self.assertEqual(frame.locator('.reader-forum-post' if extracted else '.cooked').inner_text(), '论坛正文')
-                self.assertEqual(frame.locator('header').count(), 0 if extracted else 1)
+                self.assertEqual(frame.locator('header').count(), 1)
                 self.assertEqual(frame.locator('script').count(), 0)
 
-    def test_discourse_html_extracts_posts_without_forum_shell(self):
+    def test_discourse_html_styles_posts_without_discarding_archive_content(self):
         html = """<!doctype html><html><head><title>论坛标题</title></head><body>
         <header class="d-header">论坛顶部</header>
         <div id="topic-title"><a class="fancy-title">论坛标题</a></div>
@@ -3890,6 +3890,8 @@ class ReaderRefactorTest(unittest.TestCase):
           <article class="topic-post"><div class="cooked"><p>第二段正文</p></div></article>
         </div>
         <div class="suggested-topics">推荐主题</div>
+        <aside id="archive-note"><table><tr><td>附表</td></tr></table><pre>  原始空格</pre></aside>
+        <a href="#archive-note">跳到附注</a>
         </body></html>"""
         self.serve(html, "text/html")
         self.open(self.reader_url("html", name="forum"))
@@ -3898,7 +3900,10 @@ class ReaderRefactorTest(unittest.TestCase):
         self.assertIn("第一段正文", frame.locator("body").inner_text())
         self.assertIn("第二段正文", frame.locator("body").inner_text())
         self.assertEqual(frame.locator("s").inner_text(), "删除的文字")
-        self.assertEqual(frame.locator(".d-header, .topic-timeline, .suggested-topics").count(), 0)
+        self.assertEqual(frame.locator(".d-header, .topic-timeline, .suggested-topics").count(), 3)
+        self.assertEqual(frame.locator("#archive-note td").inner_text(), "附表")
+        self.assertEqual(frame.locator("#archive-note pre").text_content(), "  原始空格")
+        self.assertEqual(frame.locator('a[href="#archive-note"]').count(), 1)
 
     def test_html_keyboard_turns_use_iframe_and_reduced_motion(self):
         self.context.clear_permissions()
