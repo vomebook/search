@@ -176,12 +176,12 @@ export function createReaderHtmlFormat(readerContext) {
   // custom-property URL strings become "", and unsafe
   // @import rules are removed. Everything else is copied byte-for-byte.
   /** @param {string | null} source @param {import('../../../typings/reader-html-format-strict').CssOptions} [options] */
-  function scanCss(source, { strict = false } = {}) {
+  function sanitizeCssReferences(source, { strict = false } = {}) {
     const css = String(source || "");
     const length = css.length;
     /** @type {[number, number, string][]} */
     const edits = [];
-    /** @type {{start: number, name: string, reference: boolean, unsafe: boolean}[]} */
+    /** @type {{start: number, reference: boolean, unsafe: boolean}[]} */
     const stack = [];
     let i = 0, customValueDepth = -1;
     // Offline HTML historically deletes references; EPUB styles keep a valid
@@ -207,6 +207,16 @@ export function createReaderHtmlFormat(readerContext) {
     };
     /** @param {number} at */
     const validEscape = (at) => css[at] === "\\" && at + 1 < length && !/[\n\r\f]/.test(css.charAt(at + 1));
+    /** @param {number} at */
+    const skipWhitespace = (at) => {
+      // charCodeAt returns NaN past EOF, which is not CSS whitespace.
+      while (cssWhitespace(css.charCodeAt(at))) at++;
+      return at;
+    };
+    /** @param {number} at */
+    const stringAt = (at) => css[at] === "\"" || css[at] === "'";
+    /** @param {number} at */
+    const commentAt = (at) => css[at] === "/" && css[at + 1] === "*";
     const readName = () => {
       let name = "";
       while (i < length) {
@@ -246,11 +256,11 @@ export function createReaderHtmlFormat(readerContext) {
         const code = css.charCodeAt(i);
         if (css[i] === ")") { i++; return bad ? null : value; }
         if (cssWhitespace(code)) {
-          while (i < length && cssWhitespace(css.charCodeAt(i))) i++;
+          i = skipWhitespace(i);
           if (css[i] !== ")" && i < length) bad = true;
           continue;
         }
-        if (css[i] === "\"" || css[i] === "'" || css[i] === "(" || code <= 0x08 ||
+        if (stringAt(i) || css[i] === "(" || code <= 0x08 ||
             code === 0x0b || (code >= 0x0e && code <= 0x1f) || code === 0x7f) {
           bad = true; i++; continue;
         }
@@ -268,8 +278,8 @@ export function createReaderHtmlFormat(readerContext) {
       let depth = 0;
       while (i < length) {
         const char = css[i];
-        if (char === "/" && css[i + 1] === "*") { skipComment(); continue; }
-        if (char === "\"" || char === "'") { readString(); continue; }
+        if (commentAt(i)) { skipComment(); continue; }
+        if (stringAt(i)) { readString(); continue; }
         if (char === "\\") { if (validEscape(i)) readEscape(); else i++; continue; }
         i++;
         if (char === "(" || char === "[" || char === "{") depth++;
@@ -283,20 +293,19 @@ export function createReaderHtmlFormat(readerContext) {
       // `i` is just after "@import".
       let target = null, cursor;
       while (i < length) {
-        if (cssWhitespace(css.charCodeAt(i))) { i++; continue; }
-        if (css[i] === "/" && css[i + 1] === "*") { skipComment(); continue; }
-        break;
+        i = skipWhitespace(i);
+        if (!commentAt(i)) break;
+        skipComment();
       }
-      if (css[i] === "\"" || css[i] === "'") target = readString();
+      if (stringAt(i)) target = readString();
       else {
         cursor = i;
         const name = cssNameChar(css.charCodeAt(i)) || validEscape(i) ? readName() : "";
         if (name.toLowerCase() === "url" && css[i] === "(") {
-          i++;
-          while (i < length && cssWhitespace(css.charCodeAt(i))) i++;
-          if (css[i] === "\"" || css[i] === "'") {
+          i = skipWhitespace(i + 1);
+          if (stringAt(i)) {
             target = readString();
-            while (i < length && cssWhitespace(css.charCodeAt(i))) i++;
+            i = skipWhitespace(i);
             if (css[i] === ")") i++; else target = null;
           } else target = readUrlToken();
         } else i = cursor;
@@ -311,8 +320,8 @@ export function createReaderHtmlFormat(readerContext) {
 
     while (i < length) {
       const char = css[i], code = css.charCodeAt(i);
-      if (char === "/" && css[i + 1] === "*") { skipComment(); continue; }
-      if (char === "\"" || char === "'") {
+      if (commentAt(i)) { skipComment(); continue; }
+      if (stringAt(i)) {
         const start = i, value = readString();
         const frame = stack[stack.length - 1];
         // Custom properties can later be substituted into image-set()/image();
@@ -332,15 +341,14 @@ export function createReaderHtmlFormat(readerContext) {
         if (name === "import" && !stack.length) handleImport(start);
         continue;
       }
-      if (cssNameChar(code) || validEscape(i) ||
-          (char === "-" && (cssNameChar(css.charCodeAt(i + 1)) || validEscape(i + 1)))) {
+      // cssNameChar already accepts hyphens, including a lone '-'.
+      if (cssNameChar(code) || validEscape(i)) {
         const start = i, name = readName().toLowerCase();
         if (css[i] === "(") {
           i++;
           if (name === "url") {
-            let probe = i;
-            while (probe < length && cssWhitespace(css.charCodeAt(probe))) probe++;
-            if (css[probe] !== "\"" && css[probe] !== "'") {
+            const probe = skipWhitespace(i);
+            if (!stringAt(probe)) {
               i = probe;
               const value = readUrlToken();
               if (value === null || !safeCssReference(value, { strict })) {
@@ -351,18 +359,17 @@ export function createReaderHtmlFormat(readerContext) {
               continue;
             }
           }
-          stack.push({ start, name, reference: CSS_REFERENCE_FUNCTIONS.has(name), unsafe: false });
+          stack.push({ start, reference: CSS_REFERENCE_FUNCTIONS.has(name), unsafe: false });
           continue;
         }
         if (name.startsWith("--") && customValueDepth < 0) {
-          let probe = i;
-          while (probe < length && cssWhitespace(css.charCodeAt(probe))) probe++;
+          const probe = skipWhitespace(i);
           if (css[probe] === ":") { customValueDepth = stack.length; i = probe + 1; }
         }
         continue;
       }
       if (char === "\\") { i++; continue; } // invalid escape
-      if (char === "(") { stack.push({ start: i, name: "", reference: false, unsafe: false }); i++; continue; }
+      if (char === "(") { stack.push({ start: i, reference: false, unsafe: false }); i++; continue; }
       if (char === ")") {
         const frame = stack.pop();
         i++;
@@ -387,11 +394,6 @@ export function createReaderHtmlFormat(readerContext) {
       cursor = end;
     }
     return output + css.slice(cursor);
-  }
-
-  /** @param {string | null} css @param {import('../../../typings/reader-html-format-strict').CssOptions} [options] */
-  function sanitizeCssReferences(css, options = {}) {
-    return scanCss(css, options);
   }
 
   /** @param {Document} doc */

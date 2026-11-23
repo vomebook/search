@@ -2,7 +2,7 @@
   "version": 1,
   "scope": "frontend",
   "limit": 12,
-  "branches": 16350,
+  "branches": 16276,
   "files": {
     "scripts/benchmarks/benchmark_djvu.py": {
       "peak": 49,
@@ -121,8 +121,8 @@
       "excess": 59
     },
     "static/reader/core/reader-contract.js": {
-      "peak": 79,
-      "excess": 147
+      "peak": 47,
+      "excess": 89
     },
     "static/reader/core/reader-document-loader.mjs": {
       "peak": 16,
@@ -161,8 +161,8 @@
       "excess": 53
     },
     "static/reader/formats/reader-html-format.mjs": {
-      "peak": 60,
-      "excess": 173
+      "peak": 50,
+      "excess": 150
     },
     "static/reader/formats/reader-image-loader.mjs": {
       "peak": 23,

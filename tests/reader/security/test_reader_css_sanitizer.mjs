@@ -22,6 +22,10 @@ const cases = [
   ["@import \"blob:https://site/abc\";p{}", "p{}"],
   ["@import url(blob:https://site/abc) screen;p{color:green}", "p{color:green}"],
   ["@import \"local.css\";p{}", "@import \"local.css\";p{}"],
+  ["@import \r\n/**/\f/* second */url( \t'https://x.test/a.css' \r\n);p{}", "p{}"],
+  ["p{--bg\t:\"//x.test/a.png\";background:url(\r\n ./local.png \f)}", "p{--bg\t:\"\";background:url(\r\n ./local.png \f)}"],
+  ["p{--:\"local string\";--x:var(---)}", null],
+  ["@import/*final*/\r\n\f", ""],
   // Safe references and non-reference strings stay byte-for-byte.
   ["p{background:url(blob:https://site/1)}", null],
   ["p{background:url(\"data:image/svg+xml,<svg/>\")}", null],
