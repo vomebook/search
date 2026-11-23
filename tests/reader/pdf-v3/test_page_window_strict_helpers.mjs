@@ -127,7 +127,8 @@ test('DjVu numeric destinations are forwarded unchanged and missing destinations
 
 test('virtual ensure preserves valid, out-of-range and disposed behavior', () => {
   const original = {document: globalThis.document, getComputedStyle: globalThis.getComputedStyle,
-    ResizeObserver: globalThis.ResizeObserver};
+    ResizeObserver: globalThis.ResizeObserver, requestAnimationFrame: globalThis.requestAnimationFrame,
+    cancelAnimationFrame: globalThis.cancelAnimationFrame};
   class Element {
     constructor() { this.children = []; this.style = {}; this.dataset = {}; this.isConnected = false; }
     appendChild(child) {
@@ -145,6 +146,13 @@ test('virtual ensure preserves valid, out-of-range and disposed behavior', () =>
     createDocumentFragment: () => Object.assign(new Element(), {fragment: true}), activeElement: null};
   globalThis.getComputedStyle = () => ({paddingLeft: '0', paddingRight: '0'});
   globalThis.ResizeObserver = class { observe() {} disconnect() {} };
+  const frames = new Map(); let frameId = 0;
+  globalThis.requestAnimationFrame = callback => { frames.set(++frameId, callback); return frameId; };
+  globalThis.cancelAnimationFrame = id => frames.delete(id);
+  const tick = () => {
+    const pending = [...frames.values()]; frames.clear();
+    pending.forEach(callback => callback());
+  };
   try {
     const content = new Element(); content.clientWidth = 100;
     const reader = {content, viewport: {scrollTop: 0, clientHeight: 100}, documentState: {zoom: 1},
@@ -159,6 +167,46 @@ test('virtual ensure preserves valid, out-of-range and disposed behavior', () =>
     assert.throws(() => window.ensure(289), TypeError); // No chunk at this index.
     window.dispose();
     assert.throws(() => window.ensure(1), TypeError);
+
+    const open = page => {
+      content.replaceChildren();
+      const first = content.appendChild(shell(page)), created = [];
+      const window = createReaderPdfPageWindow(reader).createPdfShellWindow(340, first, page => {
+        created.push(page); return shell(page);
+      }, () => {}, 1.4, null, page);
+      assert.equal(created.length, 31);
+      assert.ok(created.every(value => value >= 193 && value <= 224));
+      assert.ok(content.children.some(chunk => chunk.children.includes(first)));
+      return {window, created};
+    };
+    const picked = open(210);
+    picked.window.resize(); picked.window.schedule();
+    assert.equal(frames.size, 0, 'opening resize and programmatic scroll do not expand early');
+    picked.window.finishOpening();
+    assert.equal(picked.window.ensure(210).dataset.page, '210');
+    assert.ok(picked.window.opening);
+    assert.equal(picked.created.length, 31, 'reapplying the saved page does not expand');
+    tick();
+    assert.equal(picked.created.length, 31, 'one frame for the opening paint');
+    tick();
+    assert.ok(picked.created.length > 31, 'ordinary viewport window is restored');
+    picked.window.dispose();
+
+    const manual = open(210); manual.window.finishOpening();
+    assert.equal(manual.window.ensure(340).dataset.page, '340');
+    assert.equal(frames.size, 0, 'a later jump supersedes the queued expansion');
+    manual.window.dispose();
+
+    const scroll = open(210);
+    reader.pdfUserHasScrolled = true; scroll.window.schedule();
+    assert.equal(frames.size, 1);
+    tick(); assert.ok(scroll.created.length > 31);
+    scroll.window.dispose(); reader.pdfUserHasScrolled = false;
+
+    const closed = open(210); closed.window.finishOpening(); tick();
+    closed.window.dispose();
+    assert.equal(frames.size, 0, 'disposal removes the second frame');
+    assert.equal(closed.created.length, 31);
   } finally {
     for (const [key, value] of Object.entries(original)) {
       if (value === undefined) delete globalThis[key]; else globalThis[key] = value;

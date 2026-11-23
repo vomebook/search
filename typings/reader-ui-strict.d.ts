@@ -19,7 +19,7 @@ export interface NavigationContext {
   readerAbortController: AbortController;
   documentState: { pageCount: number; restorationReady: boolean };
   isReaderGenerationCurrent(kind: string, generation: number): boolean;
-  pdfShellWindow: { ensure(page: number): void; schedule(): void } | null;
+  pdfShellWindow: { readonly opening: boolean; ensure(page: number): void; schedule(): void } | null;
   content: HTMLElement;
   pdfShellLayoutReady: Promise<boolean> | null;
   pdfShellsReady: Promise<unknown>;

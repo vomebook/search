@@ -80,12 +80,14 @@ export interface PageWindowRepository {
   read(ref: import('./reader-v3-strict').Resource): Promise<unknown>;
 }
 export interface PageWindowHandle {
+  readonly opening: boolean;
   /** Valid pages are integers in [1, total]. Outside that range the result is
    * unspecified: it may be null or throw. Throws after disposal. */
   ensure(page: number): Element | null;
   remember(shell: WindowShell): void;
   setDefaultRatio(ratio: number): void;
   schedule(): void;
+  finishOpening(): void;
   resize(): void;
   dispose(): void;
 }
@@ -115,7 +117,7 @@ export interface PageWindowContext {
   independentTextCaret(document: Document, x: number, y: number): {node: Node; offset: number} | null;
   pdfSelectionIntersects(element: Element): boolean; pageAtMarker(): WindowShell | null;
   isPdfPageVisible(shell: Element | null | undefined): boolean;
-  createPdfShellWindow(total: number, first: WindowShell, create: (page: number) => WindowShell, unobserve: (shell: WindowShell) => void, ratio: number, retained?: Map<number, WindowShell> | null): PageWindowHandle | null;
+  createPdfShellWindow(total: number, first: WindowShell, create: (page: number) => WindowShell, unobserve: (shell: WindowShell) => void, ratio: number, retained?: Map<number, WindowShell> | null, openingPage?: number): PageWindowHandle | null;
   createPdfV3Repository(sha: string, count: number): PageWindowRepository;
   validateReadingManifest(value: unknown, limit: number): import('./reader-v3-strict').ReadingManifest & {kind: 'pdf-reading'};
   validatePageMap(value: unknown, manifest: import('./reader-v3-strict').ReadingManifest): import('./reader-v3-strict').PageMap;

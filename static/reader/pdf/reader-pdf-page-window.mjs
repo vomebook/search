@@ -205,15 +205,18 @@ export function createReaderPdfPageWindow(readerContext) {
    * @param {(shell: import('../../../typings/reader-page-window-strict').WindowShell) => void} unobserve
    * @param {number} defaultRatio
    * @param {Map<number, import('../../../typings/reader-page-window-strict').WindowShell> | null} [retainedShells]
+   * @param {number} [openingPage] When set, mount only this page's chunk until the first draw or navigation.
    */
-  function createPdfShellWindow(total, firstShell, createShell, unobserve, defaultRatio, retainedShells = null) {
+  function createPdfShellWindow(total, firstShell, createShell, unobserve, defaultRatio, retainedShells = null, openingPage) {
     // `defaultRatio` may be replaced once a real page geometry is known.
     if (total <= 256) return null;
     const chunkSize = 32;
     /** @type {import('../../../typings/reader-page-window-strict').PdfWindowChunk[]} */
     const chunks = [];
     const ratios = new Map();
-    let frame = 0, disposed = false;
+    let frame = 0, disposed = false, opening = openingPage !== undefined;
+    /** @type {import('../../../typings/reader-page-window-strict').WindowShell | null} */
+    let seedShell = firstShell;
     const readWidth = () => {
       const style = getComputedStyle(readerContext.content);
       return (readerContext.content.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight)) * readerContext.documentState.zoom;
@@ -286,7 +289,7 @@ export function createReaderPdfPageWindow(readerContext) {
       if (chunk.mounted) return;
       const pages = document.createDocumentFragment();
       for (let page = chunk.start; page <= chunk.end; page++) {
-        const shell = page === 1 && firstShell.isConnected ? firstShell : createShell(page);
+        const shell = page === (openingPage ?? 1) && seedShell?.isConnected ? seedShell : createShell(page);
         if (ratios.has(page)) shell.style.aspectRatio = `1 / ${ratios.get(page)}`;
         pages.appendChild(shell);
       }
@@ -361,7 +364,9 @@ export function createReaderPdfPageWindow(readerContext) {
       }
       show(Math.min(low, chunks.length - 1));
     }
-    mount(/** @type {import('../../../typings/reader-page-window-strict').PdfWindowChunk} */ (chunks[0]));
+    const firstChunkIndex = Math.floor(((openingPage ?? 1) - 1) / chunkSize);
+    mount(/** @type {import('../../../typings/reader-page-window-strict').PdfWindowChunk} */ (chunks[firstChunkIndex]));
+    seedShell = null;
     const resizeObserver = new ResizeObserver(() => resize());
     resizeObserver.observe(readerContext.viewport);
     function resize() {
@@ -375,13 +380,33 @@ export function createReaderPdfPageWindow(readerContext) {
       schedule();
     }
     function schedule() {
+      if (opening && !readerContext.pdfUserHasScrolled) return;
+      leaveOpening();
       if (!disposed && !frame) frame = requestAnimationFrame(sync);
     }
+    function finishOpening() {
+      if (!opening || disposed || frame) return;
+      // Give the completed canvas a paint before filling adjacent chunks.
+      frame = requestAnimationFrame(() => {
+        frame = requestAnimationFrame(() => { opening = false; sync(); });
+      });
+    }
+    function leaveOpening() {
+      if (!opening) return;
+      opening = false;
+      if (frame) { cancelAnimationFrame(frame); frame = 0; }
+    }
     const window = {
+      get opening() { return opening; },
       /** @param {number} page Integer in [1, total]; outside this range may return null or throw. Throws after disposal. */
       ensure(page) {
         const index = Math.floor((page - 1) / chunkSize);
-        show(index);
+        // Applying the saved offset on the already-mounted page must not
+        // fill neighboring chunks in the same turn as its first draw.
+        if (!opening || page !== openingPage) {
+          leaveOpening();
+          show(index);
+        }
         return (/** @type {import('../../../typings/reader-page-window-strict').PdfWindowChunk} */ (chunks[index])).element.querySelector(`.reader-page[data-page="${page}"]`);
       },
       /** @param {import('../../../typings/reader-page-window-strict').WindowShell} shell */
@@ -400,6 +425,7 @@ export function createReaderPdfPageWindow(readerContext) {
       },
       schedule,
       resize,
+      finishOpening,
       dispose() {
         disposed = true;
         if (frame) cancelAnimationFrame(frame);
@@ -1392,14 +1418,16 @@ export function createReaderPdfPageWindow(readerContext) {
       observeShell(shell);
       return shell;
     };
-    const firstShell = previewShell || createShell(1);
+    const djvuOpeningPage = !previewShell && pdf.numPages > 256 && ownsOpeningPosition() && !readerContext.pdfUserHasScrolled &&
+      (readerContext.extension === "djvu" || readerContext.pdfV3Manifest?.primary.kind === "djvu") ? initialPage : undefined;
+    const firstShell = previewShell || createShell(djvuOpeningPage ?? 1);
     if (!previewShell) readerContext.content.appendChild(firstShell);
     else for (const shell of previewPages.values()) observeShell(shell);
     readerContext.pdfShellWindow = readerContext.createPdfShellWindow(pdf.numPages, firstShell, createShell, (shell) => {
       observer.unobserve(shell);
       visibleObserver.unobserve(shell);
       pageObserver.unobserve(shell);
-    }, firstViewport.height / firstViewport.width, previewPages);
+    }, firstViewport.height / firstViewport.width, previewPages, djvuOpeningPage);
     const drawWhileBatching = !readerContext.pdfShellWindow && !previewShell && readerContext.extension === "pdf";
     // The target can paint once its own batch is connected, but restore and
     // adjacent observers still need the full layout (including near the end).
@@ -1411,7 +1439,7 @@ export function createReaderPdfPageWindow(readerContext) {
     publishLayout();
     let releaseObservers = !drawWhileBatching;
     try {
-      const targetShell = !ownsOpeningPosition() || (drawWhileBatching && initialPage === 1)
+      const targetShell = djvuOpeningPage !== undefined || !ownsOpeningPosition() || (drawWhileBatching && initialPage === 1)
         ? firstShell
         : readerContext.pdfShellWindow
           ? readerContext.pdfShellWindow.ensure(initialPage)
@@ -1455,7 +1483,10 @@ export function createReaderPdfPageWindow(readerContext) {
         readerContext.viewport.scrollTop = readerContext.readerPageScrollTop(targetShell);
       releaseObservers = true;
     } finally {
-      if (releaseObservers && !readerContext.readerAbortController.signal.aborted) releaseInitialRenderGate();
+      if (releaseObservers && !readerContext.readerAbortController.signal.aborted) {
+        releaseInitialRenderGate();
+        readerContext.pdfShellWindow?.finishOpening();
+      }
     }
     const isDjvu = readerContext.extension === "djvu" || readerContext.pdfV3Manifest?.primary.kind === "djvu";
     if (pdf.outlineNeedsFullSource) {

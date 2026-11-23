@@ -57,6 +57,44 @@ class DjvuRangeBrowserTests(unittest.TestCase):
                     self.page.unroute('**/api/reader-source-revision?**')
                     self.page.unroute('**/api/reader-content?**')
 
+    def test_long_djvu_end_key_supersedes_held_first_draw(self):
+        # Exercise the real reader/navigation with a virtual-sized document.
+        # Only the decoder result is stubbed so the test can hold page one
+        # without requiring a large binary fixture or public network traffic.
+        page = self.page
+        state = install(page, self.origin, prefix=PREFIX)
+        page.route('**/reader-djvu-loader.mjs', lambda route: route.fulfill(
+            content_type='text/javascript', body=r'''export async function openNativeDjvu() {
+              let release;
+              const held = new Promise(resolve => release = resolve);
+              window.releaseDjvuFirst = release;
+              return {
+                numPages: 340, getOutline: async () => [],
+                getPage: async number => ({
+                  getViewport: ({scale}) => ({width: 300 * scale, height: 420 * scale}),
+                  getTextContent: async () => ({items: []}),
+                  render({canvasContext}) {
+                    if (number === 1) window.djvuFirstDrawStarted = true;
+                    const promise = (number === 1 ? held : Promise.resolve()).then(() => {
+                      canvasContext.fillRect(0, 0, 10, 10);
+                    });
+                    return {promise, cancel: release};
+                  }
+                })
+              };
+            }'''))
+        page.goto(state['url'], wait_until='domcontentloaded')
+        page.wait_for_function('window.djvuFirstDrawStarted === true')
+        self.assertEqual(page.locator('.reader-page').count(), 32)
+        self.assertEqual(page.locator('.reader-page canvas.ready').count(), 0)
+        page.locator('#viewport').press('End')
+        page.locator('.reader-page[data-page="340"]').wait_for(state="attached")
+        page.evaluate('window.releaseDjvuFirst()')
+        page.locator('.reader-page[data-page="340"] canvas.ready').wait_for()
+        self.assertTrue(page.evaluate("""() => {const el=document.querySelector('#viewport');
+          return el.scrollHeight - el.clientHeight - el.scrollTop < 4;}"""))
+        self.assert_no_page_images()
+
     def test_late_outline_loads_full_same_version_only_on_demand(self):
         state = install(self.page, self.origin, prefix=PREFIX, body=separated_pages())
         self.page.goto(state['url'], wait_until='domcontentloaded')

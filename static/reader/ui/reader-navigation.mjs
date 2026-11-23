@@ -47,6 +47,7 @@ export function createReaderNavigation(readerContext) {
 
   /** @param {number} direction */
   function turnViewport(direction) {
+    if (readerContext.pdfShellWindow?.opening) readerContext.pdfUserHasScrolled = true;
     readerContext.pageNavigationLockUntil = 0;
     readerContext.beginReaderNavigation();
     const target = readerContext.htmlFrame?.contentWindow || readerContext.viewport;
@@ -80,6 +81,8 @@ export function createReaderNavigation(readerContext) {
       '#history-panel,input,textarea,select,button,a,audio,video,[role="button"],[role="link"],[contenteditable]:not([contenteditable=false])'
     )))
       return;
+    if ((event.key === "Home" || event.key === "End") && readerContext.pdfShellWindow?.opening)
+      notePdfScrollIntent(); // Keep the browser's native scrolling.
     if (["PageDown", " ", "ArrowDown", "PageUp", "ArrowUp"].includes(event.key)) {
       event.preventDefault();
       readerContext.turnViewport(
