@@ -765,7 +765,17 @@ test("Pages waits for the exact uploaded artifact before attempting deployment",
   const [prep, promotion] = workflow.split("\n  deploy:\n");
   assert.match(prep.slice(wait), /UPLOADED_ARTIFACT_ID: \$\{\{ steps\.upload\.outputs\.artifact_id \}\}/);
   assert.match(prep.slice(wait), /run: python3 -B scripts\/ci\/wait_pages_artifact\.py/);
-  assert.match(prep.slice(wait), /uses: actions\/download-artifact@v8\s*\n\s*with:\s*\n\s*artifact-ids: \$\{\{ steps\.upload\.outputs\.artifact_id \}\}[\s\S]*?digest-mismatch: error[\s\S]*?pages_artifact_proof\.py verify-upload/);
+  const download = prep.indexOf('name: Download exact uploaded Pages artifact', wait);
+  const verify = prep.indexOf('name: Verify uploaded candidate fingerprint', download);
+  assert.ok(wait < download && download < verify);
+  const downloadInputs = prep.slice(download, verify);
+  assert.match(downloadInputs, /uses: actions\/download-artifact@v8/);
+  assert.match(downloadInputs, /github-token: \$\{\{ github\.token \}\}/);
+  assert.match(downloadInputs, /repository: \$\{\{ github\.repository \}\}/);
+  assert.match(downloadInputs, /run-id: \$\{\{ github\.run_id \}\}/);
+  assert.match(downloadInputs, /artifact-ids: \$\{\{ steps\.upload\.outputs\.artifact_id \}\}/);
+  assert.match(downloadInputs, /digest-mismatch: error/);
+  assert.match(prep.slice(verify), /pages_artifact_proof\.py verify-upload/);
   assert.match(promotion, /UPLOADED_ARTIFACT_ID: \$\{\{ needs\.prepare\.outputs\.artifact_id \}\}\s*\n\s*run: python3 -B scripts\/ci\/wait_pages_artifact\.py/);
   assert.equal([...workflow.matchAll(/(?:artifact_)?name: github-pages-\$\{\{ github\.run_id \}\}-\$\{\{ github\.run_attempt \}\}/g)].length, 2);
   assert.match(workflow, /^permissions:\n  contents: read\n  actions: read\n  deployments: read\n  pages: write$/m);

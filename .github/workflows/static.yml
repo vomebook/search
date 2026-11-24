@@ -261,6 +261,10 @@ jobs:
       - name: Download exact uploaded Pages artifact
         uses: actions/download-artifact@v8
         with:
+          # Use the same REST run inventory that the visibility check just verified.
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: ${{ github.run_id }}
           artifact-ids: ${{ steps.upload.outputs.artifact_id }}
           path: ${{ runner.temp }}/uploaded-pages
           digest-mismatch: error
