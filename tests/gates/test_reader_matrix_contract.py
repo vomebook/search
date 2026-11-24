@@ -72,14 +72,32 @@ class ReaderMatrixContractTests(unittest.TestCase):
         self.assertNotIn(True, self.workflow)
         self.assertEqual(len(self.contract['matrix_jobs']['github-search']['steps']), 47)
 
-    def test_playwright_setup_cannot_drop_browsers_or_mask_failure(self):
+    def test_playwright_setup_cannot_change_image_or_mask_failure(self):
         for job in (*gate.JOBS, 'firefox-staged-pdf'):
-            for mask_failure in (False, True):
-                with self.subTest(job=job, mask_failure=mask_failure):
+            for mutation in ('mask', 'drop-tool', 'mutable-tag', 'other-digest', 'force-image', 'browser-path', 'shell'):
+                with self.subTest(job=job, mutation=mutation):
                     self.workflow = gate.parse(self.text)
-                    step = next(s for s in self.workflow['jobs'][job]['steps']
-                                if s.get('name') == 'Install Playwright system dependencies')
-                    step['run'] = step['run'] + ' || true' if mask_failure else step['run'].rsplit(' ', 1)[0]
+                    candidate = self.workflow['jobs'][job]
+                    if mutation == 'mask':
+                        smoke = next(s for s in candidate['steps'] if s.get('name') == 'Verify pinned browser image')
+                        smoke['run'] = smoke['run'].rstrip() + ' || true\n'
+                    elif mutation == 'drop-tool':
+                        install = candidate['steps'][0]
+                        self.assertEqual(install['run'].count(' git-lfs'), 1)
+                        install['run'] = install['run'].replace(' git-lfs', '')
+                    elif mutation == 'mutable-tag':
+                        candidate['container']['image'] = 'mcr.microsoft.com/playwright/python:v1.65.2-noble'
+                    elif mutation == 'other-digest':
+                        candidate['container']['image'] = candidate['container']['image'].replace(
+                            gate.BROWSER_IMAGE.split(':')[-1], '0' * 64)
+                    elif mutation == 'force-image':
+                        if job not in gate.JOBS:
+                            continue
+                        candidate['container']['image'] = gate.BROWSER_IMAGE
+                    elif mutation == 'browser-path':
+                        candidate['env']['PLAYWRIGHT_BROWSERS_PATH'] = '/tmp/replacement'
+                    else:
+                        candidate['defaults']['run']['shell'] = 'sh'
                     with self.assertRaisesRegex(gate.ContractError, 'setup changed|job changed'):
                         self.check()
 
@@ -266,11 +284,10 @@ class ReaderMatrixContractTests(unittest.TestCase):
     def test_scoped_setup_and_retained_browser_suites_are_required(self):
         for job in gate.JOBS:
             for name, condition in (
-                ('Cache Playwright browsers', "${{ matrix.shard != 'static' }}"),
-                ('Install Playwright system dependencies', "${{ matrix.shard != 'static' }}"),
-                ('Install Playwright browsers', "${{ matrix.shard != 'static' }}"),
-                ('Install qpdf', "${{ matrix.shard == 'loading' }}") if job == 'github-search' else
-                ('Install isolated coverage dependencies', "${{ matrix.shard == 'static' }}"),
+                ('Verify pinned browser image', '${{ ' + gate.BROWSER_SHARDS[job] + ' }}'),
+                ('Install Playwright system dependencies', '${{ ' + gate.HOST_BROWSERS[job] + ' }}'),
+                *((('Install isolated coverage dependencies', "${{ matrix.shard == 'static' }}"),)
+                  if job == 'huggingface-search' else ()),
             ):
                 with self.subTest(job=job, setup=name):
                     workflow = copy.deepcopy(self.workflow)

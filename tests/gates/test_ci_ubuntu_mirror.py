@@ -55,14 +55,17 @@ class MirrorTests(unittest.TestCase):
     def test_workflow_install_contract(self):
         root = Path(__file__).resolve().parents[2]
         blocks = []
-        for name, count in (('reader-refactor.yml', 3), ('static.yml', 1)):
+        from scripts.ci.reader_matrix_contract import parse
+        for name, expected_guards in (
+                ('reader-refactor.yml', {"${{ !(matrix.shard == 'core' || matrix.shard == 'loading') }}",
+                                         "${{ !(matrix.shard != 'static' && matrix.shard != 'navigation') }}"}),
+                ('static.yml', {"steps.intent.outputs.reader == 'false'"})):
             text = (root / '.github/workflows' / name).read_text()
-            heading = '      - name: Configure official Ubuntu mirrors\n'
-            if name == 'static.yml':
-                heading += "        if: steps.intent.outputs.reader == 'false'\n"
-            parts = text.split(heading + '        run: |\n')
-            self.assertEqual(len(parts) - 1, count)
-            blocks.extend(part.split('      - name:', 1)[0] for part in parts[1:])
+            steps = [step for job in parse(text)['jobs'].values() for step in job['steps']
+                     if step.get('name') == 'Configure official Ubuntu mirrors']
+            self.assertEqual(len(steps), len(expected_guards))
+            self.assertEqual({step['if'] for step in steps}, expected_guards)
+            blocks.extend(''.join('          ' + line for line in step['run'].splitlines(keepends=True)) for step in steps)
         expected = '''          set -euo pipefail
           if python3 -B scripts/ci/ci_ubuntu_mirror.py; then
             tmp=$(sudo mktemp -d /etc/apt/.ci-mirrors.XXXXXX)

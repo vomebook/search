@@ -136,33 +136,46 @@ class ReaderWorkflowParallelTests(unittest.TestCase):
         self.assertNotIn('needs:', firefox)
         self.assertNotIn('continue-on-error:', firefox)
         self.assertNotIn('if:', firefox)
-        for job, browsers in ((github, 'chromium firefox'), (firefox, 'firefox')):
+        for job in (github, firefox):
             for command in ('python-version: "3.15.2"', 'playwright==1.65.2', 'pypdf==7.1.1',
-                            'npm ci --ignore-scripts --no-audit --no-fund', 'install -y qpdf',
-                            f'install_playwright_system_deps.sh {browsers}', f'playwright install {browsers}',
+                            'npm ci --ignore-scripts --no-audit --no-fund',
+                            'curl git-lfs', 'qpdf --version',
                             'node scripts/build/copy_reader_vendor.mjs static/vendor'):
                 self.assertIn(command, job)
-            for cache in ('~/.cache/pip', '~/.npm', '~/.cache/ms-playwright',
-                          '${{ runner.os }}', '${{ runner.arch }}', '${{ steps.distro.outputs.version }}-1.65.2'):
+            for cache in ('~/.cache/pip', '~/.npm', '${{ runner.os }}', '${{ runner.arch }}'):
                 self.assertIn(cache, job)
             self.assertNotIn('path: node_modules', job)
         hf = workflow.split('  huggingface-search:\n', 1)[1]
         for command in ('python -m pip install -r requirements.txt -r config/dependencies/static-check.txt '
                         'playwright==1.65.2 Pillow==13.0.0 httpx==0.28.1',
                         'npm ci --ignore-scripts --no-audit --no-fund',
-                        'install_playwright_system_deps.sh chromium firefox', 'playwright install chromium firefox',
+                        'curl git-lfs gcc libc6-dev', 'gcc --version',
                         'node scripts/build/copy_reader_vendor.mjs static/vendor',
                         "hashFiles('huggingface-search/requirements.txt', 'huggingface-search/config/dependencies/static-check.txt')",
-                        "hashFiles('huggingface-search/package-lock.json')", '${{ steps.distro.outputs.version }}-1.65.2'):
+                        "hashFiles('huggingface-search/package-lock.json')"):
             self.assertIn(command, hf)
-        for job in (github, firefox, hf):
+        scopes = ((github, "matrix.shard == 'core' || matrix.shard == 'loading'",
+                   "matrix.shard == 'navigation' || matrix.shard == 'search'"),
+                  (firefox, None, None),
+                  (hf, "matrix.shard != 'static' && matrix.shard != 'navigation'", "matrix.shard == 'navigation'"))
+        for job, image_scope, host_scope in scopes:
             self.assertNotIn('fetch_foliate_reader.mjs', job)
             self.assertNotIn('--foliate-output', job)
             self.assertIn('runs-on: ubuntu-24.04', job)
-            mirror = 'python3 -B scripts/ci/ci_ubuntu_mirror.py'
-            self.assertLess(job.index(mirror), job.index('install_playwright_system_deps.sh'))
-            scope = "        if: ${{ matrix.shard != 'static' }}\n" if job != firefox else ''
-            self.assertIn('name: Install Playwright system dependencies\n' + scope + '        timeout-minutes: 15', job)
+            self.assertRegex(job, r'mcr\.microsoft\.com/playwright/python@sha256:[0-9a-f]{64}')
+            if image_scope is None:
+                self.assertIn('PLAYWRIGHT_BROWSERS_PATH: /ms-playwright', job)
+                self.assertNotIn('playwright install', job)
+            else:
+                operand = f'({image_scope})' if '||' in image_scope else image_scope
+                self.assertIn(f"PLAYWRIGHT_BROWSERS_PATH: ${{{{ {operand} && '/ms-playwright' || '' }}}}", job)
+                self.assertIn('name: Install Playwright system dependencies\n        if: ${{ ' + host_scope + ' }}\n', job)
+                self.assertIn('name: Install Playwright browsers\n        if: ${{ ' + host_scope + ' }}\n', job)
+            self.assertLess(job.index('Install non-browser CI tools'), job.index('actions/checkout@v7'))
+            self.assertLess(job.index('Install Python dependencies'), job.index('Verify pinned browser image'))
+            scope = '        if: ${{ ' + image_scope + ' }}\n' if image_scope else ''
+            self.assertIn('name: Verify pinned browser image\n' + scope + '        timeout-minutes: 2', job)
+            self.assertIn('HOME="$home" python -B scripts/ci/verify_reader_browser_image.py', job)
         for job, project, following in ((github, 'github', 'python -B -m unittest -v tests.seo.test_seo_catalog'),
                                         (hf, 'hf', None)):
             runner = f'python -B scripts/ci/run_static_gate_shards.py --project {project}'
@@ -358,7 +371,7 @@ class HfHistoryBridgeTests(unittest.TestCase):
         self.assertLess(hf.index('Verify independent Hugging Face quality baseline'), hf.index('Install npm dependencies'))
         self.assertLess(hf.index('Verify independent Hugging Face quality baseline'), hf.index('Check source and exercise static gates'))
         before = hf.split('      - name: Verify independent Hugging Face quality baseline\n', 1)[0]
-        allowed = {'Test Hugging Face history bridge', 'Checkout Hugging Face Search Space'}
+        allowed = {'Install non-browser CI tools', 'Test Hugging Face history bridge', 'Checkout Hugging Face Search Space'}
         self.assertEqual(set(re.findall(r'^      - name: (.+)$', before, re.M)), allowed)
         self.assertEqual(before.count('      - uses:'), 1)
         self.assertIn('      - uses: actions/checkout@v7\n', before)
@@ -445,8 +458,9 @@ class PagesSearchBenchmarkCiTests(unittest.TestCase):
         benchmark_step = github.split('      - name: Test offline Pages search benchmark\n', 1)[1].split('      - name:', 1)[0]
         self.assertEqual(benchmark_step, '        if: ' + shard_condition('search') + '\n        run: node --test tests/performance/test_benchmark_local_search.mjs\n')
         assert_required_shard(self, github, 'Test offline Pages search benchmark', 'search')
-        for option in ('if:', 'continue-on-error:', 'defaults:'):
+        for option in ('if:', 'continue-on-error:'):
             self.assertNotIn(option, job_header)
+        self.assertRegex(job_header, r'(?m)^    defaults:\n      run:\n        shell: bash\n    timeout-minutes:')
 
 
 class AdditionalSuitesCiTests(unittest.TestCase):
@@ -819,8 +833,9 @@ class HfSearchProjectionCiTests(unittest.TestCase):
             hf = text.split('  huggingface-search:\n', 1)[1]
             self.assertEqual(text.count('      - name: Reader v3 gates\n'), 2)
             for job, directory in ((github, ''), (hf, '        working-directory: huggingface-search\n')):
-                self.assertNotIn('\n    defaults:', job)
-                self.assertNotIn('\n    if:', job.split('    steps:\n', 1)[0])
+                header = job.split('    steps:\n', 1)[0]
+                self.assertRegex(header, r'(?m)^    defaults:\n      run:\n        shell: bash\n    timeout-minutes:')
+                self.assertNotIn('\n    if:', header)
                 self.assertNotIn('\n    continue-on-error:', job)
                 assert_required_shard(self, job, 'Reader v3 gates', 'core')
                 expected = step.replace('{}', directory)

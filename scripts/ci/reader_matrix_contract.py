@@ -27,6 +27,18 @@ ORIGINAL_SHA256 = '03bc625cb66d6c19010602be7c3c9504d1cb5647d15928405db20f82c2473
 POLICY_SHA256 = '3901102736b00a27a874ebdb29aba078dabf4f05cbe7423fa023c449564ded1c'
 JOBS = ('github-search', 'huggingface-search')
 SHARDS = ['static', 'core', 'loading', 'navigation', 'search']
+BROWSER_IMAGE = 'mcr.microsoft.com/playwright/python@sha256:cbd0a36dc6f6b8e8bb23703cf6cbe19ebe29e5a1ba43271a11a6c8e53c8b65d0'
+BROWSER_SHARDS = {'github-search': "matrix.shard == 'core' || matrix.shard == 'loading'",
+                  'huggingface-search': "matrix.shard != 'static' && matrix.shard != 'navigation'"}
+HOST_BROWSERS = {'github-search': "matrix.shard == 'navigation' || matrix.shard == 'search'",
+                 'huggingface-search': "matrix.shard == 'navigation'"}
+IMAGE_OPERANDS = {**BROWSER_SHARDS, 'github-search': f"({BROWSER_SHARDS['github-search']})"}
+
+
+def on_browser_shard(name, value):
+    return f"${{{{ {IMAGE_OPERANDS[name]} && '{value}' || '' }}}}"
+REPLACED_SETUP = {'Identify runner distribution', 'Cache Playwright browsers', 'Configure official Ubuntu mirrors',
+                  'Install qpdf', 'Install Playwright system dependencies', 'Install Playwright browsers'}
 _SHARD = re.compile(r"\$\{\{\s*!cancelled\(\)\s*&&\s*steps\.setup-complete\.outputs\.ready\s*==\s*'true'\s*&&\s*matrix\.shard\s*==\s*'([a-z0-9-]+)'\s*\}\}")
 
 
@@ -177,15 +189,83 @@ def backend_selection(run):
     return names, run[:match.start(1)] + run[match.end(1):]
 
 
-def playwright_install_step(setup, *, hf=False):
-    """Allow only the bounded retry wrapper around the original browser list."""
-    if setup.get('name') != 'Install Playwright system dependencies':
-        return setup
-    browsers = 'chromium firefox' if setup['run'].endswith(' chromium firefox') else 'firefox'
-    require(setup['run'] == f'python -m playwright install-deps {browsers}',
-            'unexpected baseline Playwright system dependency command')
-    prefix = '../' if hf else ''
-    return {**setup, 'run': f'bash {prefix}scripts/ci/install_playwright_system_deps.sh {browsers}'}
+def browser_job_settings(name, job):
+    """Verify and strip only the reviewed runner-image additions."""
+    base = dict(job)
+    select = {False: str, True: lambda value: on_browser_shard(name, value)}[name in JOBS]
+    image, path = map(select, (BROWSER_IMAGE, '/ms-playwright'))
+    require(base.pop('container', None) == {'image': image, 'options': '--ipc=host'},
+            'job changed: invalid browser container')
+    require(base.pop('defaults', None) == {'run': {'shell': 'bash'}}, 'job changed: invalid browser shell')
+    env = dict(base.get('env', {}))
+    require(env.pop('PLAYWRIGHT_BROWSERS_PATH', None) == path, 'job changed: invalid browser path')
+    return {**base, 'env': env}
+
+
+def browser_image_setup(job):
+    hf = job == 'huggingface-search'
+    matrix = job in JOBS
+    tools = 'curl git-lfs gcc libc6-dev' if hf else 'curl git-lfs'
+    compiler = 'gcc --version\n' if hf else ''
+    loading = 'if [[ "$READER_CI_SHARD" == loading ]]; then '
+    apt = 'apt-get -o Acquire::Retries=1 -o Acquire::http::Timeout=20 '
+    if matrix:
+        body = (f'tools=({tools})\n{loading}tools+=(qpdf); fi\n'
+                f'{apt}update\n{apt}install -y --no-install-recommends "${{tools[@]}}"\n'
+                f'git lfs version\n{compiler}{loading}qpdf --version; fi\n')
+    else:
+        body = f'{apt}update\n{apt}install -y --no-install-recommends {tools} qpdf\ngit lfs version\nqpdf --version\n'
+    install = {'name': 'Install non-browser CI tools', 'timeout-minutes': 6, 'run': 'set -euo pipefail\n' + body}
+    if matrix:
+        condition = '${{ ' + BROWSER_SHARDS[job] + ' }}'
+        install.update({'if': condition, 'env': {'READER_CI_SHARD': '${{ matrix.shard }}'}})
+    smoke = {'name': 'Verify pinned browser image', 'timeout-minutes': 2,
+             'run': ('set -euo pipefail\n'
+                     '# Firefox requires HOME to be owned by its process user.\n'
+                     'home=$(mktemp -d "$RUNNER_TEMP/reader-browser-home.XXXXXX")\n'
+                     'printf \'HOME=%s\\n\' "$home" >> "$GITHUB_ENV"\n'
+                     'HOME="$home" python -B scripts/ci/verify_reader_browser_image.py\n')}
+    smoke.update({False: {}, True: {'if': '${{ ' + BROWSER_SHARDS.get(job, '') + ' }}'}}[matrix])
+    return install, smoke
+
+
+def apply_browser_image_setup(job, steps):
+    handlers = {
+        False: (lambda s: s, lambda s: s.get('name'), 'Check staged PDF opening in Firefox'),
+        True: (lambda s: {'label': s['name'], 'setup': s},
+               lambda s: s.get('label', s.get('fields', {}).get('name')), 'Mark setup complete'),
+    }
+    record, name, anchor = handlers[job in JOBS]
+    install, smoke = browser_image_setup(job)
+    expected = REPLACED_SETUP - {'huggingface-search': {'Install qpdf'}}.get(job, set())
+    labels = list(map(name, steps))
+    require(labels.count(anchor) == 1, f'{job}: missing or duplicate browser setup anchor')
+    require(labels.count('Install qpdf') == int('Install qpdf' in expected), f'{job}: qpdf history differs')
+    require(list(map(labels.count, sorted(expected))) == [1] * len(expected), f'{job}: browser setup history differs')
+    keep = [s for s in steps if name(s) not in expected]
+    restore = {False: lambda _, items, __: items, True: scope_browser_host_setup}[job in JOBS]
+    keep = restore(job, keep, steps)
+    keep.insert(list(map(name, keep)).index(anchor), record(smoke))
+    return [record(install), *keep]
+
+
+def scope_browser_host_setup(job, keep, steps):
+    original = dict(zip(map(lambda r: r.get('label'), steps), steps))
+    host = HOST_BROWSERS[job]
+    mirror = f'!({BROWSER_SHARDS[job]})'
+    entries = (('Identify runner distribution', 'Cache pip downloads', host),
+               ('Cache Playwright browsers', 'Install Python dependencies', host),
+               ('Configure official Ubuntu mirrors', 'Install Python dependencies', mirror),
+               ('Install Playwright system dependencies', 'Install pinned Reader vendors', host),
+               ('Install Playwright browsers', 'Install pinned Reader vendors', host))
+    for label, anchor, condition in entries:
+        prior = original[label]['setup']
+        wrapper = f'bash {"../" * (job == "huggingface-search")}scripts/ci/install_playwright_system_deps.sh chromium firefox'
+        setup = {**prior, 'if': '${{ ' + condition + ' }}',
+                 **{'Install Playwright system dependencies': {'run': wrapper}}.get(label, {})}
+        offset = list(map(lambda r: r.get('label'), keep)).index(anchor)
+        keep.insert(offset, {'label': label, 'setup': setup})
+    return keep
 
 
 def remove_foliate_setup(steps, *, hf=False, records=False):
@@ -219,17 +299,11 @@ def execution_policy(job, records, historical_steps):
             {k: v for k, v in by_name[chapter]['fields'].items() if k != 'name'},
             f'{job}: chapter-search subset differs from the full suite')
     adjusted = []
-    browser_setup = {'Cache Playwright browsers', 'Install Playwright system dependencies', 'Install Playwright browsers'}
     for record in records:
         if 'setup' in record:
-            setup = playwright_install_step(record['setup'], hf=job == 'huggingface-search')
-            record = {**record, 'setup': setup}
+            setup = record['setup']
             name = setup.get('name')
             condition = None
-            if name in browser_setup:
-                condition = "${{ matrix.shard != 'static' }}"
-            if job == 'github-search' and name == 'Install qpdf':
-                condition = "${{ matrix.shard == 'loading' }}"
             if job == 'huggingface-search' and (name == 'Install isolated coverage dependencies' or
                                                 setup.get('id') == 'coverage-python'):
                 condition = "${{ matrix.shard == 'static' }}"
@@ -278,7 +352,7 @@ def execution_policy(job, records, historical_steps):
                     'invalid Service Worker test selection')
             record = {**record, 'argv': (tuple(node.split()), (*prefix.split(), *arguments))}
         adjusted.append(record)
-    return remove_foliate_setup(adjusted, hf=job == 'huggingface-search', records=True)
+    return apply_browser_image_setup(job, remove_foliate_setup(adjusted, hf=job == 'huggingface-search', records=True))
 
 
 def verify_policy(contract, original_bytes):
@@ -349,10 +423,12 @@ def validate(workflow, contract, original_bytes=None):
     # Fixed jobs include the summary and capture jobs in full. In particular,
     # summary's exact reviewed command enforces all four success results.
     for name, expected in contract['fixed_jobs'].items():
+        require(name in jobs, f'{name}: missing job')
+        actual = jobs[name]
         if name == 'firefox-staged-pdf':
-            expected = {**expected, 'steps': remove_foliate_setup(
-                [playwright_install_step(step) for step in expected['steps']])}
-        require(name in jobs and jobs[name] == expected, f'{name}: job changed')
+            actual = browser_job_settings(name, actual)
+            expected = {**expected, 'steps': apply_browser_image_setup(name, remove_foliate_setup(expected['steps']))}
+        require(actual == expected, f'{name}: job changed')
     require(set(contract['fixed_jobs']) == set(jobs) - set(JOBS), 'incomplete fixed jobs contract')
     manifest = summary_manifest(jobs['summary'])
     require(isinstance(manifest, dict) and set(manifest) == set(JOBS), 'invalid summary manifest jobs')
@@ -360,7 +436,7 @@ def validate(workflow, contract, original_bytes=None):
         job = jobs.get(name)
         policy = contract['matrix_jobs'][name]
         require(isinstance(job, dict), f'{name}: missing job')
-        require(digest({k: v for k, v in job.items() if k != 'steps'}) == policy['job_sha256'], f'{name}: job configuration changed')
+        require(digest(browser_job_settings(name, {k: v for k, v in job.items() if k != 'steps'})) == policy['job_sha256'], f'{name}: job configuration changed')
         strategy = job.get('strategy')
         require(isinstance(strategy, dict) and strategy.get('fail-fast') is False and strategy.get('matrix') == {'shard': SHARDS}, f'{name}: invalid matrix')
         steps = job.get('steps')

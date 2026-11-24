@@ -24,10 +24,32 @@ jobs:
       matrix:
         shard: [static, core, loading, navigation, search]
     runs-on: ubuntu-24.04
+    container:
+      # Empty image preserves native Ubuntu for host-only shards. Image shards use
+      # Microsoft Playwright Python v1.65.2-noble, linux/amd64.
+      image: ${{ (matrix.shard == 'core' || matrix.shard == 'loading') && 'mcr.microsoft.com/playwright/python@sha256:cbd0a36dc6f6b8e8bb23703cf6cbe19ebe29e5a1ba43271a11a6c8e53c8b65d0' || '' }}
+      options: --ipc=host
+    defaults:
+      run:
+        shell: bash
     timeout-minutes: 45
     env:
       READER_TEST_TIMEOUT_MS: "15000"
+      PLAYWRIGHT_BROWSERS_PATH: ${{ (matrix.shard == 'core' || matrix.shard == 'loading') && '/ms-playwright' || '' }}
     steps:
+      - name: Install non-browser CI tools
+        if: ${{ matrix.shard == 'core' || matrix.shard == 'loading' }}
+        timeout-minutes: 6
+        run: |
+          set -euo pipefail
+          tools=(curl git-lfs)
+          if [[ "$READER_CI_SHARD" == loading ]]; then tools+=(qpdf); fi
+          apt-get -o Acquire::Retries=1 -o Acquire::http::Timeout=20 update
+          apt-get -o Acquire::Retries=1 -o Acquire::http::Timeout=20 install -y --no-install-recommends "${tools[@]}"
+          git lfs version
+          if [[ "$READER_CI_SHARD" == loading ]]; then qpdf --version; fi
+        env:
+          READER_CI_SHARD: ${{ matrix.shard }}
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
         with:
@@ -36,6 +58,7 @@ jobs:
         with:
           node-version: "26.13.1"
       - name: Identify runner distribution
+        if: ${{ matrix.shard == 'navigation' || matrix.shard == 'search' }}
         id: distro
         run: echo "version=$(. /etc/os-release; echo "$ID-$VERSION_ID")" >> "$GITHUB_OUTPUT"
       - name: Cache pip downloads
@@ -49,12 +72,13 @@ jobs:
           path: ~/.npm
           key: npm-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('package-lock.json') }}-${{ github.job }}
       - name: Cache Playwright browsers
-        if: ${{ matrix.shard != 'static' }}
+        if: ${{ matrix.shard == 'navigation' || matrix.shard == 'search' }}
         uses: actions/cache@v6
         with:
           path: ~/.cache/ms-playwright
           key: playwright-${{ runner.os }}-${{ runner.arch }}-${{ steps.distro.outputs.version }}-1.65.2-chromium-firefox
       - name: Configure official Ubuntu mirrors
+        if: ${{ !(matrix.shard == 'core' || matrix.shard == 'loading') }}
         run: |
           set -euo pipefail
           if python3 -B scripts/ci/ci_ubuntu_mirror.py; then
@@ -72,16 +96,12 @@ jobs:
       - name: Install npm dependencies
         timeout-minutes: 10
         run: npm ci --ignore-scripts --no-audit --no-fund
-      - name: Install qpdf
-        if: ${{ matrix.shard == 'loading' }}
-        timeout-minutes: 10
-        run: sudo apt-get update && sudo apt-get install -y qpdf
       - name: Install Playwright system dependencies
-        if: ${{ matrix.shard != 'static' }}
+        if: ${{ matrix.shard == 'navigation' || matrix.shard == 'search' }}
         timeout-minutes: 15
         run: bash scripts/ci/install_playwright_system_deps.sh chromium firefox
       - name: Install Playwright browsers
-        if: ${{ matrix.shard != 'static' }}
+        if: ${{ matrix.shard == 'navigation' || matrix.shard == 'search' }}
         timeout-minutes: 10
         run: python -m playwright install chromium firefox
       - name: Install pinned Reader vendors
@@ -103,6 +123,15 @@ jobs:
             "https://huggingface.co/spaces/VoiceOfML/Search/resolve/$revision/static/sw.js" \
             --output "$HF_SW_SOURCE"
           test -s "$HF_SW_SOURCE"
+      - name: Verify pinned browser image
+        if: ${{ matrix.shard == 'core' || matrix.shard == 'loading' }}
+        timeout-minutes: 2
+        run: |
+          set -euo pipefail
+          # Firefox requires HOME to be owned by its process user.
+          home=$(mktemp -d "$RUNNER_TEMP/reader-browser-home.XXXXXX")
+          printf 'HOME=%s\n' "$home" >> "$GITHUB_ENV"
+          HOME="$home" python -B scripts/ci/verify_reader_browser_image.py
       - name: Mark setup complete
         id: setup-complete
         run: echo 'ready=true' >> "$GITHUB_OUTPUT"
@@ -369,10 +398,26 @@ jobs:
 
   firefox-staged-pdf:
     runs-on: ubuntu-24.04
+    container:
+      # Microsoft Playwright Python v1.65.2-noble, linux/amd64 manifest.
+      image: mcr.microsoft.com/playwright/python@sha256:cbd0a36dc6f6b8e8bb23703cf6cbe19ebe29e5a1ba43271a11a6c8e53c8b65d0
+      options: --ipc=host
+    defaults:
+      run:
+        shell: bash
     timeout-minutes: 30
     env:
       READER_TEST_TIMEOUT_MS: "15000"
+      PLAYWRIGHT_BROWSERS_PATH: /ms-playwright
     steps:
+      - name: Install non-browser CI tools
+        timeout-minutes: 6
+        run: |
+          set -euo pipefail
+          apt-get -o Acquire::Retries=1 -o Acquire::http::Timeout=20 update
+          apt-get -o Acquire::Retries=1 -o Acquire::http::Timeout=20 install -y --no-install-recommends curl git-lfs qpdf
+          git lfs version
+          qpdf --version
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
         with:
@@ -380,9 +425,6 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: "26.13.1"
-      - name: Identify runner distribution
-        id: distro
-        run: echo "version=$(. /etc/os-release; echo "$ID-$VERSION_ID")" >> "$GITHUB_OUTPUT"
       - name: Cache pip downloads
         uses: actions/cache@v6
         with:
@@ -393,44 +435,26 @@ jobs:
         with:
           path: ~/.npm
           key: npm-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('package-lock.json') }}-${{ github.job }}
-      - name: Cache Playwright browsers
-        uses: actions/cache@v6
-        with:
-          path: ~/.cache/ms-playwright
-          key: playwright-${{ runner.os }}-${{ runner.arch }}-${{ steps.distro.outputs.version }}-1.65.2-firefox
-      - name: Configure official Ubuntu mirrors
-        run: |
-          set -euo pipefail
-          if python3 -B scripts/ci/ci_ubuntu_mirror.py; then
-            tmp=$(sudo mktemp -d /etc/apt/.ci-mirrors.XXXXXX)
-            trap 'sudo rm -rf -- "$tmp"' EXIT
-            sudo install -o root -g root -m 0644 /dev/null "$tmp/mirrors"
-            printf '%s\n' 'https://archive.ubuntu.com/ubuntu/ priority:1' 'https://security.ubuntu.com/ubuntu/ priority:2' | sudo tee "$tmp/mirrors" >/dev/null
-            sudo mv -f -- "$tmp/mirrors" /etc/apt/apt-mirrors.txt
-          else
-            echo "::warning::Unrecognized runner mirror configuration; keeping default mirrors"
-          fi
       - name: Install Python dependencies
         timeout-minutes: 10
         run: python -m pip install playwright==1.65.2 Pillow==13.0.0 pypdf==7.1.1 -r config/dependencies/static-check.txt
       - name: Install npm dependencies
         timeout-minutes: 10
         run: npm ci --ignore-scripts --no-audit --no-fund
-      - name: Install qpdf
-        timeout-minutes: 10
-        run: sudo apt-get update && sudo apt-get install -y qpdf
-      - name: Install Playwright system dependencies
-        timeout-minutes: 15
-        run: bash scripts/ci/install_playwright_system_deps.sh firefox
-      - name: Install Playwright browsers
-        timeout-minutes: 10
-        run: python -m playwright install firefox
       - name: Install pinned Reader vendors
         timeout-minutes: 5
         run: node scripts/build/copy_reader_vendor.mjs static/vendor
       - name: Materialize pinned Pages test data and independent Reader sidecar
         timeout-minutes: 10
         run: npm run data:prepare
+      - name: Verify pinned browser image
+        timeout-minutes: 2
+        run: |
+          set -euo pipefail
+          # Firefox requires HOME to be owned by its process user.
+          home=$(mktemp -d "$RUNNER_TEMP/reader-browser-home.XXXXXX")
+          printf 'HOME=%s\n' "$home" >> "$GITHUB_ENV"
+          HOME="$home" python -B scripts/ci/verify_reader_browser_image.py
       - name: Check staged PDF opening in Firefox
         env:
           READER_TEST_BROWSER: firefox
@@ -461,10 +485,33 @@ jobs:
       matrix:
         shard: [static, core, loading, navigation, search]
     runs-on: ubuntu-24.04
+    container:
+      # Empty image preserves native Ubuntu for host-only shards. Image shards use
+      # Microsoft Playwright Python v1.65.2-noble, linux/amd64.
+      image: ${{ matrix.shard != 'static' && matrix.shard != 'navigation' && 'mcr.microsoft.com/playwright/python@sha256:cbd0a36dc6f6b8e8bb23703cf6cbe19ebe29e5a1ba43271a11a6c8e53c8b65d0' || '' }}
+      options: --ipc=host
+    defaults:
+      run:
+        shell: bash
     timeout-minutes: 45
     env:
       READER_TEST_TIMEOUT_MS: "60000"
+      PLAYWRIGHT_BROWSERS_PATH: ${{ matrix.shard != 'static' && matrix.shard != 'navigation' && '/ms-playwright' || '' }}
     steps:
+      - name: Install non-browser CI tools
+        if: ${{ matrix.shard != 'static' && matrix.shard != 'navigation' }}
+        timeout-minutes: 6
+        run: |
+          set -euo pipefail
+          tools=(curl git-lfs gcc libc6-dev)
+          if [[ "$READER_CI_SHARD" == loading ]]; then tools+=(qpdf); fi
+          apt-get -o Acquire::Retries=1 -o Acquire::http::Timeout=20 update
+          apt-get -o Acquire::Retries=1 -o Acquire::http::Timeout=20 install -y --no-install-recommends "${tools[@]}"
+          git lfs version
+          gcc --version
+          if [[ "$READER_CI_SHARD" == loading ]]; then qpdf --version; fi
+        env:
+          READER_CI_SHARD: ${{ matrix.shard }}
       - uses: actions/checkout@v7
       # This trusted pre-check remains before HF checkout and dependency setup.
       - name: Test Hugging Face history bridge
@@ -515,6 +562,7 @@ jobs:
         with:
           node-version: "26.13.1"
       - name: Identify runner distribution
+        if: ${{ matrix.shard == 'navigation' }}
         id: distro
         run: echo "version=$(. /etc/os-release; echo "$ID-$VERSION_ID")" >> "$GITHUB_OUTPUT"
       - name: Cache pip downloads
@@ -528,12 +576,13 @@ jobs:
           path: ~/.npm
           key: hf-npm-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('huggingface-search/package-lock.json') }}
       - name: Cache Playwright browsers
-        if: ${{ matrix.shard != 'static' }}
+        if: ${{ matrix.shard == 'navigation' }}
         uses: actions/cache@v6
         with:
           path: ~/.cache/ms-playwright
           key: hf-playwright-${{ runner.os }}-${{ runner.arch }}-${{ steps.distro.outputs.version }}-1.65.2-chromium-firefox
       - name: Configure official Ubuntu mirrors
+        if: ${{ !(matrix.shard != 'static' && matrix.shard != 'navigation') }}
         run: |
           set -euo pipefail
           if python3 -B scripts/ci/ci_ubuntu_mirror.py; then
@@ -581,12 +630,12 @@ jobs:
         working-directory: huggingface-search
         run: python -B scripts/build/build_search_index_native.py --output-dir .
       - name: Install Playwright system dependencies
-        if: ${{ matrix.shard != 'static' }}
+        if: ${{ matrix.shard == 'navigation' }}
         timeout-minutes: 15
         working-directory: huggingface-search
         run: bash ../scripts/ci/install_playwright_system_deps.sh chromium firefox
       - name: Install Playwright browsers
-        if: ${{ matrix.shard != 'static' }}
+        if: ${{ matrix.shard == 'navigation' }}
         timeout-minutes: 10
         working-directory: huggingface-search
         run: python -m playwright install chromium firefox
@@ -594,6 +643,15 @@ jobs:
         timeout-minutes: 5
         working-directory: huggingface-search
         run: node scripts/build/copy_reader_vendor.mjs static/vendor
+      - name: Verify pinned browser image
+        if: ${{ matrix.shard != 'static' && matrix.shard != 'navigation' }}
+        timeout-minutes: 2
+        run: |
+          set -euo pipefail
+          # Firefox requires HOME to be owned by its process user.
+          home=$(mktemp -d "$RUNNER_TEMP/reader-browser-home.XXXXXX")
+          printf 'HOME=%s\n' "$home" >> "$GITHUB_ENV"
+          HOME="$home" python -B scripts/ci/verify_reader_browser_image.py
       - name: Mark setup complete
         id: setup-complete
         run: echo 'ready=true' >> "$GITHUB_OUTPUT"
