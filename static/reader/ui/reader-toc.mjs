@@ -26,7 +26,10 @@ export function createReaderToc(readerContext) {
         label: target.textContent.trim(),
         depth: Number(target.tagName.slice(1)) - 1,
         target,
-        activate: () => target.scrollIntoView({ block: "start" })
+        activate: () => {
+          target.closest("details.reader-clean-web-reply")?.setAttribute("open", "");
+          target.scrollIntoView({ block: "start" });
+        }
       }));
   }
 
@@ -37,7 +40,9 @@ export function createReaderToc(readerContext) {
     let positions = null;
     /** @type {{entry: import('../../../typings/reader-toc-strict').TocEntry, index: number, target: Element | null | undefined, connected: boolean}[]} */
     let targets = [];
-    let width = -1, extent = -1, zoom = -1, wasAnimating = false, live = false;
+    let width = -1, extent = -1, zoom = -1, live = false;
+    /** @type {boolean | undefined} */
+    let wasAnimating = false;
     const invalidate = () => { positions = null; };
     const mutations = new MutationObserver(invalidate), resize = new ResizeObserver(invalidate);
     mutations.observe(root, {subtree:true, childList:true, characterData:true,
@@ -50,7 +55,7 @@ export function createReaderToc(readerContext) {
       at(marker, scroll) {
         if (mutations.takeRecords().length) invalidate();
         const nextWidth = root.clientWidth, nextExtent = root.scrollHeight, nextZoom = readerContext.documentState.zoom;
-        const animating = root.getAnimations?.({subtree:true}).some(animation => animation.playState === "running" || animation.pending) || false;
+        const animating = root.getAnimations?.({subtree:true}).some(animation => animation.playState === "running" || animation.pending);
         if (live || animating || wasAnimating || nextWidth !== width || nextExtent !== extent || nextZoom !== zoom ||
             targets.some(row => row.target !== row.entry.target || row.connected !== !!row.target?.isConnected)) invalidate();
         wasAnimating = animating;
@@ -74,15 +79,16 @@ export function createReaderToc(readerContext) {
             return value;
           };
           // Source CSS may pin headings while scrolling; keep their live geometry.
-          live = targets.some(row => row.connected && row.target && scrollDependent(row.target));
-          positions = targets.flatMap(row => row.connected && row.target ? [{index:row.index,
-            top:row.target.getBoundingClientRect().top + scroll - marker}] : []).sort((a,b) => a.top-b.top || a.index-b.index);
+          const connectedTargets = /** @type {{target: Element, index: number}[]} */ (targets.filter(row => row.connected));
+          live = connectedTargets.some(({target}) => scrollDependent(target));
+          positions = connectedTargets.map(({target, index}) => ({index,
+            top:target.getBoundingClientRect().top + scroll})).sort((a,b) => a.top-b.top || a.index-b.index);
           width = root.clientWidth; extent = root.scrollHeight; zoom = nextZoom;
         }
         let low = 0, high = positions.length;
         while (low < high) {
           const middle = (low + high) >> 1;
-          if ((positions[middle]?.top ?? Infinity) <= scroll) low = middle + 1;
+          if ((positions[middle]?.top ?? Infinity) <= scroll + marker) low = middle + 1;
           else high = middle;
         }
         return positions[low - 1]?.index ?? -1;
@@ -96,30 +102,51 @@ export function createReaderToc(readerContext) {
     };
   }
 
+  /** @type {ReadonlySet<string | null | undefined>} */
+  const pageLocationModes = new Set(["pdf", "pdf-pages", "image-pages"]);
+
   function syncHeadingLocation() {
-    if (!readerContext.navigationState.tocEntries.length) {
-      if (readerContext.headingLocationCache) {
-        readerContext.headingLocationCache.dispose();
-        readerContext.headingLocationCache = null;
-      }
+    const entries = tocEntries();
+    if (!entries.length) {
+      readerContext.headingLocationCache?.dispose();
+      readerContext.headingLocationCache = null;
       return;
     }
-    const marker = readerContext.htmlFrame ? 8 : readerContext.viewport.getBoundingClientRect().top + 8;
-    const root = readerContext.htmlFrame?.contentDocument?.body || readerContext.content;
     const mode = readerContext.capability.mode;
-    if (mode === "pdf" || mode === "pdf-pages" || mode === "image-pages") return;
-    if (mode !== "epub-chapters") {
-      if (readerContext.headingLocationCache?.root !== root || readerContext.headingLocationCache?.entries !== readerContext.navigationState.tocEntries) {
-        readerContext.headingLocationCache?.dispose();
-        readerContext.headingLocationCache = createHeadingLocationCache(root, tocEntries());
+    if (pageLocationModes.has(mode)) return;
+    const viewport = readerContext.viewport;
+    const frame = readerContext.htmlFrame;
+    const viewTop = frame ? 0 : viewport.getBoundingClientRect().top;
+    const marker = viewTop + 8;
+    let current;
+    if (mode === "epub-chapters") {
+      current = virtualHeadingIndex(marker, entries);
+      if (current === undefined) return;
+    } else {
+      const doc = frame?.contentDocument;
+      const root = doc?.body || readerContext.content;
+      let cache = readerContext.headingLocationCache;
+      if (!cache || cache.root !== root || cache.entries !== entries) {
+        cache?.dispose();
+        cache = readerContext.headingLocationCache = createHeadingLocationCache(root, entries);
       }
-      const current = readerContext.headingLocationCache.at(marker, readerContext.htmlFrame ? /** @type {Window} */ (readerContext.htmlFrame.contentWindow).scrollY : readerContext.viewport.scrollTop);
-      if (current !== readerContext.navigationState.currentChapterIndex) {
-        readerContext.updateNavigationState({currentChapterIndex:current});
-        readerContext.updateTocCurrentMark();
-      }
-      return;
+      const scroller = doc?.scrollingElement || viewport;
+      const { scrollTop: scroll, clientHeight: height, scrollHeight } = scroller;
+      const end = scrollHeight - height;
+      // At the scroll limit, a short final section cannot reach the normal
+      // top marker. Include headings visible through the bottom of the viewport.
+      const atEnd = scroll > 0 && end > 1 && end - scroll <= 1;
+      const bottom = viewTop + (scroller === viewport ? viewport.clientTop : 0) + height;
+      current = cache.at(atEnd ? bottom - 1 : marker, scroll);
     }
+    if (current !== readerContext.navigationState.currentChapterIndex) {
+      readerContext.updateNavigationState({ currentChapterIndex: current });
+      readerContext.updateTocCurrentMark();
+    }
+  }
+
+  /** @param {number} marker @param {ReturnType<typeof tocEntries>} entries */
+  function virtualHeadingIndex(marker, entries) {
     let current = -1,
       currentPosition = -Infinity,
       first = -1,
@@ -128,7 +155,7 @@ export function createReaderToc(readerContext) {
     // only in this read pass: layout and scroll can move it before the next.
     /** @type {Map<Element, number>} */
     const targetTops = new Map();
-    for (const [index, entry] of tocEntries().entries()) {
+    for (const [index, entry] of entries.entries()) {
       const target = entry.target;
       if (!target?.isConnected) continue;
       let position = targetTops.get(target);
@@ -136,7 +163,8 @@ export function createReaderToc(readerContext) {
         position = target.getBoundingClientRect().top;
         targetTops.set(target, position);
       }
-      if (position <= marker && (position > currentPosition || (position === currentPosition && index > current))) {
+      // Entries are visited in index order; the later index wins a tie.
+      if (position <= marker && position >= currentPosition) {
         current = index;
         currentPosition = position;
       }
@@ -147,12 +175,9 @@ export function createReaderToc(readerContext) {
     }
     // Only the start of the directory is a preface. At a virtual window's
     // leading edge the closest mounted target can be a later chapter.
-    if (current < 0 && first >= 0 && first !== tocEntries().findIndex((entry) => !entry.group)) current = first;
-    if (first < 0 && current < 0) return;
-    if (current !== readerContext.navigationState.currentChapterIndex) {
-      readerContext.updateNavigationState({ currentChapterIndex: current });
-      readerContext.updateTocCurrentMark();
-    }
+    if (current >= 0) return current;
+    if (first < 0) return undefined;
+    return first === entries.findIndex((entry) => !entry.group) ? -1 : first;
   }
 
   /** @param {number} index @param {{closePanel?: boolean}} [options] */
@@ -455,8 +480,7 @@ export function createReaderToc(readerContext) {
 
   function updateTocCurrentMark() {
     const mode = readerContext.capability.mode;
-    if (readerContext.documentState.page > 0 && (readerContext.documentState.pageCount > 1 ||
-        mode === "pdf" || mode === "pdf-pages" || mode === "image-pages")) {
+    if (readerContext.documentState.page > 0 && (readerContext.documentState.pageCount > 1 || pageLocationModes.has(mode))) {
       const entries = tocEntries();
       let pageIndex = -1;
       if (entries.length > PAGE_LOOKUP_MIN_ENTRIES && entries === ownedTocEntries && ownedTocEntries !== pageLookupEntries)

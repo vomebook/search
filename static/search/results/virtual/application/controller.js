@@ -113,12 +113,16 @@ function renderVisible() {
   updateCurrentResultPosition();
   if (!deps.pendingEntrance() && !needsLayout
       && VSCROLL.renderStart <= safeStart && VSCROLL.renderEnd >= safeEnd) return false;
-  const beforePx = tightWindow
-    ? viewH * 0.35
-    : baseOverscanPx * (scrollingDown ? 1 : 2) + (scrollingDown ? 0 : velocityOverscanPx);
-  const afterPx = tightWindow
-    ? viewH * 0.35
-    : baseOverscanPx * (scrollingDown ? 2 : 1) + (scrollingDown ? velocityOverscanPx : 0);
+  let beforePx, afterPx;
+  if (tightWindow) {
+    beforePx = afterPx = viewH * 0.35;
+  } else if (scrollingDown) {
+    beforePx = baseOverscanPx;
+    afterPx = baseOverscanPx * 2 + velocityOverscanPx;
+  } else {
+    beforePx = baseOverscanPx * 2 + velocityOverscanPx;
+    afterPx = baseOverscanPx;
+  }
   let start = findVirtualIndex(Math.max(0, scrollTop - beforePx));
   let end = Math.min(len, findVirtualIndex(scrollTop + viewH + afterPx) + 1);
   if (end - start < 10 && len > 10) end = Math.min(start + 30, len);

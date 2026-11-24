@@ -2,8 +2,8 @@
 
 /** @param {{name?: string, message?: string, code?: string} | null} failure */
 function pdfSearchUnavailable(failure) {
-  const message = failure?.message || "";
-  return failure?.name === "TimeoutError" || failure?.code === "READER_BODY_INTERRUPTED" ||
+  const { message = "", name, code } = failure ?? {};
+  return name === "TimeoutError" || code === "READER_BODY_INTERRUPTED" ||
     /^(?:HTTP (?:40[348]|410|429|5\d\d)\b|本书集中全文尚未生成$|PDF 全文搜索组件加载失败|全文搜索已取消或加载超时)/.test(message) ||
     /^(?:Failed to fetch|error loading dynamically imported module|importing a module script failed|NetworkError|Load failed)/i.test(message);
 }

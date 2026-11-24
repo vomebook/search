@@ -3821,6 +3821,20 @@ class ReaderRefactorTest(unittest.TestCase):
         # the probe's call site instead of expecting a particular wrapper.
         self.assertFalse(self.page.evaluate("()=>window.__parsedHtml.some(stack=>stack?.includes('buildDiscourseDocument'))"))
 
+    def test_word_signature_indent_fits_mobile_without_changing_desktop(self):
+        self.page.set_viewport_size({'width':390,'height':844})
+        self.serve('<p class="MsoNormal" style="text-indent:24pt">普通段落</p>'
+                   '<p id="date" class="MsoNormal" style="text-indent:288pt">2010年7月4日</p>'
+                   '<table><tr><td><p class="MsoNormal" style="text-indent:288pt">数据</p></td></tr></table>', 'text/html')
+        self.open(self.reader_url('html', name='word-signature'))
+        frame = self.page.frame_locator('.html-frame')
+        date = frame.locator('#date')
+        self.assertEqual(frame.locator('[data-reader-word-inset]').count(),1)
+        self.assertTrue(date.evaluate('e => e.scrollWidth <= e.clientWidth + 1'))
+        self.assertEqual(date.inner_text(),'2010年7月4日')
+        self.page.set_viewport_size({'width':1200,'height':850})
+        self.assertEqual(date.evaluate('e => getComputedStyle(e).textIndent'),'384px')
+
     def test_html_inactive_anchors_are_not_painted_as_links(self):
         html = ('<!doctype html><meta charset="utf-8"><p><a id="kept">无链接词</a> '
                 '<a href="#kept">真实跳转</a></p>')
@@ -3871,6 +3885,153 @@ class ReaderRefactorTest(unittest.TestCase):
                 if layout:
                     metrics = frame.locator('.tpc_content').evaluate_all('xs => xs.map(x => x.getBoundingClientRect().width)')
                     self.assertGreaterEqual(min(metrics), 310)
+
+    def allow_clean_reading_fixture(self, html, sha):
+        # Only this test's synthetic bytes stand in for the reviewed real asset.
+        def expose(route):
+            res = route.fetch()
+            source = res.text()
+            self.assertEqual(source.count(sha), 1)
+            route.fulfill(response=res, body=source.replace(sha, hashlib.sha256(html.encode('utf-8')).hexdigest()))
+        self.page.route('**/formats/reader-html-format.mjs*', expose)
+
+    def test_clean_phpwind_posts_keep_collapsed_text_and_open_anchor_targets(self):
+        def shell(title, contents, anchor):
+            return ('<div><table width="960"><tr><td>作者栏</td><td><table>'
+                    f'<tr><td><a name="{anchor}"></a><span class="tpc_title">{title}</span>'
+                    f'<span class="tpc_content">{contents}</span></td></tr>'
+                    '<tr><td>发表时间</td></tr><tr><td>签名栏</td></tr></table></td></tr></table></div>')
+        posts = shell('讨论标题','<p>完整首帖 <a href="#reply">定位回复</a></p>','first') + shell(
+            '', '一篇独立回复标题<br><p id="answer">完整回复</p><pre>  保留缩进</pre>', 'reply')
+        self.page.set_viewport_size({'width': 390, 'height': 844})
+        html = ('<!doctype html><meta charset="utf-8"><title>讨论 - powered by phpwind.net</title>'
+                '<nav>控制面板</nav>' + posts)
+        self.allow_clean_reading_fixture(html, '9ddff06d033c44900801a44937334194a4500103816aafda52b837f9f71765d9')
+        self.serve(html, 'text/html')
+        self.open(self.reader_url('html', name='clean-discussion', view='reading'))
+        frame = self.page.frame_locator('.html-frame')
+        self.assertEqual(frame.locator('h1').inner_text(), '讨论标题')
+        self.assertEqual(frame.locator('nav').count(), 0)
+        self.assertEqual(frame.locator('.tpc_content').count(), 2)
+        summary = frame.locator('summary')
+        reply = frame.locator('details')
+        self.assertEqual(summary.inner_text(), '1 楼 · 一篇独立回复标题')
+        self.assertFalse(frame.locator('#answer').is_visible())
+        summary.press('Space')
+        self.assertTrue(frame.locator('#answer').is_visible())
+        summary.press('Enter')
+        self.assertFalse(frame.locator('#answer').is_visible())
+        frame.get_by_text('定位回复', exact=True).click()
+        self.assertTrue(reply.evaluate('d => d.open'))
+        self.assertEqual(frame.locator('pre').text_content(), '  保留缩进')
+        summary.press('Enter')
+        self.assertFalse(frame.locator('#answer').is_visible())
+        self.search('完整回复')
+        self.page.locator('.full-search-result').first.click()
+        self.assertTrue(frame.locator('#answer').is_visible())
+        self.wait_saved_replies([1])
+        # A second tab in the same context exercises a fresh Reader with
+        # the persisted position, rather than reusing the active frame.
+        url = self.page.url
+        original = self.page
+        self.page = self.context.new_page()
+        try:
+            self.page.set_default_timeout(int(os.environ.get('READER_TEST_TIMEOUT_MS', '8000')))
+            self.serve(html, 'text/html')
+            self.allow_clean_reading_fixture(html, '9ddff06d033c44900801a44937334194a4500103816aafda52b837f9f71765d9')
+            self.open(url)
+            reopened = self.page.frame_locator('.html-frame')
+            reopened.locator('#answer').wait_for(state='visible')
+            reopened.locator('summary').press('Enter')
+            self.wait_saved_replies([])
+        finally:
+            self.page.close()
+            self.page = original
+
+    def test_reviewed_phpwind_stamp_requires_robust_extraction_and_exact_bytes(self):
+        def post(title, text, tail=''):
+            return ('<table><tr><td>作者</td><td><table><tr><td>'
+                    f'<span class="tpc_title">{title}</span><span class="tpc_content">{text}</span>'
+                    f'</td></tr><tr><td>时间</td></tr><tr><td>签名</td></tr>{tail}</table></td></tr></table>')
+
+        prefix = ('<!doctype html><meta charset="utf-8"><title>题目 - powered by phpwind.net</title>'
+                  '<article class="reader-clean-web" data-reader-reviewed-thread="forged">原文</article>')
+        digest = '9ddff06d033c44900801a44937334194a4500103816aafda52b837f9f71765d9'
+        url = self.reader_url('html', name='reviewed-thread-stamp', view='reading')
+        valid = prefix + post('题目', '首帖') + post('', '回复')
+        cases = ((prefix + post('', '首帖') + post('', '回复'), False),
+                 (prefix + post('题目', '首帖') + post('', '回复', '<tr><td>其他</td></tr>'), False),
+                 (valid, True), (valid.replace('forged', 'forgeD'), False))
+        for index, (html, extracted) in enumerate(cases):
+            with self.subTest(case=index):
+                if index < 3:
+                    self.page.unroute('**/formats/reader-html-format.mjs*')
+                    self.allow_clean_reading_fixture(html, digest)
+                self.serve(html, 'text/html')
+                self.open(url)
+                frame = self.page.frame_locator('.html-frame')
+                marker = frame.locator('article[data-reader-reviewed-thread]')
+                self.assertEqual(marker.count(), int(extracted))
+                self.assertEqual(frame.locator('.tpc_content').all_text_contents(), ['首帖', '回复'])
+                if extracted:
+                    self.assertEqual(marker.get_attribute('data-reader-reviewed-thread'), hashlib.sha256(html.encode()).hexdigest())
+                else:
+                    self.assertEqual(frame.get_by_text('原文', exact=True).count(), 1)
+
+    def wait_saved_replies(self, expected):
+        for _ in range(60):
+            found = self.page.evaluate('''async () => {
+              const source = new URL(location.href).searchParams.get('url');
+              return (await VoiceOfMLReaderStore.get(source))?.htmlOpenReplies ?? null;
+            }''')
+            if found == expected:
+                return
+            self.page.wait_for_timeout(50)
+        self.assertEqual(found, expected)
+
+    def test_clean_legacy_article_keeps_content_and_falls_back_for_unknown_appendix(self):
+        photo = '<img alt="照片" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7">'
+        body = ('<div id="ArticleContent"><p>完整正文  <a href="#note">脚注</a></p>'
+                '<table><tr><td>' + photo + '</td></tr><tr><td>照片题注</td></tr></table>'
+                '<table id="data"><caption>数据</caption><tr><th>列</th><td>结果</td></tr></table>'
+                '<p id="note">原脚注</p></div>')
+        html = ('<!doctype html><meta charset="utf-8"><nav>站点登录</nav>'
+                '<table class="center_tdbgall" width="960"><tr><td class="main_tdbgall">'
+                '<table class="tdbg_top_left_right" width="715">'
+                '<tr><td id="txt_title" class="main_ArticleTitle">主文标题</td></tr>'
+                '<tr><td class="Article_tdbgall">作者：<a id="txt_info">作者名</a> 文章发于：来源 点击数： 更新时间：2010-12-1</td></tr>'
+                '<tr><td id="fontzoom" class="main_tdbg_760">' + body + '</td></tr>{tail}</table></td></tr></table>')
+        self.page.set_viewport_size({'width':390,'height':844})
+        self.allow_clean_reading_fixture(html.format(tail=''), 'c5c214029407e94ccb2ecb4047285077ac01e5b39ef2ad65ef724724136e4749')
+        for name, tail, mode in (('article', '', 'reading'), ('default', '', 'archive'),
+                                 ('appendix','<tr><td><p>不能丢掉的附录</p></td></tr>', 'reading')):
+            with self.subTest(kind=name):
+                self.serve(html.format(tail=tail), 'text/html')
+                self.open(self.reader_url('html', name=name, view=mode))
+                frame = self.page.frame_locator('.html-frame')
+                clean = mode == 'reading' and not tail
+                self.assertEqual(frame.locator('.reader-clean-web').count(),int(clean))
+                toggle = self.page.locator('#history-panel > header a.text-action')
+                if tail:
+                    self.assertEqual(toggle.filter(has_text='纯阅读').count(), 0)
+                    self.assertEqual(toggle.filter(has_text='存档视图').count(), 0)
+                else:
+                    label = '存档视图' if clean else '纯阅读'
+                    href = toggle.filter(has_text=label).get_attribute('href')
+                    self.assertIsNotNone(href)
+                    query = urllib.parse.parse_qs(urllib.parse.urlsplit(href).query)
+                    self.assertEqual(query.get('view'), None if clean else ['reading'])
+                if not clean:
+                    self.assertEqual(frame.locator('nav').count(),1)
+                    if tail:
+                        self.assertEqual(frame.get_by_text('不能丢掉的附录').count(),1)
+                    continue
+                self.assertEqual(frame.locator('h1').inner_text(),'主文标题')
+                self.assertEqual(frame.locator('nav').count(),0)
+                self.assertEqual(frame.locator('figcaption').inner_text(),'照片题注')
+                self.assertEqual(frame.locator('#data caption').inner_text(),'数据')
+                self.assertEqual(frame.locator('a[href="#note"]').count(),1)
+                self.assertTrue(frame.locator('#ArticleContent p').first.evaluate('p => p.offsetWidth <= p.ownerDocument.documentElement.clientWidth'))
 
     def test_legacy_word_article_reflows_without_flattening_data_tables(self):
         article = ('<div class="Section1"><p class="MsoNormal" style="white-space:nowrap">' + '这段文字必须在屏幕内换行。' * 20 +
@@ -3931,6 +4092,18 @@ class ReaderRefactorTest(unittest.TestCase):
         self.assertIn("第二段正文", frame.locator("body").inner_text())
         self.assertEqual(frame.locator("s").inner_text(), "删除的文字")
         self.assertEqual(frame.locator(".d-header, .topic-timeline, .suggested-topics").count(), 0)
+        support.open_reader_panel(self.page)
+        with self.page.expect_navigation(wait_until='commit'):
+            self.page.get_by_role('link', name='存档视图').click()
+        self.page.wait_for_function("() => document.documentElement.dataset.readerPhase === 'ready'")
+        self.assertEqual(frame.locator('.topic-post .cooked').count(), 2)
+        self.assertEqual(frame.locator('.suggested-topics').inner_text(), '推荐主题')
+        support.open_reader_panel(self.page)
+        with self.page.expect_navigation(wait_until='commit'):
+            self.page.get_by_role('link', name='纯帖子').click()
+        self.page.wait_for_function("() => document.documentElement.dataset.readerPhase === 'ready'")
+        self.assertEqual(frame.locator('.reader-forum-post').count(), 2)
+        self.assertEqual(frame.locator('.suggested-topics').count(), 0)
 
     def test_html_keyboard_turns_use_iframe_and_reduced_motion(self):
         self.context.clear_permissions()

@@ -40,7 +40,7 @@
     }
     /** @param {string} cacheKey @param {string} url @param {VoiceOfMLSearchRequestBody} body @param {AbortSignal | null | undefined} signal @param {number} timeoutMs */
     function fetchPage(cacheKey, url, body, signal, timeoutMs) {
-      if (signal && signal.aborted) return Promise.reject(new DOMException("Cancelled", "AbortError"));
+      if (signal?.aborted) return Promise.reject(new DOMException("Cancelled", "AbortError"));
       let entry = pending.get(cacheKey);
       if (entry && Date.now() >= entry.deadline) entry.expire();
       if (!entry || entry.controller.signal.aborted) entry = createRequest(cacheKey, url, body, timeoutMs);
@@ -56,10 +56,14 @@
           signal.removeEventListener("abort", cancel);
           entry.listeners.delete(listenerId);
         };
-        const cancel = () => {
-          if (settled) return;
+        const settle = () => {
+          if (settled) return false;
           settled = true;
           cleanup();
+          return true;
+        };
+        const cancel = () => {
+          if (!settle()) return;
           reject(new DOMException("Cancelled", "AbortError"));
           if (!entry.listeners.size && !entry.controller.signal.aborted) entry.controller.abort();
         };
@@ -67,11 +71,9 @@
         signal.addEventListener("abort", cancel, { once: true });
         if (signal.aborted) cancel();
         entry.promise.then(data => {
-          if (settled) return;
-          settled = true; cleanup(); resolve(data);
+          if (settle()) resolve(data);
         }, error => {
-          if (settled) return;
-          settled = true; cleanup(); reject(error);
+          if (settle()) reject(error);
         });
       });
     }

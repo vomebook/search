@@ -1,5 +1,5 @@
 import { bindReaderScrollIntent } from "../core/reader-bindings.mjs";
-import { HTML_PROSE_STYLE, LEGACY_ARTICLE_HTML_STYLE, PHPWIND_HTML_STYLE, wrapEbookTables } from "../ui/reader-document-styles.mjs";
+import { CLEAN_WEB_HTML_STYLE, HTML_PROSE_STYLE, LEGACY_ARTICLE_HTML_STYLE, PHPWIND_HTML_STYLE, wrapEbookTables } from "../ui/reader-document-styles.mjs";
 
 /** @param {string | null | undefined} markdown */
 export function stripMarkdownFrontMatter(markdown) {
@@ -18,8 +18,8 @@ export function createReaderHtmlFormat(readerContext) {
   function normalizeEpubDocument(doc) {
     // Legacy CHM conversions can use an XHTML prefix even in HTML content.
     for (const element of [...doc.querySelectorAll("*")]) {
-      const tagName = String(element.tagName || "").toLowerCase();
-      const localName = tagName.includes(":") ? tagName.slice(tagName.lastIndexOf(":") + 1) : tagName;
+      const tagName = element.tagName.toLowerCase();
+      const localName = tagName.slice(tagName.lastIndexOf(":") + 1);
       if (tagName === localName || !readerContext.EPUB_HTML_TAGS.has(localName)) continue;
       const replacement = doc.createElementNS("http://www.w3.org/1999/xhtml", localName);
       for (const attribute of [...element.attributes]) {
@@ -46,35 +46,34 @@ export function createReaderHtmlFormat(readerContext) {
     for (const node of doc.querySelectorAll(blocked)) node.remove();
     // SMIL can retarget a link's href after sanitizing; drop animations that do.
     for (const node of doc.querySelectorAll("*")) {
-      if (!SVG_ANIMATION_ELEMENTS.has(String(node.localName || "").toLowerCase())) continue;
-      const target = String(node.getAttribute("attributeName") || "").toLowerCase();
-      if (/(?:^|:)href$/.test(target.trim()) || target.trim().startsWith("on")) node.remove();
+      if (!SVG_ANIMATION_ELEMENTS.has(node.localName.toLowerCase())) continue;
+      const target = (node.getAttribute("attributeName") ?? "").trim();
+      if (/(?:^on|(?:^|:)href$)/i.test(target)) node.remove();
     }
     for (const link of doc.querySelectorAll("link")) {
-      const rel = (link.getAttribute("rel") || "").toLowerCase().split(/\s+/);
+      const rel = (link.getAttribute("rel") ?? "").toLowerCase().split(/\s+/);
       if (!rel.includes("stylesheet") || rel.includes("alternate") ||
-          !/^blob:/i.test(link.getAttribute("href") || ""))
+          !/^blob:/i.test(link.getAttribute("href") ?? ""))
         link.remove();
     }
     for (const style of doc.querySelectorAll("style"))
-      style.textContent = sanitizeCssReferences(style.textContent || "");
+      style.textContent = sanitizeCssReferences(style.textContent);
     for (const element of doc.querySelectorAll("*"))
       for (const attribute of [...element.attributes]) {
         const name = attribute.name.toLowerCase(),
-          value = String(attribute.value || "").trim(),
+          value = attribute.value.trim(),
           // WHATWG URL parsing ignores ASCII whitespace/control characters
           // around and inside a scheme. Check a normalized copy, but retain
           // the original value for safe relative URLs.
-          schemeValue = value.replace(/[\u0000-\u0020\u007f-\u009f]/g, "");
+          schemeValue = normalizeCssReference(value);
         // XHTML may bind the XLink namespace to any prefix (x:href), so match the
         // attribute's namespace and local name rather than its qualified name.
-        const localName = String(attribute.localName || name).toLowerCase(),
+        const localName = attribute.localName.toLowerCase(),
           namespace = attribute.namespaceURI;
         const urlAttribute = (!namespace || namespace === XLINK_NAMESPACE) &&
           ["href", "src", "poster", "data"].includes(localName);
         if (
-          name.startsWith("on") ||
-          name === "srcdoc" ||
+          /^(?:on|srcdoc$)/.test(name) ||
           (urlAttribute && /^(?:javascript|vbscript):/i.test(schemeValue))
         )
           element.removeAttributeNode(attribute);
@@ -100,14 +99,14 @@ export function createReaderHtmlFormat(readerContext) {
   const OFFLINE_INLINE_IMAGE = /^data:image\/(?:gif|png|jpeg|webp|svg\+xml);/i;
   /** @param {string | null} value */
   function isLocalFragment(value) {
-    return !!value && value.startsWith("#") && !/[\u0000-\u001f\u007f-\u009f]/.test(value);
+    return /^#[^\u0000-\u001f\u007f-\u009f]*$/.test(value ?? "");
   }
 
   /** @param {Element} node @param {{attrName: string, attrValue: string, keepAttr: boolean}} data */
   function restrictOfflineUrlAttribute(node, data) {
     if (data.attrName === "href" && node.localName === "a" && isLocalFragment(data.attrValue)) return;
     if (OFFLINE_URL_ATTRIBUTES.has(data.attrName) &&
-        !OFFLINE_INLINE_IMAGE.test(String(data.attrValue || "").replace(/[\u0000-\u0020\u007f-\u009f]/g, "")))
+        !OFFLINE_INLINE_IMAGE.test(normalizeCssReference(data.attrValue)))
       data.keepAttr = false;
   }
 
@@ -116,20 +115,26 @@ export function createReaderHtmlFormat(readerContext) {
     return /** @type {HTMLAnchorElement | null | undefined} */ (/** @type {Element | null} */ (event.target)?.closest?.("a[href]"));
   }
 
+  /** @param {string} fragment */
+  function fragmentName(fragment) {
+    const name = fragment.slice(1);
+    try { return decodeURIComponent(name); } catch (_) { return name; }
+  }
+
   /** @param {HTMLElement | Document} root @param {string} fragment @param {MouseEvent} event */
   function jumpWithoutHistory(root, fragment, event) {
     // Never let a nested document navigate, even for a missing fragment. A
     // child fragment traversal joins the tab's history and consumes its Back.
     event.preventDefault();
-    let name = fragment.slice(1);
-    try { name = decodeURIComponent(name); } catch (_) {}
+    const name = fragmentName(fragment);
     const target = [...root.querySelectorAll("[id]")].find(node => node.id === name) ||
       [...root.querySelectorAll("a[name]")].find(node => node.getAttribute("name") === name);
+    if (!target && !/^(?:top)?$/i.test(name)) return;
+    readerContext.beginReaderNavigation(event);
     if (target) {
-      readerContext.beginReaderNavigation(event);
+      target.closest("details.reader-clean-web-reply")?.setAttribute("open", "");
       target.scrollIntoView({ block: "start" });
-    } else if (!name || name.toLowerCase() === "top") {
-      readerContext.beginReaderNavigation(event);
+    } else {
       if ("scrollingElement" in root) root.defaultView?.scrollTo(0, 0);
       else root.scrollIntoView({ block: "start" });
     }
@@ -145,15 +150,17 @@ export function createReaderHtmlFormat(readerContext) {
     "url", "src", "image", "image-set", "-webkit-image-set", "cross-fade", "-webkit-cross-fade"
   ]);
 
-  /** @param {number} code */
-  function cssNameChar(code) {
-    return (code >= 0x61 && code <= 0x7a) || (code >= 0x41 && code <= 0x5a) ||
-      (code >= 0x30 && code <= 0x39) || code === 0x2d || code === 0x5f || code >= 0x80;
-  }
+  // CSS Syntax's name code points, whitespace, and non-printable characters.
+  const cssNameChar = /[a-zA-Z0-9_\u0080-\uFFFF-]/;
+  const cssWhitespace = /[ \t\n\r\f]/;
+  const cssNonPrintable = /[\x00-\x08\x0b\x0e-\x1f\x7f]/;
+  const cssNewline = /[\n\r\f]/;
+  const cssQuote = /["']/;
+  const cssAbsoluteReference = /^(?:[a-z][a-z0-9+.-]*:|[\\/]{2})/i;
 
-  /** @param {number} code */
-  function cssWhitespace(code) {
-    return code === 0x20 || code === 0x09 || code === 0x0a || code === 0x0c || code === 0x0d;
+  /** @param {string} value */
+  function normalizeCssReference(value) {
+    return value.replace(/[\u0000-\u0020\u007f-\u009f]/g, "");
   }
 
   // Resource policy: fragments, blob:, data: and same-origin relative paths only.
@@ -163,10 +170,9 @@ export function createReaderHtmlFormat(readerContext) {
   /** @param {string | null} raw @param {{strict?: boolean}} [options] */
   function safeCssReference(raw, { strict = false } = {}) {
     if (strict) return false;
-    const value = String(raw || "").replace(/[\u0000-\u0020\u007f-\u009f]/g, "");
+    const value = normalizeCssReference(String(raw || ""));
     if (!value || value.startsWith("#") || /^(?:blob|data):/i.test(value)) return true;
-    if (/^[\\/]{2}/.test(value)) return false;
-    return !/^[a-z][a-z0-9+.-]*:/i.test(value);
+    return !cssAbsoluteReference.test(value);
   }
 
   // Minimal CSS Syntax 3 scanner: decodes escapes and honours strings/comments
@@ -187,17 +193,21 @@ export function createReaderHtmlFormat(readerContext) {
     // Offline HTML historically deletes references; EPUB styles keep a valid
     // `none` so shorthand declarations stay parseable.
     const removed = strict ? "" : "none";
+    /** @param {number} start */
+    const removeReference = (start) => {
+      edits.push([start, i, removed]);
+      const parent = stack[stack.length - 1];
+      if (parent?.reference) parent.unsafe = true;
+    };
 
+    const hexEscape = /([0-9a-f]{1,6})(?:\r\n|[ \t\n\r\f])?/iy;
     const readEscape = () => {
       // css[i] is a backslash that is not followed by a newline.
-      i++;
-      if (i >= length) return "\ufffd";
-      let hex = "";
-      while (hex.length < 6 && i < length && /[0-9a-f]/i.test(css.charAt(i))) hex += css[i++];
+      hexEscape.lastIndex = ++i;
+      const hex = hexEscape.exec(css);
       if (hex) {
-        if (i < length && css[i] === "\r" && css[i + 1] === "\n") i += 2;
-        else if (i < length && cssWhitespace(css.charCodeAt(i))) i++;
-        const code = parseInt(hex, 16);
+        i = hexEscape.lastIndex;
+        const code = parseInt(/** @type {string} */ (hex[1]), 16);
         return code === 0 || code > 0x10ffff || (code >= 0xd800 && code <= 0xdfff)
           ? "\ufffd" : String.fromCodePoint(code);
       }
@@ -206,21 +216,22 @@ export function createReaderHtmlFormat(readerContext) {
       return char;
     };
     /** @param {number} at */
-    const validEscape = (at) => css[at] === "\\" && at + 1 < length && !/[\n\r\f]/.test(css.charAt(at + 1));
+    const validEscape = (at) => css[at] === "\\" && at + 1 < length && !cssNewline.test(css.charAt(at + 1));
     /** @param {number} at */
     const skipWhitespace = (at) => {
-      // charCodeAt returns NaN past EOF, which is not CSS whitespace.
-      while (cssWhitespace(css.charCodeAt(at))) at++;
+      while (cssWhitespace.test(css.charAt(at))) at++;
       return at;
     };
     /** @param {number} at */
-    const stringAt = (at) => css[at] === "\"" || css[at] === "'";
+    const stringAt = (at) => cssQuote.test(css.charAt(at));
     /** @param {number} at */
-    const commentAt = (at) => css[at] === "/" && css[at + 1] === "*";
+    const commentAt = (at) => css.startsWith("/*", at);
+    /** @param {number} at */
+    const nameAt = (at) => cssNameChar.test(css.charAt(at)) || validEscape(at);
     const readName = () => {
       let name = "";
       while (i < length) {
-        if (cssNameChar(css.charCodeAt(i))) name += css[i++];
+        if (cssNameChar.test(css.charAt(i))) name += css[i++];
         else if (validEscape(i)) name += readEscape();
         else break;
       }
@@ -232,11 +243,11 @@ export function createReaderHtmlFormat(readerContext) {
       while (i < length) {
         const char = css[i];
         if (char === quote) { i++; return value; }
-        if (char === "\n" || char === "\r" || char === "\f") return value; // bad-string
+        if (cssNewline.test(css.charAt(i))) return value; // bad-string
         if (char === "\\") {
           if (i + 1 >= length) { i++; continue; }
           if (css[i + 1] === "\r" && css[i + 2] === "\n") { i += 3; continue; }
-          if (/[\n\r\f]/.test(css.charAt(i + 1))) { i += 2; continue; }
+          if (cssNewline.test(css.charAt(i + 1))) { i += 2; continue; }
           value += readEscape();
           continue;
         }
@@ -253,18 +264,17 @@ export function createReaderHtmlFormat(readerContext) {
     const readUrlToken = () => {
       let value = "", bad = false;
       while (i < length) {
-        const code = css.charCodeAt(i);
-        if (css[i] === ")") { i++; return bad ? null : value; }
-        if (cssWhitespace(code)) {
+        const char = css.charAt(i);
+        if (char === ")") { i++; break; }
+        if (cssWhitespace.test(char)) {
           i = skipWhitespace(i);
-          if (css[i] !== ")" && i < length) bad = true;
+          if (/[^)]/.test(css.charAt(i))) bad = true;
           continue;
         }
-        if (stringAt(i) || css[i] === "(" || code <= 0x08 ||
-            code === 0x0b || (code >= 0x0e && code <= 0x1f) || code === 0x7f) {
+        if (cssQuote.test(char) || char === "(" || cssNonPrintable.test(char)) {
           bad = true; i++; continue;
         }
-        if (css[i] === "\\") {
+        if (char === "\\") {
           if (validEscape(i)) value += readEscape();
           else { bad = true; i++; }
           continue;
@@ -277,13 +287,13 @@ export function createReaderHtmlFormat(readerContext) {
     const skipAtRule = () => {
       let depth = 0;
       while (i < length) {
-        const char = css[i];
+        const char = css.charAt(i);
         if (commentAt(i)) { skipComment(); continue; }
-        if (stringAt(i)) { readString(); continue; }
+        if (cssQuote.test(char)) { readString(); continue; }
         if (char === "\\") { if (validEscape(i)) readEscape(); else i++; continue; }
         i++;
-        if (char === "(" || char === "[" || char === "{") depth++;
-        else if (char === ")" || char === "]") depth = Math.max(0, depth - 1);
+        if (/[([{]/.test(char)) depth++;
+        else if (/[)\]]/.test(char)) depth = Math.max(0, depth - 1);
         else if (char === "}") { if (--depth <= 0) return; }
         else if (char === ";" && depth === 0) return;
       }
@@ -300,7 +310,7 @@ export function createReaderHtmlFormat(readerContext) {
       if (stringAt(i)) target = readString();
       else {
         cursor = i;
-        const name = cssNameChar(css.charCodeAt(i)) || validEscape(i) ? readName() : "";
+        const name = nameAt(i) ? readName() : "";
         if (name.toLowerCase() === "url" && css[i] === "(") {
           i = skipWhitespace(i + 1);
           if (stringAt(i)) {
@@ -311,15 +321,15 @@ export function createReaderHtmlFormat(readerContext) {
         } else i = cursor;
       }
       skipAtRule();
-      const value = target === null ? "" : target.replace(/[\u0000-\u0020\u007f-\u009f]/g, "");
-      // Only same-origin relative sheets may be imported in non-strict mode.
-      const relative = !!value && !/^(?:blob|data):/i.test(value) && !value.startsWith("#") &&
-        safeCssReference(value);
-      if (strict || !relative) edits.push([start, i, ""]);
+      // Only non-empty same-origin relative sheets may be imported, never
+      // fragments, absolute/protocol-relative URLs, or blob/data URLs.
+      const value = normalizeCssReference(target ?? "");
+      if (strict || !value || value.startsWith("#") || cssAbsoluteReference.test(value))
+        edits.push([start, i, ""]);
     };
 
     while (i < length) {
-      const char = css[i], code = css.charCodeAt(i);
+      const char = css[i];
       if (commentAt(i)) { skipComment(); continue; }
       if (stringAt(i)) {
         const start = i, value = readString();
@@ -327,14 +337,14 @@ export function createReaderHtmlFormat(readerContext) {
         // Custom properties can later be substituted into image-set()/image();
         // treat absolute or protocol-relative strings there as references.
         const reference = frame?.reference || (customValueDepth >= 0 &&
-          /^(?:[a-z][a-z0-9+.-]*:|[\\/]{2})/i.test(value.replace(/[\u0000-\u0020\u007f-\u009f]/g, "")));
+          cssAbsoluteReference.test(normalizeCssReference(value)));
         if (reference && !safeCssReference(value, { strict })) {
           if (frame?.reference) frame.unsafe = true;
           else edits.push([start, i, "\"\""]);
         }
         continue;
       }
-      if (char === "@" && (cssNameChar(css.charCodeAt(i + 1)) || validEscape(i + 1))) {
+      if (char === "@" && nameAt(i + 1)) {
         const start = i;
         i++;
         const name = readName().toLowerCase();
@@ -342,7 +352,7 @@ export function createReaderHtmlFormat(readerContext) {
         continue;
       }
       // cssNameChar already accepts hyphens, including a lone '-'.
-      if (cssNameChar(code) || validEscape(i)) {
+      if (nameAt(i)) {
         const start = i, name = readName().toLowerCase();
         if (css[i] === "(") {
           i++;
@@ -351,11 +361,7 @@ export function createReaderHtmlFormat(readerContext) {
             if (!stringAt(probe)) {
               i = probe;
               const value = readUrlToken();
-              if (value === null || !safeCssReference(value, { strict })) {
-                edits.push([start, i, removed]);
-                const parent = stack[stack.length - 1];
-                if (parent?.reference) parent.unsafe = true;
-              }
+              if (value === null || !safeCssReference(value, { strict })) removeReference(start);
               continue;
             }
           }
@@ -373,11 +379,7 @@ export function createReaderHtmlFormat(readerContext) {
       if (char === ")") {
         const frame = stack.pop();
         i++;
-        if (frame?.unsafe) {
-          edits.push([frame.start, i, removed]);
-          const parent = stack[stack.length - 1];
-          if (parent?.reference) parent.unsafe = true;
-        }
+        if (frame?.unsafe) removeReference(frame.start);
         continue;
       }
       if ((char === ";" || char === "}") && customValueDepth >= 0 && stack.length <= customValueDepth) customValueDepth = -1;
@@ -411,25 +413,34 @@ export function createReaderHtmlFormat(readerContext) {
     return sanitizeEpubDocument(new DOMParser().parseFromString(text, "text/html"));
   }
 
+  /** @param {URL} url */
+  function isPublicWebUrl(url) {
+    return /^https?:$/.test(url.protocol) && !url.username && !url.password;
+  }
+
+  function originalDocumentUrl() {
+    try { return new URL(readerContext.downloadUrl || readerContext.sourceUrl); }
+    catch (_) { return null; }
+  }
+
+  const absoluteReference = /^(?:[a-z][a-z0-9+.-]*:|\/\/)/i;
+  const invalidLinkCharacters = /[\u0000-\u001f\u007f-\u009f\\]/;
+
   /** @param {URL} url @param {URL | null} base */
   function readerMarkdownLink(url, base) {
     try {
+      // The caller has already required an HTTP(S) URL without credentials.
       if (url.protocol !== "https:" || !["huggingface.co", "hf-mirror.com"].includes(url.hostname) ||
-          url.username || url.password || url.port || url.search ||
+          url.port || url.search ||
           !/^\/datasets\/VoiceOfML\/[^/]+\/(?:resolve|raw)\/[^/]+\/.+/.test(url.pathname)) return null;
-      const filename = decodeURIComponent(url.pathname.split("/").pop() || "");
-      const match = /\.([a-z0-9]+)$/i.exec(filename);
-      const ext = match?.[1]?.toLowerCase();
+      const filename = decodeURIComponent(url.pathname.slice(url.pathname.lastIndexOf("/") + 1));
+      const ext = /\.[a-z0-9]+$/i.exec(filename)?.[0].slice(1).toLowerCase();
       if (!ext || VoiceOfMLReader.capability(ext).readerMode !== VoiceOfMLReader.ReaderMode.ORIGINAL) return null;
       const fragment = url.hash;
       if (fragment && !["md", "markdown"].includes(ext)) return null;
       url = new URL(url.href);
       url.hash = "";
-      if (base) {
-        const baseFile = new URL(base.href);
-        baseFile.hash = "";
-        if (fragment && url.href === baseFile.href) return fragment;
-      }
+      if (fragment && url.href === base?.href.split("#", 1)[0]) return fragment;
       const reader = new URL(location.pathname, location.origin);
       reader.searchParams.set("url", url.href);
       reader.searchParams.set("ext", ext);
@@ -443,20 +454,17 @@ export function createReaderHtmlFormat(readerContext) {
   /** @param {HTMLElement} article */
   function prepareMarkdownLinks(article) {
     // Cache-backed text still resolves relative links against the original file.
-    /** @type {URL | null} */
-    let base = null;
-    try { base = new URL(readerContext.downloadUrl || readerContext.sourceUrl); } catch (_) {}
+    const base = originalDocumentUrl();
     const readerLinks = new WeakSet();
     for (const link of article.querySelectorAll("a[href]")) {
       const value = (link.getAttribute("href") || "").trim();
       if (isLocalFragment(value)) continue;
-      const relative = !/^(?:[a-z][a-z0-9+.-]*:|\/\/)/i.test(value);
+      const relative = !absoluteReference.test(value);
       let destination = null;
-      if (value && !/[\u0000-\u001f\u007f-\u009f\\]/.test(value)) {
+      if (value && !invalidLinkCharacters.test(value)) {
         try {
-          const url = base ? new URL(value, base) : new URL(value);
-          if (/^https?:$/.test(url.protocol) && !url.username && !url.password &&
-              (!relative || url.origin === base?.origin)) destination = url;
+          const url = new URL(value, base ?? undefined);
+          if (isPublicWebUrl(url) && (!relative || url.origin === base?.origin)) destination = url;
         } catch (_) {}
       }
       const target = destination && !link.hasAttribute("download") ? readerMarkdownLink(destination, base) : null;
@@ -522,7 +530,7 @@ export function createReaderHtmlFormat(readerContext) {
   function markdownTocEntries(article) {
     const authored = readerContext.headingTocEntries(article);
     const title = authored[0]?.target;
-    if (authored.length > 1 || (title && (title.localName !== "h1" || title !== article.firstElementChild))) return authored;
+    if (authored.length > 1 || (title && title !== article.querySelector(":scope > h1:first-child"))) return authored;
     const candidates = [];
     for (const paragraph of article.children) {
       // Standalone prose blocks only: no code, tables, lists, block quotes,
@@ -530,9 +538,10 @@ export function createReaderHtmlFormat(readerContext) {
       if (paragraph.localName !== "p") continue;
       const label = paragraph.textContent.trim();
       if (label.length > 72 || /[\r\n]|[。！？；!?]$/u.test(label) || !numberedChapter.test(label)) continue;
-      const only = paragraph.firstElementChild;
-      if (only && (paragraph.childElementCount !== 1 || !only.matches("strong,b") ||
-          only.childElementCount !== 0 || only.textContent.trim() !== label)) continue;
+      if (paragraph.childElementCount) {
+        const emphasis = paragraph.querySelector(":scope > :is(strong, b):only-child:not(:has(> *))");
+        if (emphasis?.textContent.trim() !== label) continue;
+      }
       candidates.push({ label, target: paragraph });
       if (candidates.length > 512) return authored;
     }
@@ -551,8 +560,7 @@ export function createReaderHtmlFormat(readerContext) {
         if (!numberedChapter.test(label)) continue;
         const href = link.getAttribute("href");
         if (!href || href.length < 2) continue;
-        let target = href.slice(1);
-        try { target = decodeURIComponent(target); } catch (_) {}
+        const target = fragmentName(href);
         if (anchors.has(target)) linked.set(label, target);
       }
       const targets = candidates.map(({label}) => linked.get(cleanLabel(label)));
@@ -592,20 +600,14 @@ export function createReaderHtmlFormat(readerContext) {
     readerContext.status.textContent = "已加载";
   }
 
-  /** @param {string} text @param {boolean} [phpwind] */
-  function sanitizeOfflineHtml(text, phpwind = false) {
+  /** @param {string} text @param {boolean} [phpwind] @param {string} [reviewedView] @param {string} [archiveDigest] */
+  function sanitizeOfflineHtml(text, phpwind = false, reviewedView = "", archiveDigest = "") {
     // A global ALLOWED_URI_REGEXP would also strip every non-allow-listed plain
     // attribute (colspan/rowspan/width), so scope the inline-image rule to URLs.
     // Use the original document URL, not the proxy, srcdoc, or a supplied <base>.
-    /** @type {URL | null} */
-    let base = null;
-    try {
-      const original = new URL(readerContext.downloadUrl || readerContext.sourceUrl);
-      if (/^https?:$/.test(original.protocol) && !original.username && !original.password) {
-        original.hash = "";
-        base = original;
-      }
-    } catch (_) {}
+    const original = originalDocumentUrl();
+    const base = original && isPublicWebUrl(original) ? original : null;
+    if (base) base.hash = "";
     // Converted documents can link to hundreds of fragments in the same file.
     // Cache only the document match, with bounded keys and a fixed base per book.
     /** @type {Map<string, boolean>} */
@@ -614,8 +616,7 @@ export function createReaderHtmlFormat(readerContext) {
     const restrict = (node, data) => {
       if (base && data.attrName === "href" && node.localName === "a") {
         const value = data.attrValue, hashIndex = value.indexOf("#");
-        if (hashIndex > 0 && !/^(?:[a-z][a-z0-9+.-]*:|\/\/)/i.test(value) &&
-            !/[\u0000-\u001f\u007f-\u009f\\]/.test(value)) {
+        if (hashIndex > 0 && !absoluteReference.test(value) && !invalidLinkCharacters.test(value)) {
           const key = hashIndex <= 256 ? value.slice(0, hashIndex) : null;
           let matches = key === null ? undefined : documentMatches.get(key);
           if (matches === undefined) {
@@ -642,7 +643,7 @@ export function createReaderHtmlFormat(readerContext) {
         RETURN_DOM_FRAGMENT: true,
         ADD_TAGS: ["style"],
         FORBID_TAGS: ["base", "embed", "form", "iframe", "object", "script"],
-        FORBID_ATTR: ["action", "formaction", "srcdoc", "data-reader-phpwind", "data-reader-legacy-article"]
+        FORBID_ATTR: ["action", "formaction", "srcdoc", "data-reader-phpwind", "data-reader-legacy-article", "data-reader-reviewed-thread", "data-reader-word-inset"]
       });
     } finally {
       DOMPurify.removeHook("uponSanitizeAttribute", restrict);
@@ -661,7 +662,7 @@ export function createReaderHtmlFormat(readerContext) {
     /** @type {Map<string, string>} */
     const inlineStyles = new Map();
     for (const element of template.content.querySelectorAll("[style]")) {
-      const value = element.getAttribute("style") || "";
+      const value = /** @type {string} */ (element.getAttribute("style"));
       const cacheable = value.length <= 256;
       let stripped = cacheable ? inlineStyles.get(value) : undefined;
       if (stripped === undefined) {
@@ -670,8 +671,22 @@ export function createReaderHtmlFormat(readerContext) {
       }
       if (stripped !== value) element.setAttribute("style", stripped);
     }
+    // Scope the mobile fix to known Word HTML, a large authored absolute
+    // indent and a short text-only line, never code or table cells.
+    for (const line of template.content.querySelectorAll("p.MsoNormal[style]")) {
+      if (!(line instanceof HTMLElement) || line.closest("table") || line.querySelector("br,img,pre,code") ||
+          line.textContent.trim().length > 24) continue;
+      const match = /^(\d+(?:\.\d+)?)(px|pt)$/.exec(line.style.textIndent);
+      if (!match || Number(match[1]) * (match[2] === "pt" ? 4 / 3 : 1) < 240) continue;
+      line.style.setProperty("--reader-word-indent", line.style.textIndent);
+      line.setAttribute("data-reader-word-inset", "");
+    }
+    if (!phpwind && reviewedView === "article" && buildLegacyReadingArticle(template.content))
+      return template.innerHTML + CLEAN_WEB_HTML_STYLE;
     const thread = phpwind ? findPhpwindThread(template.content) : null;
     if (thread) {
+      if (reviewedView === "thread" && buildPhpwindReadingThread(template.content, thread, archiveDigest))
+        return template.innerHTML + CLEAN_WEB_HTML_STYLE;
       reflowPhpwindArchive(template.content, thread);
       return template.innerHTML + PHPWIND_HTML_STYLE;
     }
@@ -679,12 +694,108 @@ export function createReaderHtmlFormat(readerContext) {
     return template.innerHTML + layoutStyle;
   }
 
+  const legacyArticleCell = "table.center_tdbgall > tbody > tr > td.main_tdbgall > table.tdbg_top_left_right > tbody > tr > td.main_tdbg_760";
+
+  /** @param {DocumentFragment} root */
+  function buildLegacyReadingArticle(root) {
+    // Extract a known single-article CMS template, not an arbitrary element
+    // whose id happens to include “article”. Preserve the full sanitized body.
+    const bodies = root.querySelectorAll("#ArticleContent");
+    const body = bodies[0];
+    if (bodies.length !== 1 || !body?.matches(`${legacyArticleCell}#fontzoom > div`) ||
+        !body.querySelector("p") || !body.textContent.trim()) return false;
+    // The matched cell/row chain guarantees both ancestors and the table.
+    const bodyCell = /** @type {HTMLTableCellElement} */ (body.parentElement);
+    const bodyRow = /** @type {HTMLTableRowElement} */ (bodyCell.parentElement);
+    const table = /** @type {HTMLTableElement} */ (bodyCell.closest("table"));
+    const headline = table.querySelector("td#txt_title.main_ArticleTitle");
+    if (!headline?.textContent.trim()) return false;
+    const headlineRow = headline.closest("tr");
+    if (headlineRow?.parentElement !== bodyRow.parentElement) return false;
+    const rows = [...table.rows];
+    const titleIndex = rows.indexOf(headlineRow);
+    const bodyIndex = rows.indexOf(bodyRow);
+    if (titleIndex < 0 || bodyIndex <= titleIndex) return false;
+    const source = table.querySelector(".Article_tdbgall a#txt_info");
+    const metadata = source?.closest("td.Article_tdbgall");
+    // If this archive contains actual comments or other unrecognized addenda,
+    // retain the existing view instead of silently discarding them.
+    for (const row of rows.slice(bodyIndex + 1)) {
+      const text = row.textContent.replace(/\s+/g, " ").trim();
+      const commentsTitle = /^网友评论：\s*（只显示最新50条。评论内容只代表网友观点，与本站立场无关！）$/.test(text);
+      const login = /^只有注册登录的用户才可以发表评论！\s*发表评论\s*请遵守《互联网电子公告服务管理规定》及中华人民共和国其他各项有关法律法规。 用户需对自己在使用本站服务过程中的行为承担法律责任（直接或间接导致的）。 评论内容只代表网友个人观点，与本网站立场无关。$/.test(text);
+      if ([...row.querySelectorAll("img,video,audio,pre,blockquote,figure,[id],a[name]")].some(node =>
+        !(commentsTitle && node.matches("img:not([id])") && !(node.getAttribute("alt") || "").trim()) &&
+        !(login && node.matches("span#UserLogin")))) return false;
+      if (text && !commentsTitle && !login && !/^(?:文章录入：.{0,60}责任编辑：.{0,60}|上一篇文章：.{0,180}下一篇文章：.{0,60}|【复制本文】.{0,160}【关闭窗口】)$/.test(text)) return false;
+    }
+    const targetIds = new Set([...body.querySelectorAll("[id],a[name]")].flatMap(node =>
+      [node.id, node.getAttribute("name")].filter(Boolean)));
+    targetIds.add(body.id);
+    targetIds.add(headline.id);
+    targetIds.add(bodyCell.id);
+    for (const link of body.querySelectorAll('a[href^="#"]')) {
+      const href = link.getAttribute("href");
+      if (!href || href.length < 2) continue;
+      const target = fragmentName(href);
+      if (target.toLowerCase() !== "top" && !targetIds.has(target)) return false;
+    }
+    const doc = root.ownerDocument;
+    const article = doc.createElement("article");
+    article.id = bodyCell.id;
+    article.className = "reader-clean-web";
+    const heading = doc.createElement("h1");
+    heading.id = headline.id;
+    heading.append(...headline.childNodes);
+    article.append(heading);
+    if (metadata) {
+      const text = metadata.textContent.replace(/\s+/g, " ").trim();
+      const fields = /^作者：\s*(.*?)\s*文章发于：\s*(.*?)\s*点击数：.*?更新时间：\s*([0-9-]+)$/.exec(text);
+      if (fields) {
+        const line = doc.createElement("p");
+        line.className = "reader-clean-web-byline";
+        line.textContent = [fields[1], fields[2], fields[3] && `更新于 ${fields[3]}`].filter(Boolean).join(" · ");
+        article.append(line);
+      }
+    }
+    // Title and article nodes have already passed our existing URL sanitizer.
+    // Ignore site typography classes and style sheets; retain authored inline
+    // content, real tables, internal fragment IDs and the download unchanged.
+    article.append(body);
+    normalizeArticleImageTables(body);
+    root.replaceChildren(article);
+    return true;
+  }
+
+  /** @param {Element} body */
+  function normalizeArticleImageTables(body) {
+    // The common photo box is exactly a single image row plus a caption row.
+    // Never flatten a data table, a nested table, or a fragment target.
+    for (const table of body.querySelectorAll("table")) {
+      if (table.querySelector("table,th,caption,thead,tfoot,colgroup") || table.closest("table table") || table.rows.length !== 2) continue;
+      const photoRow = /** @type {HTMLTableRowElement} */ (table.rows.item(0));
+      const captionRow = /** @type {HTMLTableRowElement} */ (table.rows.item(1));
+      if (photoRow.cells.length !== 1 || captionRow.cells.length !== 1) continue;
+      const photo = /** @type {HTMLTableCellElement} */ (photoRow.cells.item(0));
+      const caption = /** @type {HTMLTableCellElement} */ (captionRow.cells.item(0));
+      if (!photo.querySelector("img[src]") ||
+          photo.querySelectorAll("img").length !== 1 || photo.textContent.trim() ||
+          !caption.textContent.trim() || caption.querySelector("img,video,audio,pre,svg") ||
+          [table, photoRow, captionRow, photo, caption].some(node => node.hasAttribute("id")) ||
+          table.querySelector("tbody[id],a[name]")) continue;
+      const figure = body.ownerDocument.createElement("figure");
+      const label = body.ownerDocument.createElement("figcaption");
+      label.append(...caption.childNodes);
+      figure.append(...photo.childNodes, label);
+      table.replaceWith(figure);
+    }
+  }
+
   /** @param {DocumentFragment} root */
   function markLegacyArticleLayout(root) {
-    // Legacy CMS exports put Word paragraphs inside fixed-width layout tables.
-    // Reflow only the ancestor chain of this known article shell, not its
-    // actual content tables, other page regions, or arbitrary Word documents.
-    const shell = "table.center_tdbgall > tbody > tr > td.main_tdbgall > table.tdbg_top_left_right > tbody > tr > td.main_tdbg_760";
+    // Legacy Word exports: retain this conservative layout fallback when
+    // there is no independently identified article body.
+    const shell = legacyArticleCell;
     let marked = false;
     for (const cell of root.querySelectorAll(shell)) {
       const article = cell.querySelector(":scope > .Section1, :scope > div > .Section1");
@@ -727,13 +838,61 @@ export function createReaderHtmlFormat(readerContext) {
       const outerGroup = /** @type {HTMLElement} */ (outerRow.parentElement);
       const outer = /** @type {HTMLElement} */ (outerGroup.parentElement);
       const author = /** @type {Element} */ (outerRow.firstElementChild);
-      if (!author.matches("td") || outerRow.childElementCount !== 2 ||
+      // With two children, `td + td` also proves the first cell is a td.
+      if (outerRow.childElementCount !== 2 ||
           group.childElementCount !== 3 || outer.childElementCount !== 1 ||
           outer.closest("table table") || shells.has(outer)) return null;
       shells.add(outer);
       layouts.push({ post, cell, inner, main, outer, author });
     }
     return { layouts, shells };
+  }
+
+  /** @param {DocumentFragment} root @param {PhpwindThread} thread @param {string} archiveDigest */
+  function buildPhpwindReadingThread(root, { layouts }, archiveDigest) {
+    // findPhpwindThread returns at least two validated layouts.
+    const first = /** @type {PhpwindPostLayout} */ (layouts[0]);
+    const title = first.cell.querySelector(":scope > .tpc_title")?.textContent.trim();
+    // Without a definite thread title, preserve the existing layout (e.g.
+    // print views or fixtures whose surrounding context may be content).
+    if (title) {
+      const doc = root.ownerDocument;
+      const article = doc.createElement("article");
+      article.className = "reader-clean-web";
+      article.setAttribute("data-reader-reviewed-thread", archiveDigest);
+      const heading = doc.createElement("h1");
+      heading.textContent = title;
+      article.append(heading);
+      for (const [i,{ post, cell, outer }] of layouts.entries()) {
+        const container = doc.createElement(i ? "details" : "section");
+        if (i) {
+          container.className = "reader-clean-web-reply";
+          const toggle = doc.createElement("summary");
+          const lead = cell.querySelector(":scope > .tpc_title")?.textContent.trim() ||
+            post.firstChild?.textContent?.trim().split(/\s*\n\s*/)[0] || "";
+          toggle.textContent = `${i} 楼${lead ? ` · ${lead.slice(0, 84)}${lead.length > 84 ? "…" : ""}` : ""}`;
+          container.append(toggle);
+        }
+        // Keep links to pre-post named anchors and the table's own target,
+        // leaving every node inside the actual post intact.
+        const ids = new Set([...post.querySelectorAll("[id],a[name]")].flatMap(node =>
+          [node.id, node.getAttribute("name")].filter(Boolean)));
+        for (const anchor of [outer, ...cell.querySelectorAll(":scope > [id], :scope > a[name]")]) {
+          if (anchor === post) continue;
+          const id = anchor.id || anchor.getAttribute("name");
+          if (!id || ids.has(id)) continue;
+          const target = doc.createElement("span");
+          target.id = id;
+          container.append(target);
+          ids.add(id);
+        }
+        container.append(post);
+        article.append(container);
+      }
+      root.replaceChildren(article);
+      return true;
+    }
+    return false;
   }
 
   /** @param {DocumentFragment} root @param {PhpwindThread} thread */
@@ -813,18 +972,20 @@ export function createReaderHtmlFormat(readerContext) {
     }
   }
 
-  /** @param {string} text */
-  function prepareHtmlDocument(text) {
-    const discourse = buildDiscourseDocument(text);
+  /** @param {string} text @param {boolean} [archiveView] @param {string} [reviewedView] @param {string} [archiveDigest] */
+  function prepareHtmlDocument(text, archiveView = false, reviewedView = "", archiveDigest = "") {
+    const discussion = buildDiscourseDocument(text);
+    const discourse = !archiveView && discussion;
     // The sanitizer returns body content; check the actual title before it is
     // discarded, but recognize and annotate only the sanitized DOM.
-    const phpwind = !discourse && /tpc_content/i.test(text) && /phpwind\.net/i.test(text) &&
+    const phpwind = !discussion && /tpc_content/i.test(text) && /phpwind\.net/i.test(text) &&
       /\bpowered\s+by\s+phpwind\.net\s*$/i.test(new DOMParser().parseFromString(text, "text/html").title);
-    const html = sanitizeOfflineHtml(discourse || text, phpwind);
+    const html = sanitizeOfflineHtml(discourse || text, phpwind, discussion ? "" : reviewedView, archiveDigest);
     return {
       html,
       discourse: !!discourse,
-      spreadsheet: !discourse && html.includes("reader-spreadsheet-sheet")
+      discourseArchive: !!discussion,
+      spreadsheet: !discussion && html.includes("reader-spreadsheet-sheet")
     };
   }
 
@@ -845,12 +1006,48 @@ export function createReaderHtmlFormat(readerContext) {
       await readerContext.settleReaderImages(frame.contentDocument, 30000);
   }
 
+  const reviewedHtmlViews = new Map([
+    ["c5c214029407e94ccb2ecb4047285077ac01e5b39ef2ad65ef724724136e4749", "article"],
+    ["9ddff06d033c44900801a44937334194a4500103816aafda52b837f9f71765d9", "thread"]
+  ]);
+
   /** @param {import('../../../typings/reader-html-format-strict').PreparedHtml} prepared */
   async function renderHtml(prepared) {
     const bytes = await readerContext.readPreparedBytes(prepared.response, prepared.engine);
     const text = new TextDecoder(detectHtmlEncoding(bytes, readerContext.documentState.title)).decode(bytes);
     readerContext.assertReaderActive();
-    const documentData = prepareHtmlDocument(text);
+    let reviewedView = "", archiveDigest = "";
+    const openUrl = new URL(location.href);
+    const view = openUrl.searchParams.get("view");
+    const reading = view === "reading";
+    // Restrict extraction to exactly reviewed bytes. A template match or
+    // reused Reader ID alone cannot approve new content.
+    if (globalThis.crypto?.subtle && /ArticleContent|tpc_content/.test(text)) {
+      archiveDigest = Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", new Uint8Array(bytes))),
+        value => value.toString(16).padStart(2, "0")).join("");
+      reviewedView = reviewedHtmlViews.get(archiveDigest) ?? "";
+      readerContext.assertReaderActive();
+    }
+    const archiveView = view === "archive";
+    const documentData = prepareHtmlDocument(text, archiveView, reading ? reviewedView : "", archiveDigest);
+    if (documentData.discourseArchive || reviewedView) {
+      const archiveNext = documentData.discourseArchive ? !archiveView : reading;
+      // The outer guard guarantees a reviewed view when this is not Discourse.
+      if (archiveNext === documentData.discourseArchive)
+        openUrl.searchParams.set("view", documentData.discourseArchive ? "archive" : "reading");
+      else openUrl.searchParams.delete("view");
+      const link = document.createElement("a");
+      link.className = "text-action";
+      link.textContent = archiveNext ? "存档视图" : documentData.discourseArchive ? "纯帖子" : "纯阅读";
+      link.href = openUrl.href;
+      link.addEventListener("click", event => {
+        if (event.button || event.metaKey || event.ctrlKey || event.altKey || event.shiftKey) return;
+        event.preventDefault();
+        readerContext.navigateReader(link.href);
+      });
+      document.querySelector("#history-panel > header")?.append(link);
+      readerContext.trackReaderResource(() => { link.remove(); });
+    }
     const frame = document.createElement("iframe");
     readerContext.htmlFrame = frame;
     frame.className = "html-frame";
@@ -886,16 +1083,27 @@ export function createReaderHtmlFormat(readerContext) {
             passive: true
           });
            doc.addEventListener("keydown", readerContext.handleReaderKeydown);
+           /** @param {Event} event */
+           const replyToggle = (event) => {
+             const target = /** @type {Element | null} */ (event.target);
+             if (target?.matches("details.reader-clean-web-reply")) readerContext.handleReaderPositionChange(event);
+           };
+           doc.addEventListener("toggle", replyToggle, true);
            /** @param {MouseEvent} event */
            const jump = (event) => {
              const href = clickedLink(event)?.getAttribute("href")?.trim() || "";
-             if (!event.defaultPrevented && isLocalFragment(href)) jumpWithoutHistory(doc, href, event);
+             if (event.defaultPrevented) return;
+             if (isLocalFragment(href)) jumpWithoutHistory(doc, href, event);
+             else if (event.type === "click" && event.isTrusted &&
+                 (/** @type {Element | null} */ (event.target))?.closest?.("details.reader-clean-web-reply > summary"))
+               readerContext.beginReaderNavigation(event);
            };
            doc.addEventListener("click", jump);
            doc.addEventListener("auxclick", jump);
            doc.addEventListener("click", readerContext.handleReaderOutsideClick);
            readerContext.trackReaderResource(() => {
              doc.removeEventListener("click", jump);
+             doc.removeEventListener("toggle", replyToggle, true);
              doc.removeEventListener("auxclick", jump);
              doc.removeEventListener("click", readerContext.handleReaderOutsideClick);
            });
@@ -982,7 +1190,7 @@ export function createReaderHtmlFormat(readerContext) {
         if (meta.namespaceURI !== "http://www.w3.org/1999/xhtml") continue;
         const declared = meta.getAttribute("charset") ||
           (meta.getAttribute("http-equiv")?.trim().toLowerCase() === "content-type" &&
-            /(?:^|;)\s*charset\s*=\s*["']?\s*([a-z0-9._:-]+)/i.exec(meta.getAttribute("content") || "")?.[1]);
+            /(?:^|;)\s*charset\s*=\s*["']?\s*([a-z0-9._:-]+)/i.exec(meta.getAttribute("content") ?? "")?.[1]);
         if (!declared) continue;
         const value = declared.trim().toLowerCase();
         try {
@@ -999,8 +1207,8 @@ export function createReaderHtmlFormat(readerContext) {
   /** @param {HTMLIFrameElement} frame */
   function repairHtmlContrast(frame) {
     const doc = frame.contentDocument;
-    if (!doc || !doc.body || !frame.contentWindow) return;
     const frameWindow = frame.contentWindow;
+    if (!doc?.body || !frameWindow) return;
     /** @param {string} value @returns {[number, number, number, number] | null} */
     const parseColor = (value) => {
       const parts = String(value).match(/[\d.]+/g);
@@ -1093,9 +1301,9 @@ export function createReaderHtmlFormat(readerContext) {
       const light = foreground.light;
       const contrast = (Math.max(light, dark) + 0.05) / (Math.min(light, dark) + 0.05);
       if (contrast < 3) {
-        const original = [element.style.color, element.style.getPropertyPriority("color")];
+        const color = element.style.color, priority = element.style.getPropertyPriority("color");
         element.style.setProperty("color", dark > 0.45 ? "#111" : "#f5f5f5", "important");
-        repaired.set(element, [original[0] || "", original[1] || "", element.style.color]);
+        repaired.set(element, [color, priority, element.style.color]);
         // Inherited color and currentColor backgrounds can change after a repair.
         backgrounds.clear();
       }

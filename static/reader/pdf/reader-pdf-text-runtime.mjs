@@ -183,7 +183,7 @@ export function createReaderPdfTextRuntime(readerContext) {
     }
     if (evidence.hasText) return;
     evidence.pages.add(page);
-    if (!evidence.hasText && evidence.pages.size === evidence.count &&
+    if (evidence.pages.size === evidence.count &&
         !readerContext.readerAbortController.signal.aborted && readerContext.pdfDocument === pdf && !readerContext.ocrManifestUrl) {
       pdf.readerNoSearchableText = true;
       readerContext.syncCapabilityControls();
@@ -268,9 +268,14 @@ export function createReaderPdfTextRuntime(readerContext) {
     return touchPageCache(readerContext.pdfOcrPageCache, page)?.payload ?? null;
   }
 
+  /** @param {import('../../../typings/reader-pdf-text-runtime-strict').Shell} shell */
+  function hasOcrText(shell) {
+    return shell.dataset.textReady === "1" && shell.dataset.nativeTextFallback !== "1";
+  }
+
   /** @param {import('../../../typings/reader-pdf-text-runtime-strict').Shell} shell @param {import('../../../typings/reader-pdf-text-runtime-strict').OcrPayload} [loaded] */
   async function renderPdfOcrText(shell, loaded) {
-    if ((shell.dataset.textReady === "1" && shell.dataset.nativeTextFallback !== "1") || !readerContext.ocrManifestUrl) return;
+    if (hasOcrText(shell) || !readerContext.ocrManifestUrl) return;
     if (shell._ocrPromise) {
       await shell._ocrPromise;
       if (loaded) return renderPdfOcrText(shell, loaded);
@@ -331,7 +336,7 @@ export function createReaderPdfTextRuntime(readerContext) {
       await readerContext.renderPdfOcrText(shell);
       // If a historical external text object disappeared or failed to load,
       // the source's own text remains usable without creating another copy.
-      if (signal?.aborted || (shell.dataset.textReady === "1" && shell.dataset.nativeTextFallback !== "1")) return;
+      if (signal?.aborted || hasOcrText(shell)) return;
     }
     const canRenderNative = () => (!ownsNativeResult || ownsNativeResult()) &&
       (shell.dataset.textReady !== "1" || (ownsNativeResult && readerContext.ocrManifestUrl &&

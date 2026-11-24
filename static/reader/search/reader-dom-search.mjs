@@ -469,7 +469,9 @@ export function createReaderDomSearch({
               !isCurrent("navigation", navigationGeneration)) return false;
           if (parts.map(part => part.node.data.slice(part.start, part.end)).join("") !== match.value) return false;
           const marks = highlightTextParts(parts);
-          marks.find(visibleTextMark)?.scrollIntoView({ block: "center" });
+          const target = marks.find(visibleTextMark);
+          target?.closest("details.reader-clean-web-reply")?.setAttribute("open", "");
+          target?.scrollIntoView({ block: "center" });
           return marks.length > 0;
         }
       };

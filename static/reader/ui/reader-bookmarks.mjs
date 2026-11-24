@@ -1,3 +1,5 @@
+import { captureHtmlDisclosure } from "./reader-progress.mjs";
+
 /** @param {import('../../../typings/reader-bookmarks-strict').BookmarkContext} readerContext */
 export function createReaderBookmarks(readerContext) {
   /** @param {import('../../../typings/reader-progress-strict').ProgressState | null} entry */
@@ -91,14 +93,19 @@ export function createReaderBookmarks(readerContext) {
     return excerpt.replace(/\s+/g, " ").trim().slice(0, 160);
   }
 
+  /** @type {ReadonlySet<string | null | undefined>} */
+  const excerptlessModes = new Set(["image", "audio", "video"]);
+  /** @type {ReadonlySet<string | null | undefined>} */
+  const pdfModes = new Set(["pdf", "pdf-pages"]);
+
   function bookmarkExcerpt() {
     const mode = readerContext.capability.mode;
-    if (mode === "image" || mode === "audio" || mode === "video") return "";
-    if (mode === "pdf" || mode === "pdf-pages") {
-      const shell = readerContext.pageAtMarker(),
-        items = shell && shell._bookmarkTextItems;
-      if (items && items.length) {
-        const rect = shell.getBoundingClientRect(),
+    if (excerptlessModes.has(mode)) return "";
+    if (pdfModes.has(mode)) {
+      const shell = readerContext.pageAtMarker();
+      const items = shell?._bookmarkTextItems;
+      if (items?.length) {
+        const rect = /** @type {HTMLElement} */ (shell).getBoundingClientRect(),
           targetY =
             Math.max(0, readerContext.bookmarkRibbon.getBoundingClientRect().bottom - rect.top) /
             Math.max(1, rect.height);
@@ -130,11 +137,12 @@ export function createReaderBookmarks(readerContext) {
     });
     const frame = frames[frames.length - 1];
     try {
-      if (frame && frame.contentDocument && frame.contentDocument.body) {
-        const rect = frame.getBoundingClientRect();
+      const doc = frame?.contentDocument;
+      if (doc?.body) {
+        const rect = /** @type {HTMLIFrameElement} */ (frame).getBoundingClientRect();
         return excerptFromCaret(
-          frame.contentDocument,
-          frame.contentDocument.body,
+          doc,
+          doc.body,
           x - rect.left,
           y - rect.top
         );
@@ -235,10 +243,10 @@ export function createReaderBookmarks(readerContext) {
     const page = Number(shell?.dataset.page) || readerContext.documentState.page;
     const scrollTop = readerContext.viewport.scrollTop;
     const pageOffset = shell ? Math.max(0, scrollTop - readerContext.readerPageScrollTop(shell)) : 0;
-    const pageHeight = shell && (mode === "pdf" || mode === "pdf-pages") ? shell.getBoundingClientRect().height : 0;
+    const pageHeight = shell && pdfModes.has(mode) ? shell.getBoundingClientRect().height : 0;
     const pageOffsetFraction = pageHeight > 0 ? Math.min(1, pageOffset / pageHeight) : undefined;
     const progress = readerContext.readerProgressPercent();
-    const htmlScrollTop = readerContext.htmlFrame && readerContext.htmlFrame.contentWindow ? readerContext.htmlFrame.contentWindow.scrollY : 0;
+    const htmlScrollTop = readerContext.htmlFrame?.contentWindow?.scrollY ?? 0;
     const pagedDocument = readerContext.documentState.pageCount && mode !== "text" && mode !== "markdown";
     const locator = chapterPosition
       ? `chapter:${chapterPosition.chapterIndex}:${Math.round(chapterPosition.chapterOffset)}`
@@ -257,6 +265,7 @@ export function createReaderBookmarks(readerContext) {
       ...(pageOffsetFraction === undefined ? {} : { pageOffsetFraction }),
       scrollTop,
       htmlScrollTop,
+      ...captureHtmlDisclosure(readerContext.htmlFrame),
       ...(chapterPosition || {})
     };
   }

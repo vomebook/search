@@ -316,6 +316,29 @@ class ReaderAccessibilityTests(unittest.TestCase):
         self.assertIsNone(field.get_attribute('placeholder'))
         self.assertEqual(self.page.locator('#toc-panel .panel-search-toggle').get_attribute('aria-controls'), field.get_attribute('id'))
 
+    def test_directory_marks_final_heading_at_scroll_limit_without_a_toc_jump(self):
+        html = ('<!doctype html><h1>Chapter one</h1>' + '<p>Body</p>' * 80
+                + '<h1>Chapter two</h1><p>End</p>')
+        for extension, body in (('md', None), ('html', html)):
+            with self.subTest(extension=extension):
+                self.open_book(extension, body, open_panel=False)
+                reader = self.page if extension == 'md' else self.page.frame_locator('iframe.html-frame')
+                scroller = self.page.locator('#viewport') if extension == 'md' else reader.locator('html')
+                last_heading = reader.get_by_role('heading', name='Chapter two', exact=True)
+                links = self.page.locator('#toc-list [role="link"]')
+                last_link = links.last
+                self.page.locator('#history').click()
+                last_link.wait_for(state='visible')
+                scroller.evaluate('node => node.scrollTo(0, node.scrollHeight)')
+                top = last_heading.evaluate('node => node.getBoundingClientRect().top')
+                view_top = scroller.evaluate('node => node.getBoundingClientRect().top') if extension == 'md' else 0
+                self.assertGreater(top, view_top + 8, 'final heading cannot reach the normal top marker')
+                self.assertLess(top, view_top + scroller.evaluate('node => node.clientHeight'))
+                self.page.wait_for_function('()=>document.querySelector("#toc-list [aria-current=location]")?.textContent==="Chapter two"')
+                self.assertEqual(self.page.locator('#toc-list [aria-current="location"]').count(), 1)
+                scroller.evaluate('node => node.scrollBy(0, -120)')
+                self.page.wait_for_function('()=>document.querySelector("#toc-list [aria-current=location]")?.textContent==="Chapter one"')
+
     def test_no_directory_tabs_reach_bookmarks_and_history_with_keyboard(self):
         self.open_book('txt', 'Long plain text\n' * 2000)
         self.open_with_keyboard()

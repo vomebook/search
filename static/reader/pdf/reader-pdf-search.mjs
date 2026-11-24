@@ -102,9 +102,13 @@ export function createReaderPdfSearch(readerContext) {
     return readerContext.pdfBookSearchClient;
   }
 
+  function pdfBookPrefetchAvailable() {
+    return !readerContext.pdfBookSearchPrefetchPromise && !!readerContext.ocrManifestUrl &&
+      ["pdf", "pdf-pages"].includes(/** @type {string} */ (readerContext.capability.mode)) && !navigator.connection?.saveData;
+  }
+
   async function prefetchPdfBookSearch() {
-    if (readerContext.readerAbortController.signal.aborted || readerContext.pdfBookSearchPrefetchPromise || !readerContext.ocrManifestUrl ||
-        !["pdf", "pdf-pages"].includes(/** @type {string} */ (readerContext.capability.mode)) || navigator.connection?.saveData) return;
+    if (readerContext.readerAbortController.signal.aborted || !pdfBookPrefetchAvailable()) return;
     const connection = navigator.connection;
     if (["slow-2g", "2g"].includes(/** @type {string} */ (connection?.effectiveType))) return;
     readerContext.pdfBookSearchPrefetchPromise = (async () => {
@@ -117,8 +121,7 @@ export function createReaderPdfSearch(readerContext) {
   }
 
   function schedulePdfBookSearchPrefetch() {
-    if (readerContext.pdfBookSearchPrefetchTimer || readerContext.pdfBookSearchPrefetchPromise || !readerContext.ocrManifestUrl ||
-        !["pdf", "pdf-pages"].includes(/** @type {string} */ (readerContext.capability.mode)) || navigator.connection?.saveData) return;
+    if (readerContext.pdfBookSearchPrefetchTimer || !pdfBookPrefetchAvailable()) return;
     readerContext.pdfBookSearchPrefetchTimer = setTimeout(() => {
       readerContext.pdfBookSearchPrefetchTimer = 0;
       const idle = window.requestIdleCallback || ((callback) => setTimeout(callback, 0));

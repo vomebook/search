@@ -29,6 +29,8 @@ body :is(article,aside,blockquote,dd,div,dl,dt,figure,figcaption,footer,header,h
 body :where(:not(pre,pre *,code,code *,.reader-ebook-table-scroll *)){
   text-wrap-mode:wrap!important;overflow-wrap:anywhere!important;
 }
+/* Word fixed tab stops can place dates/signatures beyond a phone column. */
+@media(max-width:600px){body p.MsoNormal[data-reader-word-inset]{text-indent:clamp(0px, var(--reader-word-indent), 70%)!important}}
 @supports not (text-wrap-mode:wrap){
   body :where(:not(pre,pre *,code,code *,.reader-ebook-table-scroll *)){white-space:normal!important}
 }
@@ -43,6 +45,18 @@ body a[href]{color:var(--link)}
 body a:not([href]){color:inherit}
 @media (prefers-contrast:more){:root{--paper:#fff;--ink:#111}:root[data-reader-theme="dark"]{--paper:#101214;--ink:#fff}}
 @media (forced-colors:active){html,body{background:Canvas!important;color:CanvasText!important}body a[href]{color:LinkText!important}}
+</style>`;
+
+// Layout for sanitized content separated from its archived website shell.
+export const CLEAN_WEB_HTML_STYLE = `<style>
+/* Leave room for the Reader's fixed bookmark ribbon on initial open. */
+.reader-clean-web{padding-block-start:2.25rem}
+.reader-clean-web>h1{font-size:clamp(1.4rem,4vw,2rem);line-height:1.38;margin:.5rem 0 .75rem}
+.reader-clean-web-byline{font-size:.9rem;margin:.75rem 0 1.65rem;opacity:.85}
+.reader-clean-web figure{margin:1.2rem 0;text-align:center}
+.reader-clean-web figcaption{font-size:.9rem;line-height:1.55;margin-top:.35rem}
+.reader-clean-web>details{border-block-start:1px solid currentColor;margin:1rem 0;padding-block:.6rem}
+.reader-clean-web summary{cursor:pointer;font-weight:600;line-height:1.5}
 </style>`;
 
 // The recognized article's fixed-width archive shell is not a data table.

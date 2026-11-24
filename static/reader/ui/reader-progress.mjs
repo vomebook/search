@@ -1,3 +1,12 @@
+/** @param {HTMLIFrameElement | null | undefined} frame */
+export function captureHtmlDisclosure(frame) {
+  const thread = frame?.contentDocument?.querySelector("article[data-reader-reviewed-thread]");
+  if (!thread) return {};
+  return { htmlReplySource: thread.getAttribute("data-reader-reviewed-thread") || "",
+    htmlOpenReplies: Array.from(thread.querySelectorAll("details.reader-clean-web-reply"),
+      (reply, i) => reply.hasAttribute("open") ? i + 1 : 0).filter(Boolean).slice(0, 256) };
+}
+
 /** @param {number | undefined} index @param {number} count @returns {index is number} */
 export function chapterIndexInRange(index, count) {
   return index !== undefined && Number.isInteger(index) && index >= 1 && index <= count;
@@ -36,6 +45,9 @@ export function createReaderProgress(readerContext) {
     );
   }
 
+  /** @type {ReadonlySet<string | null | undefined>} */
+  const mediaModes = new Set(["audio", "video"]);
+
   /** @param {Event} [event] */
   function captureProgressEntry(event) {
     if (
@@ -57,21 +69,24 @@ export function createReaderProgress(readerContext) {
       // and ignore collapsed or offscreen shells if layout is already gone.
       if (hiding && !(performance.now() < readerContext.pageNavigationLockUntil)) {
         const marked = readerContext.pageAtMarker();
-        const next = Number(marked?.dataset.page);
-        if (marked && next > 0 && next <= readerContext.documentState.pageCount) {
-          const rect = marked.getBoundingClientRect(), view = readerContext.viewport.getBoundingClientRect();
-          if (rect.height > 0 && view.height > 0 && rect.bottom > view.top && rect.top < view.bottom) {
-            page = next;
-            shell = marked;
+        if (marked) {
+          const next = Number(marked.dataset.page);
+          if (next > 0 && next <= readerContext.documentState.pageCount) {
+            const rect = marked.getBoundingClientRect(), view = readerContext.viewport.getBoundingClientRect();
+            if (rect.height > 0 && view.height > 0 && rect.bottom > view.top && rect.top < view.bottom) {
+              page = next;
+              shell = marked;
+            }
           }
         }
       }
       shell ??= readerContext.content.querySelector(`.reader-page[data-page="${page}"]`);
     }
     const pageOffset = shell ? Math.max(0, readerContext.viewport.scrollTop - readerContext.readerPageScrollTop(shell)) : 0;
-    const htmlScrollTop = readerContext.htmlFrame && readerContext.htmlFrame.contentWindow ? readerContext.htmlFrame.contentWindow.scrollY : 0;
+    const htmlScrollTop = readerContext.htmlFrame?.contentWindow?.scrollY ?? 0;
     const readerUrl = readerContext.currentReaderUrl();
     const chapterPosition = readerContext.captureChapterPosition();
+    const mediaTime = readerContext.mediaElement?.currentTime;
     return {
       url: readerContext.sourceUrl,
       title: readerContext.documentState.title,
@@ -80,12 +95,12 @@ export function createReaderProgress(readerContext) {
       page,
       pageCount: readerContext.documentState.pageCount,
       pageOffset,
-      mediaTime:
-        readerContext.mediaElement && Number.isFinite(readerContext.mediaElement.currentTime) ? readerContext.mediaElement.currentTime : 0,
+      mediaTime: Number.isFinite(mediaTime) ? /** @type {number} */ (mediaTime) : 0,
       scrollTop: readerContext.viewport.scrollTop,
       htmlScrollTop,
+      ...captureHtmlDisclosure(readerContext.htmlFrame),
       zoom: Math.round(readerContext.documentState.zoom * 100),
-      ...(chapterPosition || {})
+      ...chapterPosition
     };
   }
 
@@ -117,22 +132,24 @@ export function createReaderProgress(readerContext) {
     return readerContext.progressSaveChain;
   }
 
+  function hasStandaloneProgress() {
+    return !readerContext.navigationState.tocEntries.length && !readerContext.mediaElement;
+  }
+
   function placeReadingProgress() {
     const panel = /** @type {HTMLElement} */ (document.querySelector("#history-panel")),
       tocPanel = /** @type {HTMLElement} */ (document.querySelector("#toc-panel")),
       tocList = tocPanel.querySelector(".panel-list"),
-      noToc = readerContext.readerContentReady && !readerContext.navigationState.tocEntries.length && !readerContext.mediaElement;
+      noToc = readerContext.readerContentReady && hasStandaloneProgress();
     if (readerContext.progressTools.classList.contains("reader-no-toc") !== noToc)
       readerContext.progressTools.classList.toggle("reader-no-toc", noToc);
     const title = /** @type {HTMLElement} */ (tocPanel.querySelector(".panel-view-header strong")),
       label = noToc ? "阅读状态" : "目录";
     if (title.textContent !== label) title.textContent = label;
-    if (
-      noToc &&
-      (readerContext.progressTools.parentElement !== tocPanel || readerContext.progressTools.nextElementSibling !== tocList)
-    )
-      tocPanel.insertBefore(readerContext.progressTools, tocList);
-    else if (!noToc && panel.lastElementChild !== readerContext.progressTools) panel.appendChild(readerContext.progressTools);
+    if (noToc) {
+      if (readerContext.progressTools.parentElement !== tocPanel || readerContext.progressTools.nextElementSibling !== tocList)
+        tocPanel.insertBefore(readerContext.progressTools, tocList);
+    } else if (panel.lastElementChild !== readerContext.progressTools) panel.appendChild(readerContext.progressTools);
   }
 
   function currentReaderUrl() {
@@ -287,11 +304,10 @@ export function createReaderProgress(readerContext) {
   async function restoreFormat(mode, entry, generation = readerContext.beginReaderNavigation()) {
     try {
       if (!entry || !readerContext.isReaderGenerationCurrent("navigation", generation)) return false;
-      if (mode === "epub-chapters") {
-        if (Number.isInteger(entry.chapterIndex)) {
-          if (!(await readerContext.restoreChapterPosition(entry, generation))) return false;
-        } else if (!(await readerContext.restoreProgressState(entry, generation))) return false;
-      } else if (readerContext.documentState.pageCount && entry.page) {
+      const chapters = mode === "epub-chapters";
+      if (chapters && Number.isInteger(entry.chapterIndex)) {
+        if (!(await readerContext.restoreChapterPosition(entry, generation))) return false;
+      } else if (!chapters && readerContext.documentState.pageCount && entry.page) {
         if (
           !(await readerContext.goToPage(entry.page, generation)) ||
           !readerContext.isReaderGenerationCurrent("navigation", generation)
@@ -302,17 +318,21 @@ export function createReaderProgress(readerContext) {
         );
         if (shell) {
           const fraction = entry.pageOffsetFraction;
-          const pdf = mode === "pdf" || mode === "pdf-pages";
+          const pdf = ["pdf", "pdf-pages"].includes(mode);
           const height = pdf ? shell.getBoundingClientRect().height : 0;
-          const offset = pdf && typeof fraction === "number" && Number.isFinite(fraction) && fraction >= 0 && fraction <= 1
+          // The inclusive range already excludes NaN and infinities.
+          const offset = pdf && typeof fraction === "number" && fraction >= 0 && fraction <= 1
             ? fraction * height : entry.pageOffset;
-          if (typeof offset === "number" && Number.isFinite(offset)) {
+          if (Number.isFinite(offset)) {
             // Older bookmarks lack a capture scale. Keep their pixel offset
             // when possible, but never let it carry the marker into another page.
-            const marker = pdf ? readerContext.bookmarkRibbon.getBoundingClientRect().bottom -
-              readerContext.viewport.getBoundingClientRect().top : 0;
-            const withinPage = pdf ? Math.min(Math.max(0, offset), Math.max(0, height - Math.max(0, marker) - 2)) : offset;
-            readerContext.viewport.scrollTop = readerContext.readerPageScrollTop(shell) + withinPage;
+            let pixels = /** @type {number} */ (offset);
+            if (pdf) {
+              const marker = readerContext.bookmarkRibbon.getBoundingClientRect().bottom -
+                readerContext.viewport.getBoundingClientRect().top;
+              pixels = Math.min(Math.max(0, pixels), Math.max(0, height - Math.max(0, marker) - 2));
+            }
+            readerContext.viewport.scrollTop = readerContext.readerPageScrollTop(shell) + pixels;
           }
         }
         readerContext.updateProgressTools();
@@ -364,7 +384,7 @@ export function createReaderProgress(readerContext) {
 
   /** @param {number} [percent] */
   function updateReadingProgressSummary(percent) {
-    const noToc = !readerContext.navigationState.tocEntries.length && !readerContext.mediaElement;
+    const noToc = hasStandaloneProgress();
     if (readerContext.readingProgressSummary.hidden !== !noToc) readerContext.readingProgressSummary.hidden = !noToc;
     if (noToc) {
       const value = /** @type {HTMLElement} */ (readerContext.readingProgressSummary.querySelector(".reader-progress-summary-value")),
@@ -376,7 +396,7 @@ export function createReaderProgress(readerContext) {
   function updateProgressTools() {
     const mode = readerContext.capability.mode;
     const disabled = (mode === "epub-chapters" && !readerContext.chapterManifestLoader) ||
-      ((mode === "audio" || mode === "video" || !!readerContext.mediaElement) && !mediaSeekDuration());
+      ((mediaModes.has(mode) || !!readerContext.mediaElement) && !mediaSeekDuration());
     if (readerContext.progressRange.disabled !== disabled) readerContext.progressRange.disabled = disabled;
     if (readerContext.progressSeeking && !disabled) return;
     const percent = readerContext.readerProgressPercent(),
@@ -404,7 +424,7 @@ export function createReaderProgress(readerContext) {
         : readerContext.mediaElement
           ? { mediaTime: readerContext.mediaElement.currentTime }
           : readerContext.htmlFrame && readerContext.htmlFrame.contentWindow
-            ? { htmlScrollTop: readerContext.htmlFrame.contentWindow.scrollY }
+            ? { htmlScrollTop: readerContext.htmlFrame.contentWindow.scrollY, ...captureHtmlDisclosure(readerContext.htmlFrame) }
             : { scrollTop: readerContext.viewport.scrollTop };
   }
 
@@ -437,9 +457,19 @@ export function createReaderProgress(readerContext) {
           }));
         if (!readerContext.isReaderGenerationCurrent("navigation", generation)) return false;
         media.currentTime = /** @type {number} */ (state.mediaTime);
-      } else if (readerContext.htmlFrame && readerContext.htmlFrame.contentWindow && Number.isFinite(state.htmlScrollTop))
-        readerContext.htmlFrame.contentWindow.scrollTo(0, /** @type {number} */ (state.htmlScrollTop));
-      else if (Number.isFinite(state.scrollTop)) {
+      } else if (readerContext.htmlFrame?.contentWindow && Number.isFinite(state.htmlScrollTop)) {
+        const { htmlFrame } = readerContext;
+        const thread = htmlFrame.contentDocument?.querySelector("article[data-reader-reviewed-thread]");
+        if (thread && thread.getAttribute("data-reader-reviewed-thread") === state.htmlReplySource &&
+            Array.isArray(state.htmlOpenReplies) && state.htmlOpenReplies.length <= 256) {
+          // Membership uses strict identity against positive integer indices.
+          // Invalid stored values cannot match and need not be copied first.
+          const open = new Set(state.htmlOpenReplies);
+          thread.querySelectorAll("details.reader-clean-web-reply")
+            .forEach((reply, i) => reply.toggleAttribute("open", open.has(i + 1)));
+        }
+        htmlFrame.contentWindow?.scrollTo(0, /** @type {number} */ (state.htmlScrollTop));
+      } else if (Number.isFinite(state.scrollTop)) {
         if (readerContext.capability.mode === "text") {
           let measured = 0, batch = 0, started = performance.now();
           for (const block of /** @type {NodeListOf<HTMLElement>} */ (readerContext.content.querySelectorAll(".reader-text-block"))) {
@@ -477,10 +507,9 @@ export function createReaderProgress(readerContext) {
    * @param {boolean} [preserve] */
   function seekProgress(value, preserve = false) {
     const numeric = Number(value), media = readerContext.mediaElement, duration = mediaSeekDuration();
-    // Unavailable metadata must not supersede the pending media restore or
-    // translate a media seek into a viewport scroll and history write.
-    if (!Number.isFinite(numeric) || (media && !duration) ||
-        (!media && (readerContext.capability.mode === "audio" || readerContext.capability.mode === "video"))) return false;
+    // Duration can only be positive when there is a media element. A pending
+    // media seek must not turn into a viewport scroll or a history write.
+    if (!Number.isFinite(numeric) || ((media || mediaModes.has(readerContext.capability.mode)) && !duration)) return false;
     const percent = Math.max(0, Math.min(100, numeric));
     let target;
     if (!media && readerContext.capability.mode === "epub-chapters") {
@@ -534,10 +563,13 @@ export function createReaderProgress(readerContext) {
 
   /** @param {unknown} entry */
   function isChapterDestination(entry) {
-    if (!entry || typeof entry !== "object" || ("group" in entry && entry.group)) return false;
+    if (!entry || typeof entry !== "object") return false;
+    const destination = /** @type {{group?: unknown, page?: number}} */ (entry);
+    if (destination.group) return false;
     // Native PDF and DjVu share this mode. Other TOCs need not have page metadata.
-    return readerContext.capability.mode !== "pdf" ||
-      ("page" in entry && typeof entry.page === "number" && Number.isSafeInteger(entry.page) && entry.page > 0);
+    if (readerContext.capability.mode !== "pdf") return true;
+    const page = /** @type {number} */ (destination.page);
+    return Number.isSafeInteger(page) && page > 0;
   }
 
   /** @param {number} direction */

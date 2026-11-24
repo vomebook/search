@@ -721,24 +721,23 @@ export function createReaderBindings(readerContext) {
       const runs = [...readerContext.content.querySelectorAll(".reader-pdf-text-run")]
         .filter((run) => run.firstChild?.nodeType === Node.TEXT_NODE);
       if (!runs.length) return;
-      const anchorRun = selection.anchorNode?.parentElement?.closest(".reader-pdf-text-run");
-      const focusRun = selection.focusNode?.parentElement?.closest(".reader-pdf-text-run");
-      if (!anchorRun && !focusRun) return;
-      if (focusRun) return;
+      const anchorNode = selection.anchorNode, focusNode = selection.focusNode;
+      const anchorRun = anchorNode.parentElement?.closest(".reader-pdf-text-run");
+      const focusRun = focusNode.parentElement?.closest(".reader-pdf-text-run");
+      if (!anchorRun || focusRun) return;
       // Separators (line ends, inter-block gaps) are selectable text nodes
       // directly inside the layer; a focus there is already valid text.
-      const focusElement = selection.focusNode?.nodeType === Node.ELEMENT_NODE
-        ? /** @type {Element} */ (selection.focusNode) : selection.focusNode?.parentElement;
+      const focusElement = focusNode.nodeType === Node.ELEMENT_NODE
+        ? /** @type {Element} */ (focusNode) : focusNode.parentElement;
       if (focusElement?.closest(".reader-pdf-text")) return;
-      const beforeAnchor = selection.focusNode && selection.anchorNode &&
-        (selection.focusNode === selection.anchorNode
-          ? selection.focusOffset < selection.anchorOffset
-          : Boolean(selection.focusNode.compareDocumentPosition(selection.anchorNode) & Node.DOCUMENT_POSITION_FOLLOWING));
+      const beforeAnchor = focusNode === anchorNode
+        ? selection.focusOffset < selection.anchorOffset
+        : Boolean(focusNode.compareDocumentPosition(anchorNode) & Node.DOCUMENT_POSITION_FOLLOWING);
       // Clamp to the run nearest the focus in document order. Choosing the
       // first/last run of the whole book jumps to a distant retained page
       // when the focus lands on a page whose text layer is not loaded yet.
       const focus = document.createRange();
-      focus.setStart(selection.focusNode, selection.focusOffset);
+      focus.setStart(focusNode, selection.focusOffset);
       let low = 0, high = runs.length;
       while (low < high) {
         const middle = (low + high) >> 1;

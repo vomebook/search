@@ -7,6 +7,8 @@
     /** @type {number | null} */
     let timer = null;
     let revision = 0, timerRevision = 0, disposed = false, loading = false, reading = false;
+    // dispose changes both revisions, so in-flight operations can use the same
+    // equality checks for disposal, replacement, and cancellation.
     function readView() {
       reading = true;
       try { return deps.readView(); } finally { reading = false; }
@@ -31,20 +33,21 @@
       recovery = { failures: 0, retryAt: 0 };
       updateStatus();
     }
+    const cannotLoad = () => disposed || loading || reading;
     /** @param {boolean} [bottomOnly] @param {boolean} [retry] */
     function maybeLoad(bottomOnly = false, retry = false) {
-      if (disposed || loading || reading) return;
+      if (cannotLoad()) return;
       const token = revision;
       const before = readView();
-      if (disposed || token !== revision || before.suspended) return;
+      if (token !== revision || before.suspended) return;
       // Expiring a request may synchronously finish, reset, or reenter paging.
       loading = true;
       try {
         deps.expireRequests();
-        if (disposed || token !== revision) return;
+        if (token !== revision) return;
         const view = readView();
         const now = clock.now();
-        if (disposed || token !== revision || view.generation !== before.generation) return;
+        if (token !== revision || view.generation !== before.generation) return;
         if (policy.shouldLoad(view, recovery, now, bottomOnly, retry)) {
           deps.append(view.loadedPage + 1, view.scrollTop);
         }
@@ -55,16 +58,16 @@
       if (disposed || reading) return;
       const operation = revision, previousTimer = timerRevision;
       const view = readView();
-      if (disposed || operation !== revision || previousTimer !== timerRevision ||
+      if (operation !== revision || previousTimer !== timerRevision ||
           (readyPage && readyPage !== view.loadedPage + 1)) return;
       cancelTimer();
       const token = timerRevision;
       timer = clock.setTimeout(() => {
         // Cancelled callbacks must not clear a replacement timer.
-        if (disposed || token !== timerRevision) return;
+        if (token !== timerRevision) return;
         timer = null;
         const current = readView();
-        if (disposed || token !== timerRevision || current.generation !== view.generation || !policy.acceptsReadyPage(current, readyPage)) return;
+        if (token !== timerRevision || current.generation !== view.generation || !policy.acceptsReadyPage(current, readyPage)) return;
         maybeLoad(!readyPage, !current.loadedPage && recovery.failures > 0);
       }, Math.max(delay, recovery.retryAt - clock.now()));
     }
@@ -73,23 +76,23 @@
       if (disposed || reading) return;
       const token = ++revision;
       const generation = readView().generation;
-      if (disposed || token !== revision) return;
+      if (token !== revision) return;
       cancelTimer();
       recovery = policy.afterAttempt(recovery.failures, success, terminal, clock.now());
       updateStatus();
       // Presentation may synchronously reset, replace the search, or dispose.
-      if (disposed || token !== revision) return;
+      if (token !== revision) return;
       const current = readView();
-      if (!disposed && token === revision && generation === current.generation && recovery.failures < 2) schedule();
+      if (token === revision && generation === current.generation && recovery.failures < 2) schedule();
     }
     function retryBottom() {
-      if (disposed || loading || reading) return;
+      if (cannotLoad()) return;
       const token = revision, before = readView();
-      if (disposed || token !== revision || !policy.isAtBottom(before)) return;
+      if (token !== revision || !policy.isAtBottom(before)) return;
       loading = true;
       try { deps.expireRequests(); } finally { loading = false; }
       const current = readView();
-      if (disposed || token !== revision || before.generation !== current.generation) return;
+      if (token !== revision || before.generation !== current.generation) return;
       if (!current.loading && clock.now() >= recovery.retryAt && recovery.failures >= 2) {
         reset();
         const after = readView();
@@ -98,9 +101,9 @@
       schedule();
     }
     function retry() {
-      if (disposed || loading || reading) return;
+      if (cannotLoad()) return;
       const token = revision, before = readView();
-      if (disposed || token !== revision) return;
+      if (token !== revision) return;
       reset();
       const current = readView();
       if (!disposed && revision === token + 1 && before.generation === current.generation) maybeLoad(false, true);
