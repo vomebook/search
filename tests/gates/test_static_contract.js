@@ -761,24 +761,16 @@ test("deployment workflow grants required Pages permissions", () => {
 });
 test("Pages waits for the exact uploaded artifact before attempting deployment", () => {
   const upload = workflow.indexOf('name: Upload artifact');
-  const wait = workflow.indexOf('name: Wait for the uploaded Pages artifact');
-  const deploy = workflow.indexOf('name: Deploy to GitHub Pages');
-  assert.ok(0 < upload && upload < wait && wait < deploy);
-  assert.match(workflow.slice(upload, wait), /id: upload/);
   const [prep, promotion] = workflow.split("\n  deploy:\n");
-  assert.match(prep.slice(wait), /UPLOADED_ARTIFACT_ID: \$\{\{ steps\.upload\.outputs\.artifact_id \}\}/);
-  assert.match(prep.slice(wait), /run: python3 -B scripts\/ci\/wait_pages_artifact\.py/);
-  const download = prep.indexOf('name: Download exact uploaded Pages artifact', wait);
+  const download = prep.indexOf('name: Download exact uploaded Pages artifact');
   const verify = prep.indexOf('name: Verify uploaded candidate fingerprint', download);
-  assert.ok(wait < download && download < verify);
+  assert.ok(0 < upload && upload < download && download < verify);
+  assert.match(prep.slice(upload, download), /id: upload/);
   const downloadInputs = prep.slice(download, verify);
-  assert.match(downloadInputs, /uses: actions\/download-artifact@v8/);
-  assert.match(downloadInputs, /github-token: \$\{\{ github\.token \}\}/);
-  assert.match(downloadInputs, /repository: \$\{\{ github\.repository \}\}/);
-  assert.match(downloadInputs, /run-id: \$\{\{ github\.run_id \}\}/);
-  assert.match(downloadInputs, /artifact-ids: \$\{\{ steps\.upload\.outputs\.artifact_id \}\}/);
-  assert.match(downloadInputs, /digest-mismatch: error/);
-  assert.match(prep.slice(verify), /pages_artifact_proof\.py verify-upload/);
+  assert.match(downloadInputs, /GH_TOKEN: \$\{\{ github\.token \}\}/);
+  assert.match(downloadInputs, /UPLOADED_ARTIFACT_ID: \$\{\{ steps\.upload\.outputs\.artifact_id \}\}/);
+  assert.match(downloadInputs, /run: python3 -B scripts\/ci\/wait_pages_artifact\.py "\$RUNNER_TEMP\/uploaded-pages\.tar"/);
+  assert.match(prep.slice(verify), /pages_artifact_proof\.py verify-upload "\$RUNNER_TEMP\/uploaded-pages\.tar"/);
   assert.match(promotion, /UPLOADED_ARTIFACT_ID: \$\{\{ needs\.prepare\.outputs\.artifact_id \}\}\s*\n\s*run: python3 -B scripts\/ci\/wait_pages_artifact\.py/);
   assert.equal([...workflow.matchAll(/(?:artifact_)?name: github-pages-\$\{\{ github\.run_id \}\}-\$\{\{ github\.run_attempt \}\}/g)].length, 2);
   assert.match(workflow, /^permissions:\n  contents: read\n  actions: read\n  deployments: read\n  pages: write$/m);
@@ -793,7 +785,6 @@ test("deployment workflow uses official checkout configure upload and deploy act
     "actions/cache@v6",
     "actions/cache@v6",
     "actions/upload-pages-artifact@v5",
-    "actions/download-artifact@v8",
     "actions/checkout@v7",
     "actions/setup-node@v7",
     "actions/configure-pages@v6",

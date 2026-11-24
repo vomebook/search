@@ -1049,7 +1049,7 @@ class ReaderRefactorTest(unittest.TestCase):
         def hold_images(route):
             response = route.fetch()
             script = response.text()
-            anchor = 'async function waitForSpreadsheetImages(frame) {'
+            anchor = 'async function waitForSpreadsheetImages(doc) {'
             self.assertEqual(script.count(anchor), 1)
             route.fulfill(response=response, body=script.replace(anchor, anchor+'''
               await new Promise(resolve=>{window.__releaseSheetImages=resolve;});
@@ -3947,6 +3947,103 @@ class ReaderRefactorTest(unittest.TestCase):
         finally:
             self.page.close()
             self.page = original
+
+    def test_reviewed_short_archive_reflows_only_its_single_column_tables(self):
+        html = ('<!doctype html><meta charset="utf-8"><h2>归档标题</h2>'
+                '<div data-reader-table-scroll><table width="530"><tr><td><p>来源与日期</p></td></tr>'
+                '</table></div><div data-reader-table-scroll><table width="530"><tr><td>'
+                '<a href="#kept">原有链接</a><p id="kept">备份出处</p></td></tr></table></div>')
+        html += ' ' * (2215 - len(html.encode('utf-8')))
+        sha = '394cd4d8287b45c3a6d77c418af749b02654241a18d9977f5d34ef2930764b39'
+        self.allow_clean_reading_fixture(html, sha)
+        self.page.set_viewport_size({'width': 390, 'height': 844})
+        for i, payload in enumerate((html, html.replace('归档标题', '归档副题'))):
+            with self.subTest(archive=i):
+                self.assertEqual(len(payload.encode('utf-8')), 2215)
+                self.serve(payload, 'text/html')
+                self.open(self.reader_url('html', name=f'reviewed-layout-{i}'))
+                frame = self.page.frame_locator('.html-frame')
+                tables = frame.locator('div[data-reader-table-scroll] table')
+                self.assertEqual(tables.count(), 2)
+                widths = tables.evaluate_all('ts => ts.map(t => t.getBoundingClientRect().width)')
+                if i == 0:
+                    self.assertTrue(all(280 < width < 390 for width in widths), widths)
+                    self.page.set_viewport_size({'width': 1280, 'height': 900})
+                    self.assertEqual(tables.evaluate_all('ts => ts.map(t => t.getBoundingClientRect().width)'), [530, 530])
+                    self.page.set_viewport_size({'width': 390, 'height': 844})
+                else:
+                    self.assertEqual(widths, [530, 530])
+                self.assertEqual(frame.locator('#kept').text_content(), '备份出处')
+                self.assertEqual(frame.locator('a[href="#kept"]').count(), 1)
+        self.assertEqual(self.page.locator('#zoom').input_value(), '100')
+
+    def test_exact_tieba_reading_keeps_posts_media_and_archive(self):
+        pixel = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jFuoAAAAASUVORK5CYII='
+        posts = []
+        for i in range(18):
+            images = f'<img class="BDE_Image" src="{pixel}">' * (2 if i < 11 else 1)
+            gaps = '<img class="BDE_Smiley">' * (2 if i < 2 else 1)
+            reply = ('<ul><li class="j_lzl_s_p"><div class="lzl_cnt"><a class="at j_user_card">副作者</a>'
+                     '<span class="lzl_content_main">作者回复<br></span><span class="lzl_time">回复时间</span></div></li></ul>') if i < 5 else ''
+            posts.append(f'<div class="l_post_bright j_l_post"><a class="p_author_name">主作者{i}</a>'
+                         f'<div class="d_post_content_main"><div class="p_content"><div class="d_post_content j_d_post_content" '
+                         f'id="post_content_{i}">正文{i}<br>{images}{gaps}</div></div></div>'
+                         '<div class="post-tail-wrap"><span class="tail-info">'
+                         f'{i+1}楼</span><span class="tail-info">2020-01-01 12:00</span></div>{reply}</div>')
+        ad = ('<div class="l_post_bright n5c3d35bb7"><a class="p_author_name">百度传课</a>'
+              '<div class="p_content_nameplate"><div class="d_post_content">推广位</div></div></div>')
+        html = ('<!doctype html><meta charset="utf-8"><div>旧站脚本残留</div><h3 class="core_title_txt">存档标题</h3>'
+                '<div id="j_p_postlist">' + ad + ''.join(posts) + '</div>')
+        self.page.set_viewport_size({'width': 390, 'height': 844})
+        original = '41114af695f939fe98eaa18e09db29cb61fc55eb816e0e688515781a903c55be'
+        def pin(route):
+            response = route.fetch()
+            script = response.text()
+            self.assertEqual(script.count(original), 1)
+            self.assertEqual(script.count('10_296_371'), 1)
+            route.fulfill(response=response, body=script.replace(original, hashlib.sha256(html.encode()).hexdigest())
+                          .replace('10_296_371', str(len(html.encode()))))
+        self.page.route('**/formats/reader-html-format.mjs*', pin)
+        self.serve(html, 'text/html')
+        url = self.reader_url('html', name='reviewed-tieba')
+        self.open(url)
+        frame = self.page.frame_locator('.html-frame')
+        clean = frame.locator('article.reader-tieba-view')
+        self.assertEqual(clean.locator('.reader-tieba-post').count(), 18)
+        self.assertEqual(clean.locator('.reader-tieba-reply').count(), 5)
+        self.assertEqual(clean.locator('img[src]').count(), 29)
+        self.assertEqual(clean.locator('.reader-tieba-missing-emoticon').count(), 20)
+        self.assertEqual(clean.locator('.j_d_post_content').evaluate_all('nodes => nodes.map(n => n.id)'),
+                         [f'post_content_{i}' for i in range(18)])
+        self.assertEqual(frame.get_by_text('旧站脚本残留', exact=True).count(), 0)
+        self.assertTrue(frame.locator('#post_content_17').text_content().startswith('正文17'))
+        self.assertEqual(frame.locator('body').evaluate('n=>n.ownerDocument.documentElement.scrollWidth'),
+                         frame.locator('body').evaluate('n=>n.ownerDocument.documentElement.clientWidth'))
+        panel = self.page.locator('#history-panel')
+        if not panel.evaluate('p => p.classList.contains("is-open")'):
+            self.page.locator('#history').click()
+        archive = self.page.get_by_role('link', name='存档视图', exact=True)
+        archive.wait_for(state='visible')
+        self.assertEqual(urllib.parse.parse_qs(urllib.parse.urlsplit(archive.get_attribute('href')).query)['view'], ['archive'])
+        archive.press('Enter')
+        frame.get_by_text('旧站脚本残留', exact=True).wait_for()
+        self.assertEqual(clean.count(), 0)
+        self.page.go_back(wait_until='commit')
+        clean.wait_for()
+        self.page.go_forward(wait_until='commit')
+        frame.get_by_text('旧站脚本残留', exact=True).wait_for()
+        if not panel.evaluate('p => p.classList.contains("is-open")'):
+            self.page.locator('#history').click()
+        posts_link = self.page.get_by_role('link', name='纯帖子', exact=True)
+        posts_link.wait_for(state='visible')
+        posts_link.press('Enter')
+        clean.wait_for()
+        self.assertEqual(urllib.parse.parse_qs(urllib.parse.urlsplit(self.page.url).query).get('view'), None)
+        self.serve(html.replace('旧站脚本残留', '旧站模板残留'), 'text/html')
+        self.open(self.reader_url('html', name='unreviewed-tieba'))
+        self.assertEqual(clean.count(), 0)
+        self.assertEqual(frame.get_by_text('旧站模板残留', exact=True).count(), 1)
+        self.assertEqual(self.page.locator('#history-panel > header a.text-action').count(), 0)
 
     def test_reviewed_phpwind_stamp_requires_robust_extraction_and_exact_bytes(self):
         def post(title, text, tail=''):

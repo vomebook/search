@@ -1,6 +1,79 @@
 import { bindReaderScrollIntent } from "../core/reader-bindings.mjs";
 import { CLEAN_WEB_HTML_STYLE, HTML_PROSE_STYLE, LEGACY_ARTICLE_HTML_STYLE, PHPWIND_HTML_STYLE, wrapEbookTables } from "../ui/reader-document-styles.mjs";
 
+// Exact old Reader bytes, not a file title or archive template class.
+const reviewedTiebaSha256 = "41114af695f939fe98eaa18e09db29cb61fc55eb816e0e688515781a903c55be";
+const reviewedArchiveSizes = new Set([2_215, 10_296_371]);
+const TIEBA_READING_STYLE = `<style>
+.reader-tieba-post{margin:1.25rem 0;padding-block-start:.85rem;border-block-start:1px solid currentColor}
+.reader-tieba-post>h2{font-size:1rem;margin:.25rem 0 .75rem}
+.reader-tieba-reply{font-size:.9rem;margin:.8rem 0;padding-inline-start:1rem;border-inline-start:2px solid currentColor}
+.reader-tieba-note,.reader-tieba-missing-emoticon{font-size:.875em}
+</style>`;
+
+/** @param {Element} root @param {string} selector */
+const textFrom = (root, selector) => root.querySelector(selector)?.textContent.trim();
+
+/** @param {Document} doc @param {string} tag @param {string} label */
+function labeledElement(doc, tag, label) {
+  const node = doc.createElement(tag);
+  node.textContent = label;
+  return node;
+}
+
+/** @param {Element} reply @param {Document} doc */
+function tiebaReplySection(reply, doc) {
+  const content = reply.querySelector(".lzl_content_main");
+  const author = textFrom(reply, ".lzl_cnt > a.at.j_user_card");
+  const stamp = textFrom(reply, ".lzl_time");
+  if (!content || !author || !stamp) return null;
+  const nested = doc.createElement("section");
+  nested.className = "reader-tieba-reply";
+  nested.append(labeledElement(doc, "p", `${author} · ${stamp}`), content.cloneNode(true));
+  return nested;
+}
+
+/** @param {Element} post @param {Document} doc */
+function tiebaPostSection(post, doc) {
+  const body = post.querySelector(":scope > .d_post_content_main > .p_content > .j_d_post_content");
+  const author = textFrom(post, ".p_author_name");
+  const tail = [...post.querySelectorAll(".post-tail-wrap > span.tail-info")].map(node => node.textContent.trim());
+  const floor = tail.find(label => /^\d+楼$/.test(label));
+  const time = tail.find(label => /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/.test(label));
+  if (!body || !/^post_content_\d+$/.test(body.id) || !author || !floor || !time) return null;
+  const section = doc.createElement("section");
+  section.className = "reader-tieba-post";
+  section.append(labeledElement(doc, "h2", `${floor} · ${author} · ${time}`), body.cloneNode(true));
+  const replies = [...post.querySelectorAll(".j_lzl_s_p")].map(reply => tiebaReplySection(reply, doc));
+  if (replies.some(reply => reply === null)) return null;
+  section.append(.../** @type {HTMLElement[]} */ (replies));
+  return section;
+}
+
+/** @param {DocumentFragment} root */
+function buildReviewedTiebaView(root) {
+  const title = root.querySelector("h3.core_title_txt")?.textContent.trim();
+  const doc = root.ownerDocument;
+  const posts = [...root.querySelectorAll("#j_p_postlist > .j_l_post")].map(post => tiebaPostSection(post, doc));
+  if (!title || posts.length !== 18 || !posts.every(post => post !== null)) return false;
+  const article = doc.createElement("article");
+  article.className = "reader-clean-web reader-tieba-view";
+  const note = labeledElement(doc, "p", "此存档未收录 20 处原帖表情图片，已在对应位置标记。");
+  note.className = "reader-tieba-note";
+  article.append(labeledElement(doc, "h1", title), note, ...posts);
+  if (article.querySelectorAll(".reader-tieba-reply").length !== 5 ||
+      article.querySelectorAll("img[src]").length !== 29) return false;
+  const gaps = article.querySelectorAll("img.BDE_Smiley:not([src])");
+  if (gaps.length !== 20) return false;
+  for (const img of gaps) {
+    const gap = labeledElement(doc, "span", "[原帖表情图片未收录]");
+    gap.className = "reader-tieba-missing-emoticon";
+    img.replaceWith(gap);
+  }
+  root.replaceChildren(article);
+  return true;
+}
+
 /** @param {string | null | undefined} markdown */
 export function stripMarkdownFrontMatter(markdown) {
   // Marxists-Library Markdown carries YAML metadata for EPUB generation and
@@ -30,11 +103,8 @@ export function createReaderHtmlFormat(readerContext) {
       // content as siblings: serializing real <br>/<hr>/<img> drops their children.
       const fragment = doc.createDocumentFragment();
       fragment.appendChild(replacement);
-      if (readerContext.EPUB_HTML_VOID_TAGS.has(localName)) {
-        while (element.firstChild) fragment.appendChild(element.firstChild);
-      } else {
-        while (element.firstChild) replacement.appendChild(element.firstChild);
-      }
+      const destination = readerContext.EPUB_HTML_VOID_TAGS.has(localName) ? fragment : replacement;
+      while (element.firstChild) destination.appendChild(element.firstChild);
       element.replaceWith(fragment);
     }
     return doc;
@@ -108,6 +178,11 @@ export function createReaderHtmlFormat(readerContext) {
     if (OFFLINE_URL_ATTRIBUTES.has(data.attrName) &&
         !OFFLINE_INLINE_IMAGE.test(normalizeCssReference(data.attrValue)))
       data.keepAttr = false;
+  }
+
+  /** @param {MouseEvent} event */
+  function modifiedClick(event) {
+    return event.ctrlKey || event.metaKey || event.shiftKey || event.altKey;
   }
 
   /** @param {MouseEvent} event */
@@ -477,7 +552,7 @@ export function createReaderHtmlFormat(readerContext) {
       }
     }
     article.addEventListener("click", (event) => {
-      if (event.defaultPrevented || event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
+      if (event.defaultPrevented || event.button !== 0 || modifiedClick(event)) return;
       const link = clickedLink(event);
       if (!link || !article.contains(link) || link.hasAttribute("download") ||
           (link.target && link.target.toLowerCase() !== "_self") || !readerContext.isReaderOverlayFrame()) return;
@@ -504,7 +579,8 @@ export function createReaderHtmlFormat(readerContext) {
     // soft breaks elsewhere, or the whitespace of actual code and tables.
     const walker = document.createTreeWalker(article, NodeFilter.SHOW_TEXT);
     for (let node; (node = /** @type {Text | null} */ (walker.nextNode()));) {
-      if (!/\u3000{4}/u.test(node.data) || node.parentElement?.closest("pre,code,table,style,textarea,svg,math")) continue;
+      const parent = /** @type {HTMLElement} */ (node.parentElement);
+      if (!/\u3000{4}/u.test(node.data) || parent.closest("pre,code,table,style,textarea,svg,math")) continue;
       const fragment = document.createDocumentFragment();
       let start = 0;
       for (const match of node.data.matchAll(/\u3000{4,}/gu)) {
@@ -558,8 +634,8 @@ export function createReaderHtmlFormat(readerContext) {
       for (const link of article.querySelectorAll('a[href^="#"]')) {
         const label = cleanLabel(link.textContent);
         if (!numberedChapter.test(label)) continue;
-        const href = link.getAttribute("href");
-        if (!href || href.length < 2) continue;
+        const href = /** @type {string} */ (link.getAttribute("href"));
+        if (href === "#") continue;
         const target = fragmentName(href);
         if (anchors.has(target)) linked.set(label, target);
       }
@@ -600,8 +676,8 @@ export function createReaderHtmlFormat(readerContext) {
     readerContext.status.textContent = "已加载";
   }
 
-  /** @param {string} text @param {boolean} [phpwind] @param {string} [reviewedView] @param {string} [archiveDigest] */
-  function sanitizeOfflineHtml(text, phpwind = false, reviewedView = "", archiveDigest = "") {
+  /** @param {string} text @param {boolean} phpwind @param {string} reviewedView @param {string} archiveDigest @param {{ tieba: boolean }} viewResult */
+  function sanitizeOfflineHtml(text, phpwind, reviewedView, archiveDigest, viewResult) {
     // A global ALLOWED_URI_REGEXP would also strip every non-allow-listed plain
     // attribute (colspan/rowspan/width), so scope the inline-image rule to URLs.
     // Use the original document URL, not the proxy, srcdoc, or a supplied <base>.
@@ -690,8 +766,12 @@ export function createReaderHtmlFormat(readerContext) {
       reflowPhpwindArchive(template.content, thread);
       return template.innerHTML + PHPWIND_HTML_STYLE;
     }
+    if (reviewedView === "tieba" && buildReviewedTiebaView(template.content)) {
+      viewResult.tieba = true;
+      return template.innerHTML + CLEAN_WEB_HTML_STYLE + TIEBA_READING_STYLE;
+    }
     const layoutStyle = markLegacyArticleLayout(template.content) ? LEGACY_ARTICLE_HTML_STYLE : "";
-    return template.innerHTML + layoutStyle;
+    return template.innerHTML + layoutStyle + (archiveDigest === bb515LayoutSha256 ? bb515LayoutStyle : "");
   }
 
   const legacyArticleCell = "table.center_tdbgall > tbody > tr > td.main_tdbgall > table.tdbg_top_left_right > tbody > tr > td.main_tdbg_760";
@@ -701,8 +781,9 @@ export function createReaderHtmlFormat(readerContext) {
     // Extract a known single-article CMS template, not an arbitrary element
     // whose id happens to include “article”. Preserve the full sanitized body.
     const bodies = root.querySelectorAll("#ArticleContent");
-    const body = bodies[0];
-    if (bodies.length !== 1 || !body?.matches(`${legacyArticleCell}#fontzoom > div`) ||
+    if (bodies.length !== 1) return false;
+    const body = bodies.item(0);
+    if (!body.matches(`${legacyArticleCell}#fontzoom > div`) ||
         !body.querySelector("p") || !body.textContent.trim()) return false;
     // The matched cell/row chain guarantees both ancestors and the table.
     const bodyCell = /** @type {HTMLTableCellElement} */ (body.parentElement);
@@ -715,7 +796,8 @@ export function createReaderHtmlFormat(readerContext) {
     const rows = [...table.rows];
     const titleIndex = rows.indexOf(headlineRow);
     const bodyIndex = rows.indexOf(bodyRow);
-    if (titleIndex < 0 || bodyIndex <= titleIndex) return false;
+    // Both rows are in the same tbody of table.
+    if (bodyIndex <= titleIndex) return false;
     const source = table.querySelector(".Article_tdbgall a#txt_info");
     const metadata = source?.closest("td.Article_tdbgall");
     // If this archive contains actual comments or other unrecognized addenda,
@@ -735,8 +817,8 @@ export function createReaderHtmlFormat(readerContext) {
     targetIds.add(headline.id);
     targetIds.add(bodyCell.id);
     for (const link of body.querySelectorAll('a[href^="#"]')) {
-      const href = link.getAttribute("href");
-      if (!href || href.length < 2) continue;
+      const href = /** @type {string} */ (link.getAttribute("href"));
+      if (href === "#") continue;
       const target = fragmentName(href);
       if (target.toLowerCase() !== "top" && !targetIds.has(target)) return false;
     }
@@ -754,7 +836,7 @@ export function createReaderHtmlFormat(readerContext) {
       if (fields) {
         const line = doc.createElement("p");
         line.className = "reader-clean-web-byline";
-        line.textContent = [fields[1], fields[2], fields[3] && `更新于 ${fields[3]}`].filter(Boolean).join(" · ");
+        line.textContent = [fields[1], fields[2], `更新于 ${fields[3]}`].filter(Boolean).join(" · ");
         article.append(line);
       }
     }
@@ -800,8 +882,9 @@ export function createReaderHtmlFormat(readerContext) {
     for (const cell of root.querySelectorAll(shell)) {
       const article = cell.querySelector(":scope > .Section1, :scope > div > .Section1");
       if (!article?.querySelector("p.MsoNormal")) continue;
-      const outer = cell.closest("td.main_tdbgall")?.closest("table.center_tdbgall");
-      if (!outer) continue;
+      // The shell selector guarantees both ancestors. Keep the nearest matches.
+      const main = /** @type {Element} */ (cell.closest("td.main_tdbgall"));
+      const outer = /** @type {Element} */ (main.closest("table.center_tdbgall"));
       /** @type {Element | null} */
       let node = cell;
       for (; node && outer.contains(node); node = node.parentElement) {
@@ -954,7 +1037,7 @@ export function createReaderHtmlFormat(readerContext) {
       const article = source.createElement("article");
       article.className = "reader-forum-document";
       const titleNode = source.querySelector(readerContext.DISCOURSE_TITLE_SELECTOR);
-      const title = titleNode?.textContent?.trim();
+      const title = titleNode?.textContent.trim();
       if (title) {
         const heading = source.createElement("h1");
         heading.textContent = title;
@@ -980,11 +1063,13 @@ export function createReaderHtmlFormat(readerContext) {
     // discarded, but recognize and annotate only the sanitized DOM.
     const phpwind = !discussion && /tpc_content/i.test(text) && /phpwind\.net/i.test(text) &&
       /\bpowered\s+by\s+phpwind\.net\s*$/i.test(new DOMParser().parseFromString(text, "text/html").title);
-    const html = sanitizeOfflineHtml(discourse || text, phpwind, discussion ? "" : reviewedView, archiveDigest);
+    const viewResult = { tieba: false };
+    const html = sanitizeOfflineHtml(discourse || text, phpwind, discussion ? "" : reviewedView, archiveDigest, viewResult);
     return {
       html,
       discourse: !!discourse,
       discourseArchive: !!discussion,
+      tieba: viewResult.tieba,
       spreadsheet: !discussion && html.includes("reader-spreadsheet-sheet")
     };
   }
@@ -1000,16 +1085,36 @@ export function createReaderHtmlFormat(readerContext) {
       (documentData.spreadsheet ? frameStyle.slice(policyEnd) + readerContext.SPREADSHEET_HTML_STYLE : HTML_PROSE_STYLE);
   }
 
-  /** @param {HTMLIFrameElement} frame */
-  async function waitForSpreadsheetImages(frame) {
-    if (frame.contentDocument)
-      await readerContext.settleReaderImages(frame.contentDocument, 30000);
+  /** @param {Document} doc */
+  async function waitForSpreadsheetImages(doc) {
+    await readerContext.settleReaderImages(doc, 30000);
   }
 
+  // These are archive layout tables, not data grids. Ordinary tables still scroll.
+  const bb515LayoutStyle = `<style>div[data-reader-table-scroll]>.reader-ebook-table-scroll>table[width="530"]{width:100%;max-width:530px}</style>`;
+  const bb515LayoutSha256 = "394cd4d8287b45c3a6d77c418af749b02654241a18d9977f5d34ef2930764b39";
   const reviewedHtmlViews = new Map([
     ["c5c214029407e94ccb2ecb4047285077ac01e5b39ef2ad65ef724724136e4749", "article"],
     ["9ddff06d033c44900801a44937334194a4500103816aafda52b837f9f71765d9", "thread"]
   ]);
+
+  /** @param {URL} url @param {boolean} forum @param {boolean} archive @param {boolean} reading */
+  function installHtmlViewLink(url, forum, archive, reading) {
+    const archiveNext = forum ? !archive : reading;
+    if (archiveNext === forum) url.searchParams.set("view", forum ? "archive" : "reading");
+    else url.searchParams.delete("view");
+    const link = document.createElement("a");
+    link.className = "text-action";
+    link.textContent = archiveNext ? "存档视图" : forum ? "纯帖子" : "纯阅读";
+    link.href = url.href;
+    link.addEventListener("click", event => {
+      if (event.button || modifiedClick(event)) return;
+      event.preventDefault();
+      readerContext.navigateReader(link.href);
+    });
+    document.querySelector("#history-panel > header")?.append(link);
+    readerContext.trackReaderResource(() => { link.remove(); });
+  }
 
   /** @param {import('../../../typings/reader-html-format-strict').PreparedHtml} prepared */
   async function renderHtml(prepared) {
@@ -1022,41 +1127,29 @@ export function createReaderHtmlFormat(readerContext) {
     const reading = view === "reading";
     // Restrict extraction to exactly reviewed bytes. A template match or
     // reused Reader ID alone cannot approve new content.
-    if (globalThis.crypto?.subtle && /ArticleContent|tpc_content/.test(text)) {
+    if (globalThis.crypto?.subtle && (reviewedArchiveSizes.has(bytes.length) || /ArticleContent|tpc_content/.test(text))) {
       archiveDigest = Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", new Uint8Array(bytes))),
         value => value.toString(16).padStart(2, "0")).join("");
       reviewedView = reviewedHtmlViews.get(archiveDigest) ?? "";
       readerContext.assertReaderActive();
     }
     const archiveView = view === "archive";
-    const documentData = prepareHtmlDocument(text, archiveView, reading ? reviewedView : "", archiveDigest);
-    if (documentData.discourseArchive || reviewedView) {
-      const archiveNext = documentData.discourseArchive ? !archiveView : reading;
-      // The outer guard guarantees a reviewed view when this is not Discourse.
-      if (archiveNext === documentData.discourseArchive)
-        openUrl.searchParams.set("view", documentData.discourseArchive ? "archive" : "reading");
-      else openUrl.searchParams.delete("view");
-      const link = document.createElement("a");
-      link.className = "text-action";
-      link.textContent = archiveNext ? "存档视图" : documentData.discourseArchive ? "纯帖子" : "纯阅读";
-      link.href = openUrl.href;
-      link.addEventListener("click", event => {
-        if (event.button || event.metaKey || event.ctrlKey || event.altKey || event.shiftKey) return;
-        event.preventDefault();
-        readerContext.navigateReader(link.href);
-      });
-      document.querySelector("#history-panel > header")?.append(link);
-      readerContext.trackReaderResource(() => { link.remove(); });
-    }
+    const tieba = archiveDigest === reviewedTiebaSha256;
+    const documentData = prepareHtmlDocument(text, archiveView,
+      tieba && !archiveView ? "tieba" : reading ? reviewedView : "", archiveDigest);
+    if (documentData.discourseArchive || documentData.tieba || reviewedView || (tieba && archiveView))
+      installHtmlViewLink(openUrl, documentData.discourseArchive || tieba, archiveView, reading);
     const frame = document.createElement("iframe");
     readerContext.htmlFrame = frame;
     frame.className = "html-frame";
     readerContext.content.classList.toggle("reader-content--spreadsheet", documentData.spreadsheet);
-    if (documentData.spreadsheet) frame.classList.add("spreadsheet-html-frame");
+    if (documentData.spreadsheet) {
+      frame.classList.add("spreadsheet-html-frame");
+      frame.style.colorScheme = "only light";
+    }
     frame.title = `${readerContext.documentState.title} 正文`;
     frame.setAttribute("sandbox", "allow-same-origin");
     frame.setAttribute("referrerpolicy", "no-referrer");
-    if (documentData.spreadsheet) frame.style.colorScheme = "only light";
     const frameLoaded = /** @type {Promise<void>} */ (new Promise((resolve, reject) => {
       let untrack = () => {}, frameTimer = 0, deadline = 0, started = false;
       const cleanup = () => {
@@ -1107,16 +1200,16 @@ export function createReaderHtmlFormat(readerContext) {
              doc.removeEventListener("auxclick", jump);
              doc.removeEventListener("click", readerContext.handleReaderOutsideClick);
            });
-          readerContext.installReaderTapSelectionClear(frame.contentDocument.body, frame.contentDocument);
+          readerContext.installReaderTapSelectionClear(doc.body, doc);
           // Input in the srcdoc does not bubble into the Reader viewport.
           bindReaderScrollIntent(doc.documentElement, event => readerContext.beginReaderNavigation(event));
-          readerContext.setToc(readerContext.headingTocEntries(frame.contentDocument));
+          readerContext.setToc(readerContext.headingTocEntries(doc));
           if (documentData.spreadsheet) {
             // The sanitized cells are already readable. Let them take the
             // loading indicator's space before charts have finished decoding.
             // The full startup/restore path still waits for stable geometry.
             readerContext.markReaderContentReady();
-            await waitForSpreadsheetImages(frame);
+            await waitForSpreadsheetImages(doc);
           }
           readerContext.assertReaderActive();
           resolve();
@@ -1129,7 +1222,6 @@ export function createReaderHtmlFormat(readerContext) {
         reject(readerContext.readerAbortError());
       });
       const poll = () => {
-        if (started) return;
         loaded();
         if (!started) frameTimer = setTimeout(poll, 16);
       };
@@ -1151,17 +1243,18 @@ export function createReaderHtmlFormat(readerContext) {
     const walker = doc.createTreeWalker(doc.body, NodeFilter.SHOW_TEXT);
     const blocks = /^(?:body|p|div|section|article|li|blockquote|h[1-6])$/;
     while (walker.nextNode()) {
-      const node = walker.currentNode;
-      const parent = node.parentElement;
-      const value = node.nodeValue || "";
+      // SHOW_TEXT under an element only yields Text nodes with a parent.
+      const node = /** @type {Text} */ (walker.currentNode);
+      const parent = /** @type {HTMLElement} */ (node.parentElement);
+      const value = node.data;
       const indent = /^[\t\r\n ]*(?:\u3000[ \t]*){3,}(?=\S)/.exec(value);
-      if (!indent || parent?.closest("pre,code,kbd,samp,table,style,textarea")) continue;
+      if (!indent || parent.closest("pre,code,kbd,samp,table,style,textarea")) continue;
       // Ascend through wrappers only while at their first visible child.
       let leading = false;
-      for (let sibling = node; sibling.parentElement; sibling = sibling.parentElement) {
+      for (let sibling = /** @type {Node} */ (node); sibling.parentElement; sibling = sibling.parentElement) {
         let previous = sibling.previousSibling;
-        while (previous?.nodeType === Node.COMMENT_NODE ||
-               (previous?.nodeType === Node.TEXT_NODE && !previous.textContent?.trim())) previous = previous.previousSibling;
+        while (previous && (previous.nodeType === Node.COMMENT_NODE ||
+               (previous.nodeType === Node.TEXT_NODE && !(/** @type {Text} */ (previous)).data.trim()))) previous = previous.previousSibling;
         if (previous) {
           leading = previous.nodeName === "BR";
           break;
@@ -1171,7 +1264,7 @@ export function createReaderHtmlFormat(readerContext) {
           break;
         }
       }
-      if (leading) node.nodeValue = "\u3000\u3000" + value.slice(indent[0].length);
+      if (leading) node.data = "\u3000\u3000" + value.slice(indent[0].length);
     }
   }
 
@@ -1211,25 +1304,19 @@ export function createReaderHtmlFormat(readerContext) {
     if (!doc?.body || !frameWindow) return;
     /** @param {string} value @returns {[number, number, number, number] | null} */
     const parseColor = (value) => {
+      // Computed colors can be keywords; only strings with RGB channels
+      // reach the conversion. An omitted alpha channel is fully opaque.
       const parts = String(value).match(/[\d.]+/g);
-      return parts && parts.length >= 3
-        ? [
-            Number(parts[0]),
-            Number(parts[1]),
-            Number(parts[2]),
-            parts[3] === undefined ? 1 : Number(parts[3])
-          ]
-        : null;
+      if (!parts?.[2]) return null;
+      return [Number(parts[0]), Number(parts[1]), Number(parts[2]), Number(parts[3] ?? 1)];
+    };
+    /** @param {number} value */
+    const linear = (value) => {
+      const normalized = value / 255;
+      return normalized <= 0.04045 ? normalized / 12.92 : ((normalized + 0.055) / 1.055) ** 2.4;
     };
     /** @param {[number, number, number, number]} color */
-    const luminance = (color) => {
-      const channels = color.slice(0, 3).map((value) => {
-        const normalized = value / 255;
-        return normalized <= 0.04045 ? normalized / 12.92 : ((normalized + 0.055) / 1.055) ** 2.4;
-      });
-      const [red = 0, green = 0, blue = 0] = channels;
-      return red * 0.2126 + green * 0.7152 + blue * 0.0722;
-    };
+    const luminance = ([red, green, blue]) => linear(red) * 0.2126 + linear(green) * 0.7152 + linear(blue) * 0.0722;
     // Undo only the preceding pass's edits, then recompute against the new paper.
     let repaired = contrastEdits.get(doc);
     if (repaired) for (const [element, [value, priority, replacement]] of repaired) {
@@ -1290,8 +1377,8 @@ export function createReaderHtmlFormat(readerContext) {
     /** @type {Set<HTMLElement>} */
     const elements = new Set();
     while (walker.nextNode() && elements.size < 10000) {
-      const node = walker.currentNode;
-      if (node.textContent?.trim() && node.parentElement) elements.add(node.parentElement);
+      const node = /** @type {Text} */ (walker.currentNode);
+      if (node.data.trim()) elements.add(/** @type {HTMLElement} */ (node.parentElement));
     }
     for (const element of elements) {
       const style = frameWindow.getComputedStyle(element);

@@ -252,30 +252,21 @@ jobs:
         with:
           name: github-pages-${{ github.run_id }}-${{ github.run_attempt }}
           path: '_site'
-      - name: Wait for the uploaded Pages artifact
+      - name: Download exact uploaded Pages artifact
         timeout-minutes: 2
         env:
           GH_TOKEN: ${{ github.token }}
           UPLOADED_ARTIFACT_ID: ${{ steps.upload.outputs.artifact_id }}
-        run: python3 -B scripts/ci/wait_pages_artifact.py
-      - name: Download exact uploaded Pages artifact
-        uses: actions/download-artifact@v8
-        with:
-          # Use the same REST run inventory that the visibility check just verified.
-          github-token: ${{ github.token }}
-          repository: ${{ github.repository }}
-          run-id: ${{ github.run_id }}
-          artifact-ids: ${{ steps.upload.outputs.artifact_id }}
-          path: ${{ runner.temp }}/uploaded-pages
-          digest-mismatch: error
+        # Look up and read back the uploaded ID, not an eventually visible list.
+        run: python3 -B scripts/ci/wait_pages_artifact.py "$RUNNER_TEMP/uploaded-pages.tar"
       - name: Verify uploaded candidate fingerprint
         id: readback
         env:
           SELECTED_GENERATION: ${{ steps.build.outputs.generation }}
         run: |
           set -euo pipefail
-          python3 -B scripts/ci/pages_artifact_proof.py verify-upload "$RUNNER_TEMP/uploaded-pages/artifact.tar" "$RUNNER_TEMP/pages-artifact-proof.json"
-          python3 -B -m scripts.ci.pages_release export "$RUNNER_TEMP/uploaded-pages/artifact.tar"
+          python3 -B scripts/ci/pages_artifact_proof.py verify-upload "$RUNNER_TEMP/uploaded-pages.tar" "$RUNNER_TEMP/pages-artifact-proof.json"
+          python3 -B -m scripts.ci.pages_release export "$RUNNER_TEMP/uploaded-pages.tar"
           printf 'artifact_attempt=%s\n' "$GITHUB_RUN_ATTEMPT" >> "$GITHUB_OUTPUT"
 
   deploy:
