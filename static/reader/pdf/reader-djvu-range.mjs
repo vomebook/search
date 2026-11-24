@@ -124,6 +124,6 @@ export async function openDjvuRange({url, signal, fetchResponse = fetch,
     } else { cache.delete(start);cache.set(start,bytes); }
     check();return bytes.slice(offset-start,offset-start+length);
   }
-  return Object.freeze({read,total,etag,close(){if(!closed)stop();signal.removeEventListener('abort',stop);},
+  return Object.freeze({read,ownedReads:true,total,etag,close(){if(!closed)stop();signal.removeEventListener('abort',stop);},
     get failure(){return failure;},stats:()=>({requests,transferred,retained,windows:cache.size})});
 }

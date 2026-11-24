@@ -351,6 +351,32 @@ for(const type of ['error','messageerror','cancel']) {
   } finally { if (previous===undefined) delete globalThis.Worker; else globalThis.Worker=previous; }
 }
 {
+  // Exercise actual transfer semantics, including detachment and slice isolation.
+  for (const [ownedReads, offset, shouldDetach] of [[true,0,true],[false,0,false],[true,2,false]]) {
+    const backing = Uint8Array.of(0,1,2,3,4,5,6,7,8,9).slice(0,8+offset);
+    const view = backing.subarray(offset,offset+8), expected = Array.from(view);
+    const worker = createDjvuWorkerAdapter('/worker',{
+      rangeReader:{ownedReads,total:100,close(){},async read(){return view;}},
+      createWorker:()=>({postMessage(message,transfer){
+        if (message.operation === 'open-range') {
+          queueMicrotask(()=>this.onmessage({data:{id:message.id,operation:'range',rangeId:1,offset:0,length:8}}));
+        } else if (message.operation === 'range-result') {
+          assert.equal(message.ok,true);
+          assert.deepEqual(transfer,[message.bytes]);
+          if (shouldDetach) assert.equal(message.bytes,backing.buffer);
+          else assert.notEqual(message.bytes,backing.buffer);
+          const handed = structuredClone(message,{transfer});
+          assert.deepEqual(Array.from(new Uint8Array(handed.bytes)),expected);
+          assert.equal(backing.byteLength,shouldDetach ? 0 : 8+offset);
+          queueMicrotask(()=>this.onmessage({data:{id:message.id,ok:true,count:1}}));
+        }
+      },terminate(){}}),
+    });
+    try { assert.equal(await worker.openRange(),1); }
+    finally { worker.close(); }
+  }
+}
+{
   // Range error codes from the main-thread transport must stay predictable,
   // including primitive throws and unknown/malformed error messages.
   for (const [failure, expected] of [

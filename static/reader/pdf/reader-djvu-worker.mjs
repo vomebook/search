@@ -1,7 +1,8 @@
 // Serialize requests to one decoder worker. A fatal error, timeout or opening
 // abort always terminates the worker and settles the outstanding operation.
+// An owned read gives the worker exclusive ownership of the returned bytes.
 /** @typedef {{total: number, read(offset: number, length: number): Promise<Uint8Array<ArrayBuffer>>,
- * close(): void, readonly failure?: unknown}} DjvuRangeReader */
+ * close(): void, readonly failure?: unknown, readonly ownedReads?: boolean}} DjvuRangeReader */
 /** @typedef {{id: number, resolve(value: Record<string, unknown>): void, reject(reason?: unknown): void}} DjvuTask */
 /** @typedef {{t: string, x: number, y: number, w: number, h: number}} DjvuTextZone */
 /** @typedef {{title: string, depth: number, page: number}} DjvuOutlineEntry */
@@ -102,7 +103,8 @@ export function createDjvuWorkerAdapter(workerUrl, { maxPixels = 50_000_000, tim
     timer = setTimeout(() => close(new Error('DJVU_WORKER_TIMEOUT')), Math.max(timeoutMs, 5 * 60_000));
     Promise.resolve().then(()=>reader.read(offset,length)).then(bytes=>{
       if (closed || active?.id !== id) return;
-      const buffer=bytes.buffer.slice(bytes.byteOffset,bytes.byteOffset+bytes.byteLength);
+      const buffer=reader.ownedReads === true && bytes.byteOffset===0 && bytes.byteLength===bytes.buffer.byteLength
+        ? bytes.buffer : bytes.buffer.slice(bytes.byteOffset,bytes.byteOffset+bytes.byteLength);
       outstandingRange=0;
       armTimer();
       worker.postMessage({id,operation:'range-result',rangeId,ok:true,bytes:buffer},[buffer]);

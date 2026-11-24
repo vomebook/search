@@ -161,7 +161,8 @@ async function openRangedNative(context,resolving,signal,cacheBytes) {
   // revision resolution succeeds, even if decoder preparation fails first.
   let rangeAuthorized = false, documentOpened = false;
   /** @type {import('./reader-djvu-worker.mjs').DjvuRangeReader} */
-  const deferredRange = {get total(){return rangeAuthorized ? (range?.total ?? 0) : 0}, get failure(){return range?.failure},
+  const deferredRange = {get ownedReads(){return range?.ownedReads === true;},
+    get total(){return rangeAuthorized ? (range?.total ?? 0) : 0}, get failure(){return range?.failure},
     read:(offset,length)=>requireRange(rangeAuthorized ? range : undefined).read(offset,length), close:()=>range?.close()};
   const prepareFailure = {error: /** @type {unknown} */ (null)};
   const preparing=Promise.resolve().then(()=>{
