@@ -774,10 +774,14 @@ test("cached single-character pages skip rescans without weakening eviction or g
   const key=vm.runInContext('searchOrderKey({q:"a",exact:false,pageSize:17})',worker.context);
   worker.context.cachedParams={...params,page:2};
   assert.strictEqual(vm.runInContext(`searchOrderKey(cachedParams) === ${JSON.stringify(key)}`,worker.context),true);
-  await assert.rejects(() => vm.runInContext('dispatch("local-search", cachedParams, {generation, cancelled:true})',worker.context),
-    error => error.code === 'SEARCH_CANCELLED');
-  await assert.rejects(() => vm.runInContext('dispatch("local-search", cachedParams, {generation:generation-1, cancelled:false})',worker.context),
-    error => error.code === 'CORPUS_REPLACED');
+  for (const [generation, cancelled, code] of [
+    [first.generation, true, 'SEARCH_CANCELLED'],
+    [first.generation - 1, false, 'CORPUS_REPLACED'],
+    [first.generation - 1, true, 'SEARCH_CANCELLED'],
+  ]) {
+    worker.context.cachedJob = {generation, cancelled};
+    await assert.rejects(() => vm.runInContext('dispatch("local-search", cachedParams, cachedJob)',worker.context), {code});
+  }
   const missing=await worker.send('local-search',{...params,searchFolders:false},{id:'changed'});
   assert.strictEqual(missing.error.message,'cache miss rescanned');
   vm.runInContext('getRecordSearchFields = savedFields',worker.context);
@@ -1102,7 +1106,11 @@ test("corpus replacement cancels partial indexing and stale callbacks cannot alt
   tick(); tick();
   const stale = tasks.values().next().value.fn;
   await worker.request("replace-corpus", {data: compact([records[4]])});
+  const timers = [...tasks.keys()];
+  worker.context.currentFulltextTimer = timers[1];
   stale();
+  assert.deepStrictEqual([...tasks.keys()], timers);
+  assert(vm.runInContext('fulltextBuildTimer === currentFulltextTimer && fulltextBuild === null && wordIndex === null', worker.context));
   while (tasks.size) tick();
   assert.strictEqual((await worker.request("local-search", {q: "alpha"})).total, 0);
   assert.strictEqual((await worker.request("local-search", {q: "手机"})).total, 1);
@@ -1300,13 +1308,48 @@ test("legacy full-record corpus is rejected", async () => {
   assert.strictEqual(response.ok, false);
   assert.strictEqual(response.error.code, "UNSUPPORTED_CORPUS");
 });
-test("generation replacement clears records and lazily built indexes", async () => {
-  const { worker, metadata } = await loaded();
-  await worker.request("local-search", { q: "alpha" });
-  const next = await worker.request("replace-corpus", { data: compact([{ Repo: "New", File: "omega", Extension: "txt", Folder: [], Size: 1, HasTxt: false }]) });
-  assert.strictEqual(next.generation, metadata.generation + 1);
-  assert.deepStrictEqual((await worker.request("local-search", { q: "alpha" })).records, []);
-  assert.deepStrictEqual((await worker.request("local-search", { q: "omega" })).records.map((r) => r.File), ["omega"]);
+test("replacement resets warmed caches and timers only after successful preparation", async () => {
+  const {worker, tasks} = scheduledWorker();
+  // These requests do not yield to a timer. Keep warmups parked so their
+  // ownership is observable before and after each replacement attempt.
+  delete worker.context.drive;
+  const installed = await worker.request('replace-corpus', {data:compact(records)});
+  const params = {q:'alpha', exact:true, anchorId:'Repo/A\0docs/root/alpha guide.txt'};
+  const before = await worker.request('local-search', params);
+  const tree = await worker.request('folder-tree', {repo:'Repo/A'});
+  for (const sort of ['name', 'size']) await worker.request('local-search', {sort});
+  // Leave both speculative timers queued, with partially built postings.
+  const originalTasks = [...tasks];
+  assert.deepStrictEqual(originalTasks.map(([,task]) => task.delay), [1000, 1500]);
+  vm.runInContext(`advanceFulltext(1, Infinity);
+    globalThis.oldFields = recordSearchFields;
+    globalThis.oldOwners = searchAnchorOwners;`, worker.context);
+
+  const invalid = {v:2, rp:['New'], fd:[[ {toString:null, valueOf:null} ]], rc:[[0,'broken','txt',0,1,0]]};
+  await assert.rejects(worker.request('replace-corpus', {data:invalid}), {code:'WORKER_ERROR'});
+  assert.deepStrictEqual([...tasks], originalTasks);
+  assert.deepStrictEqual(await worker.request('local-search', params), before);
+  assert.deepStrictEqual(await worker.request('folder-tree', {repo:'Repo/A'}), tree);
+  assert(vm.runInContext('fulltextBuild.next === 1 && nameOrderReady && sizeOrderReady', worker.context));
+
+  const next = await worker.request('replace-corpus', {data:compact([{...records[0], File:'omega', Folder:['new']}])});
+  assert.strictEqual(next.generation, installed.generation + 1);
+  for (const [id] of originalTasks) assert(!tasks.has(id));
+  assert.deepStrictEqual([...tasks.values()].map(task => task.delay), [1000, 1500]);
+  [worker.context.currentSortTimer, worker.context.currentFulltextTimer] = tasks.keys();
+  for (const [,task] of originalTasks) task.fn();
+  assert(vm.runInContext(`sortBuildTimer === currentSortTimer && fulltextBuildTimer === currentFulltextTimer
+    && directoryIndexes.size === 0 && searchOrderCache.size === 0 && searchAnchorCache.size === 0
+    && recordSearchFields !== oldFields && searchAnchorOwners !== oldOwners
+    && !nameOrderReady && !sizeOrderReady && fulltextBuild === null && wordIndex === null`, worker.context));
+  const after = await worker.request('local-search', params);
+  assert.strictEqual(after.generation, next.generation);
+  assert.notStrictEqual(after.snapshot_generation, before.snapshot_generation);
+  assert.deepStrictEqual(after.records, []);
+  assert.strictEqual(after.anchor_index, -1);
+  assert.deepStrictEqual((await worker.request('folder-contents', {repo:'Repo/A', path:'new'})).files,
+    [{name:'omega', ext:'txt', size:100}]);
+  assert.deepStrictEqual((await worker.request('local-search', {q:'omega'})).records.map(record => record.File), ['omega']);
 });
 test("local result contains records and stable ids rather than corpus indices", async () => {
   const first = await search({ q: "", page: 1, pageSize: 2 });
@@ -1433,6 +1476,32 @@ test('gzip fingerprints use the validated source bytes, not re-encoded text or g
   await worker.request('replace-corpus', {data});
   assert.strictEqual((await worker.request('local-search', {q:''})).snapshot_generation, canonical);
   assert.deepStrictEqual(encoded, [plain, version + navigator.userAgent]);
+});
+
+test('overlapping gzip and object installs publish in preparation-completion order', async () => {
+  const {gzipSync} = require('node:zlib');
+  const worker = gzipWorker();
+  const {promise, resolve} = Promise.withResolvers();
+  const initial = compact([records[0]]), late = compact([records[1]]), early = compact([records[4]]);
+  worker.context.fetch = () => promise;
+  const first = await worker.request('replace-corpus', {data:initial});
+  const pending = worker.listeners.message({data:{protocol:1, type:'load-corpus', id:'slow-load', payload:{url:'/slow'}}});
+  const second = await worker.request('replace-corpus', {data:early}, {id:'fast-replace'});
+  const earlyPage = await worker.request('local-search', {});
+  assert.strictEqual(second.generation, first.generation + 1);
+  assert.strictEqual(earlyPage.generation, second.generation);
+  assert.deepStrictEqual(earlyPage.records, [records[4]]);
+  assert(!worker.messages.some(message => message.id === 'slow-load'));
+
+  resolve(new Response(gzipSync(JSON.stringify(late))));
+  await pending;
+  const ready = worker.messages.find(message => message.id === 'slow-load');
+  assert.strictEqual(ready.ok, true);
+  assert.strictEqual(ready.result.generation, second.generation + 1);
+  const latePage = await worker.request('local-search', {});
+  assert.strictEqual(latePage.generation, ready.result.generation);
+  assert.deepStrictEqual(latePage.records, [records[1]]);
+  assert.notStrictEqual(latePage.snapshot_generation, earlyPage.snapshot_generation);
 });
 
 test('gzip decode, digest, parse, and install failures leave the published corpus unchanged', async () => {
@@ -1788,7 +1857,14 @@ test("main-thread root select-all represents and persists direct root files with
   assert.strictEqual(params.folderMatchMode, "mixed");
   assert.deepStrictEqual(Array.from(params.folders), ["", "child"]);
   assert.match(treeSource, /function getFolderSelfSet\(\) \{\s*return new Set\(deps\.readView\(\)\.selfs \|\| \[\]\);/);
-  assert.match(treeSource, /if \(node\.hasDirectFiles\) selfPaths\.push\(node\.path\)/);
+  // Inverting a complete selection clears it; inverting again selects the
+  // same direct-file paths, including the empty root path.
+  context.invertSelection();
+  assert.deepStrictEqual(Array.from(context.STATE.filterFolderSelfs), []);
+  assert.deepStrictEqual(Array.from(context.STATE.filterFolderSubtrees), []);
+  context.invertSelection();
+  assert.deepStrictEqual(Array.from(context.STATE.filterFolderSelfs), [""]);
+  assert.deepStrictEqual(Array.from(context.STATE.filterFolderSubtrees), ["child"]);
 });
 
 test("root folder with direct files and children exposes the direct-files toggle", async () => {

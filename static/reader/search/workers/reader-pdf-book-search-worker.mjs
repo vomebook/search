@@ -1,6 +1,7 @@
 // @ts-check
 import "../../core/reader-security.js";
-import { searchBookText, validateBookText } from "../reader-book-text.js";
+import { searchBookText } from "../reader-book-text.js";
+import { validatePdfBookText } from "../reader-pdf-book-validate.mjs";
 import { validPdfBookUrl } from "../reader-pdf-book-url.mjs";
 import { validatePdfPartitionConfiguration } from "../reader-pdf-partition-config.mjs";
 import { canPrefetchPdfPartition, canRetainPdfPartition } from "../reader-pdf-partition-policy.mjs";
@@ -25,6 +26,14 @@ const pause = () => new Promise(resolve => setTimeout(resolve, 0));
 let active = 0;
 const partitionRequests = createPdfPartitionRequests();
 
+/** @param {{url: string, bytes: number}} source @param {AbortSignal} signal */
+async function fetchSearchBytes(source, signal) {
+  const response = await fetch(source.url, { signal, credentials: "omit" });
+  if (!response.ok) throw new Error(`HTTP ${response.status}`);
+  // The bounded reader enforces both the global limit and the exact declared size.
+  return readPdfSearchBytes(/** @type {ReadableStream<Uint8Array>} */ (response.body), signal, source.bytes, limit);
+}
+
 async function loadBook() {
   if (book) return book;
   if (pendingBook) return pendingBook;
@@ -35,17 +44,13 @@ async function loadBook() {
   controller = request;
   const timer = setTimeout(() => request.abort(), 120000);
   pendingBook = (async () => {
-    const response = await fetch(configuration.url, { signal: request.signal, credentials: "omit" });
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    // The stream helper calls getReader immediately; its declaration omits the nullable Fetch body.
     /** @type {Uint8Array<ArrayBuffer> | null} */
-    let packed = await readPdfSearchBytes(/** @type {ReadableStream<Uint8Array>} */ (response.body), request.signal, configuration.bytes, limit);
-    if (packed.byteLength !== configuration.bytes) throw new Error("PDF_OCR_SIZE_MISMATCH");
+    let packed = await fetchSearchBytes(configuration, request.signal);
     const decoding = readVerifiedPdfSearchText(packed, configuration.sha256, request.signal, limit);
     packed = null;
     const decoded = JSON.parse(await decoding);
     if (request.signal.aborted) throw aborted();
-    const validated = validateBookText(decoded, configuration.pageCount, configuration.sourceSha);
+    const validated = validatePdfBookText(decoded, configuration.pageCount, configuration.sourceSha);
     // Search needs offsets and hit boxes, not the duplicate full page layout.
     // The validated array is deliberately updated in place during compaction.
     /** @type {{pages: import('../reader-pdf-book-compact.mjs').SearchPage[]}} */
@@ -71,19 +76,12 @@ async function loadBook() {
   return pendingBook;
 }
 
-/** @param {PartitionReference} part @param {AbortSignal} signal */
-async function fetchPartitionBytes(part, signal) {
-  const response = await fetch(part.url, {signal, credentials: "omit"});
-  if (!response.ok) throw new Error(`HTTP ${response.status}`);
-  return readPdfSearchBytes(/** @type {ReadableStream<Uint8Array>} */ (response.body), signal, part.bytes, limit);
-}
-
 /** @param {PartitionReference} part @param {() => boolean} current
  * @param {Set<AbortController> | null} [owners] @param {Uint8Array<ArrayBuffer> | null} [prefetched] */
 async function loadSearchPartition(part, current, owners = null, prefetched = null) {
   return partitionRequests.run(current, owners, async signal => {
     /** @type {Uint8Array<ArrayBuffer> | null} */
-    let packed = prefetched || await fetchPartitionBytes(part, signal);
+    let packed = prefetched || await fetchSearchBytes(part, signal);
     const decoding = readVerifiedPdfSearchText(packed, part.sha256, signal, limit);
     packed = null;
     const value = JSON.parse(await decoding);
@@ -163,7 +161,7 @@ async function searchPartitions(query, current, progress) {
       if (next && canPrefetchPdfPartition(connection, next.bytes)) {
         // Only compressed future bytes are retained. Each of the (at most
         // two) overlapping future transfers is capped independently.
-        pending = partitionRequests.run(current, owners, signal => fetchPartitionBytes(next, signal))
+        pending = partitionRequests.run(current, owners, signal => fetchSearchBytes(next, signal))
           .then(packed => ({packed}), error => ({error}));
       }
       const outcome = await valueOutcome;

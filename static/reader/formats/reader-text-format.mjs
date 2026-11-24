@@ -1,12 +1,11 @@
 /**
- * @typedef {{response: Promise<Response> | Response, engines?: Promise<unknown>}} ReaderTextPrepared
- * @typedef {ReaderTextPrepared & {engines: Promise<unknown>}} ReaderMarkdownPrepared
- * @typedef {((markdown: false, prepared: ReaderTextPrepared) => Promise<void>) &
- *   ((markdown: true, prepared: ReaderMarkdownPrepared) => Promise<void>)} ReaderTextRenderer
+ * @typedef {{response: Promise<Response> | Response}} ReaderTextPrepared
  * @typedef {{extension?: string, resolvedReaderData?: {original_extension?: unknown} | null}} ReaderOriginalFormat
  * @typedef {object} ReaderTextHost
  * @property {() => void} assertReaderActive
  * @property {HTMLElement} content
+ * @property {HTMLElement} status
+ * @property {() => Promise<Response>} fetchReaderResponse
  * @property {() => void} markReaderContentReady
  * @property {() => Promise<void>} waitForReader
  * @property {(cleanup: () => void) => () => void} trackReaderResource
@@ -14,7 +13,6 @@
  * @property {<T>(promise: T | PromiseLike<T>) => Promise<Awaited<T>>} awaitReader
  * @property {(bytes: Uint8Array, hint?: string, leading?: boolean) => string} detectTextEncoding
  * @property {{title: string}} documentState
- * @property {ReaderTextRenderer} renderText
  * @property {(entries: {label: string; depth: number; target: HTMLElement; activate(): void}[]) => void} setToc
  * @property {{query: string}} searchState
  * @property {(name: string) => unknown} nextReaderGeneration
@@ -582,19 +580,18 @@ export function createReaderTextFormat(readerContext) {
   }
 
   /** @param {ReaderTextPrepared} prepared */
-  function renderTextDocument(prepared) {
-    return readerContext.renderText(false, prepared);
-  }
-
-  /** @param {ReaderMarkdownPrepared} prepared */
-  function renderMarkdownDocument(prepared) {
-    return readerContext.renderText(true, prepared);
+  async function renderTextDocument(prepared) {
+    let response = await prepared.response;
+    if (!response.ok) response = await readerContext.fetchReaderResponse();
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    await renderPlainText(response);
+    readerContext.markReaderContentReady();
+    readerContext.status.textContent = "已加载";
   }
 
   return {
     renderPlainText,
     detectTextEncoding,
-    renderTextDocument,
-    renderMarkdownDocument
+    renderTextDocument
   };
 }

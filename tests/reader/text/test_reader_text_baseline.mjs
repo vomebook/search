@@ -30,7 +30,8 @@ function fixture({limit=1_000_000, waits=()=>Promise.resolve()}={}) {
     assertReaderActive(){},markReaderContentReady(){events.push('ready');},waitForReader:waits,
     trackReaderResource(cleanup){events.push('track');this.cleanup=cleanup;return()=>events.push('untrack');},
     readerAbortError:()=>new DOMException('closed','AbortError'),awaitReader:promise=>Promise.resolve(promise),
-    renderText:(mode,prepared)=>({mode,prepared}), setToc(toc){this.toc=toc;}};
+    status:new FakeElement('status'),fetchReaderResponse:async()=>{throw Error('unexpected retry');},
+    setToc(toc){this.toc=toc;}};
   Object.assign(context,createReaderTextFormat(context));
   return {context,events,restore(){globalThis.document=old.document;globalThis.Node=old.Node;
     globalThis.VoiceOfMLReaderSecurity=old.security;}};
@@ -390,12 +391,44 @@ test('stream rejects an oversized body and cancels its reader',async()=>{
   } finally {f.restore();}
 });
 
-test('plain and Markdown adapters forward the prepared object unchanged',()=>{
-  const f=fixture();try {
-    const prepared={opaque:true};
-    assert.deepEqual(f.context.renderTextDocument(prepared),{mode:false,prepared});
-    assert.deepEqual(f.context.renderMarkdownDocument(prepared),{mode:true,prepared});
-  } finally {f.restore();}
+test('TXT entry streams the prepared response and completes only after EOF',async t=>{
+  const f=fixture(); t.after(f.restore);
+  const {context,events}=f;
+  let controller;
+  const response=new Response(new ReadableStream({start(c){controller=c;}}));
+  const ready=context.markReaderContentReady;
+  context.markReaderContentReady=()=>{assert.equal(context.status.textContent,'');ready();};
+  const pending=context.renderTextDocument({response:Promise.resolve(response)});
+  const value='  plain <b>&amp;</b>\t\r\n\r\n';
+  controller.enqueue(encode(value));
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(context.content.textContent,value);
+  assert.equal(context.status.textContent,'');
+  assert.deepEqual(events,['track','ready']);
+  controller.close();
+  await pending;
+  assert.equal(context.content.textContent,value);
+  assert.equal(context.status.textContent,'已加载');
+  assert.deepEqual(events,['track','ready','untrack','ready']);
+});
+
+test('TXT entry retries a non-OK response once and leaves failed reads unfinished',async t=>{
+  const f=fixture(); t.after(f.restore);
+  const {context,events}=f;
+  const retry=t.mock.method(context,'fetchReaderResponse',async()=>new Response(null,{status:503}));
+  await assert.rejects(context.renderTextDocument({response:new Response(null,{status:404})}),{message:'HTTP 503'});
+  const failure=new Error('request failed');
+  await assert.rejects(context.renderTextDocument({response:Promise.reject(failure)}),error=>error===failure);
+  assert.equal(retry.mock.callCount(),1);
+  assert.deepEqual(events,[]);
+  assert.deepEqual(context.content.children,[]);
+  assert.equal(context.status.textContent,'');
+
+  const recovered=t.mock.method(context,'fetchReaderResponse',async()=>new Response('recovered'));
+  await context.renderTextDocument({response:new Response(null,{status:404})});
+  assert.equal(recovered.mock.callCount(),1);
+  assert.equal(context.content.textContent,'recovered');
+  assert.equal(context.status.textContent,'已加载');
 });
 
 test('split UTF-16 prefix clears an early ASCII preview before publishing final text',async()=>{

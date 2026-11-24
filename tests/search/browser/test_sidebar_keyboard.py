@@ -444,6 +444,56 @@ class SidebarKeyboardTests(unittest.TestCase):
         self.assertEqual(result, dict(initial=1, expanded=1001, inherited=True, partial=True,bounded=True,
                                       excluded=True, final=1001, siblings=True))
 
+    def test_folder_forest_keeps_order_cached_rows_and_keyboard_selection(self):
+        self.page.wait_for_function('getSidebarFilters().status().done === getSidebarFilters().status().token')
+        self.page.emulate_media(reduced_motion='reduce')
+        self.page.locator('#settings-btn').press('Enter')
+        self.page.evaluate('''() => {
+          routeRenderId++;
+          const node=(path,children=[])=>({path,name:path||'根目录',children,isRoot:!path,
+            hasChildren:!!children.length,hasDirectFiles:true,showSelfToggle:!!children.length});
+          STATE.mode='repo';STATE.repo='Test';STATE.repoFull='VoiceOfML/Test';
+          STATE.folderTree=[node('z'),node('',[node('alpha',[node('alpha/deep')])]),
+            node('aside',[node('aside/file')]),node('tail')];
+          STATE.folderTreeCollapsed={'':true,alpha:false,aside:false};
+          STATE.filterFolderSubtrees=['alpha/deep','tail'];STATE.filterFolderSelfs=[''];
+          window.folderQueries=[];scheduleFilterSearch=()=>folderQueries.push(STATE.query);
+          DOM.filterFolderSection.style.display='';sidebarFolderTree.render();
+        }''')
+        self.page.wait_for_function('!sidebarFolderTree.pending()')
+        tree = self.page.locator('#filter-folder-tree')
+        rows = tree.locator('.filter-folder-item')
+        bulk = self.page.locator('#folder-toggle-all')
+        root = tree.locator('[data-path=""] .tree-toggle')
+        self.assertEqual(rows.evaluate_all('rows=>rows.map(row=>row.dataset.path)'),
+                         ['z', '', 'aside', 'aside/file', 'tail'])
+        self.assertEqual(bulk.get_attribute('aria-expanded'), 'true')
+        tree.locator('[data-path="aside"] .tree-toggle').press('Enter')
+        self.assertFalse(bulk.is_disabled())
+        self.assertEqual(bulk.get_attribute('aria-expanded'), 'false')
+
+        root.press('Space')
+        self.page.wait_for_function('!sidebarFolderTree.pending()')
+        self.assertEqual(rows.evaluate_all('rows=>rows.map(row=>[row.dataset.path,row.style.getPropertyValue("--fdepth")])'),
+                         [['z', '0'], ['', '0'], ['alpha', '1'], ['alpha/deep', '2'],
+                          ['aside', '0'], ['aside/file', '1'], ['tail', '0']])
+        leaf = tree.locator('[data-path="alpha/deep"] input')
+        self.assertTrue(leaf.is_checked())
+        leaf.evaluate('node=>{window.cachedFolderInput=node;node.focus()}')
+        root.evaluate('node=>node.click()')
+        self.assertTrue(root.evaluate('node=>node===document.activeElement'))
+        self.assertTrue(leaf.is_hidden())
+        root.press('Enter')
+        self.assertTrue(leaf.evaluate('node=>node===cachedFolderInput'))
+        self.assertTrue(leaf.is_checked())
+        self.assertEqual(self.page.evaluate('folderQueries'), [])
+
+        leaf.press('Space')
+        self.assertFalse(leaf.is_checked())
+        self.assertTrue(tree.locator('[data-path="tail"] input').is_checked())
+        self.assertEqual(self.page.evaluate('[STATE.filterFolderSubtrees,STATE.filterFolderSelfs,folderQueries]'),
+                         [['tail'], [''], ['paging']])
+
     def test_tree_rerender_has_one_delegated_action_and_respects_nested_collapse(self):
         result = self.page.evaluate('''async () => {
           STATE.folderTree=[{name:'a',path:'a',count:3,selfCount:1,showSelfToggle:true,children:[

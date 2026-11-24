@@ -33,6 +33,7 @@ class ReaderCloseTrafficTests(unittest.TestCase):
                   };''')
                 prefix = origin + '/search'
                 page.goto(prefix + '/manifest.json')
+                page.add_script_tag(url=prefix + '/static/reader/core/reader-contract.js')
                 page.add_script_tag(url=prefix + '/static/search/reader-host/application/navigation.js')
                 reader_path = '/search/static/reader.html'
                 target = prefix + '/static/reader.html?' + urllib.parse.urlencode(dict(url=SOURCE, ext='pdf'))
@@ -123,6 +124,7 @@ class ReaderCloseTrafficTests(unittest.TestCase):
                 return nativeFetch(url.pathname==='/api/reader-content'?location.origin+url.pathname+url.search:input,init);
               };''')
             page.goto(origin+'/search/manifest.json')
+            page.add_script_tag(url=origin+'/search/static/reader/core/reader-contract.js')
             page.add_script_tag(url=origin+'/search/static/search/reader-host/application/navigation.js')
             page.evaluate('''url => {
               window.__navigation = VoiceOfMLReaderNavigation.createNavigation('/search/static/reader.html');

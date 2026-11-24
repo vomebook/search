@@ -684,8 +684,12 @@ if (typeof document !== "undefined") /** @type {Window & {CCRDSpeech?: unknown}}
     wait();
   }
   /** @param {SpeechOwner} value @param {SpeechHandoff} token */
+  function canCommitHandoff(value, token) {
+    return handoff === token && owner === value && value.current === token.current && value.wantsPlay && !checkSleep();
+  }
+  /** @param {SpeechOwner} value @param {SpeechHandoff} token */
   function commitHandoff(value, token) {
-    if (handoff !== token || owner !== value || value.current !== token.current || !value.wantsPlay || checkSleep() ||
+    if (!canCommitHandoff(value, token) ||
         /** @type {HTMLAudioElement} */ (spare).readyState < 2 || /** @type {HTMLAudioElement} */ (spare).getAttribute("src") !== token.url) return;
     const next = /** @type {HTMLAudioElement} */ (spare);
     next.defaultPlaybackRate = next.playbackRate = /** @type {HTMLAudioElement} */ (audio).playbackRate;
@@ -693,14 +697,14 @@ if (typeof document !== "undefined") /** @type {Window & {CCRDSpeech?: unknown}}
     next.muted = /** @type {HTMLAudioElement} */ (audio).muted; next.volume = /** @type {HTMLAudioElement} */ (audio).volume;
     next.play().then(() => {
       // Cancellation already paused the spare; it may now belong to a newer attempt.
-      if (handoff !== token || owner !== value || value.current !== token.current || !value.wantsPlay || checkSleep()) return;
+      if (!canCommitHandoff(value, token)) return;
       handoff = null;
       const previous = /** @type {HTMLAudioElement} */ (audio);
       previous.removeAttribute("id"); next.id = "speech-audio";
       audio = next; spare = previous; retiring = previous;
       previous.addEventListener("ended", retire, { once: true });
       setTimeout(() => { if (retiring === previous) retire(); }, 2000);
-      value.position = token.job.batch.start + token.current.part.end; value.part += 1;
+      value.part += 1;
       token.job.used = true;
       value.current = { job: token.job, part: token.part }; value.position = token.job.batch.start + token.part.start;
       notice("朗读中"); mark(); controls();

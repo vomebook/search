@@ -302,6 +302,12 @@ interface ReaderResourcesApi {
 }
 
 interface ReaderContractApi {
+  readonly speechHandoff: Readonly<{
+    storageKey: string;
+    windowMs: number;
+    takeFramePayload(frame: {name: string}): string;
+    frameName(value: {pending?: boolean; unit?: number; offset?: number; settings?: unknown}): string;
+  }>;
   readonly ReaderMode: Readonly<Record<string, number>>;
   readonly articleExtensions: readonly string[];
   capability(extension: string | null | undefined): ReaderContractCapability;

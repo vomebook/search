@@ -83,7 +83,7 @@
     }
     // A Reader closed while reading aloud stays alive, hidden, with a small
     // player on the search page; reopening the same book without a target reuses it.
-    /** @type {{frame: HTMLIFrameElement; bar: HTMLDivElement; focus: HTMLElement | null | undefined; key: string; timer: number} | null} */
+    /** @type {{frame: HTMLIFrameElement; bar: HTMLDivElement; key: string; timer: number} | null} */
     let parked = null;
     /** @type {WeakMap<HTMLIFrameElement, number>} */
     const speechDeadline = new WeakMap();
@@ -139,8 +139,8 @@
     }
     // `restartBy`: a Reader resumed after a page navigation is not reading yet;
     // keep it until then (bounded) instead of disposing it on the first check.
-    /** @param {HTMLIFrameElement} target @param {HTMLElement | null | undefined} [focus] @param {number} [restartBy] */
-    function park(target, focus, restartBy = 0) {
+    /** @param {HTMLIFrameElement} target @param {number} [restartBy] */
+    function park(target, restartBy = 0) {
       disposeParked();
       if (restartBy) speechDeadline.set(target, restartBy);
       target.classList.add("reader-overlay-parked");
@@ -193,7 +193,7 @@
         play.textContent = inFrame(target, "#speech-play")?.textContent?.trim() || (state.playing ? "暂停" : "继续");
       };
       document.body.append(bar);
-      parked = { frame: target, bar, focus, key: bookKey(target.src), timer: setInterval(sync, 1000) };
+      parked = { frame: target, bar, key: bookKey(target.src), timer: setInterval(sync, 1000) };
       sync();
     }
     /** @param {string | URL} raw */
@@ -520,18 +520,17 @@
     // Leaving the page cannot keep its audio; this restarts at that sentence.
     function resumeSpeech() {
       let handoff = null;
+      const {storageKey, windowMs, frameName} = root.VoiceOfMLReader.speechHandoff;
       try {
-        handoff = JSON.parse(sessionStorage.getItem("reader-speech-handoff") || "null");
-        sessionStorage.removeItem("reader-speech-handoff");
-        // A Reader opened as the first page (or in another tab) has no prior
-        // search document to hand the session to; localStorage survives that
-        // first search-page load for the same short window.
-        if (!handoff) handoff = JSON.parse(localStorage.getItem("reader-speech-handoff") || "null");
-        localStorage.removeItem("reader-speech-handoff");
+        handoff = JSON.parse(sessionStorage.getItem(storageKey) || "null");
+        sessionStorage.removeItem(storageKey);
+        // A fresh tab has no search document to receive the session.
+        if (!handoff) handoff = JSON.parse(localStorage.getItem(storageKey) || "null");
+        localStorage.removeItem(storageKey);
       } catch (_) {
         return;
       }
-      if (!handoff || !(Date.now() - handoff.at < 300000) || frame || parked || !document.body ||
+      if (!handoff || !(Date.now() - handoff.at < windowMs) || frame || parked || !document.body ||
           (handoff.settings?.deadline && handoff.settings.deadline <= Date.now())) return;
       let url;
       try {
@@ -544,15 +543,13 @@
       const next = document.createElement("iframe");
       next.className = "reader-overlay reader-overlay-parked";
       next.title = "在线阅读";
-      next.name = "reader-speech-resume:" + JSON.stringify(handoff.pending
-        ? { pending: true, settings: handoff.settings }
-        : { unit: handoff.unit, offset: handoff.offset, settings: handoff.settings });
+      next.name = frameName(handoff);
       next.src = url.href;
       document.body.append(next);
       // A first load of the search page can take longer than the old 30 s
       // grace to boot the resumed Reader. Keep the bar until it is reading or
       // the listener stops it instead of silently dropping the session.
-      park(next, null, Date.now() + 300000);
+      park(next, Date.now() + windowMs);
     }
     if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", resumeSpeech, { once: true });
     else setTimeout(resumeSpeech);

@@ -56,10 +56,10 @@
     /** @param {number} [delay] @param {number} [readyPage] */
     function schedule(delay = 0, readyPage = 0) {
       if (disposed || reading) return;
-      const operation = revision, previousTimer = timerRevision;
+      // While reading, only reset and dispose can change revision; both cancel the timer.
+      const previousTimer = timerRevision;
       const view = readView();
-      if (operation !== revision || previousTimer !== timerRevision ||
-          (readyPage && readyPage !== view.loadedPage + 1)) return;
+      if (previousTimer !== timerRevision || (readyPage && readyPage !== view.loadedPage + 1)) return;
       cancelTimer();
       const token = timerRevision;
       timer = clock.setTimeout(() => {

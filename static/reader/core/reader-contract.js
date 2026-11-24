@@ -497,7 +497,28 @@
     return hash.toString(36).padStart(13, "0");
   }
 
+  // Shared by the classic Search host and the Reader before its lazy speech player loads.
+  const speechResumePrefix = "reader-speech-resume:";
+  const speechHandoff = Object.freeze({
+    storageKey: "reader-speech-handoff",
+    windowMs: 300000,
+    /** @param {{name: string}} frame */
+    takeFramePayload(frame) {
+      if (!String(frame.name).startsWith(speechResumePrefix)) return "";
+      const payload = frame.name.slice(speechResumePrefix.length);
+      frame.name = "";
+      return payload;
+    },
+    /** @param {{pending?: boolean, unit?: number, offset?: number, settings?: unknown}} value */
+    frameName(value) {
+      return speechResumePrefix + JSON.stringify(value.pending
+        ? { pending: true, settings: value.settings }
+        : { unit: value.unit, offset: value.offset, settings: value.settings });
+    }
+  });
+
   root.VoiceOfMLReader = Object.freeze({
+    speechHandoff,
     ReaderMode,
     articleExtensions,
     capability,

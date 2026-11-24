@@ -1,10 +1,6 @@
 // One complete, validated text file per PDF. Offsets in generated mappings are
 // Unicode code points; JavaScript RegExp returns UTF-16 offsets.
-import {validatePdfBookText} from "./reader-pdf-book-validate.mjs";
 import {codePointLength, hitBoxesAtOffsets} from "./reader-pdf-hit-projection.mjs";
-// Keep the public legacy exports and argument order.
-export {validatePdfBookText as validateBookText};
-export {hitBoxes, paintTextHit} from "./reader-pdf-hit-projection.mjs";
 
 /** @param {string} query */
 function pattern(query) {
@@ -92,12 +88,13 @@ export async function searchBookText(book, query, options = {}) {
       // that page's full count again; only whole subsequent pages can skip.
       const count = counts[index], page = book.pages[index];
       if (count === undefined || !page) break;
-      if (!(checkpoint && index === firstPage) && passed + count <= offset) { passed += count; continue; }
-      const start = checkpoint && index === firstPage ? checkpoint.start : 0;
+      const pageCheckpoint = index === firstPage ? checkpoint : null;
+      if (!pageCheckpoint && passed + count <= offset) { passed += count; continue; }
+      const start = pageCheckpoint?.start ?? 0;
       // Partitioned v3 text carries no boxes; computing code-point offsets
       // from the beginning of a large page cannot affect those results.
       const hasBoxes = !!page.text_spans?.length;
-      const projection = checkpoint && index === firstPage ? projectionFor(page,index,start,checkpointPosition) : null;
+      const projection = pageCheckpoint ? projectionFor(page,index,start,checkpointPosition) : null;
       let previousUnitEnd = projection?.end ?? 0, previousPointEnd = projection?.point ?? 0;
       for (const match of page.text.slice(start).matchAll(re)) {
         const matchIndex = start + match.index;

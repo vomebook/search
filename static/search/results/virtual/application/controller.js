@@ -85,8 +85,8 @@ function renderVisible() {
   const container = DOM.resultsContainer;
   const scrollTop = getResultScrollTop();
   const viewH = container.clientHeight;
-  const est = VSCROLL.estimatedHeight;
-  const overscanItems = Math.max(10, Math.floor(viewH / (est || 60)));
+  const estimate = VSCROLL.estimatedHeight || 60;
+  const overscanItems = Math.max(10, Math.floor(viewH / estimate));
   const now = performance.now();
   const previousScrollTop = VSCROLL.lastScrollTop;
   const elapsed = VSCROLL.lastScrollTime ? Math.max(1, now - VSCROLL.lastScrollTime) : 16;
@@ -95,7 +95,7 @@ function renderVisible() {
   VSCROLL.lastScrollTime = now;
   const tightWindow = VSCROLL.isDraggingThumb || !!VSCROLL.dragMetrics;
   const extraScreens = tightWindow ? 0 : Math.min(3, Math.floor(VSCROLL.scrollVelocity / 1.5));
-  const baseOverscanPx = overscanItems * (est || 60);
+  const baseOverscanPx = overscanItems * estimate;
   const velocityOverscanPx = extraScreens * viewH;
   const scrollingDown = scrollTop >= previousScrollTop;
   VSCROLL.scrollDirection = scrollingDown ? 1 : -1;
@@ -156,7 +156,7 @@ function renderVisible() {
   }
   // Correct the rendered window before paint, using one content anchor.
   // A deferred measurement can otherwise run against another window/query.
-  if (!VSCROLL.isDraggingThumb && measureHeights(start, end, anchor)) {
+  if (measureHeights(start, end, anchor)) {
     VSCROLL.renderStart = -1;
     VSCROLL.renderEnd = -1;
     scheduleVirtualRender();

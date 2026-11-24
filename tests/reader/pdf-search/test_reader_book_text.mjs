@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
-import { hitBoxes, searchBookText, validateBookText } from "../../../static/reader/search/reader-book-text.js";
+import { searchBookText } from "../../../static/reader/search/reader-book-text.js";
+import { hitBoxes } from "../../../static/reader/search/reader-pdf-hit-projection.mjs";
+import { validatePdfBookText as validateBookText } from "../../../static/reader/search/reader-pdf-book-validate.mjs";
 
 const spans = [
   { start: 0, end: 1, box: [0, 0, 0.2, 1], block: 0 },

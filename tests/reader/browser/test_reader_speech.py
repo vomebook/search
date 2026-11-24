@@ -16,6 +16,11 @@ from tests.performance import test_reader_performance as perf
 PlaywrightError, minimal_pdf, sync_playwright = perf.PlaywrightError, perf.minimal_pdf, perf.sync_playwright
 
 ROOT = Path(__file__).resolve().parents[3]
+
+
+def install_navigation(page):
+    for path in ('reader/core/reader-contract.js', 'search/reader-host/application/navigation.js'):
+        page.add_script_tag(content=(ROOT / 'static' / path).read_text(encoding='utf-8'))
 SPEECH = "https://vomebook-hitokoto.hf.space"
 MP3 = (bytes.fromhex("fffb9064") + bytes(413)) * 58  # ~1.5 s of silent MPEG-1 Layer III
 SOURCE = "https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/sample"
@@ -164,7 +169,7 @@ class ReaderSpeechTest(unittest.TestCase):
         page.goto(base + "search/reader-host/application/navigation.js", wait_until="domcontentloaded")
         # Inject as content: this host document has no charset, so a src= script would decode as Latin-1.
         page.add_style_tag(content=(ROOT / "static/style.css").read_text(encoding="utf-8"))
-        page.add_script_tag(content=(ROOT / "static/search/reader-host/application/navigation.js").read_text(encoding="utf-8"))
+        install_navigation(page)
         page.evaluate("""url => {
           window.__nav = VoiceOfMLReaderNavigation.createNavigation(new URL(url).pathname, { resume: next => __nav.mount(new URL(next)) });
           window.__reader = __nav.mount(new URL(url));
@@ -753,7 +758,7 @@ class ReaderSpeechTest(unittest.TestCase):
             base = reader.split("reader.html")[0]
             page.goto(base + "search/reader-host/application/navigation.js", wait_until="domcontentloaded")  # leaving fires pagehide
             page.add_style_tag(content=(ROOT / "static/style.css").read_text(encoding="utf-8"))
-            page.add_script_tag(content=(ROOT / "static/search/reader-host/application/navigation.js").read_text(encoding="utf-8"))
+            install_navigation(page)
             page.evaluate("url => { window.__nav = VoiceOfMLReaderNavigation.createNavigation(new URL(url).pathname, { resume: next => __nav.mount(new URL(next)) }); }", reader)
             bar = page.locator(".reader-speech-mini")
             bar.wait_for(timeout=5000)
@@ -796,7 +801,7 @@ class ReaderSpeechTest(unittest.TestCase):
             page.evaluate("() => sessionStorage.removeItem('reader-speech-handoff')")
             page.goto(base + "search/reader-host/application/navigation.js", wait_until="domcontentloaded")
             page.add_style_tag(content=(ROOT / "static/style.css").read_text(encoding="utf-8"))
-            page.add_script_tag(content=(ROOT / "static/search/reader-host/application/navigation.js").read_text(encoding="utf-8"))
+            install_navigation(page)
             page.evaluate("url => { window.__nav = VoiceOfMLReaderNavigation.createNavigation(new URL(url).pathname, { resume: next => __nav.mount(new URL(next)) }); }", reader)
             bar = page.locator(".reader-speech-mini")
             bar.wait_for(timeout=5000)

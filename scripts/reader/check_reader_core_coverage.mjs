@@ -40,6 +40,7 @@ const boundaryTests = [
     "normal and early resolution validate metadata while retaining extra fields",
     "non-record metadata is rejected before use in both resolution paths and application",
     "optional nulls and mixed folders survive resolution and application",
+    "reapplying committed metadata preserves its identity and refreshes OCR precedence",
     "early lookup retries timeout and rethrows null rejection",
     "lookup retries share the same delay and attempt budget after cleanup"]},
   {file: "tests/reader/security/test_reader_security_boundary.js", names: ["tests/reader/security/test_reader_security_boundary.js"]}

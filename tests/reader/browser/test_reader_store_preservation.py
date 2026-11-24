@@ -170,6 +170,7 @@ class ReaderStorePreservationTests(unittest.TestCase):
             content_type='text/html', body='<!doctype html><title>host fixture</title>'))
         host.goto(self.origin + '/store-preservation-fixture')
         host.evaluate('window.BroadcastChannel = undefined')
+        host.add_script_tag(path=str(ROOT / 'static/reader/core/reader-contract.js'))
         host.add_script_tag(path=str(ROOT / 'static/search/reader-host/application/navigation.js'))
         held = []
         script = ROOT / 'static/reader/core/reader-store.js'

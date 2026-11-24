@@ -324,9 +324,7 @@ const readerContext = {
   get renderPdfPages() { return renderPdfPages; }, set renderPdfPages(value) { renderPdfPages = value; },
   get renderPdfShell() { return renderPdfShell; }, set renderPdfShell(value) { renderPdfShell = value; },
   get renderPdfText() { return renderPdfText; }, set renderPdfText(value) { renderPdfText = value; },
-  get renderPlainText() { return renderPlainText; }, set renderPlainText(value) { renderPlainText = value; },
   get renderSwf() { return renderSwf; }, set renderSwf(value) { renderSwf = value; },
-  get renderText() { return renderText; }, set renderText(value) { renderText = value; },
   get renderTextDocument() { return renderTextDocument; }, set renderTextDocument(value) { renderTextDocument = value; },
   get reportNavigationError() { return reportNavigationError; }, set reportNavigationError(value) { reportNavigationError = value; },
   get rerenderVisiblePdfPages() { return rerenderVisiblePdfPages; }, set rerenderVisiblePdfPages(value) { rerenderVisiblePdfPages = value; },
@@ -554,16 +552,14 @@ let {
   cachedPdfOcrPage, renderPdfOcrText, renderPdfText, highlightPdfText
 } = createReaderPdfTextRuntime(readerContext);
 
-let { parseChapterDocument, renderText, renderHtml, repairHtmlContrast } = createReaderHtmlFormat(readerContext);
+let { parseChapterDocument, renderMarkdownDocument, renderHtml, repairHtmlContrast } = createReaderHtmlFormat(readerContext);
 
 let {
   pdfOutputScale, setPdfPageLoadingState, isPdfPageVisible, pdfPagePriority, normalizePdfPriority,
   renderPdfInBackground, pdfPrimarySource, renderPdfImageShell, renderPdfShell, applyPdfShellGeometry
 } = createReaderPdfRenderer(readerContext);
 
-let {
-  renderPlainText, detectTextEncoding, renderTextDocument, renderMarkdownDocument
-} = createReaderTextFormat(readerContext);
+let { detectTextEncoding, renderTextDocument } = createReaderTextFormat(readerContext);
 
 let {
   renderChapterManifest, captureChapterPosition, restoreChapterPosition
@@ -619,14 +615,11 @@ readerBindings.publishDiagnosticsAndInstallCompatibility();
 // Capture the frame handoff before it can survive a failed or abandoned open.
 let speechResume = "";
 try {
-  const prefix = "reader-speech-resume:";
-  if (String(window.name).startsWith(prefix)) {
-    speechResume = window.name.slice(prefix.length);
-    window.name = "";
-  }
+  const {takeFramePayload, storageKey} = VoiceOfMLReader.speechHandoff;
+  speechResume = takeFramePayload(window);
   if (!isReaderOverlayFrame()) {
-    sessionStorage.removeItem("reader-speech-handoff");
-    localStorage.removeItem("reader-speech-handoff");
+    sessionStorage.removeItem(storageKey);
+    localStorage.removeItem(storageKey);
   }
 } catch (_) {}
 const stopWaitingForSpeech = readerRuntime.events.on("phase", detail => {

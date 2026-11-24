@@ -148,6 +148,29 @@ test("optional nulls and mixed folders survive resolution and application", asyn
   assert.equal(f.context.resolvedReaderData.unrelated, false);
 });
 
+test("reapplying committed metadata preserves its identity and refreshes OCR precedence", () => {
+  const f = fixture();
+  const published = [];
+  f.context.readerRuntime.update = (domain, patch) => {
+    assert.equal(domain, "source");
+    published.push(patch.metadata);
+  };
+  f.context.params.set("ocr_manifest", "opening-manifest");
+  f.context.resolvedReaderData = { ReaderOcrManifest: "cached-manifest", extra: 42 };
+  f.source.applyReaderMetadata({ title: "Resolved", ocr_manifest: "resolved-manifest" });
+  const committed = f.context.resolvedReaderData;
+  assert.equal(committed.extra, 42);
+  assert.equal(f.context.ocrManifestUrl, "resolved-manifest");
+  f.source.applyReaderMetadata(committed);
+  assert.equal(f.context.resolvedReaderData, committed);
+  assert.equal(f.context.ocrManifestUrl, "cached-manifest");
+  assert.equal(f.context.params.get("ocr_manifest"), "opening-manifest");
+  assert.equal(f.heading.textContent, "Resolved.pdf");
+  assert.equal(published.length, 2);
+  assert.equal(published[0], committed);
+  assert.equal(published[1], committed);
+});
+
 test("early lookup retries timeout and rethrows null rejection", async () => {
   const f = fixture();
   let calls = 0;

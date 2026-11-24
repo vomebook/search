@@ -1,7 +1,7 @@
 export interface CssOptions { strict?: boolean }
 export interface HtmlDocumentData { html: string; discourse: boolean; discourseArchive: boolean; spreadsheet: boolean }
 export interface HeadingTocEntry { label: string; depth: number; target: Element; activate(): void }
-export interface PreparedText { response: Response | Promise<Response>; engines?: Promise<unknown> }
+export interface PreparedMarkdown { response: Response | Promise<Response>; engines: Promise<unknown> }
 export interface PreparedHtml { response: Promise<Response>; engine: Promise<unknown> }
 export interface HtmlFormatContext {
   EPUB_HTML_TAGS: ReadonlySet<string>; EPUB_HTML_VOID_TAGS: ReadonlySet<string>;
@@ -9,8 +9,8 @@ export interface HtmlFormatContext {
   HTML_FRAME_STYLE: string; DISCOURSE_HTML_STYLE: string; SPREADSHEET_HTML_STYLE: string;
   downloadUrl: string; sourceUrl: string; content: HTMLElement; status: HTMLElement;
   documentState: {title: string; zoom: number}; htmlFrame: HTMLIFrameElement | null;
-  fetchReaderResponse(): Promise<Response>; renderPlainText(response: Response): Promise<void>;
-  readPreparedBytes(response: Response | Promise<Response>, engine: Promise<unknown> | undefined): Promise<Uint8Array>;
+  fetchReaderResponse(): Promise<Response>;
+  readPreparedBytes(response: Response | Promise<Response>, engine: Promise<unknown>): Promise<Uint8Array>;
   detectTextEncoding(bytes: Uint8Array, hint: string): string;
   headingTocEntries(root: ParentNode): HeadingTocEntry[]; setToc(entries: HeadingTocEntry[]): void;
   markReaderContentReady(): void; assertReaderActive(): void;

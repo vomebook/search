@@ -9,6 +9,7 @@ import vm from 'node:vm';
 
 const filename = path.join(process.cwd(), 'static/search/reader-host/application/navigation.js');
 const source = fs.readFileSync(filename, 'utf8');
+const contract = fs.readFileSync('static/reader/core/reader-contract.js', 'utf8');
 const origin = 'https://search.example';
 const readerPath = '/search/static/reader.html';
 
@@ -35,10 +36,26 @@ function fixture(readerDestination = readerPath, document = {readyState: 'loadin
     localStorage: storage, location, URL, URLSearchParams,
     crypto, history, console, HTMLElement: ShellElement, Event, CustomEvent,
     Date: {now: () => now}, setInterval: fn => ticks.push(fn), clearInterval() {}});
+  vm.runInContext(contract, context, {filename: 'reader-contract.js'});
   vm.runInContext(source, context, {filename});
   return {nav: root.VoiceOfMLReaderNavigation.createNavigation(readerDestination, options), data, storage, crypto, calls, context, location,
     tick(ms) {now += ms; ticks.at(-1)?.();}};
 }
+
+test('speech frame payload is consumed once and foreign names are left intact', () => {
+  const {context} = fixture();
+  const {speechHandoff} = context.self.VoiceOfMLReader;
+  const settings = {rate: 1.3, timer: 'off', deadline: 0};
+  for (const target of [{pending: true, settings}, {unit: 7, offset: 22, settings}]) {
+    const frame = {name: speechHandoff.frameName(target)};
+    assert.deepEqual(JSON.parse(speechHandoff.takeFramePayload(frame)), target);
+    assert.equal(frame.name, '');
+    assert.equal(speechHandoff.takeFramePayload(frame), '');
+  }
+  const foreign = {name: 'other-frame-name'};
+  assert.equal(speechHandoff.takeFramePayload(foreign), '');
+  assert.equal(foreign.name, 'other-frame-name');
+});
 
 const json = value => JSON.parse(JSON.stringify(value));
 

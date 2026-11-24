@@ -334,7 +334,7 @@ export function createReaderSearchController({
     } catch (error) {
       if (current(generation)) {
         status.textContent = /** @type {{message?: string} | null} */ (error)?.message || "搜索结果加载失败";
-        state.failedPage = { offset, selectLast, query: search.query };
+        state.failedPage = { offset, selectLast };
         retry.textContent = "重试本页";
         retry.hidden = false;
       }
@@ -431,11 +431,14 @@ export function createReaderSearchController({
 
   listen(retry, "click", async () => {
     const failed = state.failedPage;
-    if (!failed || search.query !== failed.query) return run();
+    // Changing the committed query clears the failed page. Remember its query
+    // only across a rebuild, where run() can commit different input.
+    if (!failed) return run();
     const needsRebuild = state.pageLoader ? state.pageLoader.needsRebuild?.() : backend.chapterClient()?.failed;
     if (needsRebuild) {
+      const query = search.query;
       const generation = await run();
-      if (generation === undefined || !current(generation) || !state.complete || search.query !== failed.query) return;
+      if (generation === undefined || !current(generation) || !state.complete || search.query !== query) return;
     }
     return loadPage(failed.offset, failed.selectLast);
   });

@@ -4,7 +4,8 @@ import vm from 'node:vm';
 import { webcrypto } from 'node:crypto';
 import { gzipSync } from 'node:zlib';
 import { createPdfBookSearch } from '../../../static/reader/search/reader-pdf-book-search.mjs';
-import { validateBookText, searchBookText } from '../../../static/reader/search/reader-book-text.js';
+import { searchBookText } from '../../../static/reader/search/reader-book-text.js';
+import { validatePdfBookText } from '../../../static/reader/search/reader-pdf-book-validate.mjs';
 import { validPdfBookUrl, searchPath } from '../../../static/reader/search/reader-pdf-book-url.mjs';
 import { readPdfSearchBytes, readPdfSearchText } from '../../../static/reader/search/reader-pdf-search-stream.mjs';
 import { validatePdfSearchPartition } from '../../../static/reader/search/reader-pdf-partition-shape.mjs';
@@ -67,7 +68,7 @@ const configuration={url,bytes:packed.length,sha256:Buffer.from(await webcrypto.
 const scope={self:{location:{href:'https://voiceofml-search.hf.space/static/worker.mjs',origin:'https://voiceofml-search.hf.space'},
   VoiceOfMLReaderSecurity:{LIMITS:{chapterTotalBytes:1024*1024}},postMessage:data=>posted.push(data)},
   URL,DOMException,AbortController,TextDecoder,Uint8Array,ReadableStream,DecompressionStream,
-  crypto:webcrypto,performance,setTimeout,clearTimeout,fetch:async()=>new Response(packed),validateBookText,searchBookText,validPdfBookUrl,searchPath,readPdfSearchBytes,readPdfSearchText,validatePdfSearchPartition,validatePdfPartitionConfiguration,canPrefetchPdfPartition,canRetainPdfPartition,pdfPartitionPageOffset,decoratePdfPartitionHits,createPdfPartitionRequests,compactPdfBookPage,readVerifiedPdfSearchText};
+  crypto:webcrypto,performance,setTimeout,clearTimeout,fetch:async()=>new Response(packed),validatePdfBookText,searchBookText,validPdfBookUrl,searchPath,readPdfSearchBytes,readPdfSearchText,validatePdfSearchPartition,validatePdfPartitionConfiguration,canPrefetchPdfPartition,canRetainPdfPartition,pdfPartitionPageOffset,decoratePdfPartitionHits,createPdfPartitionRequests,compactPdfBookPage,readVerifiedPdfSearchText};
 const context=vm.createContext(scope);
 vm.runInContext(source.replace(/^import .*;\n/gm,''),context);
 // Exercise the Worker's actual network/size policy in its existing test scope.

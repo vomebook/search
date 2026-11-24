@@ -12,8 +12,6 @@ const SKIP = new Set(["SCRIPT", "STYLE", "NOSCRIPT", "TEMPLATE"]);
 // A standalone Reader left while reading aloud (← or browser back) records
 // where it was; search/reader-host/application/navigation.js resumes it in a background Reader
 // and passes the position through the frame name. Keep both keys in sync.
-const HANDOFF_KEY = "reader-speech-handoff";
-const RESUME_PREFIX = "reader-speech-resume:";
 const HIGHLIGHT_STYLE = "::highlight(ccrd-speech){background:rgba(138,180,248,.38);color:inherit;text-decoration:underline}";
 
 /** @param {Node | null | undefined} root @returns {Text[]} */
@@ -517,12 +515,8 @@ export function createReaderSpeech(readerContext, loadPlayer, handoffPayload) {
   /** @type {(({pending: true} | SpeechPosition) & {settings?: PlaybackSettings}) | null} */
   let resume = (() => {
     try {
-      let raw = handoffPayload;
-      if (raw === undefined) {
-        if (!String(window.name).startsWith(RESUME_PREFIX)) return null;
-        raw = window.name.slice(RESUME_PREFIX.length);
-        window.name = "";
-      }
+      // An explicitly captured empty payload must not read window.name again.
+      const raw = handoffPayload === undefined ? VoiceOfMLReader.speechHandoff.takeFramePayload(window) : handoffPayload;
       if (!raw) return null;
       const value = /** @type {{pending?: boolean; unit?: number; offset?: number; settings?: PlaybackSettings} | null} */ (JSON.parse(raw));
       const settings = value?.settings;
@@ -553,11 +547,12 @@ export function createReaderSpeech(readerContext, loadPlayer, handoffPayload) {
           offset: Math.max(0, Math.min(part.raw.length, /** @type {number} */ (state.position) - part.start)) };
       }
       const value = JSON.stringify({ readerUrl: readerUrl.href, ...target, settings: state.settings, at: Date.now() });
-      sessionStorage.setItem(HANDOFF_KEY, value);
+      const key = VoiceOfMLReader.speechHandoff.storageKey;
+      sessionStorage.setItem(key, value);
       // A Reader opened as the first page later reaches a search document that
       // was never loaded in this tab; sessionStorage is still shared there, but
       // localStorage also covers a search page opened in a fresh tab.
-      try { localStorage.setItem(HANDOFF_KEY, value); } catch (_) {}
+      try { localStorage.setItem(key, value); } catch (_) {}
     } catch (_) { /* Optional: without storage, leaving stops reading as before. */ }
   }
 
@@ -762,8 +757,9 @@ export function createReaderSpeech(readerContext, loadPlayer, handoffPayload) {
     installed = true;
     try {
       if (handoffPayload === undefined && !readerContext.isReaderOverlayFrame?.()) {
-        sessionStorage.removeItem(HANDOFF_KEY);
-        localStorage.removeItem(HANDOFF_KEY);
+        const key = VoiceOfMLReader.speechHandoff.storageKey;
+        sessionStorage.removeItem(key);
+        localStorage.removeItem(key);
       }
     } catch (_) {}
     // ← records it before navigating; pagehide covers browser back and other exits.

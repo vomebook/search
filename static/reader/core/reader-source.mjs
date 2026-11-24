@@ -187,11 +187,11 @@ export function createReaderSource(readerContext) {
   /** @param {unknown} input */
   function applyReaderMetadata(input) {
     const data = input == null ? null : parseMetadata(input);
-    if (data) readerContext.resolvedReaderData = { ...(readerContext.resolvedReaderData || {}), ...data };
-    if (data?.ReaderOcrManifest || data?.ocr_manifest) {
+    // Reapplying committed metadata refreshes presentation without replacing the record.
+    if (data && data !== readerContext.resolvedReaderData)
+      readerContext.resolvedReaderData = { ...readerContext.resolvedReaderData, ...data };
+    if (data?.ReaderOcrManifest || data?.ocr_manifest)
       readerContext.ocrManifestUrl = /** @type {string} */ (data.ReaderOcrManifest || data.ocr_manifest);
-      readerContext.params.set("ocr_manifest", readerContext.ocrManifestUrl);
-    }
     readerContext.readerRuntime.update("source", { metadata: readerContext.resolvedReaderData });
     const title = String(readerContext.resolvedReaderData?.title || readerContext.params.get("title") || readerContext.sourceName).trim();
     const suffix = String(

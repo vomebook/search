@@ -627,6 +627,29 @@ class PdfBookWorkerBrowserTests(unittest.TestCase):
         self.assertEqual(self.state['paths'].count(target), 1)
         self.assertEqual(page.evaluate('window.unexpected'), [])
 
+    def test_book_and_partition_report_same_transport_errors_without_progress(self):
+        for partitioned in (False, True):
+            target = f'{BASE}/' + ('search-000001-000001.json.gz' if partitioned else 'book-text.json.gz')
+            body = PARTITION if partitioned else BOOK
+            config = {'pageCount': 1, 'sourceSha': SOURCE_SHA, 'generation': GENERATION}
+            for missing, expected in ((False, 'PDF_OCR_SIZE_MISMATCH'), (True, 'HTTP 404')):
+                with self.subTest(partitioned=partitioned, missing=missing):
+                    with self.server.state_lock:
+                        if missing:
+                            self.server.resources.pop(target, None)
+                    reference = {'url': self.resource(target), 'bytes': len(body) + 1, 'sha256': digest(body)}
+                    options = ({'partitions': [{'start': 1, 'end': 1, **reference}]} if partitioned else reference)
+                    page = self.make_page()
+                    result = page.evaluate('''async config => {
+                      const {createPdfBookSearch} = await import('/static/reader/search/reader-pdf-book-search.mjs');
+                      const client = window.client = createPdfBookSearch(config), progress = [];
+                      const result = await window.capture(client.search('needle', item => progress.push(item)), 'search');
+                      return {result, progress};
+                    }''', {**config, **options})
+                    self.assertEqual(result['result'].get('message'), expected)
+                    self.assertEqual(result['progress'], [])
+                    self.assertEqual(page.evaluate('window.unexpected'), [])
+
     def test_large_legacy_worker_search_replacement_keeps_cancellation(self):
         target = f'{BASE}/book-text.json.gz'
         text = '普通文本😀' * 2000
@@ -865,7 +888,7 @@ class PdfBookWorkerBrowserTests(unittest.TestCase):
         page = self.make_page()
         result = page.evaluate('''async () => {
           const {populateIndependentTextLayer}=await import('/static/reader/pdf/reader-pdf-text.js');
-          const {paintTextHit}=await import('/static/reader/search/reader-book-text.js');
+          const {paintTextHit}=await import('/static/reader/search/reader-pdf-hit-projection.mjs');
           const shell=document.createElement('div'),layer=document.createElement('div');
           shell.className='reader-page';shell.style.cssText='position:relative;width:600px;height:800px;container-type:inline-size';
           layer.className='reader-pdf-text';shell.append(layer);document.body.append(shell);

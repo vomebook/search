@@ -7,13 +7,19 @@
 
 /** @param {boolean} [loading] */
 function updateFolderTreeControls(loading = false) {
-  const enabled = !loading && deps.readView().mode === "repo" &&
-    (deps.readView().tree || []).some(node => node.children && node.children.length);
   const button = deps.toggleAll;
   if (!button) return;
-  // A closed root hides even descendants whose individual open state is kept.
-  const expanded = Boolean(enabled && deps.readView().tree.some(node =>
-    node.children && node.children.length && !deps.readView().collapsed[node.path]));
+  const { mode, tree, collapsed } = deps.readView();
+  let enabled = false, expanded = false;
+  // Only top-level branches can make the bulk control expanded.
+  if (!loading && mode === "repo") for (const node of tree || []) {
+    if (!node.children?.length) continue;
+    enabled = true;
+    if (!collapsed[node.path]) {
+      expanded = true;
+      break;
+    }
+  }
   button.disabled = !enabled;
   button.textContent = expanded ? "收起" : "展开";
   button.setAttribute("aria-expanded", String(expanded));
@@ -86,12 +92,13 @@ function setupFolderTreeEvents() {
       deps.setCollapsed(node.path, !expanding);
       updateFolderTreeControls();
       if (!expanding) cancelFolderTreeRendering(children);
-      if (expanding && !children._childrenRendered) {
+      else if (children._childrenRendered) resumeFolderTreeRendering(children);
+      else {
         children.style.display = "block";
-        renderFilterTreeNodes(children, node.children || [], Number(row.style.getPropertyValue("--fdepth")) + 1);
-      } else if (expanding) resumeFolderTreeRendering(children);
-      toggle?.setAttribute("aria-expanded", String(expanding));
-      toggle?.setAttribute('aria-label', (expanding ? '收起子文件夹：' : '展开子文件夹：') + node.path);
+        renderFilterTreeNodes(children, node.children || [], children._folderDepth || 0);
+      }
+      toggle.setAttribute("aria-expanded", String(expanding));
+      toggle.setAttribute('aria-label', (expanding ? '收起子文件夹：' : '展开子文件夹：') + node.path);
       toggle.title = expanding ? '收起' : '展开';
       toggleFolderChildrenAnimated(children, toggle, expanding);
     }
@@ -283,13 +290,11 @@ function persistFolderSelection(subtreeSet, selfSet) {
   folderSelectionMemo = nextMemo;
 }
 
-/** @param {VoiceOfMLFilterFolder[]} nodes @param {string[]} selfPaths */
-function collectFolderNodePaths(nodes, selfPaths) {
-  for (const node of nodes) {
-    if (node.hasDirectFiles) selfPaths.push(node.path);
-    if (node.children && node.children.length > 0) {
-      collectFolderNodePaths(node.children, selfPaths);
-    }
+/** @param {VoiceOfMLFilterFolder[]} nodes @param {Set<string>} subtreeSet @param {Set<string>} selfSet @param {Set<string>} inverted */
+function collectInvertedSelfPaths(nodes, subtreeSet, selfSet, inverted) {
+  for (const {path, hasDirectFiles, children} of nodes) {
+    if (hasDirectFiles && !selfSet.has(path) && !deps.selection.folderPathCovered(path, subtreeSet)) inverted.add(path);
+    if (children?.length) collectInvertedSelfPaths(children, subtreeSet, selfSet, inverted);
   }
 }
 
@@ -347,7 +352,7 @@ function drainFolderTreeRendering() {
       appendFilterTreeNode(task.container, node, task.depth, subtreeSet, selfSet, lookup);
       changed.add(task.container); count++;
     }
-    for (const container of changed) if (container._transitionCleanup && !deps.readView().collapsed[container._folderPath || ""]) {
+    for (const container of changed) if (container._transitionCleanup && !deps.readView().collapsed[container._folderNode?.path || ""]) {
       container.style.height = container.scrollHeight + "px";
     }
   } finally { folderTreeRenderActive = false; }
@@ -389,10 +394,8 @@ function appendFilterTreeNode(container, node, depth, subtreeSet, selfSet, looku
       childDiv.id = 'filter-folder-children-' + ++folderTreeControlId;
       childDiv.inert = collapsed;
       toggle?.setAttribute('aria-controls', childDiv.id);
-      childDiv._folderPath = node.path;
       childDiv._folderNode = node; childDiv._folderDepth = depth + 1;
       if (collapsed) childDiv.style.display = "none";
-      childDiv._childrenRendered = false;
       toggle?.setAttribute("aria-expanded", String(!collapsed));
       container.appendChild(childDiv);
       if (!collapsed) renderFilterTreeNodes(childDiv, node.children || [], depth + 1);
@@ -434,17 +437,11 @@ function selectAll() {
     refreshFilterFolderSelectionState();
 }
 function invertSelection() {
-    if (!deps.readView().tree || deps.readView().tree.length === 0) return;
-    var subtreeSet = getFolderSubtreeSet();
-    var selfSet = getFolderSelfSet();
-    var allSelfPaths = /** @type {string[]} */ ([]);
-    collectFolderNodePaths(deps.readView().tree, allSelfPaths);
-    var nextSubtreeSet = new Set(/** @type {string[]} */ ([]));
-    var nextSelfSet = new Set();
-    for (const path of allSelfPaths) {
-      if (!selfSet.has(path) && !deps.selection.folderPathCovered(path, subtreeSet)) nextSelfSet.add(path);
-    }
-    persistFolderSelection(nextSubtreeSet, nextSelfSet);
+    const { tree } = deps.readView();
+    if (!tree?.length) return;
+    const nextSelfSet = new Set(/** @type {string[]} */ ([]));
+    collectInvertedSelfPaths(tree, getFolderSubtreeSet(), getFolderSelfSet(), nextSelfSet);
+    persistFolderSelection(new Set(), nextSelfSet);
     refreshFilterFolderSelectionState();
 }
 

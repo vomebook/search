@@ -2409,7 +2409,8 @@ keepValue(1, 2);
 
     def test_reader_navigation_baseline_gate_fails_closed(self):
         paths = ["static/search/reader-host/application/navigation.js", "scripts/search/check_reader_navigation_baseline.mjs",
-                 "tests/search/reader-navigation/test_reader_navigation_baseline.mjs", "scripts/check_tap_contracts.mjs"]
+                 "tests/search/reader-navigation/test_reader_navigation_baseline.mjs", "scripts/check_tap_contracts.mjs",
+                 "static/reader/core/reader-contract.js"]
         for path in paths:
             target = self.root / path
             target.parent.mkdir(parents=True, exist_ok=True)
@@ -2451,7 +2452,8 @@ keepValue(1, 2);
 
     def test_reader_navigation_coverage_gate_requires_exact_source_row_and_thresholds(self):
         paths = ["static/search/reader-host/application/navigation.js", "scripts/search/check_reader_navigation_baseline.mjs",
-                 "tests/search/reader-navigation/test_reader_navigation_baseline.mjs", "scripts/check_tap_contracts.mjs"]
+                 "tests/search/reader-navigation/test_reader_navigation_baseline.mjs", "scripts/check_tap_contracts.mjs",
+                 "static/reader/core/reader-contract.js"]
         for path in paths:
             target = self.root / path
             target.parent.mkdir(parents=True, exist_ok=True)
@@ -3627,20 +3629,21 @@ const prefetched = await client.prefetch();
             'files': [str(ROOT / 'typings/reader-globals.d.ts'), module, str(source)]}))
         check = ['node', ROOT / 'node_modules/typescript/bin/tsc', '--project', config]
         prefix = (f'import {{createReaderTextFormat}} from "{module}";\n'
+                  f'import {{createReaderHtmlFormat}} from "{(ROOT / "static/reader/formats/reader-html-format.mjs").as_posix()}";\n'
                   f'import {{createReaderDocumentLoader}} from "{(ROOT / "static/reader/core/reader-document-loader.mjs").as_posix()}";\n'
                   'const ctx = /** @type {Parameters<typeof createReaderTextFormat>[0]} */ (/** @type {unknown} */ ({}));\n'
+                  'const htmlCtx = /** @type {Parameters<typeof createReaderHtmlFormat>[0]} */ (/** @type {unknown} */ ({}));\n'
+                  'const html = createReaderHtmlFormat(htmlCtx);\n'
                   'const loaderCtx = /** @type {Parameters<typeof createReaderDocumentLoader>[0]} */ (/** @type {unknown} */ ({}));\n'
                   'const loader = createReaderDocumentLoader(loaderCtx);\n'
                   'const text = createReaderTextFormat(ctx);\n')
         source.write_text(prefix + '''
 /** @type {string} */ const encoding = text.detectTextEncoding(new Uint8Array([65]), 'book');
 /** @type {Promise<void>} */ const rendering = text.renderPlainText(new Response('synthetic'));
-text.renderTextDocument({response: Promise.resolve(new Response('hello'))});
-text.renderMarkdownDocument({response: new Response('hello'), engines: Promise.resolve([])});
+/** @type {Promise<void>} */ const renderingTxt = text.renderTextDocument({response: Promise.resolve(new Response('hello'))});
+/** @type {Promise<void>} */ const renderingMd = html.renderMarkdownDocument({response: new Response('hello'), engines: Promise.resolve([])});
 text.renderTextDocument(await loader.loadTextDocument());
-text.renderMarkdownDocument(loader.loadMarkdownDocument());
-ctx.renderText(false, {response: new Response()});
-ctx.renderText(true, {response: new Response(), engines: Promise.resolve([])});
+html.renderMarkdownDocument(loader.loadMarkdownDocument());
 ''')
         self.assert_check(self.run_check(*check), True, '')
         for expression, diagnostic in [
@@ -3648,10 +3651,10 @@ ctx.renderText(true, {response: new Response(), engines: Promise.resolve([])});
             ('text.detectTextEncoding(new Uint8Array(), 123);', 'TS2345'),
             ('text.renderPlainText("not a response");', 'TS2345'),
             ('text.renderTextDocument({});', 'TS2741'),
-            ('text.renderMarkdownDocument({response: new Response()});', 'TS2345'),
-            ('ctx.renderText(true, {response: new Response()});', 'TS2769'),
-            ('ctx.renderText(false, {});', 'TS2769'),
-            ('ctx.renderText(true, {response: new Response(), engines: undefined});', 'TS2769'),
+            ('html.renderMarkdownDocument({response: new Response()});', 'TS2741'),
+            ('html.renderMarkdownDocument({response: new Response(), engines: undefined});', 'TS2322'),
+            ('text.renderMarkdownDocument(loader.loadMarkdownDocument());', 'TS2339'),
+            ('html.renderText(false, {response: new Response()});', 'TS2339'),
             ('/** @type {number} */ const value = text.detectTextEncoding(new Uint8Array());', 'TS2322'),
             ('/** @type {Promise<string>} */ const value = text.renderPlainText(new Response());', 'TS2322'),
             ('createReaderTextFormat({});', 'TS2345'),
@@ -3667,8 +3670,7 @@ ctx.renderText(true, {response: new Response(), engines: Promise.resolve([])});
         for annotation in ('/** @param {ReaderTextContext} readerContext */', '/** @param {Response} response */',
                            '/** @param {string} value @param {string} [encoding] */',
                            '/** @param {Uint8Array} bytes @param {string} [hint] @param {boolean} [leading] */',
-                           '/** @param {ReaderTextPrepared} prepared */',
-                           '/** @param {ReaderMarkdownPrepared} prepared */'):
+                           '/** @param {ReaderTextPrepared} prepared */'):
             with self.subTest(missing=annotation):
                 self.assertEqual(original.count(annotation), 1)
                 local.write_text(original.replace(annotation, ''))

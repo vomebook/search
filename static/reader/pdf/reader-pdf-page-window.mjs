@@ -396,21 +396,27 @@ export function createReaderPdfPageWindow(readerContext) {
       chunk.element.setAttribute("aria-hidden", "true");
       chunk.mounted = false;
     }
+    /** @param {() => void} update */
+    function preserveViewportAnchor(update) {
+      const anchor = readerContext.pageAtMarker();
+      const before = readerContext.isPdfPageVisible(anchor) ? /** @type {Element} */ (anchor).getBoundingClientRect().top : undefined;
+      update();
+      if (anchor?.isConnected && before !== undefined)
+        readerContext.viewport.scrollTop += anchor.getBoundingClientRect().top - before;
+    }
     /** @param {number} index */
     function show(index) {
       if (disposed) return;
-      const anchor = readerContext.pageAtMarker();
-      const before = readerContext.isPdfPageVisible(anchor) ? /** @type {Element} */ (anchor).getBoundingClientRect().top : undefined;
-      const retiring = chunks.filter((chunk, i) => Math.abs(i - index) > 2 && canUnmount(chunk));
-      const width = retiring.length ? readWidth() : 0;
-      // Capture all retiring page geometry before mounting or removing any chunks.
-      for (const chunk of retiring)
-        for (const shell of /** @type {HTMLCollectionOf<WindowShell>} */ (chunk.element.children)) measureShell(shell);
-      for (let i = Math.max(0, index - 2); i <= Math.min(chunks.length - 1, index + 2); i++)
-        mount(/** @type {import('../../../typings/reader-page-window-strict').PdfWindowChunk} */ (chunks[i]));
-      for (const chunk of retiring) unmount(chunk, width);
-      if (anchor?.isConnected && before !== undefined)
-        readerContext.viewport.scrollTop += anchor.getBoundingClientRect().top - before;
+      preserveViewportAnchor(() => {
+        const retiring = chunks.filter((chunk, i) => Math.abs(i - index) > 2 && canUnmount(chunk));
+        const width = retiring.length ? readWidth() : 0;
+        // Capture all retiring page geometry before mounting or removing any chunks.
+        for (const chunk of retiring)
+          for (const shell of /** @type {HTMLCollectionOf<WindowShell>} */ (chunk.element.children)) measureShell(shell);
+        for (let i = Math.max(0, index - 2); i <= Math.min(chunks.length - 1, index + 2); i++)
+          mount(/** @type {import('../../../typings/reader-page-window-strict').PdfWindowChunk} */ (chunks[i]));
+        for (const chunk of retiring) unmount(chunk, width);
+      });
     }
     function sync() {
       frame = 0;
@@ -446,11 +452,7 @@ export function createReaderPdfPageWindow(readerContext) {
     }
     function resize() {
       if (disposed) return;
-      const anchor = readerContext.pageAtMarker();
-      const before = readerContext.isPdfPageVisible(anchor) ? /** @type {Element} */ (anchor).getBoundingClientRect().top : undefined;
-      resizePlaceholders();
-      if (anchor?.isConnected && before !== undefined)
-        readerContext.viewport.scrollTop += anchor.getBoundingClientRect().top - before;
+      preserveViewportAnchor(resizePlaceholders);
       schedule();
     }
     function schedule() {

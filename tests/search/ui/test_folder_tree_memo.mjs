@@ -75,6 +75,16 @@ test('inversion preserves file-membership complement for 2048 mixed selections',
   }
 });
 
+test('inversion keeps forest order and does not treat the empty path as subtree coverage', () => {
+  const f = fixture();
+  const [root, a, , , ab, empty] = f.nodes;
+  f.view.tree = [ab, {...root, children: [a, empty]}, {...ab, path: 'aa'}];
+  f.view.subtrees = ['', 'a/b'];
+  f.view.selfs = ['ab'];
+  f.controller.invertSelection();
+  assert.deepEqual(f.commits, [[['aa', 'empty'], ['', 'a']]]);
+});
+
 test('checkbox uses current memo, invalidates on mutation and tree replacement', () => {
   const f = fixture();
   f.controller.render();

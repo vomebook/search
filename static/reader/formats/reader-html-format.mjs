@@ -649,29 +649,25 @@ export function createReaderHtmlFormat(readerContext) {
     }))];
   }
 
-  /** @param {boolean} markdown @param {import('../../../typings/reader-html-format-strict').PreparedText} prepared */
-  async function renderText(markdown, prepared) {
+  /** @param {import('../../../typings/reader-html-format-strict').PreparedMarkdown} prepared */
+  async function renderMarkdownDocument(prepared) {
     let response = await prepared.response;
     if (!response.ok) response = await readerContext.fetchReaderResponse();
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    if (!markdown) {
-      await readerContext.renderPlainText(response);
-    } else {
-      const bytes = await readerContext.readPreparedBytes(response, prepared.engines);
-      const text = new TextDecoder(readerContext.detectTextEncoding(bytes, readerContext.documentState.title)).decode(bytes);
-      const article = document.createElement("article");
-      article.className = "reader-markdown";
-      // Reuse the sanitized nodes instead of serializing them and reparsing
-      // the entire article before the first paint.
-      article.appendChild(DOMPurify.sanitize(marked.parse(stripMarkdownFrontMatter(text)), {
-        USE_PROFILES: { html: true }, RETURN_DOM_FRAGMENT: true
-      }));
-      if (/\u3000{4}/u.test(text)) wrapMarkdownSpacing(article);
-      prepareMarkdownLinks(article);
-      wrapEbookTables(article);
-      readerContext.content.appendChild(article);
-      readerContext.setToc(markdownTocEntries(article));
-    }
+    const bytes = await readerContext.readPreparedBytes(response, prepared.engines);
+    const text = new TextDecoder(readerContext.detectTextEncoding(bytes, readerContext.documentState.title)).decode(bytes);
+    const article = document.createElement("article");
+    article.className = "reader-markdown";
+    // Reuse the sanitized nodes instead of serializing them and reparsing
+    // the entire article before the first paint.
+    article.appendChild(DOMPurify.sanitize(marked.parse(stripMarkdownFrontMatter(text)), {
+      USE_PROFILES: { html: true }, RETURN_DOM_FRAGMENT: true
+    }));
+    if (/\u3000{4}/u.test(text)) wrapMarkdownSpacing(article);
+    prepareMarkdownLinks(article);
+    wrapEbookTables(article);
+    readerContext.content.appendChild(article);
+    readerContext.setToc(markdownTocEntries(article));
     readerContext.markReaderContentReady();
     readerContext.status.textContent = "已加载";
   }
@@ -1400,7 +1396,7 @@ export function createReaderHtmlFormat(readerContext) {
   return {
     sanitizeCssReferences,
     parseChapterDocument,
-    renderText,
+    renderMarkdownDocument,
     renderHtml,
     repairHtmlContrast
   };

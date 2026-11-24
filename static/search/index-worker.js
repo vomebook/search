@@ -23,8 +23,9 @@ const MAX_CORPUS_EXPANDED_BYTES = 256 * 1024 * 1024;
 const SORT_PRECOMPUTE_DELAY_MS = 1000;
 // Bump when matching, filtering, collation or public record semantics change.
 const SEARCH_SEMANTICS_VERSION = "worker-search-v8";
-/** @type {string | null} */
-let snapshotGeneration = null;
+const corpusInstance = Date.now().toString(36) + '-' + Math.random().toString(36).slice(2);
+// Numeric epochs invalidate in-flight work even when the content stamp repeats.
+let corpusVersion = { generation: 0, snapshotGeneration: `worker:${corpusInstance}:0` };
 
 /** @type {SearchRecord[]} */
 let records = [];
@@ -33,8 +34,6 @@ let recordIds = [];
 /** @type {WeakMap<Partial<SearchRecord>, {file: string, repo: string, folder: string}>} */
 let recordSearchFields = new WeakMap();
 let metadata = emptyMetadata();
-let generation = 0;
-const corpusInstance = Date.now().toString(36) + '-' + Math.random().toString(36).slice(2);
 /** @type {PostingIndex | null} */
 let wordIndex = null;
 /** @type {PostingIndex | null} */
@@ -443,7 +442,6 @@ async function finishCorpusFingerprint(contentHash) {
 
 /** @param {string} source */
 async function corpusFingerprint(source) {
-  if (!canFingerprintCorpus()) return null;
   return corpusFingerprintBytes(new TextEncoder().encode(source || ""));
 }
 
@@ -452,9 +450,7 @@ async function installCorpus(data, fingerprint, fromJSON = false) {
   if (fingerprint === undefined) fingerprint = canFingerprintCorpus() ? await corpusFingerprint(JSON.stringify(data)) : null;
   const nextRecords = decodeSearchPayload(data);
   data = null;
-  const result = replaceCorpus(nextRecords, fromJSON);
-  snapshotGeneration = fingerprint;
-  return result;
+  return replaceCorpus(nextRecords, fromJSON, fingerprint);
 }
 
 /** @param {string} url */
@@ -530,13 +526,12 @@ function buildSizeOrders() {
 function scheduleSortOrders(expectedGeneration) {
   if (typeof setTimeout !== "function") return;
   sortBuildTimer = setTimeout(() => {
+    if (corpusVersion.generation !== expectedGeneration) return;
     sortBuildTimer = null;
-    if (generation === expectedGeneration) {
-      if (searchJobs.size) { scheduleSortOrders(expectedGeneration); return; }
-      // Keep the useful name warmup, but never make incoming queries wait for
-      // an unrelated second full-corpus sort. Size browse builds on demand.
-      buildNameOrders();
-    }
+    if (searchJobs.size) { scheduleSortOrders(expectedGeneration); return; }
+    // Keep the useful name warmup, but never make incoming queries wait for
+    // an unrelated second full-corpus sort. Size browse builds on demand.
+    buildNameOrders();
   }, SORT_PRECOMPUTE_DELAY_MS);
 }
 
@@ -549,8 +544,8 @@ function stableJSONRecordId(record, folderPath, occurrence) {
   return [record.Repo || "", path, String(occurrence)].join("\u001f");
 }
 
-/** @param {SearchRecord[]} nextRecords @param {boolean} [fromJSON] */
-function replaceCorpus(nextRecords, fromJSON = false) {
+/** @param {SearchRecord[]} nextRecords @param {boolean} [fromJSON] @param {string | null} [fingerprint] */
+function replaceCorpus(nextRecords, fromJSON = false, fingerprint = null) {
   // Build all fallible metadata off to the side. A rejected corpus must never
   // expose its records under the previous generation or damage old indexes.
   /** @type {Record<string, number>} */
@@ -619,17 +614,16 @@ function replaceCorpus(nextRecords, fromJSON = false) {
     const counts = /** @type {Record<string, number>} */ (extensionsByRepo[repo]);
     nextMetadata.extensionsByRepo[repo] = Object.keys(counts).sort().map((name) => ({ name, count: /** @type {number} */ (counts[name]) }));
   }
-  // Publication is synchronous: existing searches see either complete snapshot.
+  // Commit synchronously, in preparation-completion order. Neither the epoch
+  // nor the snapshot stamp changes before all fallible corpus preparation ends.
   if (sortBuildTimer !== null && typeof clearTimeout === "function") clearTimeout(sortBuildTimer);
-  if (fulltextBuildTimer !== null && typeof clearTimeout === "function") clearTimeout(fulltextBuildTimer);
-  fulltextBuildTimer = null;
+  cancelFulltextTimer();
   fulltextBuild = null;
   directoryIndexes.clear();
   searchOrderCache.clear();
   searchAnchorOwners = new WeakMap();
   searchAnchorCache.clear();
   recordSearchFields = new WeakMap();
-  snapshotGeneration = null;
   records = nextRecords;
   recordIds = nextRecordIds;
   recordIndices = nextRecordIndices;
@@ -648,7 +642,8 @@ function replaceCorpus(nextRecords, fromJSON = false) {
   nameOrderReady = false;
   sizeOrderReady = false;
   sortBuildTimer = null;
-  generation++;
+  const generation = corpusVersion.generation + 1;
+  corpusVersion = { generation, snapshotGeneration: fingerprint || `worker:${corpusInstance}:${generation}` };
   scheduleSortOrders(generation);
   scheduleFulltext(generation, 1500);
   repoWildcardProofSafe = nextRepoWildcardProofSafe;
@@ -738,7 +733,7 @@ function scheduleFulltext(expectedGeneration, delay) {
   // Keep lazy construction on devices that explicitly report little memory.
   if (typeof navigator !== "undefined" && /** @type {WorkerNavigator & {deviceMemory: number}} */ (navigator).deviceMemory <= 2) return;
   fulltextBuildTimer = setTimeout(() => {
-    if (generation !== expectedGeneration) return;
+    if (corpusVersion.generation !== expectedGeneration) return;
     fulltextBuildTimer = null;
     if (wordIndex) return;
     try {
@@ -753,10 +748,14 @@ function scheduleFulltext(expectedGeneration, delay) {
   }, delay);
 }
 
-function buildFulltext() {
-  if (wordIndex) return;
+function cancelFulltextTimer() {
   if (fulltextBuildTimer !== null && typeof clearTimeout === "function") clearTimeout(fulltextBuildTimer);
   fulltextBuildTimer = null;
+}
+
+function buildFulltext() {
+  if (wordIndex) return;
+  cancelFulltextTimer();
   advanceFulltext(records.length, Infinity);
 }
 
@@ -781,15 +780,14 @@ function singleCharacterSearch(query, params) {
 function assertCurrentSearch(job) {
   // A cancelled job can also belong to a replaced corpus. Cancellation wins.
   if (job.cancelled) throw protocolError("SEARCH_CANCELLED", "Search cancelled");
-  if (job.generation !== generation) throw protocolError("CORPUS_REPLACED", "Search corpus changed");
+  if (job.generation !== corpusVersion.generation) throw protocolError("CORPUS_REPLACED", "Search corpus changed");
 }
 
 /** @param {SearchParams} params @param {SearchJob} job */
 async function prepareSearchIndex(params, job) {
   const query = String(params.q || "").trim();
   if (wordIndex || !query || singleCharacterSearch(query, params) || isExactSearch(query, params)) return;
-  if (fulltextBuildTimer !== null && typeof clearTimeout === "function") clearTimeout(fulltextBuildTimer);
-  fulltextBuildTimer = null;
+  cancelFulltextTimer();
   try {
     while (!wordIndex) {
       assertCurrentSearch(job);
@@ -798,7 +796,7 @@ async function prepareSearchIndex(params, job) {
     }
     assertCurrentSearch(job);
   } finally {
-    if (!wordIndex && job.generation === generation && !fulltextBuildTimer && searchJobs.size <= 1) scheduleFulltext(generation, 4);
+    if (!wordIndex && job.generation === corpusVersion.generation && !fulltextBuildTimer && searchJobs.size <= 1) scheduleFulltext(job.generation, 4);
   }
 }
 
@@ -1045,8 +1043,8 @@ function pageResult(indices, params) {
     total: indices.length,
     page,
     pageSize,
-    generation,
-    snapshot_generation: snapshotGeneration || `worker:${corpusInstance}:${generation}`,
+    generation: corpusVersion.generation,
+    snapshot_generation: corpusVersion.snapshotGeneration,
   };
   if (typeof params.anchorId === "string") {
     result.anchor_index = findSearchAnchor(indices, params.anchorId);
@@ -1319,12 +1317,12 @@ function randomRecord(params) {
   if (readerOnly) candidates = repo ? (repoReaderRecordIndices[repo] || []) : readerRecordIndices;
   else if (repo) candidates = repoRecordIndices[repo] || [];
   else candidates = recordIndices;
-  if (!candidates.length) return { record: null, id: null, generation };
+  if (!candidates.length) return { record: null, id: null, generation: corpusVersion.generation };
   // NaN previously indexed the array with the string "NaN", returning missing
   // record/id fields. Treat it like an absent randomValue instead.
   const randomValue = typeof params.randomValue === "number" && !Number.isNaN(params.randomValue) ? params.randomValue : Math.random();
   const index = /** @type {number} */ (candidates[Math.min(candidates.length - 1, Math.floor(Math.max(0, randomValue) * candidates.length))]);
-  return { record: records[index], id: recordIds[index], generation };
+  return { record: records[index], id: recordIds[index], generation: corpusVersion.generation };
 }
 
 /** @param {SearchParams} params */
@@ -1342,7 +1340,7 @@ function folderContents(params) {
       .map(child => ({ name: child.name, path: child.path, count: child.count })),
     files: files.sort((a, b) => /** @type {{localeCompare(value: unknown): number}} */ (a.name).localeCompare(b.name)),
     current_path: path,
-    generation,
+    generation: corpusVersion.generation,
   };
 }
 
@@ -1418,7 +1416,7 @@ function getDirectoryIndex(repo) {
 
 /** @param {SearchParams} params */
 function folderTree(params) {
-  return { tree: getDirectoryIndex(/** @type {string} */ (params.repo || "")).tree, generation };
+  return { tree: getDirectoryIndex(/** @type {string} */ (params.repo || "")).tree, generation: corpusVersion.generation };
 }
 
 /** @param {string} code @param {string} message */
@@ -1443,6 +1441,7 @@ async function dispatch(type, input, job) {
   }
   if (type === "replace-corpus") return installCorpus(payload.data);
   // A successfully installed compact corpus can contain zero records.
+  const {generation} = corpusVersion;
   if (generation === 0) throw protocolError("CORPUS_NOT_READY", "Search corpus is not ready");
   if (type === "metadata") return Object.assign({ generation }, metadata);
   if (type === "local-search") {
@@ -1476,7 +1475,7 @@ self.addEventListener("message", async function(event) {
     self.postMessage({ protocol: WORKER_PROTOCOL_VERSION, type: "response", id, ok: false, error: { code: "PROTOCOL_MISMATCH", message: "Refresh required: app/Worker protocol mismatch" } });
     return;
   }
-  const job = {generation, cancelled: false};
+  const job = {generation: corpusVersion.generation, cancelled: false};
   const searching = message.type === "local-search";
   try {
     if (searching) {

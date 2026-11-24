@@ -414,8 +414,7 @@ class ServiceWorkerIntegrationTest(unittest.TestCase):
 
     def test_warmed_reader_offline_loads_legacy_validation_dependency(self):
         self.prime()
-        # The Reader eagerly imports reader-book-text.js; its validation
-        # dependency must be warmed with the shell even before PDF search.
+        # Both PDF modules must be present before opening the Reader offline.
         self.assertTrue(self.page.evaluate('''async () => {
           const cache = await window.findOwnedServiceWorkerCache();
           const paths = ['/search/static/reader.html', '/search/static/reader.js',
@@ -426,7 +425,7 @@ class ServiceWorkerIntegrationTest(unittest.TestCase):
             await new Promise(resolve=>setTimeout(resolve,50));
           }
           return false;
-        }'''), 'Reader shell and validation dependency must be warmed')
+        }'''), 'Reader shell and both PDF modules must be warmed')
         errors = []
         self.page.on('pageerror', lambda error: errors.append(str(error)))
         self.go_offline()
@@ -436,10 +435,13 @@ class ServiceWorkerIntegrationTest(unittest.TestCase):
         self.page.locator('#back').wait_for(state='visible')
         self.assertFalse(self.page.locator('#error').is_visible() if self.page.locator('#error').count() else False)
         self.assertEqual(self.page.evaluate('''async () => {
-          const {validateBookText} = await import('/search/static/reader/search/reader-book-text.js');
+          const [{searchBookText}, {validatePdfBookText}] = await Promise.all([
+            import('/search/static/reader/search/reader-book-text.js'),
+            import('/search/static/reader/search/reader-pdf-book-validate.mjs'),
+          ]);
           const book = {version:2,kind:'pdf-book-text',complete:true,offset_unit:'unicode-codepoint',page_count:1,
             pages:[{page:1,text:'offline',layout:{offset_unit:'unicode-codepoint'},text_spans:[]}]};
-          return validateBookText(book,1) === book;
+          return (await searchBookText(validatePdfBookText(book,1), 'offline')).total === 1;
         }'''), True)
         self.assertEqual(errors, [])
 

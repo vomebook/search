@@ -6,7 +6,7 @@ declare namespace ReaderSearchController {
   interface Page<T = Result | ChapterResult> { total: number; offset: number; pageSize: number; results: T[] }
   interface State {
     page: Page | null;
-    failedPage: { offset: number; selectLast: boolean | null; query: string } | null;
+    failedPage: { offset: number; selectLast: boolean | null } | null;
     complete: boolean;
     highlightsEnabled: boolean;
     nativePdfSearch: boolean;
