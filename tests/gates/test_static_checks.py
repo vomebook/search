@@ -2110,6 +2110,10 @@ keepValue(1, 2);
                           "tests/reader/core/test_pdf_text_context.js",
                           "tests/reader/core/test_reader_contract_pdf_document.js",
                           "tests/reader/core/test_reader_format_controller_boundary.mjs",
+                          "static/reader/pdf/reader-pdf-search.mjs",
+                          "static/reader/ui/reader-bookmarks.mjs",
+                          "tests/reader/pdf-search/test_native_pdf_progress.mjs",
+                          "tests/reader/test_reader_bookmark_handoff.mjs",
                           "tests/reader/core/test_reader_source_boundary.mjs",
                           "tests/reader/security/test_reader_security_boundary.js"]
         for path in [*paths, *boundary_paths, "scripts/check_tap_contracts.mjs"]:
@@ -3033,6 +3037,7 @@ keepValue(1, 2);
         # V8 resolves symlinks before applying coverage includes. Copy the
         # source into the fixture so the exact source row is really measured.
         shutil.copytree(ROOT / 'static/reader', self.root / 'static/reader')
+        shutil.copyfile(ROOT / 'static/reader-resources.js', self.root / 'static/reader-resources.js')
         names = ('only', 'png', 'range', 'range_fallback', 'scheduler', 'source_integrity', 'worker')
         directory = self.root / 'tests/reader/djvu'
         directory.mkdir(parents=True)
@@ -3041,7 +3046,7 @@ keepValue(1, 2);
                             directory / f'test_reader_djvu_{name}.mjs')
         boundary = directory / 'test_reader_djvu_range_boundaries.mjs'
         shutil.copyfile(ROOT / 'tests/reader/djvu/test_reader_djvu_range_boundaries.mjs', boundary)
-        for name in ('audit', 'text_runtime'):
+        for name in ('audit', 'text_runtime', 'engine_cleanup'):
             filename = f'test_reader_djvu_{name}.mjs'
             shutil.copyfile(ROOT / 'tests/reader/djvu' / filename, directory / filename)
         # Only the explicit test scripts change in these live negatives; their

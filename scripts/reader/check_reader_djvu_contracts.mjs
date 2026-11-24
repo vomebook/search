@@ -19,7 +19,8 @@ if (result.stdout) process.stdout.write(result.stdout);
 if (result.stderr) process.stderr.write(result.stderr);
 if (result.error) throw result.error;
 const audit = spawnSync(process.execPath, ['--test', '--test-reporter=tap',
-  'tests/reader/djvu/test_reader_djvu_audit.mjs', 'tests/reader/djvu/test_reader_djvu_text_runtime.mjs'], {encoding: 'utf8'});
+  'tests/reader/djvu/test_reader_djvu_audit.mjs', 'tests/reader/djvu/test_reader_djvu_text_runtime.mjs',
+  'tests/reader/djvu/test_reader_djvu_engine_cleanup.mjs'], {encoding: 'utf8'});
 if (audit.error) throw audit.error;
 const auditComplete = audit.status === 0 && hasCompleteFlatTapReport(audit.stdout || '');
 if (!auditComplete) process.stderr.write((audit.stdout || '') + (audit.stderr || ''));

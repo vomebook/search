@@ -16,6 +16,12 @@ const gates = [
 
 // Run boundary regressions separately so they cannot change the coverage gates below.
 const boundaryTests = [
+  {file: "tests/reader/pdf-search/test_native_pdf_progress.mjs", names: [
+    "native PDF publishes final search progress once with the complete first page",
+    "native PDF distinguishes a completed no-match search from absent text",
+    "native PDF does not publish twice after cancellation during the final yield"]},
+  {file: "tests/reader/test_reader_bookmark_handoff.mjs", names: [
+    "bookmark handoff only cleans matching navigation and preserves other state"]},
   {file: "tests/reader/chapters/test_chapter_format_validation.mjs", names: ["tests/reader/chapters/test_chapter_format_validation.mjs"], marker: "chapter metadata validation and prefetch sizes passed"},
   {file: "tests/reader/core/test_pdf_text_context.js", names: ["tests/reader/core/test_pdf_text_context.js"]},
   {file: "tests/reader/core/test_reader_contract_pdf_document.js", names: ["tests/reader/core/test_reader_contract_pdf_document.js"]},

@@ -2,6 +2,18 @@
   "version": 1,
   "project": "github",
   "tests": {
+    "tests/reader/djvu/test_reader_djvu_engine_cleanup.mjs": {
+      "kind": "script",
+      "source": "scripts/reader/check_reader_djvu_contracts.mjs"
+    },
+    "tests/reader/pdf-search/test_native_pdf_progress.mjs": {
+      "kind": "script",
+      "source": "scripts/reader/check_reader_core_coverage.mjs"
+    },
+    "tests/reader/test_reader_bookmark_handoff.mjs": {
+      "kind": "script",
+      "source": "scripts/reader/check_reader_core_coverage.mjs"
+    },
     "tests/gates/test_ci_ubuntu_mirror.py": {
       "kind": "script",
       "source": "scripts/ci/check_pages_source.sh"

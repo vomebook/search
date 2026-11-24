@@ -225,12 +225,12 @@ function benchmark(options, corpus, source) {
     searchOrderCache.set(cacheKey, ordered);
     return pageResult(ordered, params);
   }
-  let matched = [];`;
+  let filtered;`;
   if (source.split(boundary).length !== 2) throw new Error("cannot instrument search order cache miss path");
   const instrumentedBoundary = boundary
     .replace("    return pageResult(ordered, params);",
       "    globalThis.__benchmarkSearchCacheHits++;\n    return pageResult(ordered, params);")
-    .replace("  let matched = [];", "  globalThis.__benchmarkSearchCacheMisses++;\n  let matched = [];");
+    .replace("  let filtered;", "  globalThis.__benchmarkSearchCacheMisses++;\n  let filtered;");
   const instrumented = source.replace(boundary, instrumentedBoundary);
   const context = {self: {addEventListener() {}, postMessage() {}},
     __benchmarkSearchCacheHits: 0, __benchmarkSearchCacheMisses: 0};
