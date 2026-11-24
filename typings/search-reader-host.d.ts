@@ -24,7 +24,7 @@ interface ReaderReturnController {
 interface ReaderHostSnapshot { readonly results: readonly unknown[]; readonly loadedPage: number }
 interface ReaderHostMessage {
   origin: string; source: MessageEventSource | null;
-  data: { type?: string; state?: string; theme?: string; url?: string;
+  data: { type?: string; theme?: string; url?: string;
     progress?: {url?: unknown; closeTime?: unknown} | null };
 }
 interface ReaderHostDependencies {
@@ -44,7 +44,7 @@ declare var VoiceOfMLReaderReturn: { create(deps: ReaderReturnDependencies): Rea
 declare var VoiceOfMLReaderHost: { create(deps: ReaderHostDependencies): {
   readonly navigation: ReturnType<SearchReaderNavigationApi['createNavigation']>;
   readonly keys: readonly string[]; readonly overlay: HTMLIFrameElement | null;
-  readonly closing: boolean; readonly uiState: string; readonly returnSnapshot: ReaderHostSnapshot | null;
+  readonly closing: boolean; readonly returnSnapshot: ReaderHostSnapshot | null;
   currentReaderSearchParams(): URLSearchParams; normalizeReaderReturnUrl(raw: string): string;
   syncReaderFolderFilter(raw: string): string;
   closeReaderOverlay(focus?: boolean, scroll?: boolean): boolean;

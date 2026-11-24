@@ -1,7 +1,7 @@
 import { test, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
-import { createReaderFormatController, readerSourceExtension } from "../../../static/reader/formats/reader-format-controller.mjs";
+import { createReaderFormatController } from "../../../static/reader/formats/reader-format-controller.mjs";
 import { createReaderLifecycle } from "../../../static/reader/core/reader-lifecycle.mjs";
 import { createReaderProgress } from "../../../static/reader/ui/reader-progress.mjs";
 
@@ -42,16 +42,15 @@ test("resolution ignores non-string extensions and preserves the existing extens
   assert.equal(f.context.extension, "pdf-pages");
 });
 
-test("direct and resolved PDF links retain legacy page-manifest mode", async () => {
-  const path = "/api/reader-bucket-resource?path=objects%2Fpage-manifest.json";
-  const url = `https://example.test${path}`;
-  assert.equal(readerSourceExtension("pdf", path, url), "pdf-pages");
-  assert.equal(readerSourceExtension("pdf", "https://example.test/book.pdf"), "pdf");
-  assert.equal(readerSourceExtension("image-pages", url), "image-pages");
-  const f = fixture({ url, extension: "PDF" });
-  await f.controller.resolveReaderSource();
-  assert.equal(f.context.extension, "pdf-pages");
-  assert.equal(f.context.capability.mode, "pdf-pages");
+test("explicit PDF and page-manifest modes follow the resolved extension", async () => {
+  const url = "https://example.test/api/reader-bucket-resource?path=objects%2Fpage-manifest.json";
+  for (const [extension, mode] of [["PDF-PAGES", "pdf-pages"], ["PDF", "pdf"], ["IMAGE-PAGES", "image-pages"]]) {
+    const f = fixture({ url, extension });
+    await f.controller.resolveReaderSource();
+    assert.equal(f.context.sourceUrl, url);
+    assert.equal(f.context.extension, mode);
+    assert.equal(f.context.capability.mode, mode);
+  }
 });
 
 test("resolution retains string and legacy DJVU semantics", async () => {

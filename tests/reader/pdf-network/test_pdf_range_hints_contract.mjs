@@ -36,6 +36,13 @@ assert.equal(isFirstPageCandidate(encode(tree(sparse)),8*1024*1024-1,PDF_ADAPTIV
 assert.equal(isFirstPageCandidate(encode(tree(sparse)),large,chunk),false);
 const twoChildren = encode('%PDF-1.7\n2 0 obj\n<</Type/Pages/Count 500/Kids[3 0 R 11 0 R]>>\nendobj');
 assert.equal(isFirstPageCandidate(twoChildren,large,chunk),true);
+// Both tree consumers must reject malformed references and low direct counts.
+for (const bad of [
+  '%PDF-1.7\n2 0 obj\n<</Type/Pages/Count 127/Kids[3 0 R 11 0 R]>>\nendobj',
+  '%PDF-1.7\n2 0 obj\n<</Type/Pages/Count 500 0 R/Kids[3 0 R 11 0 R]>>\nendobj',
+  '%PDF-1.7\n2 0 obj\n<</Type/Pages/Count 500/Kids[3 0 R junk 11 0 R]>>\nendobj',
+]) assert.equal(isFirstPageCandidate(encode(bad),large,chunk),false);
+assert.equal(choosePdfRangeChunkSize(encode(tree(sparse).replace('/Count 160','/Count 160 0 R')),large),chunk);
 assert.equal(isFirstPageCandidate(twoChildren,large,chunk/16),true);
 assert.equal(isFirstPageCandidate(twoChildren,large-63*1024*1024,chunk),false);
 const total=10*1024*1024;

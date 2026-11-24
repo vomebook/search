@@ -22,20 +22,20 @@ const boundaryTests = [
   {file: "tests/reader/core/test_reader_format_controller_boundary.mjs", names: [
     "DjVu loader remains a separate module at the Pages runtime URL",
     "resolution ignores non-string extensions and preserves the existing extension",
-    "direct and resolved PDF links retain legacy page-manifest mode",
+    "explicit PDF and page-manifest modes follow the resolved extension",
     "resolution retains string and legacy DJVU semantics",
     "classification is narrowed at the fail boundary without coercion",
     "dynamic lifecycle code remains uncoerced and is narrowed by the controller",
     "image fallback only accepts a string original extension"]},
   {file: "tests/reader/core/test_reader_source_boundary.mjs", names: [
-    "exact old Web Reader URLs resolve as original-source IDs",
     "download validates unknown JSON and preserves server messages",
     "download handles null, primitive and abort errors without losing cleanup",
     "a derived text preview still downloads the original VCF with its exact filename",
     "normal and early resolution validate metadata while retaining extra fields",
     "non-record metadata is rejected before use in both resolution paths and application",
     "optional nulls and mixed folders survive resolution and application",
-    "early lookup retries timeout and rethrows null rejection"]},
+    "early lookup retries timeout and rethrows null rejection",
+    "lookup retries share the same delay and attempt budget after cleanup"]},
   {file: "tests/reader/security/test_reader_security_boundary.js", names: ["tests/reader/security/test_reader_security_boundary.js"]}
 ];
 for (const {file, names, marker} of boundaryTests) {

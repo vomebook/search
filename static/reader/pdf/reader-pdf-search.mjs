@@ -102,9 +102,13 @@ export function createReaderPdfSearch(readerContext) {
     return readerContext.pdfBookSearchClient;
   }
 
+  function pdfBookPrefetchAvailable() {
+    return !readerContext.pdfBookSearchPrefetchPromise && !!readerContext.ocrManifestUrl &&
+      ["pdf", "pdf-pages"].includes(/** @type {string} */ (readerContext.capability.mode)) && !navigator.connection?.saveData;
+  }
+
   async function prefetchPdfBookSearch() {
-    if (readerContext.readerAbortController.signal.aborted || readerContext.pdfBookSearchPrefetchPromise || !readerContext.ocrManifestUrl ||
-        !["pdf", "pdf-pages"].includes(/** @type {string} */ (readerContext.capability.mode)) || navigator.connection?.saveData) return;
+    if (readerContext.readerAbortController.signal.aborted || !pdfBookPrefetchAvailable()) return;
     const connection = navigator.connection;
     if (["slow-2g", "2g"].includes(/** @type {string} */ (connection?.effectiveType))) return;
     readerContext.pdfBookSearchPrefetchPromise = (async () => {
@@ -117,8 +121,7 @@ export function createReaderPdfSearch(readerContext) {
   }
 
   function schedulePdfBookSearchPrefetch() {
-    if (readerContext.pdfBookSearchPrefetchTimer || readerContext.pdfBookSearchPrefetchPromise || !readerContext.ocrManifestUrl ||
-        !["pdf", "pdf-pages"].includes(/** @type {string} */ (readerContext.capability.mode)) || navigator.connection?.saveData) return;
+    if (readerContext.pdfBookSearchPrefetchTimer || !pdfBookPrefetchAvailable()) return;
     readerContext.pdfBookSearchPrefetchTimer = setTimeout(() => {
       readerContext.pdfBookSearchPrefetchTimer = 0;
       const idle = window.requestIdleCallback || ((callback) => setTimeout(callback, 0));
@@ -452,7 +455,8 @@ export function createReaderPdfSearch(readerContext) {
       throw Object.assign(new Error(verified ? "此文件没有可搜索文字" : "当前未能找到可搜索文字"),
         {code:verified ? "READER_NO_SEARCHABLE_TEXT" : "READER_TEXT_UNCONFIRMED"});
     }
-    readerContext.publishPdfSearchProgress(generation, groups, total, pattern, firstPage, pdf.numPages, pdf.numPages);
+    // The last page already published the complete results. The controller
+    // marks the search complete and renders its final status on return.
     return firstPage;
   }
 

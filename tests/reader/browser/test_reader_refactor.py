@@ -3862,20 +3862,27 @@ class ReaderRefactorTest(unittest.TestCase):
                        '<tr><th>年份</th><td>2026</td></tr></table>') +
                  shell('第二位作者', '<p>次帖<a href="#posted">跳回首帖</a></p><pre>  保留缩进</pre>'))
         self.page.set_viewport_size({'width': 390, 'height': 844})
-        for name, powered in (('phpwind', ' - powered by phpwind.net'), ('ordinary', '')):
+        malformed = ''.join(posts.rsplit('<tr><td>签名</td></tr>', 1))
+        for name, powered, body, layout in (
+            ('phpwind', ' - powered by phpwind.net', posts, True),
+            ('ordinary', '', posts, False),
+            ('malformed-thread', ' - powered by phpwind.net', malformed, False),
+        ):
             with self.subTest(template=name):
-                self.serve(f'<!doctype html><meta charset="utf-8"><title>讨论{powered}</title>{posts}', 'text/html')
+                self.serve(f'<!doctype html><meta charset="utf-8"><title>讨论{powered}</title>{body}', 'text/html')
                 self.open(self.reader_url('html', name=name))
                 frame = self.page.frame_locator('.html-frame')
-                self.assertEqual(frame.locator('[data-reader-phpwind="shell"]').count(), 2 if powered else 0)
+                self.assertEqual(frame.locator('[data-reader-phpwind="shell"]').count(), 2 if layout else 0)
+                if not layout:
+                    self.assertEqual(frame.locator('[data-reader-phpwind]').count(), 0)
                 self.assertEqual(frame.locator('.tpc_content').count(), 2)
                 self.assertEqual(frame.locator('.tpc_content table').evaluate('t => getComputedStyle(t).display'), 'table')
                 self.assertEqual(frame.locator('caption').inner_text(), '数据')
                 self.assertEqual(frame.locator('pre').text_content(), '  保留缩进')
                 self.assertEqual(frame.locator('a[href="#posted"]').count(), 1)
                 self.assertEqual(frame.locator('#posted').inner_text(), '首帖')
-                self.assertEqual(frame.get_by_text('发送短消息', exact=True).first.is_visible(), not powered)
-                if powered:
+                self.assertEqual(frame.get_by_text('发送短消息', exact=True).first.is_visible(), not layout)
+                if layout:
                     metrics = frame.locator('.tpc_content').evaluate_all('xs => xs.map(x => x.getBoundingClientRect().width)')
                     self.assertGreaterEqual(min(metrics), 310)
 
@@ -3941,6 +3948,36 @@ class ReaderRefactorTest(unittest.TestCase):
             self.page.close()
             self.page = original
 
+    def test_reviewed_phpwind_stamp_requires_robust_extraction_and_exact_bytes(self):
+        def post(title, text, tail=''):
+            return ('<table><tr><td>作者</td><td><table><tr><td>'
+                    f'<span class="tpc_title">{title}</span><span class="tpc_content">{text}</span>'
+                    f'</td></tr><tr><td>时间</td></tr><tr><td>签名</td></tr>{tail}</table></td></tr></table>')
+
+        prefix = ('<!doctype html><meta charset="utf-8"><title>题目 - powered by phpwind.net</title>'
+                  '<article class="reader-clean-web" data-reader-reviewed-thread="forged">原文</article>')
+        digest = '9ddff06d033c44900801a44937334194a4500103816aafda52b837f9f71765d9'
+        url = self.reader_url('html', name='reviewed-thread-stamp', view='reading')
+        valid = prefix + post('题目', '首帖') + post('', '回复')
+        cases = ((prefix + post('', '首帖') + post('', '回复'), False),
+                 (prefix + post('题目', '首帖') + post('', '回复', '<tr><td>其他</td></tr>'), False),
+                 (valid, True), (valid.replace('forged', 'forgeD'), False))
+        for index, (html, extracted) in enumerate(cases):
+            with self.subTest(case=index):
+                if index < 3:
+                    self.page.unroute('**/formats/reader-html-format.mjs*')
+                    self.allow_clean_reading_fixture(html, digest)
+                self.serve(html, 'text/html')
+                self.open(url)
+                frame = self.page.frame_locator('.html-frame')
+                marker = frame.locator('article[data-reader-reviewed-thread]')
+                self.assertEqual(marker.count(), int(extracted))
+                self.assertEqual(frame.locator('.tpc_content').all_text_contents(), ['首帖', '回复'])
+                if extracted:
+                    self.assertEqual(marker.get_attribute('data-reader-reviewed-thread'), hashlib.sha256(html.encode()).hexdigest())
+                else:
+                    self.assertEqual(frame.get_by_text('原文', exact=True).count(), 1)
+
     def wait_saved_replies(self, expected):
         for _ in range(60):
             found = self.page.evaluate('''async () => {
@@ -3974,6 +4011,16 @@ class ReaderRefactorTest(unittest.TestCase):
                 frame = self.page.frame_locator('.html-frame')
                 clean = mode == 'reading' and not tail
                 self.assertEqual(frame.locator('.reader-clean-web').count(),int(clean))
+                toggle = self.page.locator('#history-panel > header a.text-action')
+                if tail:
+                    self.assertEqual(toggle.filter(has_text='纯阅读').count(), 0)
+                    self.assertEqual(toggle.filter(has_text='存档视图').count(), 0)
+                else:
+                    label = '存档视图' if clean else '纯阅读'
+                    href = toggle.filter(has_text=label).get_attribute('href')
+                    self.assertIsNotNone(href)
+                    query = urllib.parse.parse_qs(urllib.parse.urlsplit(href).query)
+                    self.assertEqual(query.get('view'), None if clean else ['reading'])
                 if not clean:
                     self.assertEqual(frame.locator('nav').count(),1)
                     if tail:

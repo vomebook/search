@@ -52,7 +52,6 @@ export interface ReaderUiContext {
   clearSearchHighlights(view: HTMLElement): void;
   highlightPanelItem(item: HTMLElement, query: string): void;
   readerUiHistoryState: string;
-  isReaderOverlayFrame(): boolean;
   panelAnimationTimer: number;
   readerPanelInteractionSerial: number;
   selectPanel(name: string): void;

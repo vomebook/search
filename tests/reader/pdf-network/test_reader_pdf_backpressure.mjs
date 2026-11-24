@@ -336,6 +336,28 @@ try {
     assert.equal(response.status,429);assert.equal(calls.length,1);assert.equal(calls[0].method,'HEAD');
     assert.equal(calls[0].headers.get('If-None-Match'),'"stable"');policy.dispose();
   }
+  // Temporary-status recovery applies to a full GET or one bounded Range,
+  // not a conditional or open-ended Range. Each attempt retains its headers.
+  for (const [name, requestHeaders, status, expectedCalls] of [
+    ['full GET', {}, 200, 2],
+    ['bounded Range', {Range:'bytes=0-3'}, 206, 2],
+    ['conditional Range', {Range:'bytes=0-3','If-Range':'"stable"'}, 503, 1],
+    ['open-ended Range', {Range:'bytes=0-'}, 503, 1]
+  ]) {
+    const requests=[];
+    globalThis.fetch=async (_input,init)=>{
+      requests.push([...new Headers(init.headers)]);
+      if(requests.length===1)return new Response(null,{status:503});
+      return new Response(bytes,{status,headers:status===206 ? headers : {ETag:'"stable"','Content-Length':'4'}});
+    };
+    const policy=createPdfFetchPolicy(opts);policy.add(['/a.pdf']);
+    try {
+      const response=await fetch('/a.pdf',{headers:requestHeaders});
+      assert.equal(response.status,status,name);
+      if(status!==503)assert.deepEqual(new Uint8Array(await response.arrayBuffer()),bytes,name);
+      assert.deepEqual(requests,Array.from({length:expectedCalls},()=>[...new Headers(requestHeaders)]),name);
+    } finally {policy.dispose();}
+  }
   // Three callers rejected in the same burst resume one by one rather than
   // immediately reissuing all their requests together.
   {

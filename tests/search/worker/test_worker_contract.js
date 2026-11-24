@@ -755,15 +755,15 @@ test("cached single-character pages skip rescans without weakening eviction or g
   const params={q:'a',exact:false,pageSize:17};
   const first=await worker.request('local-search',params);
   const completeFirstPage=await worker.request('local-search',{...params,pageSize:500});
-  vm.runInContext(`globalThis.savedPrepareChar = prepareSingleCharacter;
+  vm.runInContext(`globalThis.savedPrepareLiteral = prepareLiteralScan;
     globalThis.savedPrepareIndex = prepareSearchIndex;
-    prepareSingleCharacter = () => {throw Error('cached page rescanned')};
+    prepareLiteralScan = () => {throw Error('cached page rescanned')};
     prepareSearchIndex = () => {throw Error('cached page rebuilt index')};`,worker.context);
   const later=await worker.request('local-search',{...params,page:2,pageSize:23});
   assert.strictEqual(later.total,first.total);
   assert.deepStrictEqual(later.ids,completeFirstPage.ids.slice(23,46));
   assert.strictEqual(later.snapshot_generation,first.snapshot_generation);
-  vm.runInContext('prepareSingleCharacter = savedPrepareChar; prepareSearchIndex = savedPrepareIndex',worker.context);
+  vm.runInContext('prepareLiteralScan = savedPrepareLiteral; prepareSearchIndex = savedPrepareIndex',worker.context);
   const paged=await worker.request('local-search',{...params,page:1,pageSize:500});
   const anchor = 'Repo/A\0docs/root/alpha 1199.txt';
   vm.runInContext(`globalThis.savedFields = getRecordSearchFields;

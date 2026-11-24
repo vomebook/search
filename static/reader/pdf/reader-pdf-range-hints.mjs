@@ -121,6 +121,18 @@ export function firstImageSectionEnd(bytes, total, chunkSize) {
   return image.end;
 }
 
+// Extract only conventional direct page references; malformed arrays are not hints.
+/** @param {string} text @param {number} minRefs @param {number} maxRefs */
+function pageTreeRefs(text, minRefs, maxRefs) {
+  const count = /\/Count\s+(\d+)(?!\s+\d+\s+R)(?=[\s/>]|$)/.exec(text);
+  const kids = /** @type {(RegExpExecArray & [string, string]) | null} */ (/\/Kids\s*\[([^\]]*)\]/.exec(text));
+  if (!count || !kids || Number(count[1]) < PDF_MIN_SPARSE_PAGES) return null;
+  const refs = kids[1].match(/\b\d+\s+\d+\s+R\b/g) || [];
+  if (refs.length < minRefs || refs.length > maxRefs || refs.length > Number(count[1]) ||
+      kids[1].replace(/\b\d+\s+\d+\s+R\b/g, '').trim() !== '') return null;
+  return refs;
+}
+
 // This is a scheduling hint, not a PDF parser or a source of page identities.
 // For a directly declared large flat /Pages node, PDF.js still validates the
 // entire page tree, but its dispersed metadata is cheaper to read in smaller
@@ -143,14 +155,8 @@ export function choosePdfRangeChunkSize(bytes, total, fallback = PDF_DEFAULT_CHU
     const text = head.slice(object.index, end);
     objectHeader.lastIndex = end + 6;
     if (!/\/Type\s*\/Pages(?=[\s/>]|$)/.test(text)) continue;
-    const count = /\/Count\s+(\d+)(?!\s+\d+\s+R)(?=[\s/>]|$)/.exec(text);
-    const kids = /** @type {(RegExpExecArray & [string, string]) | null} */ (/\/Kids\s*\[([^\]]*)\]/.exec(text));
-    if (!count || !kids || Number(count[1]) < PDF_MIN_SPARSE_PAGES) continue;
-    // Counting only conventional indirect references avoids relying on random
-    // byte strings in an arbitrary content stream or on a malformed array.
-    const refs = kids[1].match(/\b\d+\s+\d+\s+R\b/g) || [];
-    if (refs.length < PDF_MIN_SPARSE_PAGES || refs.length > 4096 || refs.length > Number(count[1]) ||
-        kids[1].replace(/\b\d+\s+\d+\s+R\b/g, '').trim() !== '') continue;
+    const refs = pageTreeRefs(text, PDF_MIN_SPARSE_PAGES, 4096);
+    if (!refs) continue;
     const numbers = refs.map(ref => Number.parseInt(ref, 10));
     if (!numbers.every(Number.isSafeInteger)) continue;
     let ordered = true;
@@ -239,21 +245,16 @@ function chooseLargeFlatTreeChunkSize(bytes, fallback) {
         /\/Kids\s*\[[^\[\]]*\]/.test(dictionary) &&
         !/[\[\]{}]/.test(dictionary.replace(/\[[^\[\]]*\]/g, ''));
       if (!directKidsOnly) return fallback;
-      const count = /\/Count\s+(\d+)(?!\s+\d+\s+R)(?=[\s/>]|$)/.exec(dictionary);
-      const kids = /** @type {(RegExpExecArray & [string, string]) | null} */ (/\/Kids\s*\[([^\]]*)\]/.exec(dictionary));
-      if (count && kids && Number(count[1]) >= PDF_MIN_SPARSE_PAGES) {
-        const refs = kids[1].match(/\b\d+\s+\d+\s+R\b/g) || [];
-        if (refs.length >= PDF_MIN_SPARSE_PAGES && refs.length <= 4096 && refs.length <= Number(count[1]) &&
-            kids[1].replace(/\b\d+\s+\d+\s+R\b/g, '').trim() === '') {
-          const numbers = refs.map(ref => Number.parseInt(ref,10));
-          const tail = numbers.slice(1);
-          const ordered = tail.every((number,index) => Number.isSafeInteger(number) &&
-            (!index || number > /** @type {number} */ (tail[index-1])));
-          const firstNumber = /** @type {number} */ (numbers[0]);
-          if (Number.isSafeInteger(firstNumber) && ordered && !tail.includes(firstNumber)) {
-            const min = Math.min(...numbers), max = Math.max(...numbers);
-            if (max - min >= refs.length * 2) return PDF_LARGE_FLAT_CHUNK_BYTES;
-          }
+      const refs = pageTreeRefs(dictionary, PDF_MIN_SPARSE_PAGES, 4096);
+      if (refs) {
+        const numbers = refs.map(ref => Number.parseInt(ref,10));
+        const tail = numbers.slice(1);
+        const ordered = tail.every((number,index) => Number.isSafeInteger(number) &&
+          (!index || number > /** @type {number} */ (tail[index-1])));
+        const firstNumber = /** @type {number} */ (numbers[0]);
+        if (Number.isSafeInteger(firstNumber) && ordered && !tail.includes(firstNumber)) {
+          const min = Math.min(...numbers), max = Math.max(...numbers);
+          if (max - min >= refs.length * 2) return PDF_LARGE_FLAT_CHUNK_BYTES;
         }
       }
     }
@@ -304,11 +305,7 @@ export function isFirstPageCandidate(bytes, total, rangeChunkSize) {
     const text = head.slice(object.index, end);
     objects.lastIndex = end + 6;
     if (!/\/Type\s*\/Pages(?=[\s/>]|$)/.test(text)) continue;
-    const count = /\/Count\s+(\d+)(?!\s+\d+\s+R)(?=[\s/>]|$)/.exec(text);
-    const kids = /** @type {(RegExpExecArray & [string, string]) | null} */ (/\/Kids\s*\[([^\]]*)\]/.exec(text));
-    if (!count || Number(count[1]) < PDF_MIN_SPARSE_PAGES || !kids) continue;
-    const refs = kids[1].match(/\b\d+\s+\d+\s+R\b/g) || [];
-    if (refs.length === 2 && kids[1].replace(/\b\d+\s+\d+\s+R\b/g, "").trim() === "") return true;
+    if (pageTreeRefs(text, 2, 2)) return true;
   }
   return false;
 }

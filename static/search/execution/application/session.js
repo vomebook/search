@@ -3,6 +3,7 @@
 (function (root) {
     const DB_NAME = "voiceofml-search-state";
     const SESSION_TIMEOUT_MS = 1500;
+    const RESTORE_EVENTS = ["popstate", "hashchange", "pagehide", "input", "compositionstart", "compositionupdate", "compositionend"];
 
     // A deadline settles the caller, but only a native terminal event retires
     // the operation. In particular, blocked opens cannot be cancelled.
@@ -177,10 +178,9 @@
         const startingKey = navigation?.currentEntry?.key;
         let cancelled = false;
         const cancel = () => { cancelled = true; };
-        const events = ["popstate", "hashchange", "pagehide", "input", "compositionstart", "compositionupdate", "compositionend"];
         let db;
         try {
-          for (const type of events) window.addEventListener(type, cancel, true);
+          for (const type of RESTORE_EVENTS) window.addEventListener(type, cancel, true);
           db = await openSearchSessionDB();
           const transaction = db.transaction("session", "readonly");
           const completion = watchTransaction(transaction);
@@ -208,7 +208,7 @@
         } catch (_) {
           return false;
         } finally {
-          for (const type of events) window.removeEventListener(type, cancel, true);
+          for (const type of RESTORE_EVENTS) window.removeEventListener(type, cancel, true);
           if (db) db.close();
         }
       }

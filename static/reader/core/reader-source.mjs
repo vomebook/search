@@ -150,6 +150,7 @@ export function createReaderSource(readerContext) {
   async function resolveReaderId(id) {
     const endpoint = `https://voiceofml-search.hf.space/api/reader-resolve?id=${encodeURIComponent(id)}`;
     for (let attempt = 0; attempt < 2; attempt++) {
+      let status;
       const early = /** @type {{id: string, promise: Promise<{ok: boolean, status: number, data: unknown}>, dispose: () => void} | null | undefined} */ (window.__VOICE_READER_RESOLVE__);
       if (!attempt && early?.id === id) {
         window.__VOICE_READER_RESOLVE__ = null;
@@ -164,21 +165,20 @@ export function createReaderSource(readerContext) {
         }
         finally { untrack(); early.dispose(); }
         if (result.ok) return parseMetadata(result.data);
-        if (![408, 429, 500, 502, 503, 504].includes(result.status))
-          throw new Error(`HTTP ${result.status}`);
-        await readerContext.waitForReader(350);
-        continue;
+        status = result.status;
+      } else {
+        const response = await readerContext.readerRequestManager.requestBuffered(
+          endpoint, readerContext.READER_PROXY_TIMEOUT_MS, VoiceOfMLReaderSecurity.LIMITS.manifestBytes);
+        if (response.ok) {
+          /** @type {unknown} */
+          const data = await response.json();
+          return parseMetadata(data);
+        }
+        await response.body?.cancel();
+        status = response.status;
       }
-      const response = await readerContext.readerRequestManager.requestBuffered(
-        endpoint, readerContext.READER_PROXY_TIMEOUT_MS, VoiceOfMLReaderSecurity.LIMITS.manifestBytes);
-      if (response.ok) {
-        /** @type {unknown} */
-        const data = await response.json();
-        return parseMetadata(data);
-      }
-      await response.body?.cancel();
-      if (![408, 429, 500, 502, 503, 504].includes(response.status) || attempt)
-        throw new Error(`HTTP ${response.status}`);
+      if (![408, 429, 500, 502, 503, 504].includes(status) || attempt)
+        throw new Error(`HTTP ${status}`);
       await readerContext.waitForReader(350);
     }
     throw new Error("Reader ID resolution failed");

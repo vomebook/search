@@ -80,7 +80,8 @@ test("filter metadata rejects stale requests and uses static sidebar fallback", 
   assert.match(filters, /if \(renderId !== extensionFilterRenderId\) return/);
   assert.match(filters, /if \(deps\.readView\(\)\.mode !== renderMode \|\| deps\.readView\(\)\.repo !== renderRepo \|\| deps\.readView\(\)\.repoFull !== renderRepoFull\) return/);
   const directory = fs.readFileSync("static/search/sidebar/application/directory.js", "utf8");
-  assert.match(directory, /async function renderRepoList\(routeId\) \{[\s\S]*?var initial = await deps\.initial\(null\)/);
+  assert.match(directory, /async function renderRepoList\(routeId\) \{[\s\S]*?const initial = await deps\.initial\(null\)/);
+  assert.match(directory, /await deps\.initial\(null\)[\s\S]*?if \(!matchesRoute\(routeId, deps\.readView\(\)\.routeId\)\) return;\s*deps\.renderRepos\(initial\.repos\)/);
   assert.match(app, /function renderSidebar\(routeId\) \{\s*getSidebarDirectory\(\)\.render\(routeId\)/);
   assert.doesNotMatch(app, /if \(!currentExtNames\.length && STATE\.mode === "repo"\) currentExtNames = extensionList\.slice\(\)\.sort\(\)/);
 });
@@ -513,7 +514,7 @@ test("reader uses original files and lazy PDF canvas rendering", async () => {
   assertCode(reader, 'appendDecoded(decoder.decode(bytes), decoder.encoding)');
   assert.doesNotMatch(reader, /docx-preview|JSZip|renderDocx/);
   assert.match(app, /&& !rec\.ReaderLink\) return false/);
-  assert.match(contract, /asset\?\.b && bucketName !== "vomebook\/pdf-pages-v2" && bucketName !== "vomebook\/reader-assets-v2"/);
+  assert.match(contract, /asset\.b && bucketName !== "vomebook\/pdf-pages-v2" && bucketName !== "vomebook\/reader-assets-v2"/);
   assert.doesNotMatch(reader, /extension === "docx"/);
   assert.match(reader, /function fetchReaderResponse\(\)/);
   assertCode(reader, 'const READER_PROXY_TIMEOUT_MS = 120000;');
@@ -538,7 +539,8 @@ test("reader uses original files and lazy PDF canvas rendering", async () => {
    assert.match(reader, /renderVirtualToc/);
    assert.match(readerCss, /toc-list-virtualized/);
   assert.doesNotMatch(contract, /params\.set\("ocr"/);
-  assert.match(contract, /params\.set\("download"/);
+  assert.match(contract, /const originalSource = download \|\| originalLink \|\| ""/);
+  assert.match(contract, /\bdownload,\s*\n/);
   assert.match(contract, /ReaderExtension/);
   assert.match(contract, /pdf-pages/);
   assert.doesNotMatch(reader, /Reader-Assets/);
@@ -629,8 +631,9 @@ test("reader uses original files and lazy PDF canvas rendering", async () => {
   assert.match(readerHtml, /id="zoom" type="number"/);
   assert.match(readerHtml, /id="history-panel"/);
   assert.match(readerHtml, /id="reader-path"/);
-  assert.match(contract, /params\.set\("path"/);
-  assert.match(contract, /params\.set\("folder_url"/);
+  assert.match(contract, /path: repo && \(folder \? `\$\{repo\}\/\$\{folder\}` : repo\)/);
+  assert.match(contract, /folder_url: record\.FolderUrl \|\| record\.folderUrl/);
+  assert.match(contract, /for \(const \[key, value\] of Object\.entries\(extras\)\) \{\s*if \(value\) params\.set\(key, value\)/);
   assert.match(app, /FolderUrl: getReaderFolderUrl\(rec\)/);
   assertCode(reader, 'location.assign(folderNavigationTarget.href)');
   assert.match(readerStore, /indexedDB\.open\(DB_NAME, DB_VERSION\)/);

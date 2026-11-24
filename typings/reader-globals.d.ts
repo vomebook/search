@@ -150,7 +150,7 @@ interface VoiceOfMLSidebarPorts {
   icon(type: string | object): string;
 }
 declare var VoiceOfMLSearchSidebarRender: {
-  browserMarkup(data: VoiceOfMLSidebarEntries, repo: string, path: string, surface: "pages" | "space", ports: VoiceOfMLSidebarPorts): string;
+  browserMarkup(data: VoiceOfMLSidebarEntries, repo: string, path: string, ports: VoiceOfMLSidebarPorts): string;
 };
 interface VoiceOfMLSearchViewState {
   mode: string; repoFull: string | null; query: string; filterMinSize: number | null; filterMaxSize: number | null;

@@ -149,6 +149,79 @@ export function createReaderPdfPageWindow(readerContext) {
     }
   }
 
+  /** @typedef {import('../../../typings/reader-page-window-strict').WindowShell} WindowShell */
+
+  /** @param {(page: number) => HTMLElement} createShell @param {number} total @param {number} batchSize @param {number} earlyPage */
+  function startShellLayout(createShell, total, batchSize, earlyPage) {
+    const mounted = !readerContext.pdfShellWindow && earlyPage > 1 ? Promise.withResolvers() : null;
+    const shellsReady = readerContext.pdfShellsReady = readerContext.pdfShellWindow
+      ? Promise.resolve() : appendShellsBatched(createShell, total, batchSize, mounted
+        ? endPage => { if (endPage >= earlyPage) mounted.resolve(undefined); } : undefined);
+    shellsReady.catch(() => {});
+    // Start racing only when the caller needs the opening shell. The remaining
+    // batches still own the full-layout promise used by navigation and restore.
+    const waitForOpeningBatch = mounted && (() => Promise.race([mounted.promise, shellsReady]));
+    return {shellsReady, waitForOpeningBatch};
+  }
+
+  /** @param {boolean} imagePages */
+  function createPageObservers(imagePages) {
+    const root = readerContext.viewport;
+    const {signal} = readerContext.readerAbortController;
+    const prefetch = new IntersectionObserver(entries => {
+      for (const {target, isIntersecting} of entries) {
+        if (signal.aborted) return;
+        const shell = /** @type {HTMLElement} */ (target);
+        if (isIntersecting) {
+          shell.dataset.renderVisible = readerContext.isPdfPageVisible(shell) ? "1" : "0";
+          readerContext.renderPdfInBackground(shell);
+        } else if (!imagePages) shell.dataset.renderVisible = "0";
+      }
+    }, {root, rootMargin: `${readerContext.PDF_PREFETCH_MARGIN}px 0px`});
+    const visibleObserver = new IntersectionObserver(entries => {
+      for (const {target, isIntersecting} of entries) {
+        if (signal.aborted) return;
+        const shell = /** @type {HTMLElement} */ (target);
+        shell.dataset.renderVisible = isIntersecting ? "1" : "0";
+        if (!isIntersecting) continue;
+        readerContext.promotePdfRenderWaiter(shell);
+        // Don't restart an in-flight first PDF draw before the user scrolls.
+        if (imagePages || readerContext.pdfUserHasScrolled || shell.dataset.renderState !== "rendering")
+          readerContext.renderPdfInBackground(shell, false, readerContext.pdfPagePriority(shell));
+        if (imagePages && shell.dataset.renderState === "rendered") readerContext.renderPdfOcrText(shell);
+      }
+    }, {root, threshold: 0});
+    const observers = [prefetch, visibleObserver];
+    if (!imagePages) observers.push(new IntersectionObserver(() => readerContext.scheduleMarkerSync(), {
+      root, threshold: [0, 0.5, 1]
+    }));
+    readerContext.trackReaderResource(() => { for (const observer of observers) observer.disconnect(); });
+    let gated = true;
+    /** @param {WindowShell} shell */
+    const attach = shell => { for (const observer of observers) observer.observe(shell); };
+    return {
+      /** @param {WindowShell} shell */
+      observe(shell) {
+        if (gated) shell._pdfObserversPending = true;
+        else attach(shell);
+      },
+      /** @param {WindowShell} shell */
+      unobserve(shell) {
+        for (const observer of observers) observer.unobserve(shell);
+      },
+      release() {
+        gated = false;
+        // Query mounted shells at release, not the original batch: a jump can
+        // retire an unopened virtual chunk before its observers are attached.
+        for (const shell of /** @type {NodeListOf<WindowShell>} */ (readerContext.content.querySelectorAll(".reader-page"))) {
+          if (!shell._pdfObserversPending) continue;
+          delete shell._pdfObserversPending;
+          attach(shell);
+        }
+      }
+    };
+  }
+
   /** @param {Element} element */
   function pdfSelectionIntersects(element) {
     const selection = document.getSelection();
@@ -303,17 +376,14 @@ export function createReaderPdfPageWindow(readerContext) {
       return chunk.mounted && !chunk.element.contains(document.activeElement) &&
         !readerContext.pdfSelectionIntersects(chunk.element);
     }
-    /** @param {import('../../../typings/reader-page-window-strict').PdfWindowChunk} chunk */
-    function measureChunk(chunk) {
-      for (const shell of /** @type {HTMLCollectionOf<import('../../../typings/reader-page-window-strict').WindowShell>} */ (chunk.element.children)) {
-        const bounds = shell.getBoundingClientRect();
-        if (bounds.width && bounds.height) ratios.set(Number(shell.dataset.page), bounds.height / bounds.width);
-      }
+    /** @param {WindowShell} shell */
+    function measureShell(shell) {
+      const bounds = shell.getBoundingClientRect();
+      if (bounds.width && bounds.height) ratios.set(Number(shell.dataset.page), bounds.height / bounds.width);
     }
     /** @param {import('../../../typings/reader-page-window-strict').PdfWindowChunk} chunk @param {number} width */
     function unmount(chunk, width) {
-      if (!chunk.mounted || chunk.element.contains(document.activeElement) ||
-          readerContext.pdfSelectionIntersects(chunk.element)) return;
+      if (!canUnmount(chunk)) return;
       for (const shell of /** @type {HTMLCollectionOf<import('../../../typings/reader-page-window-strict').WindowShell>} */ (chunk.element.children)) {
         const page = Number(shell.dataset.page);
         shell._textEpoch = (shell._textEpoch || 0) + 1;
@@ -334,7 +404,8 @@ export function createReaderPdfPageWindow(readerContext) {
       const retiring = chunks.filter((chunk, i) => Math.abs(i - index) > 2 && canUnmount(chunk));
       const width = retiring.length ? readWidth() : 0;
       // Capture all retiring page geometry before mounting or removing any chunks.
-      for (const chunk of retiring) measureChunk(chunk);
+      for (const chunk of retiring)
+        for (const shell of /** @type {HTMLCollectionOf<WindowShell>} */ (chunk.element.children)) measureShell(shell);
       for (let i = Math.max(0, index - 2); i <= Math.min(chunks.length - 1, index + 2); i++)
         mount(/** @type {import('../../../typings/reader-page-window-strict').PdfWindowChunk} */ (chunks[i]));
       for (const chunk of retiring) unmount(chunk, width);
@@ -369,12 +440,15 @@ export function createReaderPdfPageWindow(readerContext) {
     seedShell = null;
     const resizeObserver = new ResizeObserver(() => resize());
     resizeObserver.observe(readerContext.viewport);
+    function resizePlaceholders() {
+      const width = readWidth();
+      for (const chunk of chunks) if (!chunk.mounted) chunk.element.style.height = `${chunkHeight(chunk, width)}px`;
+    }
     function resize() {
       if (disposed) return;
       const anchor = readerContext.pageAtMarker();
       const before = readerContext.isPdfPageVisible(anchor) ? /** @type {Element} */ (anchor).getBoundingClientRect().top : undefined;
-      const width = readWidth();
-      for (const chunk of chunks) if (!chunk.mounted) chunk.element.style.height = `${chunkHeight(chunk, width)}px`;
+      resizePlaceholders();
       if (anchor?.isConnected && before !== undefined)
         readerContext.viewport.scrollTop += anchor.getBoundingClientRect().top - before;
       schedule();
@@ -411,17 +485,14 @@ export function createReaderPdfPageWindow(readerContext) {
       },
       /** @param {import('../../../typings/reader-page-window-strict').WindowShell} shell */
       remember(shell) {
-        if (!shell.isConnected) return;
-        const bounds = shell.getBoundingClientRect();
-        if (bounds.width && bounds.height) ratios.set(Number(shell.dataset.page), bounds.height / bounds.width);
+        if (shell.isConnected) measureShell(shell);
       },
       // The caller owns anchor compensation (see seedPdfPageGeometry).
       /** @param {number} ratio */
       setDefaultRatio(ratio) {
         if (disposed || !(ratio > 0)) return;
         defaultRatio = ratio;
-        const width = readWidth();
-        for (const chunk of chunks) if (!chunk.mounted) chunk.element.style.height = `${chunkHeight(chunk, width)}px`;
+        resizePlaceholders();
       },
       schedule,
       resize,
@@ -576,7 +647,6 @@ export function createReaderPdfPageWindow(readerContext) {
     if (readerContext.ocrManifestUrl && !navigator.connection?.saveData) {
       readerContext.loadPdfOcrPage(initialPage).catch(() => {});
     }
-    let initialRenderGate = true;
     if (Array.isArray(toc) && toc.length)
       readerContext.setToc(
         toc.map((item) => ({
@@ -586,51 +656,7 @@ export function createReaderPdfPageWindow(readerContext) {
           activate: (generation) => readerContext.goToPage(item.page, generation)
         }))
       );
-    const observer = new IntersectionObserver(
-      (items) => {
-        if (readerContext.readerAbortController.signal.aborted) return;
-        for (const entry of items) if (entry.isIntersecting) {
-          /** @type {HTMLElement} */ (entry.target).dataset.renderVisible = readerContext.isPdfPageVisible(entry.target) ? "1" : "0";
-          readerContext.renderPdfInBackground(entry.target);
-        }
-      },
-      { root: readerContext.viewport, rootMargin: `${readerContext.PDF_PREFETCH_MARGIN}px 0px` }
-    );
-    const visibleObserver = new IntersectionObserver(
-      (items) => {
-        if (readerContext.readerAbortController.signal.aborted) return;
-        for (const entry of items) {
-          /** @type {HTMLElement} */ (entry.target).dataset.renderVisible = entry.isIntersecting ? "1" : "0";
-          if (entry.isIntersecting) {
-            readerContext.promotePdfRenderWaiter(entry.target);
-            readerContext.renderPdfInBackground(entry.target, false, readerContext.pdfPagePriority(entry.target));
-            if (/** @type {HTMLElement} */ (entry.target).dataset.renderState === "rendered") readerContext.renderPdfOcrText(entry.target);
-          }
-        }
-      },
-      { root: readerContext.viewport, threshold: 0 }
-    );
-    /** @param {import('../../../typings/reader-page-window-strict').WindowShell} shell */
-    const observeShell = (shell) => {
-      if (initialRenderGate) {
-        shell._pdfObserversPending = true;
-        return;
-      }
-      observer.observe(shell);
-      visibleObserver.observe(shell);
-    };
-    const releaseInitialRenderGate = () => {
-      initialRenderGate = false;
-      for (const shell of /** @type {NodeListOf<import('../../../typings/reader-page-window-strict').WindowShell>} */ (readerContext.content.querySelectorAll(".reader-page"))) {
-        if (!shell._pdfObserversPending) continue;
-        delete shell._pdfObserversPending;
-        observeShell(shell);
-      }
-    };
-    readerContext.trackReaderResource(() => {
-      observer.disconnect();
-      visibleObserver.disconnect();
-    });
+    const observers = createPageObservers(true);
     /** @param {number} page */
     const createShell = (page) => {
       const shell = document.createElement("section");
@@ -665,27 +691,20 @@ export function createReaderPdfPageWindow(readerContext) {
           openingImage.removeAttribute("src");
       }
       shell.addEventListener("focus", () => readerContext.renderPdfInBackground(shell));
-      observeShell(shell);
+      observers.observe(shell);
       return shell;
     };
     const firstShell = createShell(1);
     readerContext.content.appendChild(firstShell);
     readerContext.markReaderContentReady();
-    readerContext.pdfShellWindow = readerContext.createPdfShellWindow(totalPages, firstShell, createShell, (shell) => {
-      observer.unobserve(shell);
-      visibleObserver.unobserve(shell);
-    }, book.seedRatio || 1.414);
+    readerContext.pdfShellWindow = readerContext.createPdfShellWindow(totalPages, firstShell, createShell, observers.unobserve, book.seedRatio || 1.414);
     // The opening image only needs its own shell; history and the background
     // observers still wait for the complete layout.
-    const mounted = !readerContext.pdfShellWindow && initialPage > 1 ? Promise.withResolvers() : null;
-    const shellsReady = readerContext.pdfShellsReady = readerContext.pdfShellWindow
-      ? Promise.resolve() : appendShellsBatched(createShell, totalPages, 250, mounted
-        ? endPage => { if (endPage >= initialPage) mounted.resolve(undefined); } : undefined);
-    shellsReady.catch(() => {});
+    const {shellsReady, waitForOpeningBatch} = startShellLayout(createShell, totalPages, 250, initialPage);
     publishLayout();
     try {
       if (ownsOpeningPosition()) {
-        if (mounted) await Promise.race([mounted.promise, shellsReady]);
+        if (waitForOpeningBatch) await waitForOpeningBatch();
         readerContext.assertReaderActive();
         if (ownsOpeningPosition()) {
           const openingShell = readerContext.pdfShellWindow?.ensure(initialPage) || (initialPage === 1
@@ -717,7 +736,7 @@ export function createReaderPdfPageWindow(readerContext) {
               }
             }
           }
-          if (mounted) {
+          if (waitForOpeningBatch) {
             await shellsReady;
             // Near the temporary end the scroll can clamp. Align again before
             // releasing observers, but leave any newer navigation untouched.
@@ -732,7 +751,7 @@ export function createReaderPdfPageWindow(readerContext) {
       await shellsReady.catch(() => {});
       readerContext.pdfFirstPagePreload?.removeAttribute("src");
       readerContext.pdfFirstPagePreload = null;
-      if (!readerContext.readerAbortController.signal.aborted) releaseInitialRenderGate();
+      if (!readerContext.readerAbortController.signal.aborted) observers.release();
     }
     await shellsReady;
   }
@@ -786,6 +805,27 @@ export function createReaderPdfPageWindow(readerContext) {
 
   /** @typedef {import('../../../typings/reader-page-window-strict').PdfPreviewDocument | import('../../../typings/reader-page-window-strict').DirectDjvuDocument} VerifiedPdf */
   /** @typedef {{page: number, top: number | null}} PreviewAnchor */
+  /** @typedef {{generation: number, width: number, zoom: number}} PreviewDraw */
+
+  /** @param {WindowShell} shell @param {number} generation @returns {PreviewDraw} */
+  function previewDraw(shell, generation) {
+    return {generation, width: shell.clientWidth, zoom: readerContext.documentState.zoom};
+  }
+
+  /** @param {WindowShell} shell @param {number} page @param {PreviewDraw | undefined} draw @param {boolean} checkDraw */
+  function finishPreviewShell(shell, page, draw, checkDraw) {
+    // Invalidate completed canvases drawn for an old layout. A requested shell
+    // with an incomplete render keeps its in-flight state during the handoff.
+    if (checkDraw && (draw?.generation !== readerContext.readerRuntime.currentGeneration("pdf") ||
+        draw.width !== shell.clientWidth || draw.zoom !== readerContext.documentState.zoom))
+      delete shell.dataset.renderState;
+    shell.classList.remove("reader-pdf-opening");
+    shell.setAttribute("aria-label", `第 ${page} 页`);
+    delete shell.dataset.previewReady;
+    delete shell.dataset.previewPageReady;
+    shell.tabIndex = 0;
+    shell.addEventListener("focus", () => readerContext.renderPdfInBackground(shell));
+  }
   /** @param {VerifiedPdf | Promise<VerifiedPdf>} prepared */
   async function renderPdf(prepared) {
     const pdf = await prepared;
@@ -814,18 +854,25 @@ export function createReaderPdfPageWindow(readerContext) {
       const canPreview = !!known && (!saved || (savedPage === 1 && Number(saved?.pageOffset || 0) === 0 && !saved?.id));
       const lifetime = new AbortController();
       let preservePreview = false;
+      const discardPreviewPages = () => {
+        for (const shell of previewPages.values()) { shell._renderCancel?.(); shell.remove(); }
+      };
       const untrackPreview = readerContext.trackReaderResource(() => {
         lifetime.abort(readerContext.readerAbortError());
         previewPadding?.remove();
-        if (preservePreview) return;
-        for (const shell of previewPages.values()) { shell._renderCancel?.(); shell.remove(); }
+        if (!preservePreview) discardPreviewPages();
       });
       /** @type {HTMLElement | null} */
       let controls = null;
       let previousDisabled = false;
       let bookmarkDisabled = false;
       let verifiedCount = null;
-      let previewWidth = null, previewZoom = null;
+      /** @type {WeakMap<WindowShell, PreviewDraw>} */
+      const previewDraws = new WeakMap();
+      const claimPreviewNavigation = () => {
+        if (!previewNavigationChanged && saved) readerContext.beginReaderNavigation();
+        previewNavigationChanged = true;
+      };
       let provisionalDocument = false;
       let previewActive = true, previewCount = 1, previewPage = 1, previewTurnUntil = 0;
       /** @type {Promise<void> | null} */
@@ -892,9 +939,7 @@ export function createReaderPdfPageWindow(readerContext) {
           await readerContext.renderPdfShell(previewShell, false, true);
           readerContext.assertReaderActive();
           previewShell.dataset.previewReady = "1";
-          previewShell.dataset.previewPdfGeneration = String(pdfGeneration);
-          previewWidth = previewShell.clientWidth;
-          previewZoom = readerContext.documentState.zoom;
+          previewDraws.set(previewShell, previewDraw(previewShell, pdfGeneration));
           readerContext.markReaderContentReady();
           // Let the browser paint before validation competes for network/CPU.
           await Promise.race([readerContext.waitForReader(0, true), readerContext.waitForReader(100)]);
@@ -968,9 +1013,7 @@ export function createReaderPdfPageWindow(readerContext) {
               readerContext.renderPdfInBackground(shell, false, priority)?.then(() => {
                 if (!previewActive || shell.dataset.renderState !== "rendered") return;
                 shell.dataset.previewPageReady = "1";
-                shell.dataset.previewPdfGeneration = String(generation);
-                shell.dataset.previewWidth = String(shell.clientWidth);
-                shell.dataset.previewZoom = String(readerContext.documentState.zoom);
+                previewDraws.set(shell, previewDraw(shell, generation));
               }).catch(() => {});
             };
             /** @param {number} delta */
@@ -986,9 +1029,8 @@ export function createReaderPdfPageWindow(readerContext) {
                 }
                 return;
               }
-              if (!previewNavigationChanged && saved) readerContext.beginReaderNavigation();
+              claimPreviewNavigation();
               previewPage = Math.min(previewCount, Math.max(1, previewPage + delta));
-              previewNavigationChanged = true;
               previewTurnUntil = performance.now() + 1500;
               previewAnchor = {page:previewPage, top:null};
               let shell = previewPages.get(previewPage);
@@ -1029,8 +1071,7 @@ export function createReaderPdfPageWindow(readerContext) {
                 other._renderCancel?.();
               }
               renderPreview(shell, true);
-              if (delta > 0 && previewPage === previewCount) requestMore();
-              else if (delta > 0 && previewPage === previewCount - 1) scheduleMore();
+              if (delta > 0) loadNearFrontier();
             };
             /** @param {Event} event */
             const onPrevious = event => { event.stopImmediatePropagation(); turn(-1); };
@@ -1120,6 +1161,10 @@ export function createReaderPdfPageWindow(readerContext) {
                 requestMore();
               }, 200);
             };
+            const loadNearFrontier = () => {
+              if (previewPage === previewCount) requestMore();
+              else if (previewPage === previewCount - 1) scheduleMore();
+            };
             disconnectPreviewObserver=()=>previewObserver.disconnect();
             ensureSequentialShells();
             const onScroll = () => {
@@ -1127,12 +1172,10 @@ export function createReaderPdfPageWindow(readerContext) {
               const shell = readerContext.pageAtMarker();
               const number = Number(shell?.dataset.page);
               if (previewActive && shell && number >= 1 && number <= previewCount) {
-                if (number !== 1 && !previewNavigationChanged && saved) readerContext.beginReaderNavigation();
-                if (number !== 1) previewNavigationChanged = true;
+                if (number !== 1) claimPreviewNavigation();
                 previewPage = number;
                 previewAnchor = {page:number, top:shell.getBoundingClientRect().top};
-                if (number === previewCount) requestMore();
-                else if (number === previewCount - 1) scheduleMore();
+                loadNearFrontier();
               }
             };
             const onScrollIntent = () => {
@@ -1197,8 +1240,7 @@ export function createReaderPdfPageWindow(readerContext) {
           // A click at the frontier may still be waiting for the next ref when
           // full validation wins. Carry that request into the normal reader.
           if (pendingTurn > 0 && pendingTurn <= verifiedCount && pendingTurn === previewPage + 1) {
-            if (!previewNavigationChanged && saved) readerContext.beginReaderNavigation();
-            previewNavigationChanged = true;
+            claimPreviewNavigation();
             previewAnchor = {page:pendingTurn, top:readerContext.viewport.getBoundingClientRect().top};
           }
         } finally { clearTimeout(timer); }
@@ -1206,7 +1248,7 @@ export function createReaderPdfPageWindow(readerContext) {
         (/** @type {(() => void) | null} */ (cancelWarm))?.();
         (/** @type {HTMLDivElement | null} */ (previewPadding))?.remove();
         if (provisionalDocument && readerContext.pdfDocument === pdf) readerContext.pdfDocument = null;
-        for (const shell of previewPages.values()) { shell._renderCancel?.(); shell.remove(); }
+        discardPreviewPages();
         throw error;
       } finally {
         previewActive = false;
@@ -1217,11 +1259,13 @@ export function createReaderPdfPageWindow(readerContext) {
         cleanupControls();
         preservePreview = verifiedCount !== null && !readerContext.readerAbortController.signal.aborted;
         untrackPreview();
-        if (!readerContext.readerAbortController.signal.aborted) gateControls.hidden = gateWasHidden;
-        if (!readerContext.readerAbortController.signal.aborted && controls) {
-          controls.hidden = gateWasHidden;
-          readerContext.pageInput.disabled = previousDisabled;
-          readerContext.bookmarkRibbon.disabled = bookmarkDisabled;
+        if (!readerContext.readerAbortController.signal.aborted) {
+          gateControls.hidden = gateWasHidden;
+          if (controls) {
+            controls.hidden = gateWasHidden;
+            readerContext.pageInput.disabled = previousDisabled;
+            readerContext.bookmarkRibbon.disabled = bookmarkDisabled;
+          }
         }
       }
       readerContext.assertReaderActive();
@@ -1243,25 +1287,9 @@ export function createReaderPdfPageWindow(readerContext) {
           if (!requested && (incomplete || !shell.querySelector("canvas.ready"))) {
             shell.remove(); previewPages.delete(number); continue;
           }
-          shell.classList.remove("reader-pdf-opening");
-          shell.setAttribute("aria-label", `第 ${number} 页`);
-          if (!incomplete && (String(readerContext.readerRuntime.currentGeneration("pdf")) !== shell.dataset.previewPdfGeneration ||
-              Number(shell.dataset.previewWidth) !== shell.clientWidth || Number(shell.dataset.previewZoom) !== readerContext.documentState.zoom))
-            delete shell.dataset.renderState;
-          delete shell.dataset.previewPageReady; delete shell.dataset.previewPdfGeneration;
-          delete shell.dataset.previewWidth; delete shell.dataset.previewZoom;
-          shell.tabIndex = 0;
-          shell.addEventListener("focus", () => readerContext.renderPdfInBackground(shell));
+          finishPreviewShell(shell, number, previewDraws.get(shell), !incomplete);
         }
-        if (String(readerContext.readerRuntime.currentGeneration("pdf")) !== previewShell.dataset.previewPdfGeneration ||
-            previewWidth !== previewShell.clientWidth || previewZoom !== readerContext.documentState.zoom)
-          delete previewShell.dataset.renderState;
-        previewShell.classList.remove("reader-pdf-opening");
-        previewShell.setAttribute("aria-label", "第 1 页");
-        delete previewShell.dataset.previewReady;
-        delete previewShell.dataset.previewPdfGeneration;
-        previewShell.tabIndex = 0;
-        previewShell.addEventListener("focus", () => readerContext.renderPdfInBackground(/** @type {import('../../../typings/reader-page-window-strict').WindowShell} */ (previewShell)));
+        finishPreviewShell(previewShell, 1, previewDraws.get(previewShell), true);
       }
       if (previewAnchor && !previewPages.has(previewAnchor.page) && !previewNavigationChanged) previewAnchor = null;
     }
@@ -1324,7 +1352,6 @@ export function createReaderPdfPageWindow(readerContext) {
     readerContext.status.textContent = `${pdf.numPages} 页`;
     await readerContext.getInitialReaderRestoration();
     const initialPage = previewAnchor?.page || readerContext.initialReaderPage(pdf.numPages);
-    let initialRenderGate = true;
     const firstPage = ownsOpeningPosition() ? await Promise.race([
       readerContext.measurePdf(readerContext.awaitReader(pdf.getPage(initialPage)), "page", initialPage).catch(error => {
         if (!ownsOpeningPosition()) return null;
@@ -1333,62 +1360,14 @@ export function createReaderPdfPageWindow(readerContext) {
     ]) : null;
     readerContext.assertReaderActive();
     const firstViewport = firstPage?.getViewport({ scale: 1 }) || { width: 612, height: 792 };
-    const observer = new IntersectionObserver(
-      (entries) =>
-        entries.forEach((entry) => {
-          if (readerContext.readerAbortController.signal.aborted) return;
-          /** @type {HTMLElement} */ (entry.target).dataset.renderVisible = entry.isIntersecting && readerContext.isPdfPageVisible(entry.target) ? "1" : "0";
-          if (entry.isIntersecting) readerContext.renderPdfInBackground(entry.target);
-        }),
-      { root: document.querySelector("#viewport"), rootMargin: `${readerContext.PDF_PREFETCH_MARGIN}px 0px` }
-    );
-    const visibleObserver = new IntersectionObserver(
-      (entries) =>
-        entries.forEach((entry) => {
-          if (readerContext.readerAbortController.signal.aborted) return;
-          /** @type {HTMLElement} */ (entry.target).dataset.renderVisible = entry.isIntersecting ? "1" : "0";
-          if (entry.isIntersecting) {
-            readerContext.promotePdfRenderWaiter(entry.target);
-            if (readerContext.pdfUserHasScrolled || /** @type {HTMLElement} */ (entry.target).dataset.renderState !== "rendering")
-              readerContext.renderPdfInBackground(entry.target, false, readerContext.pdfPagePriority(entry.target));
-          }
-        }),
-      { root: document.querySelector("#viewport"), threshold: 0 }
-    );
-    const pageObserver = new IntersectionObserver(() => readerContext.scheduleMarkerSync(), {
-      root: document.querySelector("#viewport"),
-      threshold: [0, 0.5, 1]
-    });
-    /** @param {import('../../../typings/reader-page-window-strict').WindowShell} shell */
-    const observeShell = (shell) => {
-      if (initialRenderGate) {
-        shell._pdfObserversPending = true;
-        return;
-      }
-      observer.observe(shell);
-      visibleObserver.observe(shell);
-      pageObserver.observe(shell);
-    };
-    const releaseInitialRenderGate = () => {
-      initialRenderGate = false;
-      for (const shell of /** @type {NodeListOf<import('../../../typings/reader-page-window-strict').WindowShell>} */ (readerContext.content.querySelectorAll(".reader-page"))) {
-        if (!shell._pdfObserversPending) continue;
-        delete shell._pdfObserversPending;
-        observeShell(shell);
-      }
-    };
-    readerContext.trackReaderResource(() => {
-      observer.disconnect();
-      visibleObserver.disconnect();
-      pageObserver.disconnect();
-    });
+    const observers = createPageObservers(false);
     /** @param {number} page */
     const createShell = (page) => {
       if (previewPages.has(page)) {
         const existing = /** @type {import('../../../typings/reader-page-window-strict').WindowShell} */ (previewPages.get(page));
         // Virtual-window eviction must not resurrect stale canvas/text.
         previewPages.delete(page);
-        observeShell(existing);
+        observers.observe(existing);
         return existing;
       }
       const shell = document.createElement("section");
@@ -1415,27 +1394,20 @@ export function createReaderPdfPageWindow(readerContext) {
       readerContext.setPdfPageLoadingState(pageState, page);
       shell.appendChild(pageState);
       shell.addEventListener("focus", () => readerContext.renderPdfInBackground(shell));
-      observeShell(shell);
+      observers.observe(shell);
       return shell;
     };
     const djvuOpeningPage = !previewShell && pdf.numPages > 256 && ownsOpeningPosition() && !readerContext.pdfUserHasScrolled &&
       (readerContext.extension === "djvu" || readerContext.pdfV3Manifest?.primary.kind === "djvu") ? initialPage : undefined;
     const firstShell = previewShell || createShell(djvuOpeningPage ?? 1);
     if (!previewShell) readerContext.content.appendChild(firstShell);
-    else for (const shell of previewPages.values()) observeShell(shell);
-    readerContext.pdfShellWindow = readerContext.createPdfShellWindow(pdf.numPages, firstShell, createShell, (shell) => {
-      observer.unobserve(shell);
-      visibleObserver.unobserve(shell);
-      pageObserver.unobserve(shell);
-    }, firstViewport.height / firstViewport.width, previewPages, djvuOpeningPage);
+    else for (const shell of previewPages.values()) observers.observe(shell);
+    readerContext.pdfShellWindow = readerContext.createPdfShellWindow(pdf.numPages, firstShell, createShell, observers.unobserve,
+      firstViewport.height / firstViewport.width, previewPages, djvuOpeningPage);
     const drawWhileBatching = !readerContext.pdfShellWindow && !previewShell && readerContext.extension === "pdf";
     // The target can paint once its own batch is connected, but restore and
     // adjacent observers still need the full layout (including near the end).
-    const mounted = drawWhileBatching && initialPage > 1 ? Promise.withResolvers() : null;
-    const shellsReady = readerContext.pdfShellsReady = readerContext.pdfShellWindow
-      ? Promise.resolve() : appendShellsBatched(createShell, pdf.numPages, 24, mounted
-        ? endPage => { if (endPage >= initialPage) mounted.resolve(undefined); } : undefined);
-    shellsReady.catch(() => {});
+    const {shellsReady, waitForOpeningBatch} = startShellLayout(createShell, pdf.numPages, 24, drawWhileBatching ? initialPage : 1);
     publishLayout();
     let releaseObservers = !drawWhileBatching;
     try {
@@ -1443,7 +1415,7 @@ export function createReaderPdfPageWindow(readerContext) {
         ? firstShell
         : readerContext.pdfShellWindow
           ? readerContext.pdfShellWindow.ensure(initialPage)
-          : (await (mounted ? Promise.race([mounted.promise, shellsReady]) : shellsReady),
+          : (await (waitForOpeningBatch?.() ?? shellsReady),
             readerContext.content.querySelector(`.reader-page[data-page="${initialPage}"]`));
       readerContext.assertReaderActive();
       if (!targetShell) throw new Error("PDF initial page shell missing");
@@ -1479,12 +1451,12 @@ export function createReaderPdfPageWindow(readerContext) {
       readerContext.assertReaderActive();
       // A short last mounted slice can clamp the initial scroll. Correct it
       // once there is enough layout, but never after a newer navigation.
-      if (drawWhileBatching && initialPage > 1 && ownsOpeningPosition())
+      if (waitForOpeningBatch && ownsOpeningPosition())
         readerContext.viewport.scrollTop = readerContext.readerPageScrollTop(targetShell);
       releaseObservers = true;
     } finally {
       if (releaseObservers && !readerContext.readerAbortController.signal.aborted) {
-        releaseInitialRenderGate();
+        observers.release();
         readerContext.pdfShellWindow?.finishOpening();
       }
     }

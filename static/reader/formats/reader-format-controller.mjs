@@ -1,10 +1,3 @@
-/** Legacy PDF links can name a page manifest without an explicit `pdf-pages` extension.
- * @param {string} extension @param {string} sourceUrl @param {string} [base] */
-export function readerSourceExtension(extension, sourceUrl, base) {
-  return extension === "pdf" && sourceUrl.includes("/api/reader-bucket-resource?") &&
-    new URL(sourceUrl, base).searchParams.get("path")?.endsWith("page-manifest.json") ? "pdf-pages" : extension;
-}
-
 /** @param {unknown} original */
 function originalImageFallbackExtension(original) {
   const extension = typeof original === "string" ? original.toLowerCase() : "";
@@ -125,7 +118,6 @@ export function createReaderFormatController(readerContext) {
     readerContext.downloadUrl = typeof resolved.download === "string" && resolved.download || readerContext.sourceUrl;
     readerContext.chapterManifestUrl = typeof resolved.chapter_manifest === "string" ? resolved.chapter_manifest : "";
     if (typeof resolved.extension === "string" && resolved.extension) readerContext.extension = resolved.extension.toLowerCase();
-    readerContext.extension = readerSourceExtension(readerContext.extension, readerContext.sourceUrl);
     readerContext.capability = readerContext.readerRuntime.negotiate(VoiceOfMLReader.capability(readerContext.extension));
     if (readerContext.capability.mode !== "pdf" && !readerContext.pdfPrimarySource()) readerContext.releasePdfWorker?.();
     readerContext.readerRuntime.update("source", {

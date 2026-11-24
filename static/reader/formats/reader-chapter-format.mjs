@@ -415,9 +415,9 @@ export function createReaderChapterFormat(readerContext) {
           // literal xlink:href attributes in legacy HTML.
           const elements = doc.querySelectorAll("[src], [*|href], [poster], [xlink\\:href], [srcset]");
           let rewritten = 0, deadline = performance.now() + 8;
-          /** @param {number} count @param {number} total */
-          const yieldIfNeeded = async (count, total) => {
-            if (count % 256 || count >= total || performance.now() < deadline) return;
+          // Call only after a batch reaches the deadline; keep the abort checks
+          // on both sides of the actual task yield.
+          const yieldChapterWork = async () => {
             signal.throwIfAborted();
             readerContext.assertReaderActive();
             await new Promise(resolve => setTimeout(resolve, 0));
@@ -437,7 +437,7 @@ export function createReaderChapterFormat(readerContext) {
               }
             if (element.hasAttribute("srcset")) element.removeAttribute("srcset");
             if (++rewritten % 256 === 0 && rewritten < elements.length && performance.now() >= deadline)
-              await yieldIfNeeded(rewritten, elements.length);
+              await yieldChapterWork();
           }
           signal.throwIfAborted();
           readerContext.assertReaderActive();
@@ -452,7 +452,7 @@ export function createReaderChapterFormat(readerContext) {
           if (children) for (const child of children) {
             article.appendChild(document.importNode(child, true));
             if (++imported % 256 === 0 && imported < children.length && performance.now() >= deadline)
-              await yieldIfNeeded(imported, children.length);
+              await yieldChapterWork();
           }
           wrapEbookTables(article);
           const images = article.querySelectorAll("img");
@@ -462,7 +462,7 @@ export function createReaderChapterFormat(readerContext) {
             image.fetchPriority = priority;
             image.decoding = "async";
             if (++prepared % 256 === 0 && prepared < images.length && performance.now() >= deadline)
-              await yieldIfNeeded(prepared, images.length);
+              await yieldChapterWork();
           }
           // The generated text index includes head text (e.g. the chapter title).
           article._chapterSearchHead = doc.head ? document.importNode(doc.head, true) : null;

@@ -810,12 +810,17 @@ class EbookFlowTests(unittest.TestCase):
         self.assertEqual(self.page.locator('#viewport').evaluate('node=>node.scrollTop'), 0)
         self.assertTrue(self.page.evaluate('state=>__ebook.restoreProgress(state)', saved))
         self.assertAlmostEqual(self.page.evaluate('__ebook.captureChapter().chapterOffset'), saved['chapterOffset'], delta=2)
-        self.assertEqual(self.page.evaluate('''async()=>{
-          await __ebook.save();
-          const entry = await VoiceOfMLReaderStore.get(__ebook.captureChapter().chapterManifest);
-          return entry && {chapterIndex:entry.chapterIndex, chapterOffset:entry.chapterOffset,
-                           chapterManifest:entry.chapterManifest};
-        }'''), self.page.evaluate('__ebook.captureChapter()'))
+        expected, persisted = self.page.evaluate('''async()=>{
+          // saveProgress captures synchronously before its asynchronous write.
+          // A later animation frame can adjust the live chapter offset.
+          const pending = __ebook.save();
+          const captured = __ebook.captureChapter();
+          await pending;
+          const entry = await VoiceOfMLReaderStore.get(captured.chapterManifest);
+          return [captured, entry && {chapterIndex:entry.chapterIndex, chapterOffset:entry.chapterOffset,
+                                     chapterManifest:entry.chapterManifest}];
+        }''')
+        self.assertEqual(persisted, expected)
 
     def test_chapter_history_captures_the_virtual_placeholder_under_the_marker(self):
         self.open_converted_progress([{'bytes':100}, {'bytes':100}], height=lambda _: 1300)

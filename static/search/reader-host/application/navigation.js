@@ -166,8 +166,7 @@
         url.hash = "";
         url.searchParams.delete("bookmark");
         url.searchParams.delete("bookmark_source");
-        if (typeof options.resume === "function") options.resume(url.href);
-        else root.dispatchEvent(new CustomEvent("voice-reader-resume", { detail: url.href }));
+        options.resume?.(url.href);
       });
       back.className = "reader-speech-mini-back";
       const play = button("暂停", () => /** @type {HTMLElement | null} */ (inFrame(target, "#speech-play"))?.click());

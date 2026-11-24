@@ -177,24 +177,33 @@ class BrowserBehaviorTest(unittest.TestCase):
                                                   headers={"Access-Control-Allow-Origin": "*"}))
         self.load()
         url = "/search/static/reader.html?url=https%3A%2F%2Fhuggingface.co%2Fdatasets%2FVoiceOfML%2FTest%2Fresolve%2Fmain%2Fback.txt&ext=txt"
+        # Use Chromium's joint History, not the renderer's cached history.length.
+        cdp = self.context.new_cdp_session(self.page)
         for view in ("panel", "full-search"):
-            before = self.page.evaluate("() => location.href")
+            before = self.page.url
+            search_history = cdp.send("Page.getNavigationHistory")
             self.page.evaluate("url => navigateToReader(url)", url)
             reader = self.page.frame_locator("iframe.reader-overlay")
             reader.locator(".reader-text").wait_for()
+            reader_history = cdp.send("Page.getNavigationHistory")
+            self.assertEqual(reader_history["currentIndex"], search_history["currentIndex"] + 1, view)
+            self.assertEqual(len(reader_history["entries"]), reader_history["currentIndex"] + 1, view)
             reader.locator("#history").click()
+            reader.locator("#history-panel.is-open").wait_for(state="visible")
             if view == "full-search":
                 reader.locator("#full-search-toggle").click()
+                reader.locator("#full-search-view").wait_for(state="visible")
                 reader.locator("#full-search-input").fill("find-me")
-                reader.locator(".full-search-result").wait_for()
-            self.page.wait_for_function("view => readerHost.uiState === view", arg=view)
-            self.page.evaluate("""() => { window.__pushes = 0; const push = history.pushState.bind(history);
-              history.pushState = (...args) => { window.__pushes++; return push(...args); }; }""")
-            self.page.evaluate("history.back()")
+                reader.locator(".full-search-result").wait_for(state="visible")
+            else:
+                reader.locator("#toc-panel").wait_for(state="visible")
+            self.assertEqual(cdp.send("Page.getNavigationHistory"), reader_history, view)
+            self.page.go_back(wait_until="commit")
             self.page.locator("iframe.reader-overlay").wait_for(state="detached")
-            self.assertEqual(self.page.evaluate("window.__pushes"), 0, view)
-            self.assertEqual(self.page.evaluate("() => location.href"), before, view)
-            self.page.evaluate("() => { delete history.pushState; }")
+            self.assertEqual(self.page.url, before, view)
+            after = cdp.send("Page.getNavigationHistory")
+            self.assertEqual(after["currentIndex"], search_history["currentIndex"], view)
+            self.assertEqual(after["entries"], reader_history["entries"], view)
         self.assertEqual(self.page_errors, [])
 
     def test_global_filters_recover_from_unavailable_api_after_local_metadata_loads(self):

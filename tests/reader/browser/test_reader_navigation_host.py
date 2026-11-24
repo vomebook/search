@@ -569,46 +569,51 @@ process.stdout.write(stripBundledScripts(readFileSync('static/index.html','utf8'
         }''')
         self.assertEqual(result['filename'],'poster.jpg.JPG')
 
-    def test_explicit_close_ignores_late_panel_state_before_history_pop(self):
+    def test_explicit_close_ignores_late_reader_open_before_history_pop(self):
+        before = self.page.url
         self.page.evaluate('navigateToReader("/search/static/reader.html?ext=txt")')
         self.page.frame_locator('.reader-overlay').locator('body').wait_for()
-        state = self.page.evaluate('''() => {
-          const frame=readerHost.overlay, back=history.back;
+        untouched = self.page.evaluate('''() => {
+          const frame=readerHost.overlay, back=history.back, href=location.href;
           history.back=()=>{};
           try {
             handleReaderMessage({origin:location.origin,source:frame.contentWindow,data:{type:'voice-reader-close'}});
             handleReaderMessage({origin:location.origin,source:frame.contentWindow,
-              data:{type:'voice-reader-ui-state',state:'panel'}});
-            return readerHost.uiState;
+              data:{type:'voice-reader-open',url:'/search/static/reader.html?ext=txt&title=next'}});
+            return readerHost.closing && readerHost.overlay===frame && location.href===href;
           } finally { history.back=back; }
         }''')
-        self.assertEqual(state, 'base')
+        self.assertTrue(untouched)
         self.page.evaluate('history.back()')
         self.page.locator('.reader-overlay').wait_for(state='detached')
+        self.assertEqual(self.page.url, before)
         self.page.evaluate('navigateToReader("/search/static/reader.html?ext=txt")')
-        state = self.page.evaluate('''()=>{
-          handleReaderMessage({origin:location.origin,source:readerHost.overlay.contentWindow,
-            data:{type:'voice-reader-ui-state',state:'panel'}});
-          return readerHost.uiState;
+        replaced = self.page.evaluate('''()=>{
+          const frame=readerHost.overlay;
+          handleReaderMessage({origin:location.origin,source:frame.contentWindow,
+            data:{type:'voice-reader-open',url:'/search/static/reader.html?ext=txt&title=next'}});
+          return readerHost.overlay!==frame && new URL(location.href).searchParams.get('title')==='next';
         }''')
-        self.assertEqual(state, 'panel', 'a new Reader must still publish its real panel state')
+        self.assertTrue(replaced, 'a new Reader must still be able to switch books')
 
     def test_back_with_panel_open_exits_even_without_overlay_history_entry(self):
         # Formerly the close waited on history.back(); a non-overlay current entry
         # left the Reader open and the closing state then blocked every later tap.
-        before = self.page.evaluate('() => new URL(location.href).pathname')
-        self.page.evaluate('navigateToReader("/search/static/reader.html?ext=txt")')
-        self.page.frame_locator('.reader-overlay').locator('body').wait_for()
-        self.page.evaluate("""() => {
-          history.replaceState({foreign:{nested:{items:['keep', 7]}}}, "", location.href);
-          handleReaderMessage({origin:location.origin,source:readerHost.overlay.contentWindow,
-            data:{type:'voice-reader-ui-state',state:'panel'}});
-          handleReaderMessage({origin:location.origin,source:readerHost.overlay.contentWindow,
-            data:{type:'voice-reader-close'}});
-        }""")
+        self.page.unroute('**/static/reader.html?**')
+        self.page.route('**/api/reader-content?**', lambda route: route.fulfill(
+            content_type='text/plain', body='Reader document', headers={'Access-Control-Allow-Origin': '*'}))
+        before = self.page.url
+        self.page.evaluate('url => navigateToReader(url)',
+                           '/search/static/reader.html?ext=txt&url=https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/back.txt')
+        reader = self.page.frame_locator('.reader-overlay')
+        expect(reader.locator('.reader-text')).to_contain_text('Reader document')
+        reader.locator('#history').click()
+        expect(reader.locator('#history-panel.is-open')).to_be_visible()
+        self.page.evaluate("history.replaceState({foreign:{nested:{items:['keep', 7]}}}, '', location.href)")
+        reader.locator('#back').click()
         self.page.locator('.reader-overlay').wait_for(state='detached', timeout=3000)
         self.assertFalse(self.page.evaluate('readerHost.closing'))
-        self.assertEqual(self.page.evaluate('() => new URL(location.href).pathname'), before)
+        self.assertEqual(self.page.url, before)
         self.assertEqual(self.page.evaluate('history.state'), {'foreign': {'nested': {'items': ['keep', 7]}}})
 
     def test_back_tap_recovers_when_history_traversal_never_arrives(self):

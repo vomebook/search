@@ -5,7 +5,7 @@
     const position = deps.position;
     /** @type {HTMLIFrameElement | null} */
     let overlay = null;
-    let revision = 0, closing = false, uiState = "base";
+    let revision = 0, closing = false;
     /** @type {URLSearchParams | null} */
     let openedSearchParams = null;
     /** @type {ReaderHostSnapshot | null} */
@@ -55,7 +55,6 @@
       if (!overlay) return false;
       revision++;
       closing = false;
-      uiState = "base";
       openedSearchParams = null;
       overlay = null;
       const returnFocus = navigation.unmount();
@@ -90,7 +89,6 @@
       if (revision !== owner) return;
       overlay = mounted;
       if (!overlay) return;
-      uiState = "base";
       closing = false;
       openedSearchParams = params;
       if (addHistory) navigation.remember(url, /** @type {object} */ (position.scroll));
@@ -124,7 +122,6 @@
         if (closing) return;
         navigation.persistProgress(message.progress);
         closing = true;
-        uiState = "base";
         navigation.dismiss();
         let returnUrl = deps.hashRoute ? "/search/" : "/";
         try {
@@ -153,11 +150,6 @@
           if (!closing || overlay !== previous || revision !== owner) return;
           navigation.showCloseRecovery(returnUrl);
         }, 1000);
-        return;
-      }
-      if (message.type === "voice-reader-ui-state") {
-        if (closing) return;
-        if (typeof message.state === "string" && ["base", "panel", "full-search"].includes(message.state)) uiState = message.state;
         return;
       }
       if (message.type === "voice-reader-theme") {
@@ -211,7 +203,7 @@
       closeReaderOverlay, openReaderOverlay, reconcileSearchDestination, restoreReaderOverlay,
       handleReaderMessage, navigateToReader, restoreReaderFromSession,
       get overlay() { return overlay; }, get closing() { return closing; },
-      get uiState() { return uiState; }, get returnSnapshot() { return snapshot; }
+      get returnSnapshot() { return snapshot; }
     });
   }
   globalThis.VoiceOfMLReaderHost = Object.freeze({ create });

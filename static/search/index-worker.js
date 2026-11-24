@@ -344,10 +344,10 @@ function compileWildcardMatcher(pattern) {
 }
 
 /** @param {string} query @param {SearchParams} params */
-function asciiSeparatorSearch(query, params) {
-  // Only one ASCII term joined by common separators is eligible. Explicit
-  // exact and wildcard queries retain their literal behavior.
-  return !params.exact && /^[a-z0-9]+(?:[._-][a-z0-9]+)+$/i.test(query);
+function isExactSearch(query, params) {
+  // An implicit literal query can still use fuzzy matching if it is one
+  // ASCII term joined by common separators. Explicit exact always wins.
+  return !!params.exact || (literalSearch(query) && !/^[a-z0-9]+(?:[._-][a-z0-9]+)+$/i.test(query));
 }
 
 /** @param {unknown} input @returns {SearchRecord[]} */
@@ -490,6 +490,14 @@ function compareRecordSize(a, b) {
   return (Number(/** @type {SearchRecord} */ (records[b]).Size) || 0) - (Number(/** @type {SearchRecord} */ (records[a]).Size) || 0) || compareRecordName(a, b);
 }
 
+/** @param {Record<string, number[]>} byRepo @param {number[]} order */
+function populateRepoOrders(byRepo, order) {
+  for (const repo of Object.keys(repoRecordIndices)) byRepo[repo] = [];
+  // Repository buckets were initialized from the same snapshot. Appending in
+  // global sort order preserves the same stable ties in each bucket.
+  for (const index of order) /** @type {number[]} */ (byRepo[/** @type {string} */ (/** @type {SearchRecord} */ (records[index]).Repo)]).push(index);
+}
+
 function buildNameOrders() {
   if (nameOrderReady) return;
   // Ordinary decoded records have immutable string names; compute the key
@@ -506,9 +514,7 @@ function buildNameOrders() {
     sortedByName = recordIndices.slice().sort(compareRecordName);
   }
   repoSortedByName = Object.create(null);
-  for (const repo of Object.keys(repoRecordIndices)) repoSortedByName[repo] = [];
-  // Repository buckets were initialized from the same snapshot.
-  for (const index of sortedByName) /** @type {number[]} */ (repoSortedByName[/** @type {string} */ (/** @type {SearchRecord} */ (records[index]).Repo)]).push(index);
+  populateRepoOrders(repoSortedByName, sortedByName);
   nameOrderReady = true;
 }
 
@@ -516,8 +522,7 @@ function buildSizeOrders() {
   if (sizeOrderReady) return;
   sortedBySize = recordIndices.slice().sort(compareRecordSize);
   repoSortedBySize = Object.create(null);
-  for (const repo of Object.keys(repoRecordIndices)) repoSortedBySize[repo] = [];
-  for (const index of sortedBySize) /** @type {number[]} */ (repoSortedBySize[/** @type {string} */ (/** @type {SearchRecord} */ (records[index]).Repo)]).push(index);
+  populateRepoOrders(repoSortedBySize, sortedBySize);
   sizeOrderReady = true;
 }
 
@@ -772,22 +777,26 @@ function singleCharacterSearch(query, params) {
   return !params.exact && Array.from(query).length === 1 && !/[\s*?]/u.test(query);
 }
 
+/** @param {SearchJob} job */
+function assertCurrentSearch(job) {
+  // A cancelled job can also belong to a replaced corpus. Cancellation wins.
+  if (job.cancelled) throw protocolError("SEARCH_CANCELLED", "Search cancelled");
+  if (job.generation !== generation) throw protocolError("CORPUS_REPLACED", "Search corpus changed");
+}
+
 /** @param {SearchParams} params @param {SearchJob} job */
 async function prepareSearchIndex(params, job) {
   const query = String(params.q || "").trim();
-  if (wordIndex || !query || params.exact || singleCharacterSearch(query, params)
-      || (literalSearch(query) && !asciiSeparatorSearch(query, params))) return;
+  if (wordIndex || !query || singleCharacterSearch(query, params) || isExactSearch(query, params)) return;
   if (fulltextBuildTimer !== null && typeof clearTimeout === "function") clearTimeout(fulltextBuildTimer);
   fulltextBuildTimer = null;
   try {
     while (!wordIndex) {
-      if (job.cancelled) throw protocolError("SEARCH_CANCELLED", "Search cancelled");
-      if (job.generation !== generation) throw protocolError("CORPUS_REPLACED", "Search corpus changed");
+      assertCurrentSearch(job);
       advanceFulltext(FULLTEXT_BATCH_RECORDS, Date.now() + FULLTEXT_BATCH_MS);
       if (!wordIndex) await yieldSearchIndex();
     }
-    if (job.cancelled) throw protocolError("SEARCH_CANCELLED", "Search cancelled");
-    if (job.generation !== generation) throw protocolError("CORPUS_REPLACED", "Search corpus changed");
+    assertCurrentSearch(job);
   } finally {
     if (!wordIndex && job.generation === generation && !fulltextBuildTimer && searchJobs.size <= 1) scheduleFulltext(generation, 4);
   }
@@ -869,16 +878,20 @@ function applyFilters(indices, params, filters) {
 /** @param {SearchParams} params */
 function filterEmptySearch(params) {
   const repos = params.repos;
-  if (!Array.isArray(repos) || repos.length !== 1 || typeof repos[0] !== "string" || !repos[0]) {
-    return applyFilters(recordIndices, params);
+  let scope = recordIndices;
+  if (Array.isArray(repos) && repos.length === 1 && typeof repos[0] === "string" && repos[0]) {
+    const repo = repos[0];
+    scope = repoRecordIndices[repo] || [];
+    if (params.folderMatchMode === "mixed") {
+      // Peek without building an index or changing the directory LRU order.
+      const directory = directoryIndexes.get(repo);
+      if (directory?.canonicalPaths) {
+        const filters = buildFilterSets(params);
+        return applyFilters(warmFolderCandidates(directory, filters, scope.length) ?? scope, params, filters);
+      }
+    }
   }
-  const repo = repos[0], scope = repoRecordIndices[repo] || [];
-  if (params.folderMatchMode !== "mixed") return applyFilters(scope, params);
-  // Peek without building an index or changing the directory LRU order.
-  const directory = directoryIndexes.get(repo);
-  if (!directory?.canonicalPaths) return applyFilters(scope, params);
-  const filters = buildFilterSets(params);
-  return applyFilters(warmFolderCandidates(directory, filters, scope.length) ?? scope, params, filters);
+  return applyFilters(scope, params);
 }
 
 /** @param {DirectoryIndex} directory @param {ReturnType<typeof buildFilterSets>} filters @param {number} scopeSize */
@@ -976,16 +989,15 @@ function emptySearchOrder(params) {
       || params.minSize != null
       || params.maxSize != null) return null;
   const repo = repos.length === 1 ? repos[0] : null;
-  if (params.sort === "name") buildNameOrders();
-  else if (params.sort === "size") buildSizeOrders();
-  if (repo) {
-    if (params.sort === "name") return repoSortedByName[repo] || [];
-    if (params.sort === "size") return repoSortedBySize[repo] || [];
-    return repoRecordIndices[repo] || [];
+  if (params.sort === "name") {
+    buildNameOrders();
+    return repo ? (repoSortedByName[repo] || []) : sortedByName;
   }
-  if (params.sort === "name") return sortedByName;
-  if (params.sort === "size") return sortedBySize;
-  return recordIndices;
+  if (params.sort === "size") {
+    buildSizeOrders();
+    return repo ? (repoSortedBySize[repo] || []) : sortedBySize;
+  }
+  return repo ? (repoRecordIndices[repo] || []) : recordIndices;
 }
 
 /** @param {number[]} indices @param {string} anchorId */
@@ -1080,6 +1092,65 @@ function orderByRelevance(indices, tokens, searchFolders) {
   return scored.map(item => item.index);
 }
 
+/** @param {ReturnType<typeof getRecordSearchFields>} fields @param {string} lower @param {boolean} searchFolders */
+function matchesLiteralFields(fields, lower, searchFolders) {
+  return fields.file.includes(lower) || fields.repo.includes(lower) || (searchFolders && fields.folder.includes(lower));
+}
+
+/** @param {ReturnType<typeof getRecordSearchFields>} fields @param {{test(text: string): boolean}} pattern @param {boolean} searchFolders */
+function matchesWildcardFields(fields, pattern, searchFolders) {
+  return pattern.test(fields.file) || pattern.test(fields.repo) || (searchFolders && pattern.test(fields.folder));
+}
+
+/** @param {string} query @param {SearchParams} params @param {boolean} searchFolders */
+function exactSearchMatches(query, params, searchFolders) {
+  // Apply terms in order; unlike the cooperative scan, compile a later term
+  // only if earlier terms did not exhaust the scope.
+  const terms = query.split(/\s+/).filter(Boolean);
+  // Borrow the scope: each term filter is nonmutating.
+  let matched = exactSearchScope(params.repos);
+  for (let termIndex = 0; termIndex < terms.length; termIndex++) {
+    const term = /** @type {string} */ (terms[termIndex]);
+    const wildcard = term.includes("*") || term.includes("?");
+    const lower = term.toLowerCase();
+    if (wildcard && term.replace(/\*/g, "") === "") continue;
+    const pattern = wildcard ? compileWildcardMatcher(term) : null;
+    if (termIndex === 0) matched = seedExactSearch(term, terms, query, params, matched);
+    // Avoid proving universal terms against all repos when nothing can match.
+    if (!matched.length) break;
+    // Every indexed Repo is a complete field in every candidate. If the
+    // matcher accepts all of them, this AND term cannot remove a record.
+    // For a small scope, the existing scan is cheaper than proving all repos.
+    if (repoWildcardProofSafe && matched.length >= metadata.repos.length
+        && pattern && term.includes("*") && term.includes("?") && /^[*?]+$/.test(term)
+        && Object.keys(repoRecordIndices).every(repo => pattern.test(repo.toLowerCase()))) continue;
+    matched = matched.filter(index => {
+      const fields = getRecordSearchFields(records[index] || {});
+      return pattern ? matchesWildcardFields(fields, pattern, searchFolders) : matchesLiteralFields(fields, lower, searchFolders);
+    });
+    if (!matched.length) break;
+  }
+  return matched;
+}
+
+/** @param {string} term @param {string[]} terms @param {string} query @param {SearchParams} params @param {number[]} scope */
+function seedExactSearch(term, terms, query, params, scope) {
+  const indexed = indexedExactCandidates(term, params, scope.length);
+  if (indexed !== null) return indexed;
+  if (!wordIndex || !scope.length || terms.length <= 1
+      || terms.length > EXACT_INDEX_LOOKAHEAD_MAX_TERMS || /[*?]/.test(query)) return scope;
+  // A first term without a seed may still reject quickly, so cap the extra
+  // probes. The first proven superset (even empty) retains source order.
+  for (let i = 1; i < terms.length; i++) {
+    const later = /** @type {string} */ (terms[i]);
+    if (later.length > EXACT_INDEX_LOOKAHEAD_MAX_TERM_UNITS || terms.indexOf(later) !== i
+        || !/[\u3400-\u4dbf\u4e00-\u9fff]{2}/.test(later)) continue;
+    const seed = indexedExactCandidates(later, params, scope.length, EXACT_INDEX_LOOKAHEAD_MAX_INDICES);
+    if (seed !== null) return seed;
+  }
+  return scope;
+}
+
 /** @param {SearchParams} params @param {number[] | null} preparedExact */
 function searchLocal(params, preparedExact = null) {
   const query = String(params.q || "").trim();
@@ -1091,64 +1162,15 @@ function searchLocal(params, preparedExact = null) {
     searchOrderCache.set(cacheKey, ordered);
     return pageResult(ordered, params);
   }
-  let matched = [];
   let filtered;
-  if (singleCharacterSearch(query, params) && preparedExact !== null) {
-    matched = preparedExact;
-  } else if (!query) {
+  let exact;
+  if (!query) {
     const order = emptySearchOrder(params);
     if (order !== null) return pageResult(order, params);
     filtered = filterEmptySearch(params);
-  } else if (params.exact || (literalSearch(query) && !asciiSeparatorSearch(query, params))) {
-    // Whitespace separates independent literal terms, matching the HF API.
-    // A term may still be a wildcard pattern; every term must match.
-    const terms = query.split(/\s+/).filter(Boolean);
-    // Borrow the scope: term filters do not mutate it, and applyFilters
-    // returns an owned array before any in-place result sort.
-    matched = preparedExact === null ? exactSearchScope(params.repos) : preparedExact;
-    for (let termIndex = 0; preparedExact === null && termIndex < terms.length; termIndex++) {
-      const term = /** @type {string} */ (terms[termIndex]);
-      const wildcard = term.includes("*") || term.includes("?");
-      const lower = term.toLowerCase();
-      if (wildcard && term.replace(/\*/g, "") === "") continue;
-      const pattern = wildcard ? compileWildcardMatcher(term) : null;
-      if (termIndex === 0) {
-        const indexed = indexedExactCandidates(term, params, matched.length);
-        if (indexed !== null) matched = indexed;
-        else if (wordIndex && matched.length && terms.length > 1
-            && terms.length <= EXACT_INDEX_LOOKAHEAD_MAX_TERMS && !/[*?]/.test(query)) {
-          // A first term without a seed may still reject quickly, so cap the
-          // extra probes and candidate work. Use the first proven superset
-          // (even empty) in source order, then check every term as before.
-          for (let i = 1; i < terms.length; i++) {
-            const later = /** @type {string} */ (terms[i]);
-            if (later.length > EXACT_INDEX_LOOKAHEAD_MAX_TERM_UNITS || terms.indexOf(later) !== i
-                || !/[\u3400-\u4dbf\u4e00-\u9fff]{2}/.test(later)) continue;
-            const seed = indexedExactCandidates(later, params, matched.length, EXACT_INDEX_LOOKAHEAD_MAX_INDICES);
-            if (seed !== null) { matched = seed; break; }
-          }
-        }
-      }
-      // The previous scan breaks here for an empty scope; avoid proving
-      // universal terms against all repos repeatedly when nothing can match.
-      if (!matched.length) break;
-      // Every indexed Repo is a complete field in every candidate. If the
-      // matcher accepts all of them, this AND term cannot remove a record.
-      // For a small scope, the existing scan is cheaper than proving all repos.
-      if (repoWildcardProofSafe && matched.length >= metadata.repos.length
-          && pattern && term.includes("*") && term.includes("?")
-          && /^[*?]+$/.test(term)
-          && Object.keys(repoRecordIndices).every(repo => pattern.test(repo.toLowerCase()))) continue;
-      matched = matched.filter(index => {
-        /** @type {Partial<SearchRecord>} */
-        const record = records[index] || {};
-        const fields = getRecordSearchFields(record);
-        return pattern
-          ? pattern.test(fields.file) || pattern.test(fields.repo) || (searchFolders && pattern.test(fields.folder))
-          : fields.file.includes(lower) || fields.repo.includes(lower) || (searchFolders && fields.folder.includes(lower));
-      });
-      if (!matched.length) break;
-    }
+  } else if ((singleCharacterSearch(query, params) && preparedExact !== null) || (exact = isExactSearch(query, params))) {
+    // Copy a borrowed scope before any in-place result sort.
+    filtered = applyFilters(preparedExact ?? exactSearchMatches(query, params, searchFolders), params);
   } else {
     buildFulltext();
     const activeIndex = /** @type {PostingIndex} */ (searchFolders ? wordIndex : wordIndexFilesOnly);
@@ -1166,8 +1188,7 @@ function searchLocal(params, preparedExact = null) {
       const seen = new Set();
       for (const index of literalScope) {
         const fields = getRecordSearchFields(/** @type {SearchRecord} */ (records[index]));
-        if ((fields.file.includes(term) || fields.repo.includes(term)
-            || (searchFolders && fields.folder.includes(term))) && (!inScope || inScope(index))) seen.add(index);
+        if (matchesLiteralFields(fields, term, searchFolders) && (!inScope || inScope(index))) seen.add(index);
       }
       const tokenCandidates = [];
       let sortedCandidates = true;
@@ -1209,28 +1230,11 @@ function searchLocal(params, preparedExact = null) {
       termCandidates.push(Array.from(seen).sort((a, b) => a - b));
       if (!seen.size) break;
     }
-    matched = intersectCandidateLists(termCandidates, true);
+    const matched = intersectCandidateLists(termCandidates, true);
     filtered = inScope ? matched.filter(inScope) : matched;
   }
-  filtered ??= applyFilters(matched, params);
   if (params.sort === "name" || params.sort === "size") {
-    const repos = /** @type {string[]} */ (params.repos || []);
-    const ready = params.sort === "name" ? nameOrderReady : sizeOrderReady;
-    const byRepo = params.sort === "name" ? repoSortedByName : repoSortedBySize;
-    const order = repos.length === 1 ? (byRepo[/** @type {string} */ (repos[0])] || []) : null;
-    // Exact single-repo matches retain source order, so stable name ties match
-    // the prepared repository order. Fuzzy, unusual and cold paths still sort.
-    const exactSingleRepoName = query && params.sort === "name"
-      && (params.exact || (literalSearch(query) && !asciiSeparatorSearch(query, params)))
-      && repoWildcardProofSafe && Array.isArray(repos) && repos.length === 1
-      && typeof repos[0] === "string" && repos[0];
-    if ((!query || exactSingleRepoName) && ready && order && filtered.length <= SORT_REUSE_MAX_INDICES
-        && filtered.length * 3 > order.length * 2) {
-      const keep = new Set(filtered);
-      ordered = order.filter(index => keep.has(index));
-    } else {
-      ordered = filtered.sort(params.sort === "name" ? compareRecordName : compareRecordSize);
-    }
+    ordered = orderByNameOrSize(filtered, query, params, exact);
   } else if (!query || /^[*?]+$/.test(query)) {
     // These queries have no score tokens, so stable relevance keeps this order.
     ordered = filtered;
@@ -1242,57 +1246,67 @@ function searchLocal(params, preparedExact = null) {
   return pageResult(ordered, params);
 }
 
-/** @param {SearchParams} params @param {SearchJob} job */
-async function prepareSingleCharacter(params, job) {
-  const query = String(params.q || "").trim();
-  if (!singleCharacterSearch(query, params)) return null;
-  const lower = query.toLowerCase(), scope = exactSearchScope(params.repos), matched = [];
-  for (let start = 0; start < scope.length; start += FULLTEXT_BATCH_RECORDS) {
-    if (job.cancelled) throw protocolError("SEARCH_CANCELLED", "Search cancelled");
-    if (job.generation !== generation) throw protocolError("CORPUS_REPLACED", "Search corpus changed");
-    const end = Math.min(scope.length, start + FULLTEXT_BATCH_RECORDS);
-    for (let offset = start; offset < end; offset++) {
-      const index = /** @type {number} */ (scope[offset]), fields = getRecordSearchFields(/** @type {SearchRecord} */ (records[index]));
-      if (fields.file.includes(lower) || fields.repo.includes(lower)
-          || (params.searchFolders !== false && fields.folder.includes(lower))) matched.push(index);
-    }
-    if (end < scope.length) await yieldSearchIndex();
+/** @param {number[]} filtered @param {string} query @param {SearchParams} params @param {boolean | undefined} exact */
+function orderByNameOrSize(filtered, query, params, exact) {
+  const repos = /** @type {string[]} */ (params.repos || []);
+  const byName = params.sort === "name";
+  const ready = byName ? nameOrderReady : sizeOrderReady;
+  const byRepo = byName ? repoSortedByName : repoSortedBySize;
+  // Keep the bucket lookup before the reuse proof: raw repo keys can throw
+  // during coercion, even when the order is cold or not eligible for reuse.
+  const order = repos.length === 1 ? (byRepo[/** @type {string} */ (repos[0])] || []) : null;
+  // Exact single-repo matches retain source order, so stable name ties match
+  // the prepared repository order. Fuzzy, unusual and cold paths still sort.
+  // A prepared single character skipped classification. Punctuation can
+  // still qualify as implicit exact, but an ordinary letter cannot.
+  const exactSingleRepoName = query && byName && (exact ?? isExactSearch(query, params))
+    && repoWildcardProofSafe && Array.isArray(repos) && repos.length === 1
+    && typeof repos[0] === "string" && repos[0];
+  if ((!query || exactSingleRepoName) && ready && order && filtered.length <= SORT_REUSE_MAX_INDICES
+      && filtered.length * 3 > order.length * 2) {
+    const keep = new Set(filtered);
+    return order.filter(index => keep.has(index));
   }
-  if (job.cancelled) throw protocolError("SEARCH_CANCELLED", "Search cancelled");
-  if (job.generation !== generation) throw protocolError("CORPUS_REPLACED", "Search corpus changed");
-  return matched;
+  return filtered.sort(byName ? compareRecordName : compareRecordSize);
 }
 
-/** @param {SearchParams} params @param {SearchJob} job */
-async function prepareLongWildcard(params, job) {
+/** @param {SearchParams} params @param {SearchJob} job @param {"character" | "wildcard"} kind */
+async function prepareLiteralScan(params, job, kind) {
   const query = String(params.q || "").trim();
-  // Ordinary searches keep their fast synchronous path. Expensive wildcard
-  // scans yield between bounded batches so cancellation and metadata work.
-  // Keep short glob scans on the existing fast path, including repository
-  // proofs and dense-order reuse; only long patterns require cooperative work.
-  if (query.length < 32 || !/[*?]/.test(query)
-      || query.split(/\s+/).every(term => /^\*+$/.test(term))) return null;
-  if (searchOrderCache.has(searchOrderKey(params))) return null;
-  const terms = query.split(/\s+/).filter(Boolean).map(term => ({
-    lower: term.toLowerCase(),
-    matcher: /[*?]/.test(term) ? compileWildcardMatcher(term) : null,
-  }));
+  /** @type {(fields: ReturnType<typeof getRecordSearchFields>) => boolean} */
+  let matches;
+  if (kind === "character") {
+    if (!singleCharacterSearch(query, params)) return null;
+    const lower = query.toLowerCase();
+    matches = fields => matchesLiteralFields(fields, lower, params.searchFolders !== false);
+  } else {
+    // Keep short globs on the synchronous path, including repository proofs.
+    if (query.length < 32 || !/[*?]/.test(query)
+        || query.split(/\s+/).every(term => /^\*+$/.test(term))) return null;
+    if (searchOrderCache.has(searchOrderKey(params))) return null;
+    const terms = query.split(/\s+/).filter(Boolean).map(term => ({
+      lower: term.toLowerCase(),
+      matcher: /[*?]/.test(term) ? compileWildcardMatcher(term) : null,
+    }));
+    matches = fields => terms.every(({lower, matcher}) => matcher
+      ? matchesWildcardFields(fields, matcher, params.searchFolders !== false)
+      : matchesLiteralFields(fields, lower, params.searchFolders !== false));
+  }
+  // Both cooperative scans visit records in source order and checkpoint at
+  // the same batch boundaries, including empty scopes and the final batch.
   const scope = exactSearchScope(params.repos);
   const matched = [];
   for (let start = 0; start < scope.length; start += FULLTEXT_BATCH_RECORDS) {
-    if (job.cancelled) throw protocolError("SEARCH_CANCELLED", "Search cancelled");
-    if (job.generation !== generation) throw protocolError("CORPUS_REPLACED", "Search corpus changed");
+    assertCurrentSearch(job);
     const end = Math.min(scope.length, start + FULLTEXT_BATCH_RECORDS);
     for (let offset = start; offset < end; offset++) {
-      const index = /** @type {number} */ (scope[offset]), fields = getRecordSearchFields(/** @type {SearchRecord} */ (records[index]));
-      if (terms.every(({lower, matcher}) => matcher
-        ? matcher.test(fields.file) || matcher.test(fields.repo) || (params.searchFolders !== false && matcher.test(fields.folder))
-        : fields.file.includes(lower) || fields.repo.includes(lower) || (params.searchFolders !== false && fields.folder.includes(lower)))) matched.push(index);
+      const index = /** @type {number} */ (scope[offset]);
+      const fields = getRecordSearchFields(/** @type {SearchRecord} */ (records[index]));
+      if (matches(fields)) matched.push(index);
     }
     if (end < scope.length) await yieldSearchIndex();
   }
-  if (job.cancelled) throw protocolError("SEARCH_CANCELLED", "Search cancelled");
-  if (job.generation !== generation) throw protocolError("CORPUS_REPLACED", "Search corpus changed");
+  assertCurrentSearch(job);
   return matched;
 }
 
@@ -1440,14 +1454,13 @@ async function dispatch(type, input, job) {
     // A complete cached order already includes filtering and sorting. Serve it
     // before a cooperative single-character scan can revisit the whole corpus.
     if (searchOrderCache.has(searchOrderKey(params))) {
-      if (job.cancelled) throw protocolError("SEARCH_CANCELLED", "Search cancelled");
-      if (job.generation !== generation) throw protocolError("CORPUS_REPLACED", "Search corpus changed");
+      assertCurrentSearch(job);
       return searchLocal(params);
     }
     await prepareSearchIndex(params || {}, job);
-    const prepared = await prepareSingleCharacter(params || {}, job) ?? await prepareLongWildcard(params || {}, job);
-    if (job.cancelled) throw protocolError("SEARCH_CANCELLED", "Search cancelled");
-    if (job.generation !== generation) throw protocolError("CORPUS_REPLACED", "Search corpus changed");
+    const prepared = await prepareLiteralScan(params || {}, job, "character")
+      ?? await prepareLiteralScan(params || {}, job, "wildcard");
+    assertCurrentSearch(job);
     return searchLocal(params || {}, prepared);
   }
   if (type === "random-record") return randomRecord(/** @type {SearchParams} */ (payload) || {});

@@ -1236,9 +1236,9 @@ keepValue(1, 2);
         fixture.write_text(original_fixture)
         module = self.root / paths[0]
         original = module.read_text()
-        probe = "  if (surface === 'pages') {\n"
+        probe = "function browserMarkup(data, repo, path, ports) {\n"
         self.assertEqual(original.count(probe), 1)
-        module.write_text(original.replace(probe, probe + "    if (data === globalThis) return '';\n"))
+        module.write_text(original.replace(probe, probe + "  if (data === globalThis) return '';\n"))
         self.assert_check(self.run_check(*check), False, "exactly one fully covered source row")
         module.write_text(original)
         gate = self.root / paths[1]
@@ -1261,7 +1261,7 @@ keepValue(1, 2);
             "files": [str(declaration), str(ROOT / "static/search/sidebar/presentation/markup.js")]}))
         check = ["node", ROOT / "node_modules/typescript/bin/tsc", "--project", config]
         self.assert_check(self.run_check(*check), True, "")
-        before = '  browserMarkup(data: VoiceOfMLSidebarEntries, repo: string, path: string, surface: "pages" | "space", ports: VoiceOfMLSidebarPorts): string;'
+        before = '  browserMarkup(data: VoiceOfMLSidebarEntries, repo: string, path: string, ports: VoiceOfMLSidebarPorts): string;'
         self.assertEqual(original.count(before), 1)
         declaration.write_text(original.replace(before, before.replace("): string;", "): number;")))
         self.assert_check(self.run_check(*check), False, "TS2322")
@@ -1269,8 +1269,10 @@ keepValue(1, 2);
         usage = self.root / "static/sidebar-usage.js"
         config.write_text(json.dumps({"compilerOptions": {"allowJs": True, "checkJs": True, "noEmit": True,
             "strict": True, "target": "esnext"}, "files": [str(declaration), str(usage)]}))
-        usage.write_text('VoiceOfMLSearchSidebarRender.browserMarkup({}, "r", "p", "other", {});\n')
+        usage.write_text('VoiceOfMLSearchSidebarRender.browserMarkup({}, "r", "p", "other");\n')
         self.assert_check(self.run_check(*check), False, "TS2345")
+        usage.write_text('VoiceOfMLSearchSidebarRender.browserMarkup({}, "r", "p", "pages", {});\n')
+        self.assert_check(self.run_check(*check), False, "TS2554")
 
     def test_search_view_key_coverage_gate_fails_closed(self):
         paths = ["static/search/positions/domain/view-key.js", "scripts/search/check_search_view_key_coverage.mjs",
@@ -2109,7 +2111,6 @@ keepValue(1, 2);
                           "tests/reader/core/test_reader_contract_pdf_document.js",
                           "tests/reader/core/test_reader_format_controller_boundary.mjs",
                           "tests/reader/core/test_reader_source_boundary.mjs",
-                          "static/reader/core/reader-web-aliases.mjs",
                           "tests/reader/security/test_reader_security_boundary.js"]
         for path in [*paths, *boundary_paths, "scripts/check_tap_contracts.mjs"]:
             target = self.root / path

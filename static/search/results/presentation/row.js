@@ -4,10 +4,14 @@
   function create(deps) {
     const { escapeHTML, highlightText, getFileIconType, formatSize, getRecordLink,
       getCopyableLink, getRecordPath, getPreviewLink, readerAction, icons } = deps;
+    /** @param {VoiceOfMLResultRecord} rec */
+    function recordFileName(rec) {
+      return rec.File + (rec.Extension ? '.' + rec.Extension : '');
+    }
     /** @param {VoiceOfMLResultRecord} rec @param {number} idx */
     function buildHTML(rec, idx) {
       const view = deps.readView();
-      const fileName = escapeHTML(rec.File + (rec.Extension ? '.' + rec.Extension : ''));
+      const fileName = escapeHTML(recordFileName(rec));
       const iconType = /** @type {string} */ (getFileIconType(rec.Extension));
       const titleHTML = highlightText(rec.File, view.query);
       const repoShort = escapeHTML((rec.Repo || "").split("/").pop());
@@ -67,7 +71,7 @@
       const row = /** @type {HTMLDivElement} */ (template.cloneNode(true));
       row.tabIndex = -1;
       row.setAttribute('role', 'listitem');
-      row.setAttribute('aria-label', rec.File + (rec.Extension ? '.' + rec.Extension : ''));
+      row.setAttribute('aria-label', recordFileName(rec));
       deps.bindRecord(row, rec);
       return row;
     }

@@ -35,6 +35,84 @@ class DjvuRangeBrowserTests(unittest.TestCase):
         self.assertFalse([url for url in self.requests if '/pages/page-' in url or '/preview/' in url])
         self.assertEqual(self.page.locator('.reader-page img').count(), 0)
 
+    def test_native_worker_eager_and_range_page_replies_match(self):
+        # Drive the actual module Worker and Wasm over the wire, independently
+        # of the caller's page cache and its terminate-on-open-error behavior.
+        source_url = self.origin + '/separated-synthetic.djvu'
+        self.page.route(source_url, lambda route: route.fulfill(body=separated_pages()))
+        self.page.goto(self.origin + PREFIX + '/static/manifest.json')
+        result = self.page.evaluate(r'''async ({prefix, sourceUrl}) => {
+          const source = new Uint8Array(await (await fetch(sourceUrl)).arrayBuffer());
+          async function read(lazy) {
+            const worker = new Worker(`${prefix}/static/reader/pdf/reader-djvu-engine-worker.mjs`, {type:'module'});
+            const ranges = [];
+            let id = 0;
+            async function send(operation, fields = {}, transfer = []) {
+              const current = ++id;
+              let timer;
+              try {
+                return await new Promise((resolve, reject) => {
+                  timer = setTimeout(() => reject(Error(`no reply for ${operation}`)), 5000);
+                  worker.onerror = reject;
+                  worker.onmessage = ({data}) => {
+                    if (data.id !== current) { reject(Error('unexpected reply id')); return; }
+                    if (data.operation !== 'range') { resolve(data); return; }
+                    const {rangeId, offset, length} = data;
+                    if (!(offset >= 0 && length > 0 && offset + length <= source.length)) {
+                      reject(Error('unexpected range')); return;
+                    }
+                    ranges.push({rangeId, offset});
+                    const bytes = source.slice(offset, offset + length).buffer;
+                    worker.postMessage({id:current, operation:'range-result', rangeId, ok:true, bytes}, [bytes]);
+                  };
+                  worker.postMessage({id:current, operation, ...fields}, transfer);
+                });
+              } finally { clearTimeout(timer); }
+            }
+            try {
+              const cacheBytes = 4096;
+              const bytes = source.slice().buffer;
+              const opened = lazy ? await send('open-range', {total:source.length, cacheBytes})
+                                  : await send('open', {bytes, cacheBytes}, [bytes]);
+              const invalidPages = [];
+              for (const operation of ['geometry', 'text', 'page'])
+                invalidPages.push(await send(operation, {page:4}));
+              const geometry = await send('geometry', {page:3});
+              const text = await send('text', {page:3});
+              const page = await send('page', {page:3});
+              const raster = page.pixels instanceof ArrayBuffer ? {
+                byteLength:page.pixels.byteLength,
+                digest:Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', page.pixels)))
+              } : null;
+              delete page.pixels;
+              const rejectedOpen = lazy ? await send('open', {bytes, cacheBytes}, [bytes])
+                                        : await send('open-range', {total:source.length, cacheBytes});
+              const afterRejectedOpen = await send('geometry', {page:3});
+              return {opened, invalidPages, geometry, text, page, raster, rejectedOpen, afterRejectedOpen, ranges};
+            } finally { worker.terminate(); }
+          }
+          return {eager:await read(false), lazy:await read(true)};
+        }''', {'prefix': PREFIX, 'sourceUrl': source_url})
+        eager, lazy = result['eager'], result['lazy']
+        for mode in (eager, lazy):
+            self.assertEqual(mode['opened']['count'], 3)
+            self.assertEqual(mode['invalidPages'], [
+                {'id': i, 'ok': False, 'error': 'DJVU_PAGE_INVALID'} for i in (2, 3, 4)])
+            self.assertEqual(mode['geometry'], {'id': 5, 'ok': True, 'width': 96, 'height': 128,
+                                                'dpi': 100, 'rotation': 0})
+            self.assertEqual(mode['page'], {**mode['geometry'], 'id': 7})
+            self.assertIn('Page3text', mode['text']['text'])
+            self.assertTrue(mode['text']['zones'])
+            self.assertEqual(mode['raster']['byteLength'], 96 * 128 * 4)
+            self.assertEqual(mode['rejectedOpen'], {'id': 8, 'ok': False, 'error': 'DJVU_DOCUMENT_INVALID'})
+            self.assertEqual(mode['afterRejectedOpen'], {**mode['geometry'], 'id': 9})
+        self.assertEqual(eager['text'], lazy['text'])
+        self.assertEqual(eager['raster'], lazy['raster'])
+        self.assertEqual(eager['ranges'], [])
+        self.assertEqual([row['rangeId'] for row in lazy['ranges']], list(range(1, len(lazy['ranges']) + 1)))
+        self.assertEqual(lazy['ranges'][0]['offset'], 0)
+        self.assertTrue(any(row['offset'] >= 2 * 1024 * 1024 for row in lazy['ranges']), lazy['ranges'])
+
     def test_native_djvu_canvas_matches_physical_width_across_browser_modes(self):
         cdp = self.context.new_cdp_session(self.page)
         self.page.add_init_script("Object.defineProperty(navigator, 'deviceMemory', {value: 2})")

@@ -147,6 +147,69 @@ test('site directory fallback preserves cached HF and mixed Pages behavior', asy
   assert.equal(f.draws[0].data, data);
 });
 
+test('Pages reads the local cache once after a held initial listing misses', async () => {
+  let releaseInitial;
+  const entries = new Map();
+  const lookups = [];
+  const f = fixture({
+    initial: () => new Promise(resolve => { releaseInitial = resolve; }),
+    cache: {
+      get(key) { lookups.push(key); return entries.get(key); },
+      has(key) { return this.get(key) !== undefined; }, // BoundedResponseCache.has delegates to get.
+    },
+  });
+  const pending = f.controller.browse('', 1);
+  assert.deepEqual(lookups, []);
+  const data = {files: [{name: 'cached root'}]};
+  entries.set('VoiceOfML/A|', data);
+  releaseInitial(null);
+  await pending;
+  assert.deepEqual(lookups, ['VoiceOfML/A|']);
+  assert.equal(f.requests.length, 0);
+  assert.equal(f.draws.length, 1);
+  assert.equal(f.draws[0].data, data);
+});
+
+test('Pages waits for the local race result after an API miss and drops it on departure', async () => {
+  for (const depart of [false, true]) {
+    let releaseLocal;
+    const f = fixture({ensureLocal: () => new Promise(resolve => { releaseLocal = resolve; })});
+    f.view.useLocalMode = true;
+    const data = {files: [{name: 'local folder'}]};
+    f.ports.localContents = async (repo, path) => {
+      assert.equal(repo, 'VoiceOfML/A');
+      assert.equal(path, 'docs');
+      return data;
+    };
+    const pending = f.controller.browse('docs', 1);
+    f.requests[0].resolve(null);
+    await turn();
+    assert.equal(f.draws.length, 0);
+    assert.equal(f.timers.length, 0);
+    if (depart) Object.assign(f.view, {repo: 'B', repoFull: 'VoiceOfML/B', routeId: 2});
+    releaseLocal(true);
+    await pending;
+    assert.deepEqual(f.draws.map(draw => draw.data), depart ? [] : [data]);
+    assert.equal(f.requests.length, 1);
+    assert.equal(f.timers.length, 0);
+  }
+});
+
+test('Pages uses local data that becomes ready during a failed API request', async () => {
+  const f = fixture();
+  const data = {files: [{name: 'local fallback'}]};
+  const localRequests = [];
+  f.ports.localContents = async (repo, path) => { localRequests.push([repo, path]); return data; };
+  const pending = f.controller.browse('docs', 1);
+  assert.deepEqual(localRequests, []);
+  f.view.dataLoaded = true;
+  f.requests[0].reject(Error('offline'));
+  await pending;
+  assert.deepEqual(localRequests, [['VoiceOfML/A', 'docs']]);
+  assert.deepEqual(f.draws.map(draw => draw.data), [data]);
+  assert.equal(f.timers.length, 0);
+});
+
 test('HF observes cache created after controller construction before a held root initial fetch', async () => {
   if (!space) return;
   let initialCalls = 0;

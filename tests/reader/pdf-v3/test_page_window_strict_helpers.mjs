@@ -133,11 +133,19 @@ test('virtual ensure preserves valid, out-of-range and disposed behavior', () =>
     constructor() { this.children = []; this.style = {}; this.dataset = {}; this.isConnected = false; }
     appendChild(child) {
       if (child.fragment) { for (const node of [...child.children]) this.appendChild(node); child.children = []; }
-      else { this.children.push(child); child.isConnected = true; }
+      else {
+        if (child.parent) child.parent.children.splice(child.parent.children.indexOf(child), 1);
+        child.parent = this;
+        this.children.push(child);
+        child.isConnected = true;
+      }
       return child;
     }
     setAttribute() {} removeAttribute() {} contains() { return false; }
-    replaceChildren() { this.children = []; }
+    replaceChildren() {
+      for (const child of this.children) { child.parent = null; child.isConnected = false; }
+      this.children = [];
+    }
     querySelector(selector) { const page = selector.match(/data-page="(\d+)"/)?.[1];
       return this.children.find(child => child.dataset.page === page) || null; }
     getBoundingClientRect() { return {top: 0, width: 100, height: 140}; }
@@ -207,6 +215,34 @@ test('virtual ensure preserves valid, out-of-range and disposed behavior', () =>
     closed.window.dispose();
     assert.equal(frames.size, 0, 'disposal removes the second frame');
     assert.equal(closed.created.length, 31);
+
+    content.replaceChildren();
+    const first = content.appendChild(shell(1)), unobserved = [];
+    const retiring = createReaderPdfPageWindow(reader).createPdfShellWindow(340, first, shell,
+      node => unobserved.push(Number(node.dataset.page)), 1.4);
+    const firstChunk = content.children[0];
+    let cancelled = 0;
+    first._renderCancel = () => { cancelled++; };
+    reader.pdfSelectionIntersects = element => element === firstChunk;
+    retiring.ensure(340);
+    assert.ok(firstChunk.children.includes(first), 'selection keeps a distant chunk mounted');
+    assert.equal(cancelled, 0);
+    assert.deepEqual(unobserved, []);
+    reader.pdfSelectionIntersects = () => false;
+    retiring.remember(first);
+    retiring.ensure(340);
+    assert.equal(cancelled, 1);
+    assert.equal(first._textEpoch, 1);
+    assert.deepEqual(unobserved, Array.from({length: 32}, (_, i) => i + 1));
+    reader.documentState.zoom = 2;
+    retiring.setDefaultRatio(1.6);
+    assert.equal(firstChunk.style.height, `${32 * (280 + 18)}px`, 'measured pages keep their ratio at new zoom');
+    const placeholder = content.children[3];
+    assert.equal(placeholder.style.height, `${32 * (320 + 18)}px`, 'unmeasured pages use the replacement ratio');
+    reader.documentState.zoom = 1;
+    retiring.resize();
+    assert.equal(firstChunk.style.height, `${32 * (160 + 18)}px`);
+    retiring.dispose();
   } finally {
     for (const [key, value] of Object.entries(original)) {
       if (value === undefined) delete globalThis[key]; else globalThis[key] = value;

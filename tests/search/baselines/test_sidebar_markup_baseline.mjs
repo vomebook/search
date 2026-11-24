@@ -26,7 +26,7 @@ function fixture() {
   const directoryPath=path.join(root,'static/search/sidebar/presentation/directory.js');
   vm.runInContext(fs.readFileSync(directoryPath,'utf8'),c,{filename:directoryPath});
   const view=c.VoiceOfMLSidebarDirectoryView.create({
-    surface:space?'space':'pages',scroll:{restore:()=>c.restoreSidebarScroll()},
+    scroll:{restore:()=>c.restoreSidebarScroll()},
     markup:{icon:key=>c.sidebarIconMarkup(key),escape:value=>c.escapeHTML(value),
       iconType:value=>c.getFileIconType(value),formatSize:value=>c.formatSize(value),
       name:file=>c.getBrowserFileName(file),link:(...args)=>c.getBrowserFileLink(...args),
