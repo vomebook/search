@@ -52,15 +52,15 @@ function tiebaPostSection(post, doc) {
 
 /** @param {DocumentFragment} root */
 function buildReviewedTiebaView(root) {
-  const title = root.querySelector("h3.core_title_txt")?.textContent.trim();
+  const threadTitle = root.querySelector("h3.core_title_txt")?.textContent.trim();
   const doc = root.ownerDocument;
   const posts = [...root.querySelectorAll("#j_p_postlist > .j_l_post")].map(post => tiebaPostSection(post, doc));
-  if (!title || posts.length !== 18 || !posts.every(post => post !== null)) return false;
+  if (!threadTitle || posts.length !== 18 || !posts.every(post => post !== null)) return false;
   const article = doc.createElement("article");
   article.className = "reader-clean-web reader-tieba-view";
   const note = labeledElement(doc, "p", "此存档未收录 20 处原帖表情图片，已在对应位置标记。");
   note.className = "reader-tieba-note";
-  article.append(labeledElement(doc, "h1", title), note, ...posts);
+  article.append(labeledElement(doc, "h1", threadTitle), note, ...posts);
   if (article.querySelectorAll(".reader-tieba-reply").length !== 5 ||
       article.querySelectorAll("img[src]").length !== 29) return false;
   const gaps = article.querySelectorAll("img.BDE_Smiley:not([src])");
