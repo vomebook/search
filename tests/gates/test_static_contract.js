@@ -325,7 +325,10 @@ test("virtual results use bounded buffering", () => {
   assert.match(applyDrag, /setResultScrollTop\([^;]+\);\s*pendingScrollTop = null;\s*renderVisible\(\);/);
   assert.match(virtual, /const tightWindow = VSCROLL\.isDraggingThumb \|\| !!VSCROLL\.dragMetrics/);
   assert.match(virtual, /tightWindow\s*\? viewH \* 0\.35/);
-  assert.match(virtual, /if \(!VSCROLL\.isDraggingThumb && measureHeights\(start, end, anchor\)\)/);
+  assert.match(virtual, /if \(measureHeights\(start, end, anchor\)\)/);
+  // The measurement owner rejects dragging and stale windows before reading geometry.
+  const measure = virtual.match(/^function measureHeights\([^]*?^}/m)?.[0] || '';
+  assert.match(measure, /if \(VSCROLL\.isDraggingThumb \|\| start !== VSCROLL\.renderStart \|\| end !== VSCROLL\.renderEnd\) return false;/);
   assert.match(app, /VSCROLL\.dragMetrics = null/);
   assert.match(css, /overflow-anchor: none/);
   assert.strictEqual(/function finishDrag\(\)[\s\S]*?measureHeights/.test(app), false);
